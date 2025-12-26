@@ -1,7 +1,9 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import EditorView from './views/EditorView.vue'
+</script>
 
 <template>
-  <h1>3D编辑器</h1>
+  <EditorView />
 </template>
 
 <style scoped></style>

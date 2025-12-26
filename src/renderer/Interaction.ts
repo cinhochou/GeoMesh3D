@@ -1,67 +1,82 @@
+// renderer/Interaction.ts
 import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { Editor, EditorMode } from '../core/editor/Editor'
+import { Vec3 } from '../core/geometry/Vec3'
+import { ThreeRenderer } from './ThreeRenderer'
 
 export class Interaction {
-  private raycaster = new THREE.Raycaster()
-  private pointer = new THREE.Vector2()
-  private selected: THREE.Object3D | null = null
-  private dragging = false
+  editor: Editor
+  renderer: ThreeRenderer
+  raycaster = new THREE.Raycaster()
+  mouse = new THREE.Vector2()
 
-  constructor(
-    private camera: THREE.Camera,
-    private scene: THREE.Scene,
-    private domElement: HTMLElement,
-    private controls: OrbitControls,
-    private onSelect: (obj: THREE.Object3D | null) => void,
-  ) {
-    this.domElement.addEventListener('pointerdown', this.onPointerDown)
-    this.domElement.addEventListener('pointermove', this.onPointerMove)
-    this.domElement.addEventListener('pointerup', this.onPointerUp)
+  draggingPointId: string | null = null
+
+  constructor(editor: Editor, renderer: ThreeRenderer) {
+    this.editor = editor
+    this.renderer = renderer
   }
 
-  private setPointer(event: PointerEvent) {
-    const rect = this.domElement.getBoundingClientRect()
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  bind(dom: HTMLElement) {
+    dom.addEventListener('mousedown', this.onMouseDown)
+    dom.addEventListener('mousemove', this.onMouseMove)
+    dom.addEventListener('mouseup', this.onMouseUp)
   }
 
-  private intersectObjects() {
-    this.raycaster.setFromCamera(this.pointer, this.camera)
-    return this.raycaster.intersectObjects(this.scene.children, true)
-  }
+  onMouseDown = (e: MouseEvent) => {
+    this.updateMouse(e)
 
-  private onPointerDown = (event: PointerEvent) => {
-    this.setPointer(event)
-    const intersects = this.intersectObjects()
+    const hit = this.pickPoint()
+    if (hit) {
+      if (this.editor.mode === EditorMode.Select) {
+        this.draggingPointId = hit.userData.geoId
+      }
 
-    if (intersects.length > 0) {
-      this.selected = intersects[0]!.object
-      this.dragging = true
-      this.controls.enabled = false // ⛔ 禁用旋转
-      this.onSelect(this.selected)
+      if (this.editor.mode === EditorMode.CreateLine) {
+        this.editor.tryCreateLineWith(this.editor.scene.points.get(hit.userData.geoId)!)
+      }
     } else {
-      // 点击空白，取消选中
-      this.selected = null
-      this.dragging = false
-      this.controls.enabled = true // 允许旋转
-      this.onSelect(null)
+      // 点击空白
+      if (this.editor.mode === EditorMode.CreatePoint) {
+        const pos = this.getWorldPositionOnPlane(e)
+        this.editor.createPoint(pos)
+      }
     }
   }
 
-  private onPointerMove = (event: PointerEvent) => {
-    if (!this.dragging || !this.selected) return
-
-    this.setPointer(event)
-    const intersects = this.intersectObjects()
-
-    if (intersects.length > 0) {
-      const point = intersects[0]!.point
-      this.selected.position.copy(point) // 简单版拖拽
-    }
+  onMouseMove = (e: MouseEvent) => {
+    if (!this.draggingPointId) return
+    this.editor.movePoint(
+      this.draggingPointId,
+      new Vec3(e.movementX * 0.01, -e.movementY * 0.01, 0),
+    )
   }
 
-  private onPointerUp = () => {
-    this.dragging = false
-    this.controls.enabled = true
+  onMouseUp = () => {
+    this.draggingPointId = null
+  }
+
+  /* ---------- picking ---------- */
+
+  pickPoint(): THREE.Object3D | null {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+    const hits = this.raycaster.intersectObjects([...this.renderer.meshMap.values()])
+    return hits.find((h) => h.object.userData.type === 'point')?.object ?? null
+  }
+
+  updateMouse(e: MouseEvent) {
+    const rect = this.renderer.renderer.domElement.getBoundingClientRect()
+    this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+    this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+  }
+
+  getWorldPositionOnPlane(e: MouseEvent): Vec3 {
+    // z=0 平面
+    this.updateMouse(e)
+    this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
+    const pos = new THREE.Vector3()
+    this.raycaster.ray.intersectPlane(plane, pos)
+    return new Vec3(pos.x, pos.y, pos.z)
   }
 }

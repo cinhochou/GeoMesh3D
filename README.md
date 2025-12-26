@@ -47,4 +47,64 @@ npm run build
 npm run lint
 ```
 
+### Author
+
 @cinhoChou Guangzhou University
+
+### 目录结构
+
+Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
+
+```
+3D_editor
+├─ .editorconfig
+├─ .prettierrc.json
+├─ env.d.ts
+├─ eslint.config.ts
+├─ index.html
+├─ package-lock.json
+├─ package.json
+├─ public
+│  └─ favicon.ico
+├─ README.md
+├─ src
+│  ├─ App.vue
+│  ├─ assets
+│  ├─ components
+│  │  ├─ SideBar.vue
+│  │  ├─ TimeLine.vue
+│  │  └─ ToolBar.vue
+│  ├─ core
+│  │  ├─ behavior
+│  │  ├─ constraints
+│  │  ├─ editor
+│  │  │  ├─ Command.ts
+│  │  │  ├─ Editor.ts
+│  │  │  └─ TransformCommand.ts
+│  │  ├─ geometry
+│  │  │  ├─ Line3.ts
+│  │  │  ├─ Plane.ts
+│  │  │  ├─ Point3.ts
+│  │  │  └─ Vec3.ts
+│  │  └─ scene
+│  │     └─ Scene.ts
+│  ├─ main.ts
+│  ├─ renderer
+│  │  ├─ Interaction.ts
+│  │  ├─ ObjectMapper.ts
+│  │  └─ ThreeRenderer.ts
+│  ├─ router
+│  │  └─ index.ts
+│  ├─ store
+│  │  ├─ sceneStore.ts
+│  │  └─ uiStore.ts
+│  ├─ styles
+│  ├─ utils
+│  └─ views
+│     └─ EditorView.vue
+├─ tsconfig.app.json
+├─ tsconfig.json
+├─ tsconfig.node.json
+└─ vite.config.ts
+
+```

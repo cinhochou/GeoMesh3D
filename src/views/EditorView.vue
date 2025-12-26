@@ -1,0 +1,87 @@
+<script setup lang="ts">
+import { onMounted, ref, computed } from 'vue'
+
+import Toolbar from '../components/Toolbar.vue'
+import Sidebar from '../components/Sidebar.vue'
+import Timeline from '../components/Timeline.vue'
+
+import { Scene } from '../core/scene/Scene'
+import { Editor, EditorMode } from '../core/editor/Editor'
+import { ThreeRenderer } from '../renderer/ThreeRenderer'
+import { Interaction } from '../renderer/Interaction'
+
+const viewportRef = ref<HTMLDivElement | null>(null)
+
+const scene = new Scene()
+const editor = new Editor(scene)
+
+let renderer: ThreeRenderer
+let interaction: Interaction
+
+const modeName = computed(() => {
+  switch (editor.mode) {
+    case EditorMode.Select:
+      return '选择'
+    case EditorMode.CreatePoint:
+      return '创建点'
+    case EditorMode.CreateLine:
+      return '创建线'
+    default:
+      return ''
+  }
+})
+
+onMounted(() => {
+  renderer = new ThreeRenderer(viewportRef.value!)
+  interaction = new Interaction(editor, renderer)
+  interaction.bind(renderer.renderer.domElement)
+
+  const loop = () => {
+    renderer.sync(scene)
+    renderer.render()
+    requestAnimationFrame(loop)
+  }
+  loop()
+
+  window.addEventListener('resize', () => {
+    renderer.resize(viewportRef.value!.clientWidth, viewportRef.value!.clientHeight)
+  })
+})
+
+function onModeChange(mode: EditorMode) {
+  editor.setMode(mode)
+}
+</script>
+
+<template>
+  <div class="editor-root">
+    <Toolbar @mode-change="onModeChange" />
+
+    <div class="editor-body">
+      <Sidebar :modeName="modeName" />
+
+      <div ref="viewportRef" class="viewport"></div>
+    </div>
+
+    <Timeline />
+  </div>
+</template>
+
+<style scoped>
+.editor-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.editor-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.viewport {
+  flex: 1;
+  background: #000;
+}
+</style>
