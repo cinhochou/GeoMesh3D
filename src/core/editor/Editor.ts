@@ -5,6 +5,7 @@ import { TransformCommand } from './TransformCommand'
 import { Vec3 } from '../geometry/Vec3'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
+import { DistanceConstraint } from '../constraints/DistanceConstraint'
 
 export enum EditorMode {
   Select,
@@ -18,6 +19,7 @@ const genId = (prefix: string) => `${prefix}_${idCounter++}` // 生成 id
 
 export class Editor {
   scene: Scene
+
   mode: EditorMode = EditorMode.Select
   selectedPoints: Point3[] = []
 
@@ -75,8 +77,24 @@ export class Editor {
 
   executeCommand(cmd: Command) {
     cmd.execute()
-    this.history = this.history.slice(0, this.historyIndex + 1)
-    this.history.push(cmd)
+    this.history = this.history.slice(0, this.historyIndex + 1) //截取保留从索引0到this.historyIndex（包含）的元素
+    this.history.push(cmd) //将新执行的命令添加到历史记录末尾
     this.historyIndex++
+  }
+
+  addDistanceConstraint() {
+    const ids = [...this.scene.selection.points]
+    if (ids.length !== 2) return
+
+    const p1 = this.scene.points.get(ids[0]!)!
+    const p2 = this.scene.points.get(ids[1]!)!
+
+    const dx = p2.position.x - p1.position.x
+    const dy = p2.position.y - p1.position.y
+    const dz = p2.position.z - p1.position.z
+
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    this.scene.addConstraint(new DistanceConstraint(p1, p2, dist))
   }
 }

@@ -1,22 +1,30 @@
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue'
+import { Scene } from '../core/scene/Scene'
+const props = defineProps<{
+  scene: Scene
   modeName: string
 }>()
+const selectedPoints = computed(() => {
+  return [...props.scene.selection.points].map((id) => props.scene.points.get(id))
+})
 </script>
 
 <template>
   <div class="sidebar">
     <h3>状态</h3>
-    <p>当前模式：{{ modeName }}</p>
+    <p>模式：{{ modeName }}</p>
 
-    <hr />
+    <h4>选中点</h4>
+    <div v-if="selectedPoints.length === 0">无</div>
 
-    <p style="opacity: 0.6">
-      这里将来显示：<br />
-      • 选中点坐标<br />
-      • 线长度<br />
-      • 约束参数
-    </p>
+    <div v-for="p in selectedPoints" :key="p!.id" class="point-info">
+      <div>ID: {{ p!.id }}</div>
+      <div>
+        x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
+        {{ p!.position.z.toFixed(2) }}
+      </div>
+    </div>
   </div>
 </template>
 

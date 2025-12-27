@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, reactive } from 'vue'
 
-import Toolbar from '../components/Toolbar.vue'
-import Sidebar from '../components/Sidebar.vue'
-import Timeline from '../components/Timeline.vue'
+import Toolbar from '../components/ToolBar.vue'
+import Sidebar from '../components/SideBar.vue'
+import Timeline from '../components/TimeLine.vue'
 
 import { Scene } from '../core/scene/Scene'
 import { Editor, EditorMode } from '../core/editor/Editor'
@@ -12,8 +12,8 @@ import { Interaction } from '../renderer/Interaction'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 
-const scene = new Scene()
-const editor = new Editor(scene)
+const scene = reactive(new Scene())
+const editor = reactive(new Editor(scene))
 
 let renderer: ThreeRenderer
 let interaction: Interaction
@@ -37,6 +37,7 @@ onMounted(() => {
   interaction.bind(renderer.renderer.domElement)
 
   const loop = () => {
+    scene.constraints.forEach((c) => c.solve())
     renderer.sync(scene)
     renderer.render()
     requestAnimationFrame(loop)
@@ -58,7 +59,7 @@ function onModeChange(mode: EditorMode) {
     <Toolbar @mode-change="onModeChange" />
 
     <div class="editor-body">
-      <Sidebar :modeName="modeName" />
+      <Sidebar :scene="scene" :modeName="modeName" />
 
       <div ref="viewportRef" class="viewport"></div>
     </div>

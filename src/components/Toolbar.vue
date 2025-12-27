@@ -30,6 +30,9 @@ button {
   cursor: pointer;
 }
 button:hover {
-  background: #555;
+  background: #9ea09f;
+}
+button:active {
+  background: #43f260;
 }
 </style>

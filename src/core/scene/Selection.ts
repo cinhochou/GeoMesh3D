@@ -17,4 +17,8 @@ export class Selection {
     if (!additive) this.clear()
     this.lines.add(id)
   }
+
+  isEmpty() {
+    return this.points.size === 0 && this.lines.size === 0
+  }
 }
