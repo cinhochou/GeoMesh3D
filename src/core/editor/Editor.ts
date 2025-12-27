@@ -10,16 +10,18 @@ export enum EditorMode {
   Select,
   CreatePoint,
   CreateLine,
+  CreatePlane,
 }
 
 let idCounter = 0
-const genId = (prefix: string) => `${prefix}_${idCounter++}`
+const genId = (prefix: string) => `${prefix}_${idCounter++}` // 生成 id
 
 export class Editor {
   scene: Scene
   mode: EditorMode = EditorMode.Select
   selectedPoints: Point3[] = []
 
+  // 命令历史记录，实现撤销/重做功能
   history: Command[] = []
   historyIndex = -1
 
@@ -29,7 +31,7 @@ export class Editor {
 
   setMode(mode: EditorMode) {
     this.mode = mode
-    this.selectedPoints = []
+    this.selectedPoints = [] // 更改模式时清空选中的点
   }
 
   /* ---------- 点 ---------- */
