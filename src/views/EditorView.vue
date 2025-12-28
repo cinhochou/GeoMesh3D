@@ -25,7 +25,7 @@ const modeName = computed(() => {
     case EditorMode.CreatePoint:
       return '创建点'
     case EditorMode.CreateLine:
-      return '创建线'
+      return '连线'
     default:
       return ''
   }
@@ -38,8 +38,8 @@ onMounted(() => {
 
   const loop = () => {
     scene.constraints.forEach((c) => c.solve())
-    renderer.sync(scene)
     renderer.render()
+    renderer.sync(scene, interaction.rubberBandData)
     requestAnimationFrame(loop)
   }
   loop()
@@ -56,7 +56,12 @@ function onModeChange(mode: EditorMode) {
 
 <template>
   <div class="editor-root">
-    <Toolbar @mode-change="onModeChange" />
+    <Toolbar
+      :current-mode="editor.mode"
+      :is-snapping-enabled="editor.isSnappingEnabled"
+      @mode-change="onModeChange"
+      @toggle-snapping="editor.toggleSnapping()"
+    />
 
     <div class="editor-body">
       <Sidebar :scene="scene" :modeName="modeName" />

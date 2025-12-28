@@ -13,6 +13,7 @@ export class ThreeRenderer {
     y: THREE.Line
     z: THREE.Line
   }
+  private rubberBand?: THREE.Line
 
   /** geoId -> mesh */
   meshMap = new Map<string, THREE.Object3D>()
@@ -25,7 +26,7 @@ export class ThreeRenderer {
     const h = container.clientHeight
 
     this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000)
-    this.camera.position.set(5, 5, 5)
+    this.camera.position.set(15, 15, 15)
     this.camera.lookAt(0, 0, 0)
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -52,9 +53,10 @@ export class ThreeRenderer {
 
   /* ---------- Scene → Three ---------- */
 
-  sync(scene: GeoScene) {
-    this.syncPoints(scene)
-    this.syncLines(scene)
+  sync(geoScene: GeoScene, previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null) {
+    this.syncPoints(geoScene)
+    this.syncLines(geoScene)
+    this.updateRubberBand(previewData) // 处理虚线
   }
 
   private syncPoints(scene: GeoScene) {
@@ -71,8 +73,8 @@ export class ThreeRenderer {
 
         sprite = new THREE.Sprite(material)
 
-        // 屏幕空间 ≈ 8px
-        const pixelSize = 8
+        // 屏幕空间 ≈ 10px
+        const pixelSize = 10
         const h = this.renderer.domElement.clientHeight
         const scale = pixelSize / h
 
@@ -97,31 +99,34 @@ export class ThreeRenderer {
   }
 
   private syncLines(scene: GeoScene) {
-    scene.lines.forEach((l) => {
-      let line = this.meshMap.get(l.id) as THREE.Line
-
-      const p1 = l.p1.position
-      const p2 = l.p2.position
-
+    scene.lines.forEach((lineData, id) => {
+      let line = this.meshMap.get(id) as THREE.Line
+      const p1 = lineData.p1.position
+      const p2 = lineData.p2.position
       const points = [new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)]
 
       if (!line) {
+        // 首次创建
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = new THREE.LineBasicMaterial({ color: 0xffffff })
         line = new THREE.Line(geo, mat)
-
-        line.userData = {
-          type: 'line',
-          geoId: l.id,
-        }
-
+        line.userData = { geoId: id, type: 'line' }
         this.scene.add(line)
-        this.meshMap.set(l.id, line)
+        this.meshMap.set(id, line)
       } else {
+        // 1. 更新顶点数据
         line.geometry.setFromPoints(points)
+
+        // 2. 必须告诉 Three.js 顶点缓冲区需要更新
+        line.geometry.attributes.position!.needsUpdate = true
+
+        // 3. 必须重新计算包围盒，否则射线检测（Raycaster）还会去旧地方找线
+        line.geometry.computeBoundingBox()
+        line.geometry.computeBoundingSphere()
       }
 
-      const isSelected = scene.selection.lines.has(l.id)
+      // 选中高亮逻辑
+      const isSelected = scene.selection.lines.has(id)
       ;(line.material as THREE.LineBasicMaterial).color.set(isSelected ? 0x43f260 : 0xffffff)
     })
   }
@@ -291,5 +296,31 @@ export class ThreeRenderer {
     this.scene.remove(this.axisGuides.y)
     this.scene.remove(this.axisGuides.z)
     this.axisGuides = undefined
+  }
+
+  //处理连接时的橡皮筋虚线
+  private updateRubberBand(data?: { from: THREE.Vector3; to: THREE.Vector3 } | null) {
+    if (!data) {
+      if (this.rubberBand) this.rubberBand.visible = false
+      return
+    }
+
+    if (!this.rubberBand) {
+      const geo = new THREE.BufferGeometry().setFromPoints([data.from, data.to])
+      // 使用 LineDashedMaterial 实现虚线效果
+      const mat = new THREE.LineDashedMaterial({
+        color: 0x43f260,
+        dashSize: 0.2,
+        gapSize: 0.1,
+      })
+      this.rubberBand = new THREE.Line(geo, mat)
+      this.rubberBand.computeLineDistances() // 必须调用才能显示虚线
+      this.scene.add(this.rubberBand)
+    } else {
+      this.rubberBand.visible = true
+      this.rubberBand.geometry.setFromPoints([data.from, data.to])
+      this.rubberBand.geometry.attributes.position!.needsUpdate = true
+      this.rubberBand.computeLineDistances()
+    }
   }
 }

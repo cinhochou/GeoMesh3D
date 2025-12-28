@@ -77,6 +77,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  ├─ core
 │  │  ├─ behavior
 │  │  ├─ constraints
+│  │  │  └─ DistanceConstraint.ts
 │  │  ├─ editor
 │  │  │  ├─ Command.ts
 │  │  │  ├─ Editor.ts
@@ -87,7 +88,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ Point3.ts
 │  │  │  └─ Vec3.ts
 │  │  └─ scene
-│  │     └─ Scene.ts
+│  │     ├─ Scene.ts
+│  │     └─ Selection.ts
 │  ├─ main.ts
 │  ├─ renderer
 │  │  ├─ Interaction.ts
@@ -95,6 +97,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  └─ ThreeRenderer.ts
 │  ├─ router
 │  │  └─ index.ts
+│  ├─ state
 │  ├─ store
 │  │  ├─ sceneStore.ts
 │  │  └─ uiStore.ts
