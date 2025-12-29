@@ -79,8 +79,10 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ constraints
 │  │  │  └─ DistanceConstraint.ts
 │  │  ├─ editor
+│  │  │  ├─ AddElementCommand.ts
 │  │  │  ├─ Command.ts
 │  │  │  ├─ Editor.ts
+│  │  │  ├─ MoveLineCommand.ts
 │  │  │  └─ TransformCommand.ts
 │  │  ├─ geometry
 │  │  │  ├─ Line3.ts

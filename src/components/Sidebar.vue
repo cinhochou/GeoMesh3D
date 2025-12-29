@@ -39,11 +39,13 @@ const linesInScene = computed(() => {
         <div>ID: {{ l!.id }}</div>
         <div>
           <div>
-            p1(x,y,z): {{ l!.p1.position.x.toFixed(2) }}, {{ l!.p1.position.y.toFixed(2) }},
+            {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
+            {{ l!.p1.position.y.toFixed(2) }},
             {{ l!.p1.position.z.toFixed(2) }}
           </div>
           <div>
-            p2(x,y,z): {{ l!.p2.position.x.toFixed(2) }}, {{ l!.p2.position.y.toFixed(2) }},
+            {{ l!.p2.id }}(x,y,z): {{ l!.p2.position.x.toFixed(2) }},
+            {{ l!.p2.position.y.toFixed(2) }},
             {{ l!.p2.position.z.toFixed(2) }}
           </div>
         </div>
@@ -64,11 +66,13 @@ const linesInScene = computed(() => {
         <div>ID: {{ l!.id }}</div>
         <div>
           <div>
-            p1(x,y,z): {{ l!.p1.position.x.toFixed(2) }}, {{ l!.p1.position.y.toFixed(2) }},
+            {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
+            {{ l!.p1.position.y.toFixed(2) }},
             {{ l!.p1.position.z.toFixed(2) }}
           </div>
           <div>
-            p2(x,y,z): {{ l!.p2.position.x.toFixed(2) }}, {{ l!.p2.position.y.toFixed(2) }},
+            {{ l!.p2.id }}(x,y,z): {{ l!.p2.position.x.toFixed(2) }},
+            {{ l!.p2.position.y.toFixed(2) }},
             {{ l!.p2.position.z.toFixed(2) }}
           </div>
         </div>

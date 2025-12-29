@@ -38,7 +38,7 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
       const direction = this.raycaster.ray.direction
-      const pos = this.renderer.camera.position.clone().add(direction.multiplyScalar(10))
+      const pos = this.renderer.camera.position.clone().add(direction.multiplyScalar(30))
 
       //只有当开关开启且没有按住 Alt 时，才进行吸附
       if (this.editor.isSnappingEnabled && !e.altKey) {
@@ -77,7 +77,7 @@ export class Interaction {
     if (this.editor.mode === EditorMode.CreatePoint) {
       this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
       const direction = this.raycaster.ray.direction
-      const previewPos = this.renderer.camera.position.clone().add(direction.multiplyScalar(10))
+      const previewPos = this.renderer.camera.position.clone().add(direction.multiplyScalar(30))
 
       if (this.editor.isSnappingEnabled && !e.altKey) {
         previewPos.set(this.snap(previewPos.x), this.snap(previewPos.y), this.snap(previewPos.z))
@@ -99,8 +99,8 @@ export class Interaction {
 
       // 计算鼠标在 3D 空间的投影点
       this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
-      // 这里我们假设在以起点为准的水平面上预览，或者简单的距离相机 10 个单位
-      const to = this.raycaster.ray.at(10, new THREE.Vector3())
+      // 这里我们假设在以起点为准的水平面上预览，或者简单的距离相机 30 个单位
+      const to = this.raycaster.ray.at(30, new THREE.Vector3())
 
       // 如果有吸附开关，也应用到预览线上
       if (this.editor.isSnappingEnabled && !e.altKey) {

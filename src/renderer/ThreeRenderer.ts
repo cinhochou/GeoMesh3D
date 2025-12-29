@@ -66,7 +66,7 @@ export class ThreeRenderer {
       if (!sprite) {
         const material = new THREE.SpriteMaterial({
           color: 0xff5555,
-          depthTest: false, // 始终可见（编辑器推荐）
+          depthTest: false, // 始终可见
           depthWrite: false,
           sizeAttenuation: false,
         })
