@@ -8,11 +8,8 @@ export class ThreeRenderer {
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
-  axisGuides?: {
-    x: THREE.Line
-    y: THREE.Line
-    z: THREE.Line
-  }
+  private projectionGroup: THREE.Group | null = null
+  private guideLabel: THREE.Sprite | null = null
   private rubberBand?: THREE.Line
 
   /** geoId -> mesh */
@@ -251,51 +248,87 @@ export class ThreeRenderer {
     return sprite
   }
 
-  createAxisGuides() {
-    const size = 1000 // 足够大的长度，制造“无限”错觉
+  /**
+   * 更新坐标投影线
+   * 包含：从点到 X 轴、Z 轴的地面方形投影，以及 Y 轴垂直线
+   */
+  updateGuide(pos: THREE.Vector3, visible: boolean = true) {
+    if (!this.projectionGroup) {
+      this.projectionGroup = new THREE.Group()
 
-    const makeLine = (dir: THREE.Vector3, color: number) => {
-      const geo = new THREE.BufferGeometry().setFromPoints([
-        dir.clone().multiplyScalar(-size),
-        dir.clone().multiplyScalar(size),
-      ])
-      const mat = new THREE.LineBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.6,
+      // 创建投影线物体 (使用 LineSegments 以便绘制不连续的线)
+      const mat = new THREE.LineDashedMaterial({
+        color: 0xffff00,
+        dashSize: 0.2,
+        gapSize: 0.1,
         depthTest: false,
+        transparent: true,
+        opacity: 0.8,
       })
-      return new THREE.Line(geo, mat)
+      const line = new THREE.LineSegments(new THREE.BufferGeometry(), mat)
+      line.name = 'guideLines'
+      this.projectionGroup.add(line)
+
+      // 创建坐标浮窗
+      this.guideLabel = new THREE.Sprite(
+        new THREE.SpriteMaterial({ depthTest: false, sizeAttenuation: false }),
+      )
+      this.guideLabel.scale.set(0.18, 0.1, 1)
+      this.projectionGroup.add(this.guideLabel)
+
+      this.scene.add(this.projectionGroup)
     }
 
-    this.axisGuides = {
-      x: makeLine(new THREE.Vector3(1, 0, 0), 0xff0000),
-      y: makeLine(new THREE.Vector3(0, 1, 0), 0x00ff00),
-      z: makeLine(new THREE.Vector3(0, 0, 1), 0x0000ff),
-    }
+    this.projectionGroup.visible = visible
+    if (!visible) return
 
-    this.scene.add(this.axisGuides.x)
-    this.scene.add(this.axisGuides.y)
-    this.scene.add(this.axisGuides.z)
+    const line = this.projectionGroup.getObjectByName('guideLines') as THREE.LineSegments
+
+    // 构建方形投影顶点数据
+    // 1. 从点 (x,y,z) 到地面 (x,0,z) 的垂直线
+    // 2. 从地面点 (x,0,z) 到 X 轴 (x,0,0) 的连线
+    // 3. 从地面点 (x,0,z) 到 Z 轴 (0,0,z) 的连线
+    const points = [
+      // 垂直线
+      pos,
+      new THREE.Vector3(pos.x, 0, pos.z),
+      // X方向投影
+      new THREE.Vector3(pos.x, 0, pos.z),
+      new THREE.Vector3(pos.x, 0, 0),
+      // Z方向投影
+      new THREE.Vector3(pos.x, 0, pos.z),
+      new THREE.Vector3(0, 0, pos.z),
+    ]
+
+    line.geometry.setFromPoints(points)
+    line.computeLineDistances() // 虚线必须
+
+    // 更新浮窗文字和位置
+    this.drawLabel(pos)
+    this.guideLabel!.position.copy(pos).add(new THREE.Vector3(0.5, 0.5, 0.5))
+  }
+
+  private drawLabel(pos: THREE.Vector3) {
+    const canvas = document.createElement('canvas')
+    canvas.width = 256
+    canvas.height = 128
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.roundRect(0, 0, 256, 128, 15)
+    ctx.fill()
+    ctx.fillStyle = '#0f0'
+    ctx.font = 'bold 32px monospace'
+    ctx.fillText(`X: ${pos.x.toFixed(2)}`, 20, 40)
+    ctx.fillText(`Y: ${pos.y.toFixed(2)}`, 20, 75)
+    ctx.fillText(`Z: ${pos.z.toFixed(2)}`, 20, 110)
+    this.guideLabel!.material.map = new THREE.CanvasTexture(canvas)
   }
 
   showAxisGuidesAt(pos: THREE.Vector3) {
-    if (!this.axisGuides) {
-      this.createAxisGuides()
-    }
-
-    this.axisGuides!.x.position.copy(pos)
-    this.axisGuides!.y.position.copy(pos)
-    this.axisGuides!.z.position.copy(pos)
+    this.updateGuide(pos, true)
   }
-
   hideAxisGuides() {
-    if (!this.axisGuides) return
-
-    this.scene.remove(this.axisGuides.x)
-    this.scene.remove(this.axisGuides.y)
-    this.scene.remove(this.axisGuides.z)
-    this.axisGuides = undefined
+    this.updateGuide(new THREE.Vector3(), false)
   }
 
   //处理连接时的橡皮筋虚线

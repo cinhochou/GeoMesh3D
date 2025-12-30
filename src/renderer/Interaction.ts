@@ -49,9 +49,9 @@ export class Interaction {
     }
 
     if (hit) {
+      this.renderer.controls.enabled = false
       const { geoId, type } = hit.userData
       if (this.editor.mode === EditorMode.Select) {
-        this.renderer.controls.enabled = false
         this.renderer.renderer.domElement.style.cursor = 'grabbing'
         if (type === 'point') {
           this.draggingPointId = geoId

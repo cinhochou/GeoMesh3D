@@ -15,4 +15,8 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  server: {
+    port: 5173,
+    allowedHosts: ['localhost', '127.0.0.1', 'amara-subtwined-admiringly.ngrok-free.dev'],
+  },
 })
