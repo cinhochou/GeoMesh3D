@@ -83,7 +83,7 @@ const linesInScene = computed(() => {
 
 <style scoped>
 .sidebar {
-  width: 220px;
+  min-width: 220px;
   background: #1a1a1a;
   color: #ddd;
   padding: 12px;

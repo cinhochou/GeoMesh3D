@@ -210,7 +210,11 @@ export class Interaction {
   }
 
   updateMouse(e: MouseEvent) {
+    // 关键：实时获取最新的矩形位置，不要缓存 rect
     const rect = this.renderer.renderer.domElement.getBoundingClientRect()
+
+    // 这里的 rect 会受到 CSS marginTop 或 top 的影响
+    // 如果退出 AR 后偏移，说明这里的 rect.top 和 rect.left 与 AR 开启前不一致
     this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
     this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   }
