@@ -12,6 +12,11 @@ export class ThreeRenderer {
   private guideLabel: THREE.Sprite | null = null
   private rubberBand?: THREE.Line
 
+  private arToolkitSource: any = null
+  private arToolkitContext: any = null
+  private arMarkerControls: any = null
+  private isARMode = false
+
   /** geoId -> mesh */
   meshMap = new Map<string, THREE.Object3D>()
 
@@ -27,6 +32,7 @@ export class ThreeRenderer {
     this.camera.lookAt(0, 0, 0)
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
+    this.renderer.setPixelRatio(window.devicePixelRatio)
     this.renderer.setSize(w, h)
     container.appendChild(this.renderer.domElement)
 
@@ -54,6 +60,63 @@ export class ThreeRenderer {
     this.syncPoints(geoScene)
     this.syncLines(geoScene)
     this.updateRubberBand(previewData) // 处理虚线
+  }
+
+  // 切换 AR 模式
+  async toggleAR(enabled: boolean) {
+    this.isARMode = enabled
+    if (enabled) {
+      this.renderer.setClearColor(new THREE.Color('lightgrey'), 0) // 透明背景
+      this.initAR()
+    } else {
+      this.renderer.setClearColor(0x111111, 1)
+      if (this.arToolkitSource) {
+        this.arToolkitSource.domElement.srcObject?.getTracks().forEach((t: any) => t.stop())
+        this.arToolkitSource.domElement.remove()
+      }
+      this.scene.visible = true
+    }
+  }
+
+  private initAR() {
+    // @ts-expect-error THREEx 来自外部 ar.js
+    this.arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' })
+    this.arToolkitSource.init(() => this.onResize())
+
+    // @ts-expect-error THREEx 来自外部 ar.js
+    this.arToolkitContext = new THREEx.ArToolkitContext({
+      cameraParametersUrl: 'data/camera_para.dat',
+      detectionMode: 'mono',
+    })
+    this.arToolkitContext.init(() => {
+      this.camera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
+    })
+
+    // @ts-expect-error THREEx 来自外部 ar.js
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.camera, {
+      type: 'pattern',
+      patternUrl: 'arcode/marker89.td',
+      changeMatrixMode: 'cameraTransformMatrix', // 关键：移动相机而非模型
+    })
+    this.scene.visible = false
+  }
+
+  render() {
+    if (this.isARMode && this.arToolkitSource?.ready) {
+      this.arToolkitContext.update(this.arToolkitSource.domElement)
+      this.scene.visible = this.camera.visible
+    } else {
+      this.controls.update()
+    }
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  // 暴露给外部用于处理窗口缩放
+  onResize() {
+    if (this.isARMode && this.arToolkitSource) {
+      this.arToolkitSource.onResizeElement()
+      this.arToolkitSource.copyElementSizeTo(this.renderer.domElement)
+    }
   }
 
   private syncPoints(scene: GeoScene) {
@@ -128,10 +191,10 @@ export class ThreeRenderer {
     })
   }
 
-  render() {
-    this.controls.update()
-    this.renderer.render(this.scene, this.camera)
-  }
+  // render() {
+  //   this.controls.update()
+  //   this.renderer.render(this.scene, this.camera)
+  // }
 
   resize(w: number, h: number) {
     this.camera.aspect = w / h

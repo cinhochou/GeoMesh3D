@@ -1,15 +1,33 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { EditorMode } from '../core/editor/Editor'
 
 defineProps<{
   currentMode: EditorMode
   isSnappingEnabled: boolean
+  peerCount: number
 }>()
 
 const emit = defineEmits<{
   (e: 'mode-change', mode: EditorMode): void
   (e: 'toggle-snapping'): void // 新增：切换吸附事件
+  (e: 'toggle-ar', isOpen: boolean): void
+  (e: 'toggle-collab', data: { open: boolean; room: string }): void
 }>()
+
+const roomName = ref('default-room')
+const isCollabOpen = ref(false)
+const isAROpen = ref(false)
+
+const toggleCollab = () => {
+  isCollabOpen.value = !isCollabOpen.value
+  emit('toggle-collab', { open: isCollabOpen.value, room: roomName.value })
+}
+
+const toggleAR = () => {
+  isAROpen.value = !isAROpen.value
+  emit('toggle-ar', isAROpen.value)
+}
 </script>
 
 <template>
@@ -36,6 +54,22 @@ const emit = defineEmits<{
 
     <button :class="{ active: isSnappingEnabled }" @click="emit('toggle-snapping')">
       吸附: {{ isSnappingEnabled ? '开启' : '关闭' }}
+    </button>
+
+    <div class="divider"></div>
+
+    <div class="collab-box">
+      <input v-model="roomName" placeholder="输入房间名" class="room-input" />
+      <button @click="toggleCollab" :class="{ active: isCollabOpen }">
+        {{ isCollabOpen ? '退出协作' : '开启协作' }}
+      </button>
+      <span v-if="isCollabOpen" class="peer-count">👥 {{ peerCount }}</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <button @click="toggleAR" :class="{ active: isAROpen }">
+      {{ isAROpen ? '退出 AR' : '开启 AR' }}
     </button>
   </div>
 </template>
