@@ -1,6 +1,6 @@
 <!-- src/views/EditorView.vue -->
 <script setup lang="ts">
-import { onMounted, ref, computed, reactive } from 'vue'
+import { onMounted, onUnmounted, ref, computed, reactive } from 'vue'
 
 import Toolbar from '../components/ToolBar.vue'
 import Sidebar from '../components/SideBar.vue'
@@ -22,6 +22,11 @@ let interaction: Interaction
 
 const peerCount = ref(1)
 const collabManager = ref<CollabManager | null>(null)
+
+// 提示框相关的响应式变量
+const toastMessage = ref('')
+const isToastVisible = ref(false)
+let toastTimer: number | null = null
 
 const modeName = computed(() => {
   switch (editor.mode) {
@@ -67,6 +72,12 @@ onMounted(() => {
   })
 })
 
+// 生命周期钩子，防止页面刷新或销毁后连接残留
+onUnmounted(() => {
+  if (toastTimer) clearTimeout(toastTimer)
+  collabManager.value?.leaveRoom()
+})
+
 function onModeChange(mode: EditorMode) {
   editor.setMode(mode)
 }
@@ -76,12 +87,36 @@ const handleToggleAR = (enabled: boolean) => {
 }
 
 const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => {
-  if (open) collabManager.value?.joinRoom(room)
+  if (open) {
+    collabManager.value?.joinRoom(room)
+    showToast(`😉 成功加入房间: ${room}`)
+  } else {
+    collabManager.value?.leaveRoom()
+    showToast('😶‍🌫️ 已成功退出协作')
+  }
+}
+
+// 统一的提示函数
+const showToast = (msg: string) => {
+  if (toastTimer) clearTimeout(toastTimer)
+  toastMessage.value = msg
+  isToastVisible.value = true
+  toastTimer = window.setTimeout(() => {
+    isToastVisible.value = false
+  }, 1000)
 }
 </script>
 
 <template>
   <div class="editor-root">
+    <Transition name="toast-fade">
+      <div v-if="isToastVisible" class="toast-container">
+        <div class="toast-content">
+          {{ toastMessage }}
+        </div>
+      </div>
+    </Transition>
+
     <Toolbar
       :current-mode="editor.mode"
       :is-snapping-enabled="editor.isSnappingEnabled"
@@ -121,5 +156,39 @@ const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => 
   position: relative; /* 必须加上这个！作为 Video 和 Canvas 的定位基准 */
   overflow: hidden; /* 防止视频溢出 */
   min-height: 0;
+}
+
+/* 提示框样式：位于屏幕正中间 */
+.toast-container {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+  pointer-events: none; /* 确保不影响对页面的操作 */
+}
+
+.toast-content {
+  background: rgba(30, 30, 30, 0.9);
+  color: #43f260;
+  padding: 16px 32px;
+  border-radius: 4px;
+  border: 1px solid #ffffff;
+  font-size: 16px;
+  font-weight: bold;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+/* 动画效果 */
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: all 0.2s ease;
+}
+
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -60%); /* 消失时稍微向上位移一点 */
 }
 </style>

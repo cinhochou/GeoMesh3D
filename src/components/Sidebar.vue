@@ -1,3 +1,4 @@
+<!-- src/components/SideBar.vue -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Scene } from '../core/scene/Scene'

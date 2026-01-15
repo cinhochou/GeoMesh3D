@@ -1,3 +1,4 @@
+<!-- src/components/ToolBar.vue -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { EditorMode } from '../core/editor/Editor'
@@ -21,6 +22,7 @@ const isAROpen = ref(false)
 
 const toggleCollab = () => {
   isCollabOpen.value = !isCollabOpen.value
+  // 发送事件给父组件执行 join 或 leave
   emit('toggle-collab', { open: isCollabOpen.value, room: roomName.value })
 }
 
@@ -59,7 +61,12 @@ const toggleAR = () => {
     <div class="divider"></div>
 
     <div class="collab-box">
-      <input v-model="roomName" placeholder="输入房间名" class="room-input" />
+      <input
+        v-model="roomName"
+        :disabled="isCollabOpen"
+        placeholder="输入房间名"
+        class="room-input"
+      />
       <button @click="toggleCollab" :class="{ active: isCollabOpen }">
         {{ isCollabOpen ? '退出协作' : '开启协作' }}
       </button>
@@ -115,5 +122,23 @@ button.is-active {
   color: #000;
   font-weight: bold;
   border-color: #ffffff;
+}
+.room-input {
+  background: #222;
+  border: 1px solid #444;
+  color: #fff;
+  padding: 4px 8px;
+  margin-right: 4px;
+  width: 100px;
+}
+.room-input:disabled {
+  color: #666;
+  background: #111;
+  border-color: #333;
+}
+.peer-count {
+  margin-left: 8px;
+  color: #43f260;
+  font-family: monospace;
 }
 </style>
