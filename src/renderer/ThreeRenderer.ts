@@ -73,6 +73,8 @@ export class ThreeRenderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
+    this.controls.minDistance = 1
+    this.controls.maxDistance = 100
 
     this.addCustomAxes()
   }
@@ -522,17 +524,23 @@ export class ThreeRenderer {
 
   private drawLabel(pos: THREE.Vector3) {
     const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 128
+    canvas.width = 288
+    canvas.height = 192
     const ctx = canvas.getContext('2d')!
     ctx.fillStyle = 'rgba(0,0,0,0.6)'
-    ctx.roundRect(0, 0, 256, 128, 15)
+    ctx.roundRect(0, 0, 288, 192, 15)
     ctx.fill()
     ctx.fillStyle = '#0f0'
     ctx.font = 'bold 32px monospace'
     ctx.fillText(`X: ${pos.x.toFixed(2)}`, 20, 40)
     ctx.fillText(`Y: ${pos.y.toFixed(2)}`, 20, 75)
     ctx.fillText(`Z: ${pos.z.toFixed(2)}`, 20, 110)
+
+    // 添加提示文本
+    ctx.fillStyle = '#ffffff' // 使用白色文字以便区分
+    ctx.font = 'normal 24px monospace' // 稍小的字体
+    ctx.fillText(`Tips: 放大缩小坐标轴`, 20, 145) // 在底部添加提示
+    ctx.fillText(`以更好确定落点`, 20, 175) // 分两行显示提示
     this.guideLabel!.material.map = new THREE.CanvasTexture(canvas)
   }
 
