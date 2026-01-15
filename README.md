@@ -65,6 +65,10 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 ├─ package-lock.json
 ├─ package.json
 ├─ public
+│  ├─ arcode
+│  │  └─ marker89.td
+│  ├─ data
+│  │  └─ camera_para.dat
 │  └─ favicon.ico
 ├─ README.md
 ├─ src
@@ -76,6 +80,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  └─ ToolBar.vue
 │  ├─ core
 │  │  ├─ behavior
+│  │  ├─ collab
+│  │  │  └─ CollabManager.ts
 │  │  ├─ constraints
 │  │  │  └─ DistanceConstraint.ts
 │  │  ├─ editor
@@ -98,8 +104,6 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ ObjectMapper.ts
 │  │  └─ ThreeRenderer.ts
 │  ├─ resources
-│  │  ├─ arcode
-│  │  │  └─ marker89.td
 │  │  ├─ build
 │  │  │  ├─ ar.js
 │  │  │  ├─ GLTFLoader.js
@@ -111,23 +115,6 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ three.js
 │  │  │  ├─ three.min.js
 │  │  │  └─ threex-arbasecontrols.js
-│  │  ├─ data
-│  │  │  └─ camera_para.dat
-│  │  ├─ obj
-│  │  │  ├─ gg.jpg
-│  │  │  ├─ iphone.mtl
-│  │  │  ├─ iphone.obj
-│  │  │  ├─ iphone_textures
-│  │  │  │  ├─ Apple-WWDC24-iOS-18-Control-Center-240610_inline.jpg.large_2x.jpg
-│  │  │  │  ├─ c196869ba35a99db52058c627f65c63c_icon.png
-│  │  │  │  ├─ iPhone17Pro_Blue.webp
-│  │  │  │  ├─ iPhone17Pro_Orange_2.webp
-│  │  │  │  ├─ iPhone17Pro_Silver_2.webp
-│  │  │  │  └─ logo.jpg
-│  │  │  ├─ jj.mtl
-│  │  │  ├─ jj.obj
-│  │  │  ├─ r8.mtl
-│  │  │  └─ r8.obj
 │  │  └─ pdf
 │  │     └─ marker89.pdf
 │  ├─ router
