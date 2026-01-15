@@ -16,7 +16,7 @@ export class Interaction {
     public renderer: ThreeRenderer,
   ) {
     // 设置射线检测线的灵敏度
-    this.raycaster.params.Line = { threshold: 0.2 }
+    this.raycaster.params.Line = { threshold: 0.5 }
   }
 
   bind(dom: HTMLElement) {

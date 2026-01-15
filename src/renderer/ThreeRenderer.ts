@@ -22,6 +22,7 @@ export class ThreeRenderer {
   private arToolkitContext: any = null
   private arMarkerControls: any = null
   private isARMode = false
+  private arWorldRoot = new THREE.Group()
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -193,10 +194,11 @@ export class ThreeRenderer {
     })
 
     // @ts-expect-error THREEx
-    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.camera, {
+    // 更改：Marker 控制世界，不控制相机
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arWorldRoot, {
       type: 'pattern',
       patternUrl: '/arcode/marker89.td',
-      changeMatrixMode: 'cameraTransformMatrix',
+      changeMatrixMode: 'modelViewMatrix',
     })
   }
 
