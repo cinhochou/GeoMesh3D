@@ -13,6 +13,7 @@ export class ThreeRenderer {
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
+  arCamera: THREE.Camera
   private container: HTMLElement
   private projectionGroup: THREE.Group | null = null
   private guideLabel: THREE.Sprite | null = null
@@ -20,9 +21,8 @@ export class ThreeRenderer {
 
   private arToolkitSource: any = null
   private arToolkitContext: any = null
-  private arMarkerControls: any = null
+  //private arMarkerControls: any = null
   private isARMode = false
-  private arWorldRoot = new THREE.Group()
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -47,6 +47,8 @@ export class ThreeRenderer {
     this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000)
     this.camera.position.set(15, 15, 15)
     this.camera.lookAt(0, 0, 0)
+
+    this.arCamera = new THREE.Camera()
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     this.renderer.setPixelRatio(window.devicePixelRatio)
@@ -93,7 +95,7 @@ export class ThreeRenderer {
     this.isARMode = enabled
 
     if (enabled) {
-      // ===== 进入 AR（不变）=====
+      // ===== 进入 AR=====
       this.backupState.position.copy(this.camera.position)
       this.backupState.quaternion.copy(this.camera.quaternion)
       this.backupState.target.copy(this.controls.target)
@@ -102,13 +104,11 @@ export class ThreeRenderer {
 
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
-      this.controls.enabled = false
+      // this.controls.enabled = false
 
       this.initAR()
     } else {
       // ===== 退出 AR =====
-
-      // --- 原有代码 ---
       if (this.arToolkitSource) {
         if (this.arToolkitSource.domElement) {
           this.arToolkitSource.domElement.srcObject?.getTracks().forEach((t: any) => t.stop())
@@ -117,15 +117,15 @@ export class ThreeRenderer {
         this.arToolkitSource = null
       }
       this.arToolkitContext = null
-      this.arMarkerControls = null
+      //this.arMarkerControls = null
 
       this.scene.visible = true
       this.camera.visible = true
 
-      // ===== 🔴 核心修复 1：恢复 matrixAutoUpdate =====
+      // 恢复 matrixAutoUpdate
       this.camera.matrixAutoUpdate = true
 
-      // ===== 🔴 核心修复 2：强制清空 AR 留下的矩阵 =====
+      // 强制清空 AR 留下的矩阵
       this.camera.matrix.identity()
       this.camera.matrixWorld.identity()
 
@@ -165,41 +165,47 @@ export class ThreeRenderer {
   }
 
   private initAR() {
-    // @ts-expect-error THREEx
+    //@ts-expect-error THREEx
+    // source
     this.arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' })
-
     this.arToolkitSource.init(() => {
-      const video = this.arToolkitSource.domElement
+      const video = this.arToolkitSource.domElement as HTMLVideoElement
       if (!video) return
 
-      this.container.appendChild(video)
+      //  AR.js 会把video插到body里，必须移走
+      if (video.parentElement !== this.container) {
+        video.parentElement?.removeChild(video)
+        this.container.appendChild(video)
+      }
 
-      // 初始强制样式
       this.applyVideoForceStyle(video)
 
-      // 稍微延迟，等浏览器完成 DOM 插入后再计算尺寸
       setTimeout(() => {
         if (this.isARMode) this.onResize()
       }, 200)
     })
 
-    // @ts-expect-error THREEx
+    //@ts-expect-error THREEx
+    // context
     this.arToolkitContext = new THREEx.ArToolkitContext({
       cameraParametersUrl: '/data/camera_para.dat',
       detectionMode: 'mono',
     })
 
     this.arToolkitContext.init(() => {
-      this.camera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
+      this.arCamera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
     })
 
-    // @ts-expect-error THREEx
-    // 更改：Marker 控制世界，不控制相机
-    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arWorldRoot, {
+    //@ts-expect-error THREEx
+    // marker → camera
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arCamera, {
       type: 'pattern',
       patternUrl: '/arcode/marker89.td',
-      changeMatrixMode: 'modelViewMatrix',
+      changeMatrixMode: 'cameraTransformMatrix',
+      maxDetectionRate: 60,
     })
+
+    this.scene.visible = false
   }
 
   // 强制样式工具函数
@@ -219,16 +225,17 @@ export class ThreeRenderer {
 
   render() {
     if (this.isARMode) {
-      if (this.arToolkitSource?.ready) {
-        this.arToolkitContext.update(this.arToolkitSource.domElement)
-        // 仅在 AR 模式下受相机可见性控制
-        this.scene.visible = this.camera.visible
-      }
+      if (this.arToolkitSource?.ready === false) return
+
+      this.arToolkitContext.update(this.arToolkitSource.domElement)
+
+      // 关键：完全交给 AR.js
+      this.scene.visible = this.arCamera.visible
     } else {
-      // 普通模式下，确保场景始终可见
       this.scene.visible = true
       this.controls.update()
     }
+
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -248,17 +255,17 @@ export class ThreeRenderer {
       const source = this.arToolkitSource
       const video = source.domElement
 
-      // A. 尝试调用 AR.js 自带的 resize
+      // 尝试调用 AR.js 自带的 resize
       if (typeof source.onResizeElement === 'function') source.onResizeElement()
       else if (typeof source.onResize === 'function') source.onResize()
 
-      // B. 【核心修复】：在 AR.js 计算完后，立即强行把样式改回来
+      // 在 AR.js 计算完后，立即强行把样式改回来
       // AR.js 经常会把视频设为 width: 640px 这种固定值，我们要强行覆盖它
       if (video) {
         this.applyVideoForceStyle(video)
       }
 
-      // C. 同步 Canvas 尺寸
+      //同步 Canvas 尺寸
       if (typeof source.copyElementSizeTo === 'function') {
         source.copyElementSizeTo(this.renderer.domElement)
       } else if (typeof source.copySizeTo === 'function') {
@@ -287,7 +294,7 @@ export class ThreeRenderer {
         sprite = new THREE.Sprite(material)
 
         // 屏幕空间 ≈ 10px
-        const pixelSize = 10
+        const pixelSize = 6
         const h = this.renderer.domElement.clientHeight
         const scale = pixelSize / h
 
@@ -343,11 +350,6 @@ export class ThreeRenderer {
       ;(line.material as THREE.LineBasicMaterial).color.set(isSelected ? 0x43f260 : 0xffffff)
     })
   }
-
-  // render() {
-  //   this.controls.update()
-  //   this.renderer.render(this.scene, this.camera)
-  // }
 
   resize(w: number, h: number) {
     this.camera.aspect = w / h
