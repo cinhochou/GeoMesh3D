@@ -2,8 +2,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, reactive } from 'vue'
 
-import Toolbar from '../components/ToolBar.vue'
-import Sidebar from '../components/SideBar.vue'
+import Toolbar from '../components/Toolbar.vue'
+import Sidebar from '../components/Sidebar.vue'
 import Timeline from '../components/TimeLine.vue'
 
 import { Scene } from '../core/scene/Scene'

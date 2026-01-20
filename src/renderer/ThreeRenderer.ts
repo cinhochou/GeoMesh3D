@@ -21,9 +21,8 @@ export class ThreeRenderer {
 
   private arToolkitSource: any = null
   private arToolkitContext: any = null
-  private arMarkerControls: any = null
+  //private arMarkerControls: any = null
   private isARMode = false
-  private arWorldRoot!: THREE.Group
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -41,9 +40,6 @@ export class ThreeRenderer {
     this.container = container
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color(0x111111)
-
-    this.arWorldRoot = new THREE.Group()
-    this.scene.add(this.arWorldRoot)
 
     const w = container.clientWidth
     const h = container.clientHeight
@@ -70,12 +66,12 @@ export class ThreeRenderer {
     light.position.set(5, 10, 5)
     this.scene.add(light)
     this.scene.add(new THREE.AmbientLight(0x404040))
-    this.arWorldRoot.add(new THREE.AxesHelper(10))
+    this.scene.add(new THREE.AxesHelper(10))
 
     const size = 20
     const divisions = 20
     const gridHelper = new THREE.GridHelper(size, divisions)
-    this.arWorldRoot.add(gridHelper)
+    this.scene.add(gridHelper)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
@@ -108,7 +104,7 @@ export class ThreeRenderer {
 
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
-      this.controls.enabled = false
+      // this.controls.enabled = false
 
       this.initAR()
     } else {
@@ -121,7 +117,7 @@ export class ThreeRenderer {
         this.arToolkitSource = null
       }
       this.arToolkitContext = null
-      this.arMarkerControls = null
+      //this.arMarkerControls = null
 
       this.scene.visible = true
       this.camera.visible = true
@@ -132,19 +128,6 @@ export class ThreeRenderer {
       // 强制清空 AR 留下的矩阵
       this.camera.matrix.identity()
       this.camera.matrixWorld.identity()
-
-      // 清除 AR Marker 对世界的变换残留
-      this.arWorldRoot.visible = true
-
-      this.arWorldRoot.matrix.identity()
-      this.arWorldRoot.matrixWorld.identity()
-
-      this.arWorldRoot.position.set(0, 0, 0)
-      this.arWorldRoot.quaternion.identity()
-      this.arWorldRoot.scale.set(1, 1, 1)
-
-      this.arWorldRoot.updateMatrix()
-      this.arWorldRoot.updateMatrixWorld(true)
 
       // --- 原有恢复逻辑 ---
       this.camera.fov = this.backupState.fov
@@ -215,12 +198,14 @@ export class ThreeRenderer {
 
     //@ts-expect-error THREEx
     // marker → camera
-    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arWorldRoot, {
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arCamera, {
       type: 'pattern',
       patternUrl: '/arcode/marker89.td',
-      changeMatrixMode: 'modelViewMatrix',
+      changeMatrixMode: 'cameraTransformMatrix',
       maxDetectionRate: 60,
     })
+
+    this.scene.visible = false
   }
 
   // 强制样式工具函数
@@ -241,13 +226,17 @@ export class ThreeRenderer {
   render() {
     if (this.isARMode) {
       if (this.arToolkitSource?.ready === false) return
+
       this.arToolkitContext.update(this.arToolkitSource.domElement)
+
+      // 关键：完全交给 AR.js
+      this.scene.visible = this.arCamera.visible
     } else {
       this.scene.visible = true
       this.controls.update()
     }
 
-    this.renderer.render(this.scene, this.isARMode ? this.arCamera : this.camera)
+    this.renderer.render(this.scene, this.camera)
   }
 
   // 暴露给外部用于处理窗口缩放
@@ -316,7 +305,7 @@ export class ThreeRenderer {
           geoId: p.id,
         }
 
-        this.arWorldRoot.add(sprite)
+        this.scene.add(sprite)
         this.meshMap.set(p.id, sprite)
       }
 
@@ -342,7 +331,7 @@ export class ThreeRenderer {
         const mat = new THREE.LineBasicMaterial({ color: 0xffffff })
         line = new THREE.Line(geo, mat)
         line.userData = { geoId: id, type: 'line' }
-        this.arWorldRoot.add(line)
+        this.scene.add(line)
         this.meshMap.set(id, line)
       } else {
         // 1. 更新顶点数据
@@ -385,19 +374,19 @@ export class ThreeRenderer {
   private addSimpleAxis(dir: THREE.Vector3, color: number, length: number, label: string) {
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), length, color, 0.5, 0.3)
-    this.arWorldRoot.add(arrow)
+    this.scene.add(arrow)
 
     // 反方向轴线
     const negPoints = [new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(-length)]
     const negGeo = new THREE.BufferGeometry().setFromPoints(negPoints)
     const negLine = new THREE.Line(negGeo, new THREE.LineBasicMaterial({ color }))
-    this.arWorldRoot.add(negLine)
+    this.scene.add(negLine)
 
     // 与轴同色的文字标签，位置远离轴端（距离 1.5 单位）
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.arWorldRoot.add(textSprite)
+    this.scene.add(textSprite)
   }
 
   /** Y 轴专用：主轴 + 箭头 + 白色刻度线 + 绿色 "Y" 标签 */
@@ -411,7 +400,7 @@ export class ThreeRenderer {
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
     const material = new THREE.LineBasicMaterial({ color })
     const line = new THREE.Line(geometry, material)
-    this.arWorldRoot.add(line)
+    this.scene.add(line)
 
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(
@@ -422,7 +411,7 @@ export class ThreeRenderer {
       0.5,
       0.3,
     )
-    this.arWorldRoot.add(arrow)
+    this.scene.add(arrow)
 
     // 白色刻度线（每1单位一条短横线）
     for (let i = -length; i <= length; i++) {
@@ -433,14 +422,14 @@ export class ThreeRenderer {
 
       const tickGeo = new THREE.BufferGeometry().setFromPoints([tickStart, tickEnd])
       const tickLine = new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color: 0xffffff }))
-      this.arWorldRoot.add(tickLine)
+      this.scene.add(tickLine)
     }
 
     // 绿色 "Y" 标签，远离轴端
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.arWorldRoot.add(textSprite)
+    this.scene.add(textSprite)
   }
 
   /** 创建与轴同色的纯文字 Sprite（无背景、无边框） */
@@ -505,7 +494,7 @@ export class ThreeRenderer {
       this.guideLabel.scale.set(0.18, 0.1, 1)
       this.projectionGroup.add(this.guideLabel)
 
-      this.arWorldRoot.add(this.projectionGroup)
+      this.scene.add(this.projectionGroup)
     }
 
     this.projectionGroup.visible = visible
@@ -583,7 +572,7 @@ export class ThreeRenderer {
       })
       this.rubberBand = new THREE.Line(geo, mat)
       this.rubberBand.computeLineDistances() // 必须调用才能显示虚线
-      this.arWorldRoot.add(this.rubberBand)
+      this.scene.add(this.rubberBand)
     } else {
       this.rubberBand.visible = true
       this.rubberBand.geometry.setFromPoints([data.from, data.to])
