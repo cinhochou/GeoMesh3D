@@ -29,7 +29,10 @@ export class CollabManager {
 
     // 2. 初始化 WebrtcProvider
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
-      signaling: ['wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'],
+      signaling: [
+        'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/',
+        'ws://localhost:4444/', //npx y-webrtc-signaling命令部署本地信令服务器
+      ],
       // 这里的 peerOpts 可以设置连接超时等
     })
 
