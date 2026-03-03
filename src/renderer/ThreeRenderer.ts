@@ -21,7 +21,7 @@ export class ThreeRenderer {
 
   private arToolkitSource: any = null
   private arToolkitContext: any = null
-  //private arMarkerControls: any = null
+  private arMarkerControls: any = null
   private isARMode = false
 
   // 用于备份进入 AR 前的相机和控制器状态
@@ -104,7 +104,7 @@ export class ThreeRenderer {
 
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
-      // this.controls.enabled = false
+      this.controls.enabled = false
 
       this.initAR()
     } else {
@@ -117,7 +117,7 @@ export class ThreeRenderer {
         this.arToolkitSource = null
       }
       this.arToolkitContext = null
-      //this.arMarkerControls = null
+      this.arMarkerControls = null
 
       this.scene.visible = true
       this.camera.visible = true
