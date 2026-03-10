@@ -22,6 +22,8 @@ let interaction: Interaction
 
 const peerCount = ref(1)
 const collabManager = ref<CollabManager | null>(null)
+const isARMode = ref(false)
+const lastModeBeforeAR = ref<EditorMode | null>(null)
 
 // 提示框相关的响应式变量
 const toastMessage = ref('')
@@ -68,7 +70,7 @@ onMounted(() => {
   loop()
 
   window.addEventListener('resize', () => {
-    renderer.resize(viewportRef.value!.clientWidth, viewportRef.value!.clientHeight)
+    renderer.onResize()
   })
 })
 
@@ -79,11 +81,34 @@ onUnmounted(() => {
 })
 
 function onModeChange(mode: EditorMode) {
+  // AR 模式下仅允许“选择”功能
+  if (isARMode.value && mode !== EditorMode.Select) return
   editor.setMode(mode)
 }
 
-const handleToggleAR = (enabled: boolean) => {
-  renderer.toggleAR(enabled)
+const handleToggleAR = async (enabled: boolean) => {
+  if (enabled) {
+    lastModeBeforeAR.value = editor.mode
+    editor.setMode(EditorMode.Select)
+    isARMode.value = true
+  } else {
+    isARMode.value = false
+    if (lastModeBeforeAR.value !== null) {
+      editor.setMode(lastModeBeforeAR.value)
+    }
+    lastModeBeforeAR.value = null
+  }
+
+  try {
+    await renderer.toggleAR(enabled)
+  } catch (err) {
+    // rollback if AR 初始化失败
+    if (enabled && lastModeBeforeAR.value !== null) {
+      editor.setMode(lastModeBeforeAR.value)
+    }
+    isARMode.value = false
+    console.error(err)
+  }
 }
 
 const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => {
@@ -121,6 +146,7 @@ const showToast = (msg: string) => {
       :current-mode="editor.mode"
       :is-snapping-enabled="editor.isSnappingEnabled"
       :peer-count="peerCount"
+      :is-ar-mode="isARMode"
       @mode-change="onModeChange"
       @toggle-snapping="editor.toggleSnapping()"
       @toggle-ar="handleToggleAR"

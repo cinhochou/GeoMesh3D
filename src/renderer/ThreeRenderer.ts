@@ -1,4 +1,4 @@
-// src/renderer/ThreeRenderer.ts
+﻿// src/renderer/ThreeRenderer.ts
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene } from '../core/scene/Scene'
@@ -49,6 +49,8 @@ export class ThreeRenderer {
     this.camera.lookAt(0, 0, 0)
 
     this.arCamera = new THREE.Camera()
+    this.arCamera.matrixAutoUpdate = false
+    this.scene.add(this.arCamera)
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     this.renderer.setPixelRatio(window.devicePixelRatio)
@@ -106,62 +108,73 @@ export class ThreeRenderer {
       this.scene.background = null
       this.controls.enabled = false
 
-      this.initAR()
-    } else {
-      // ===== 退出 AR =====
-      if (this.arToolkitSource) {
-        if (this.arToolkitSource.domElement) {
-          this.arToolkitSource.domElement.srcObject?.getTracks().forEach((t: any) => t.stop())
-          this.arToolkitSource.domElement.remove()
-        }
-        this.arToolkitSource = null
+      try {
+        this.initAR()
+      } catch (err) {
+        this.isARMode = false
+        this.restoreFromBackupState()
+        throw err
       }
-      this.arToolkitContext = null
-      this.arMarkerControls = null
-
-      this.scene.visible = true
-      this.camera.visible = true
-
-      // 恢复 matrixAutoUpdate
-      this.camera.matrixAutoUpdate = true
-
-      // 强制清空 AR 留下的矩阵
-      this.camera.matrix.identity()
-      this.camera.matrixWorld.identity()
-
-      // --- 原有恢复逻辑 ---
-      this.camera.fov = this.backupState.fov
-      this.camera.near = 0.1
-      this.camera.far = 1000
-      this.camera.zoom = this.backupState.zoom
-      this.camera.aspect = this.container.clientWidth / this.container.clientHeight
-
-      this.camera.projectionMatrix.identity()
-      this.camera.updateProjectionMatrix()
-
-      this.camera.position.copy(this.backupState.position)
-      this.camera.quaternion.copy(this.backupState.quaternion)
-      this.camera.updateMatrixWorld(true)
-
-      this.controls.target.copy(this.backupState.target)
-      this.controls.enabled = true
-      this.controls.update()
-
-      this.renderer.setClearColor(0x111111, 1)
-      this.scene.background = new THREE.Color(0x111111)
-
-      const canvas = this.renderer.domElement
-      canvas.style.display = 'block'
-      canvas.style.width = '100%'
-      canvas.style.height = '100%'
-      canvas.style.position = 'absolute'
-      canvas.style.top = '0'
-      canvas.style.left = '0'
-      canvas.style.marginTop = '0px'
-      canvas.style.marginLeft = '0px'
-
-      this.onResize()
+    } else {
+      this.restoreFromBackupState()
     }
+  }
+
+  private restoreFromBackupState() {
+    this.isARMode = false
+    // ===== 退出 AR =====
+    if (this.arToolkitSource) {
+      if (this.arToolkitSource.domElement) {
+        this.arToolkitSource.domElement.srcObject?.getTracks().forEach((t: any) => t.stop())
+        this.arToolkitSource.domElement.remove()
+      }
+      this.arToolkitSource = null
+    }
+    this.arToolkitContext = null
+    this.arMarkerControls = null
+
+    this.scene.visible = true
+    this.camera.visible = true
+
+    // 恢复 matrixAutoUpdate
+    this.camera.matrixAutoUpdate = true
+
+    // 强制清空 AR 留下的矩阵
+    this.camera.matrix.identity()
+    this.camera.matrixWorld.identity()
+
+    // --- 原有恢复逻辑 ---
+    this.camera.fov = this.backupState.fov
+    this.camera.near = 0.1
+    this.camera.far = 1000
+    this.camera.zoom = this.backupState.zoom
+    this.camera.aspect = this.container.clientWidth / this.container.clientHeight
+
+    this.camera.projectionMatrix.identity()
+    this.camera.updateProjectionMatrix()
+
+    this.camera.position.copy(this.backupState.position)
+    this.camera.quaternion.copy(this.backupState.quaternion)
+    this.camera.updateMatrixWorld(true)
+
+    this.controls.target.copy(this.backupState.target)
+    this.controls.enabled = true
+    this.controls.update()
+
+    this.renderer.setClearColor(0x111111, 1)
+    this.scene.background = new THREE.Color(0x111111)
+
+    const canvas = this.renderer.domElement
+    canvas.style.display = 'block'
+    canvas.style.width = '100%'
+    canvas.style.height = '100%'
+    canvas.style.position = 'absolute'
+    canvas.style.top = '0'
+    canvas.style.left = '0'
+    canvas.style.marginTop = '0px'
+    canvas.style.marginLeft = '0px'
+
+    this.onResize()
   }
 
   private initAR() {
@@ -217,6 +230,7 @@ export class ThreeRenderer {
     video.style.height = '100%'
     video.style.objectFit = 'contain' // 确保完整显示画面
     video.style.zIndex = '0'
+    video.style.pointerEvents = 'none'
 
     // 关键：清除 AR.js 可能会自动生成的负 margin
     video.style.marginLeft = '0px'
@@ -225,9 +239,10 @@ export class ThreeRenderer {
 
   render() {
     if (this.isARMode) {
-      if (this.arToolkitSource?.ready === false) return
+      if (!this.arToolkitContext || this.arToolkitSource?.ready === false) return
 
       this.arToolkitContext.update(this.arToolkitSource.domElement)
+      this.arCamera.updateMatrixWorld(true)
 
       // 关键：完全交给 AR.js
       this.scene.visible = this.arCamera.visible
@@ -236,7 +251,7 @@ export class ThreeRenderer {
       this.controls.update()
     }
 
-    this.renderer.render(this.scene, this.camera)
+    this.renderer.render(this.scene, this.isARMode ? this.arCamera : this.camera)
   }
 
   // 暴露给外部用于处理窗口缩放
