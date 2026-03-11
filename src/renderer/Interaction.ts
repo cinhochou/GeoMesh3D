@@ -1,4 +1,4 @@
-// src/renderer/Interaction.ts
+﻿// src/renderer/Interaction.ts
 import * as THREE from 'three'
 import { Editor, EditorMode } from '../core/editor/Editor'
 import { Vec3 } from '../core/geometry/Vec3'
@@ -36,9 +36,11 @@ export class Interaction {
 
     if (this.editor.mode === EditorMode.CreatePoint) {
       this.renderer.controls.enabled = false
-      this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+      // 在 AR 模式下需要使用 arCamera，否则射线会偏移
+      this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
       const direction = this.raycaster.ray.direction
-      const pos = this.renderer.camera.position.clone().add(direction.multiplyScalar(30))
+      const camPos = this.renderer.getActiveCameraWorldPosition()
+      const pos = camPos.add(direction.multiplyScalar(30))
 
       //只有当开关开启且没有按住 Alt 时，才进行吸附
       if (this.editor.isSnappingEnabled && !e.altKey) {
@@ -75,9 +77,11 @@ export class Interaction {
 
     // --- 处理创建点模式下的辅助线预览 ---
     if (this.editor.mode === EditorMode.CreatePoint) {
-      this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+      this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
       const direction = this.raycaster.ray.direction
-      const previewPos = this.renderer.camera.position.clone().add(direction.multiplyScalar(30))
+      const previewPos = this.renderer
+        .getActiveCameraWorldPosition()
+        .add(direction.multiplyScalar(30))
 
       if (this.editor.isSnappingEnabled && !e.altKey) {
         previewPos.set(this.snap(previewPos.x), this.snap(previewPos.y), this.snap(previewPos.z))
@@ -98,7 +102,7 @@ export class Interaction {
       )
 
       // 计算鼠标在 3D 空间的投影点
-      this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+      this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
       // 这里我们假设在以起点为准的水平面上预览，或者简单的距离相机 30 个单位
       const to = this.raycaster.ray.at(30, new THREE.Vector3())
 
@@ -192,7 +196,7 @@ export class Interaction {
 
   /** 统一的拾取函数，支持点和线 */
   pick(): THREE.Object3D | null {
-    this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const hits = this.raycaster.intersectObjects([...this.renderer.meshMap.values()])
 
     if (hits.length > 0) {
@@ -226,7 +230,7 @@ export class Interaction {
    */
   private handleDrag(referencePos: Vec3, applyDelta: (d: Vec3) => void, isAltPressed: boolean) {
     const cameraDir = new THREE.Vector3()
-    this.renderer.camera.getWorldDirection(cameraDir)
+    this.renderer.getActiveCamera().getWorldDirection(cameraDir)
 
     // 创建一个面对相机的虚拟平面，通过参考点
     const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
@@ -234,7 +238,7 @@ export class Interaction {
       new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z),
     )
 
-    this.raycaster.setFromCamera(this.mouse, this.renderer.camera)
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const targetPos = new THREE.Vector3()
 
     if (this.raycaster.ray.intersectPlane(dragPlane, targetPos)) {

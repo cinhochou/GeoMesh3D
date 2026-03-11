@@ -10,6 +10,8 @@ if (typeof (THREE.Matrix4.prototype as any).getInverse !== 'function') {
 }
 export class ThreeRenderer {
   scene: THREE.Scene
+  /** 承载所有几何物体的分组，便于在 AR 模式下整体缩放 */
+  world: THREE.Group
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
@@ -23,6 +25,10 @@ export class ThreeRenderer {
   private arToolkitContext: any = null
   private arMarkerControls: any = null
   private isARMode = false
+  /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
+  private worldScale = 1
+  /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
+  private static readonly AR_SCENE_SCALE = 0.2
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -40,6 +46,8 @@ export class ThreeRenderer {
     this.container = container
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color(0x111111)
+    this.world = new THREE.Group()
+    this.scene.add(this.world)
 
     const w = container.clientWidth
     const h = container.clientHeight
@@ -68,12 +76,12 @@ export class ThreeRenderer {
     light.position.set(5, 10, 5)
     this.scene.add(light)
     this.scene.add(new THREE.AmbientLight(0x404040))
-    this.scene.add(new THREE.AxesHelper(10))
+    this.world.add(new THREE.AxesHelper(10))
 
     const size = 20
     const divisions = 20
     const gridHelper = new THREE.GridHelper(size, divisions)
-    this.scene.add(gridHelper)
+    this.world.add(gridHelper)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
@@ -82,6 +90,57 @@ export class ThreeRenderer {
     this.controls.maxDistance = 100
 
     this.addCustomAxes()
+  }
+
+  /** 当前用于渲染/拾取的相机（AR 模式下为 arCamera） */
+  getActiveCamera(): THREE.Camera {
+    return this.isARMode ? this.arCamera : this.camera
+  }
+
+  /** 是否处于 AR 模式（供交互层判断） */
+  isARActive(): boolean {
+    return this.isARMode
+  }
+
+  /** 返回 AR 视频元素，便于在拾取时获取真实显示区域 */
+  getARVideoElement(): HTMLVideoElement | null {
+    // arToolkitSource.domElement 即为 <video>
+    return this.isARMode && this.arToolkitSource?.domElement
+      ? (this.arToolkitSource.domElement as HTMLVideoElement)
+      : null
+  }
+
+  /** 获取当前相机的世界坐标（兼容 AR 相机 matrixAutoUpdate=false 的情况） */
+  getActiveCameraWorldPosition(): THREE.Vector3 {
+    const cam = this.getActiveCamera()
+    return cam.getWorldPosition(new THREE.Vector3())
+  }
+
+  /** 获取当前相机的世界朝向 */
+  getActiveCameraWorldDirection(): THREE.Vector3 {
+    const cam = this.getActiveCamera()
+    return cam.getWorldDirection(new THREE.Vector3())
+  }
+
+  /** 统一设置世界缩放，同时保持标记点/浮窗等屏幕尺寸不变 */
+  private setWorldScale(scale: number) {
+    this.worldScale = scale
+    this.world.scale.setScalar(scale)
+
+    // 让点精灵在屏幕上保持可点击尺寸
+    const h = this.renderer.domElement.clientHeight || 1
+    const basePixel = 6
+    const spriteScale = (basePixel / h) / this.worldScale
+    this.meshMap.forEach((obj) => {
+      if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
+        ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
+      }
+    })
+
+    // 引导浮窗大小也保持稳定
+    if (this.guideLabel) {
+      this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+    }
   }
 
   /* ---------- Scene → Three ---------- */
@@ -107,6 +166,8 @@ export class ThreeRenderer {
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
       this.controls.enabled = false
+      // AR 模式整体缩放，避免相机贴得太近导致看不到边缘
+      this.setWorldScale(ThreeRenderer.AR_SCENE_SCALE)
 
       try {
         this.initAR()
@@ -122,6 +183,8 @@ export class ThreeRenderer {
 
   private restoreFromBackupState() {
     this.isARMode = false
+    // 恢复世界缩放
+    this.setWorldScale(1)
     // ===== 退出 AR =====
     if (this.arToolkitSource) {
       if (this.arToolkitSource.domElement) {
@@ -251,7 +314,7 @@ export class ThreeRenderer {
       this.controls.update()
     }
 
-    this.renderer.render(this.scene, this.isARMode ? this.arCamera : this.camera)
+    this.renderer.render(this.scene, this.getActiveCamera())
   }
 
   // 暴露给外部用于处理窗口缩放
@@ -311,7 +374,7 @@ export class ThreeRenderer {
         // 屏幕空间 ≈ 10px
         const pixelSize = 6
         const h = this.renderer.domElement.clientHeight
-        const scale = pixelSize / h
+        const scale = (pixelSize / h) / this.worldScale
 
         sprite.scale.set(scale, scale, 1)
 
@@ -320,7 +383,7 @@ export class ThreeRenderer {
           geoId: p.id,
         }
 
-        this.scene.add(sprite)
+        this.world.add(sprite)
         this.meshMap.set(p.id, sprite)
       }
 
@@ -346,7 +409,7 @@ export class ThreeRenderer {
         const mat = new THREE.LineBasicMaterial({ color: 0xffffff })
         line = new THREE.Line(geo, mat)
         line.userData = { geoId: id, type: 'line' }
-        this.scene.add(line)
+        this.world.add(line)
         this.meshMap.set(id, line)
       } else {
         // 1. 更新顶点数据
@@ -389,19 +452,19 @@ export class ThreeRenderer {
   private addSimpleAxis(dir: THREE.Vector3, color: number, length: number, label: string) {
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), length, color, 0.5, 0.3)
-    this.scene.add(arrow)
+    this.world.add(arrow)
 
     // 反方向轴线
     const negPoints = [new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(-length)]
     const negGeo = new THREE.BufferGeometry().setFromPoints(negPoints)
     const negLine = new THREE.Line(negGeo, new THREE.LineBasicMaterial({ color }))
-    this.scene.add(negLine)
+    this.world.add(negLine)
 
     // 与轴同色的文字标签，位置远离轴端（距离 1.5 单位）
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.scene.add(textSprite)
+    this.world.add(textSprite)
   }
 
   /** Y 轴专用：主轴 + 箭头 + 白色刻度线 + 绿色 "Y" 标签 */
@@ -415,7 +478,7 @@ export class ThreeRenderer {
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
     const material = new THREE.LineBasicMaterial({ color })
     const line = new THREE.Line(geometry, material)
-    this.scene.add(line)
+    this.world.add(line)
 
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(
@@ -426,7 +489,7 @@ export class ThreeRenderer {
       0.5,
       0.3,
     )
-    this.scene.add(arrow)
+    this.world.add(arrow)
 
     // 白色刻度线（每1单位一条短横线）
     for (let i = -length; i <= length; i++) {
@@ -437,14 +500,14 @@ export class ThreeRenderer {
 
       const tickGeo = new THREE.BufferGeometry().setFromPoints([tickStart, tickEnd])
       const tickLine = new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color: 0xffffff }))
-      this.scene.add(tickLine)
+      this.world.add(tickLine)
     }
 
     // 绿色 "Y" 标签，远离轴端
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.scene.add(textSprite)
+    this.world.add(textSprite)
   }
 
   /** 创建与轴同色的纯文字 Sprite（无背景、无边框） */
@@ -506,10 +569,10 @@ export class ThreeRenderer {
       this.guideLabel = new THREE.Sprite(
         new THREE.SpriteMaterial({ depthTest: false, sizeAttenuation: false }),
       )
-      this.guideLabel.scale.set(0.18, 0.1, 1)
+      this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
       this.projectionGroup.add(this.guideLabel)
 
-      this.scene.add(this.projectionGroup)
+      this.world.add(this.projectionGroup)
     }
 
     this.projectionGroup.visible = visible
@@ -587,7 +650,7 @@ export class ThreeRenderer {
       })
       this.rubberBand = new THREE.Line(geo, mat)
       this.rubberBand.computeLineDistances() // 必须调用才能显示虚线
-      this.scene.add(this.rubberBand)
+      this.world.add(this.rubberBand)
     } else {
       this.rubberBand.visible = true
       this.rubberBand.geometry.setFromPoints([data.from, data.to])
