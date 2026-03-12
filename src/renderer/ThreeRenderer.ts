@@ -15,7 +15,7 @@ export class ThreeRenderer {
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
-  arCamera: THREE.Camera
+  arCamera: THREE.PerspectiveCamera
   private container: HTMLElement
   private projectionGroup: THREE.Group | null = null
   private guideLabel: THREE.Sprite | null = null
@@ -56,7 +56,7 @@ export class ThreeRenderer {
     this.camera.position.set(15, 15, 15)
     this.camera.lookAt(0, 0, 0)
 
-    this.arCamera = new THREE.Camera()
+    this.arCamera = new THREE.PerspectiveCamera()
     this.arCamera.matrixAutoUpdate = false
     this.scene.add(this.arCamera)
 
@@ -130,7 +130,7 @@ export class ThreeRenderer {
     // 让点精灵在屏幕上保持可点击尺寸
     const h = this.renderer.domElement.clientHeight || 1
     const basePixel = 6
-    const spriteScale = (basePixel / h) / this.worldScale
+    const spriteScale = basePixel / h / this.worldScale
     this.meshMap.forEach((obj) => {
       if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
@@ -270,6 +270,8 @@ export class ThreeRenderer {
 
     this.arToolkitContext.init(() => {
       this.arCamera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
+      // Three.js r150+ 需要同步 projectionMatrixInverse，否则 Raycaster 在 AR 模式下会算出错误射线
+      this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
     })
 
     //@ts-expect-error THREEx
@@ -291,7 +293,7 @@ export class ThreeRenderer {
     video.style.left = '0'
     video.style.width = '100%'
     video.style.height = '100%'
-    video.style.objectFit = 'contain' // 确保完整显示画面
+    video.style.objectFit = 'cover' // contain可以确保完整显示画面
     video.style.zIndex = '0'
     video.style.pointerEvents = 'none'
 
@@ -374,7 +376,7 @@ export class ThreeRenderer {
         // 屏幕空间 ≈ 10px
         const pixelSize = 6
         const h = this.renderer.domElement.clientHeight
-        const scale = (pixelSize / h) / this.worldScale
+        const scale = pixelSize / h / this.worldScale
 
         sprite.scale.set(scale, scale, 1)
 

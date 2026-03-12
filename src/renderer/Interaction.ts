@@ -215,7 +215,15 @@ export class Interaction {
 
   updateMouse(e: MouseEvent) {
     // 关键：实时获取最新的矩形位置，不要缓存 rect
-    const rect = this.renderer.renderer.domElement.getBoundingClientRect()
+    // AR 模式下优先使用视频元素的尺寸，避免 AR.js 对 <video> 的缩放导致拾取偏移
+    let rect = this.renderer.renderer.domElement.getBoundingClientRect()
+    if (this.renderer.isARActive()) {
+      const video = this.renderer.getARVideoElement()
+      if (video) {
+        const videoRect = video.getBoundingClientRect()
+        if (videoRect.width > 0 && videoRect.height > 0) rect = videoRect
+      }
+    }
 
     // 这里的 rect 会受到 CSS marginTop 或 top 的影响
     // 如果退出 AR 后偏移，说明这里的 rect.top 和 rect.left 与 AR 开启前不一致
