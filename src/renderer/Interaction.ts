@@ -10,6 +10,9 @@ export class Interaction {
   draggingPointId: string | null = null
   draggingLineId: string | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
+  private dragPlane: THREE.Plane | null = null
+  private dragLastPos: THREE.Vector3 | null = null
+  private dragDepth: number | null = null
 
   constructor(
     public editor: Editor,
@@ -59,10 +62,21 @@ export class Interaction {
           this.draggingPointId = geoId
           // 关键点：传入 true，实现点击即多选，不再清空之前的
           this.editor.scene.selection.selectPoint(geoId, true)
+          const p = this.editor.scene.points.get(geoId)
+          if (p) this.startDrag(p.position)
         } else if (type === 'line') {
           this.draggingLineId = geoId
           // 关键点：传入 true，多选线
           this.editor.scene.selection.selectLine(geoId, true)
+          const l = this.editor.scene.lines.get(geoId)
+          if (l) {
+            const mid = new Vec3(
+              (l.p1.position.x + l.p2.position.x) / 2,
+              (l.p1.position.y + l.p2.position.y) / 2,
+              (l.p1.position.z + l.p2.position.z) / 2,
+            )
+            this.startDrag(mid)
+          }
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
         this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
@@ -186,6 +200,7 @@ export class Interaction {
   onMouseUp = () => {
     this.draggingPointId = null
     this.draggingLineId = null
+    this.endDrag()
     this.renderer.controls.enabled = true
     this.renderer.renderer.domElement.style.cursor = 'default'
 
@@ -237,33 +252,71 @@ export class Interaction {
    * @param applyDelta 回调函数，接收计算出的位移
    */
   private handleDrag(referencePos: Vec3, applyDelta: (d: Vec3) => void, isAltPressed: boolean) {
-    const cameraDir = new THREE.Vector3()
-    this.renderer.getActiveCamera().getWorldDirection(cameraDir)
-
-    // 创建一个面对相机的虚拟平面，通过参考点
-    const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-      cameraDir,
-      new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z),
-    )
-
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const targetPos = new THREE.Vector3()
 
-    if (this.raycaster.ray.intersectPlane(dragPlane, targetPos)) {
-      // 吸附逻辑判断
-      if (this.editor.isSnappingEnabled && !isAltPressed) {
-        targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
-      }
+    // 拖拽平面在拖拽开始时固定，避免 AR 相机抖动导致跳动
+    if (!this.dragPlane || !this.dragLastPos) this.startDrag(referencePos)
+    if (!this.dragPlane || !this.dragLastPos) return
 
-      const delta = new Vec3(
-        targetPos.x - referencePos.x,
-        targetPos.y - referencePos.y,
-        targetPos.z - referencePos.z,
-      )
+    let hit = false
 
-      if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
-        applyDelta(delta)
-      }
+    // AR 模式使用“固定深度球面”方案，避免平面与射线接近平行造成卡顿
+    if (this.renderer.isARActive() && this.dragDepth !== null) {
+      const sphere = new THREE.Sphere(this.raycaster.ray.origin.clone(), this.dragDepth)
+      hit = this.raycaster.ray.intersectSphere(sphere, targetPos) !== null
     }
+
+    // 非 AR 或球面未命中时，回退到固定拖拽平面
+    if (!hit) {
+      hit = !this.raycaster.ray.intersectPlane(this.dragPlane, targetPos)
+    }
+
+    // 仍未命中时，用上一次深度兜底
+    if (!hit) {
+      const fallbackDepth = this.raycaster.ray.origin.distanceTo(this.dragLastPos)
+      targetPos.copy(this.raycaster.ray.at(fallbackDepth, new THREE.Vector3()))
+    }
+
+    // 吸附逻辑判断
+    if (this.editor.isSnappingEnabled && !isAltPressed) {
+      targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
+    }
+
+    const delta = new Vec3(
+      targetPos.x - this.dragLastPos.x,
+      targetPos.y - this.dragLastPos.y,
+      targetPos.z - this.dragLastPos.z,
+    )
+
+    if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
+      applyDelta(delta)
+      this.dragLastPos.copy(targetPos)
+    }
+  }
+
+  private startDrag(referencePos: Vec3) {
+    const cameraDir = this.renderer.getActiveCameraWorldDirection()
+    const ref = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
+
+    // 固定拖拽平面：法线取拖拽开始时的相机朝向
+    this.dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, ref)
+
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const hit = new THREE.Vector3()
+    if (this.raycaster.ray.intersectPlane(this.dragPlane, hit)) {
+      this.dragLastPos = hit
+    } else {
+      this.dragLastPos = ref
+    }
+
+    // 记录拖拽起始的相机距离，用于 AR 模式的固定深度拖拽
+    this.dragDepth = this.raycaster.ray.origin.distanceTo(ref)
+  }
+
+  private endDrag() {
+    this.dragPlane = null
+    this.dragLastPos = null
+    this.dragDepth = null
   }
 }
