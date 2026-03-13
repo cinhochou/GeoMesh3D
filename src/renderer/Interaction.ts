@@ -278,9 +278,16 @@ export class Interaction {
       targetPos.copy(this.raycaster.ray.at(fallbackDepth, new THREE.Vector3()))
     }
 
+    const snapping = this.editor.isSnappingEnabled && !isAltPressed
     // 吸附逻辑判断
-    if (this.editor.isSnappingEnabled && !isAltPressed) {
+    if (snapping) {
       targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
+      // 保证 delta 基于同一吸附空间，避免拖拽时“吸不上格”
+      this.dragLastPos.set(
+        this.snap(this.dragLastPos.x),
+        this.snap(this.dragLastPos.y),
+        this.snap(this.dragLastPos.z),
+      )
     }
 
     const delta = new Vec3(
