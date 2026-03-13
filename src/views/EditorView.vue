@@ -3,7 +3,7 @@
 import { onMounted, onUnmounted, ref, computed, reactive } from 'vue'
 
 import Toolbar from '../components/ToolBar.vue'
-import Sidebar from '../components/Sidebar.vue'
+import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/TimeLine.vue'
 
 import { Scene } from '../core/scene/Scene'
@@ -154,7 +154,7 @@ const showToast = (msg: string) => {
     />
 
     <div class="editor-body">
-      <Sidebar :scene="scene" :modeName="modeName" />
+      <Sidebar :scene="scene" :editor="editor" :modeName="modeName" />
 
       <div ref="viewportRef" class="viewport"></div>
     </div>
