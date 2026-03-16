@@ -27,6 +27,10 @@ export class ThreeRenderer {
   private isARMode = false
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
+  private axisGridGroup: THREE.Group
+  private axisGridSize = 20
+  private axisSizeSelectorWrap: HTMLDivElement | null = null
+  private axisSizeSelector: HTMLSelectElement | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
   private static readonly AR_SCENE_SCALE = 0.2
 
@@ -48,6 +52,8 @@ export class ThreeRenderer {
     this.scene.background = new THREE.Color(0x111111)
     this.world = new THREE.Group()
     this.scene.add(this.world)
+    this.axisGridGroup = new THREE.Group()
+    this.world.add(this.axisGridGroup)
 
     const w = container.clientWidth
     const h = container.clientHeight
@@ -76,20 +82,14 @@ export class ThreeRenderer {
     light.position.set(5, 10, 5)
     this.scene.add(light)
     this.scene.add(new THREE.AmbientLight(0x404040))
-    this.world.add(new THREE.AxesHelper(10))
-
-    const size = 20
-    const divisions = 20
-    const gridHelper = new THREE.GridHelper(size, divisions)
-    this.world.add(gridHelper)
-
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
     this.controls.minDistance = 1
     this.controls.maxDistance = 100
 
-    this.addCustomAxes()
+    this.setAxisGridSize(this.axisGridSize)
+    this.createAxisSizeSelector()
   }
 
   /** 当前用于渲染/拾取的相机（AR 模式下为 arCamera） */
@@ -154,6 +154,7 @@ export class ThreeRenderer {
   // 切换 AR 模式
   async toggleAR(enabled: boolean) {
     this.isARMode = enabled
+    this.updateAxisSizeSelectorVisibility()
 
     if (enabled) {
       // ===== 进入 AR=====
@@ -238,6 +239,7 @@ export class ThreeRenderer {
     canvas.style.marginLeft = '0px'
 
     this.onResize()
+    this.updateAxisSizeSelectorVisibility()
   }
 
   private initAR() {
@@ -437,9 +439,7 @@ export class ThreeRenderer {
     this.renderer.setSize(w, h)
   }
 
-  private addCustomAxes() {
-    const len = 10 // 主轴长度，可自行调整
-
+  private addCustomAxes(len: number) {
     // X 轴：红色箭头 + 红色 "X" 标签
     this.addSimpleAxis(new THREE.Vector3(1, 0, 0), 0xff0000, len, 'X轴')
 
@@ -454,19 +454,19 @@ export class ThreeRenderer {
   private addSimpleAxis(dir: THREE.Vector3, color: number, length: number, label: string) {
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), length, color, 0.5, 0.3)
-    this.world.add(arrow)
+    this.axisGridGroup.add(arrow)
 
     // 反方向轴线
     const negPoints = [new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(-length)]
     const negGeo = new THREE.BufferGeometry().setFromPoints(negPoints)
     const negLine = new THREE.Line(negGeo, new THREE.LineBasicMaterial({ color }))
-    this.world.add(negLine)
+    this.axisGridGroup.add(negLine)
 
     // 与轴同色的文字标签，位置远离轴端（距离 1.5 单位）
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.world.add(textSprite)
+    this.axisGridGroup.add(textSprite)
   }
 
   /** Y 轴专用：主轴 + 箭头 + 白色刻度线 + 绿色 "Y" 标签 */
@@ -480,7 +480,7 @@ export class ThreeRenderer {
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
     const material = new THREE.LineBasicMaterial({ color })
     const line = new THREE.Line(geometry, material)
-    this.world.add(line)
+    this.axisGridGroup.add(line)
 
     // 正方向箭头
     const arrow = new THREE.ArrowHelper(
@@ -491,7 +491,7 @@ export class ThreeRenderer {
       0.5,
       0.3,
     )
-    this.world.add(arrow)
+    this.axisGridGroup.add(arrow)
 
     // 白色刻度线（每1单位一条短横线）
     for (let i = -length; i <= length; i++) {
@@ -502,14 +502,80 @@ export class ThreeRenderer {
 
       const tickGeo = new THREE.BufferGeometry().setFromPoints([tickStart, tickEnd])
       const tickLine = new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color: 0xffffff }))
-      this.world.add(tickLine)
+      this.axisGridGroup.add(tickLine)
     }
 
     // 绿色 "Y" 标签，远离轴端
     const labelPos = dir.clone().multiplyScalar(length + 1.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
-    this.world.add(textSprite)
+    this.axisGridGroup.add(textSprite)
+  }
+
+  private setAxisGridSize(size: number) {
+    this.axisGridSize = size
+
+    // 清空旧的坐标轴与网格
+    while (this.axisGridGroup.children.length > 0) {
+      const child = this.axisGridGroup.children.pop()!
+      this.axisGridGroup.remove(child)
+    }
+
+    // 坐标轴正负方向长度 = size（总长度 = 2 * size）
+    this.addCustomAxes(size)
+
+    // 网格尺寸与坐标轴总长度对齐：总长度 = 2 * size
+    // 分割数 = 2 * size（保持每格 1 单位）
+    const gridSize = size * 2
+    const divisions = gridSize
+    const gridHelper = new THREE.GridHelper(gridSize, divisions)
+    this.axisGridGroup.add(gridHelper)
+  }
+
+  private createAxisSizeSelector() {
+    const wrap = document.createElement('div')
+    wrap.style.position = 'absolute'
+    wrap.style.right = '12px'
+    wrap.style.bottom = '12px'
+    wrap.style.zIndex = '20'
+    wrap.style.pointerEvents = 'auto'
+
+    const select = document.createElement('select')
+    select.style.border = '1px solid #444'
+    select.style.background = 'transparent'
+    select.style.color = '#ffffff'
+    select.style.padding = '6px 10px'
+    select.style.fontSize = '14px'
+    select.style.borderRadius = '4px'
+    select.style.outline = 'none'
+
+    const sizes = [10, 20, 40]
+    sizes.forEach((size) => {
+      const opt = document.createElement('option')
+      opt.value = `${size}`
+      opt.textContent = `${size}`
+      opt.style.background = '#111111'
+      opt.style.color = '#ffffff'
+      select.appendChild(opt)
+    })
+
+    select.value = `${this.axisGridSize}`
+    select.addEventListener('change', () => {
+      const nextSize = Number.parseInt(select.value, 10)
+      if (!Number.isNaN(nextSize)) this.setAxisGridSize(nextSize)
+    })
+
+    wrap.appendChild(select)
+    this.container.appendChild(wrap)
+
+    this.axisSizeSelectorWrap = wrap
+    this.axisSizeSelector = select
+    this.updateAxisSizeSelectorVisibility()
+  }
+
+  private updateAxisSizeSelectorVisibility() {
+    if (!this.axisSizeSelectorWrap) return
+    this.axisSizeSelectorWrap.style.display = this.isARMode ? 'none' : 'block'
   }
 
   /** 创建与轴同色的纯文字 Sprite（无背景、无边框） */
