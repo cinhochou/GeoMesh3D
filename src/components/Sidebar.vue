@@ -28,7 +28,7 @@ const linesInScene = computed(() => {
 
 const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
 const sidebarRef = ref<HTMLElement | null>(null)
-const editPoint = reactive({ x: '', y: '', z: '' })
+const editPoint = reactive({ name: '', x: '', y: '', z: '' })
 const editLine = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
@@ -50,6 +50,7 @@ const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
   if (p.locked) return
   editing.value = { type: 'point', id: p.id }
+  editPoint.name = p.name ?? ''
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
   editPoint.z = toFixed2(p.position.z)
@@ -74,6 +75,7 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return
   const point = props.scene.points.get(id)
   if (!point) return
+  if (point.locked) return
   const before = point.position
   const delta = new Vec3(x - before.x, y - before.y, z - before.z)
   if (Math.abs(delta.x) + Math.abs(delta.y) + Math.abs(delta.z) < 1e-6) return
@@ -82,6 +84,10 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
 
 const applyEditPoint = () => {
   if (!editing.value || editing.value.type !== 'point') return
+  const point = props.scene.points.get(editing.value.id)
+  if (point && !point.locked) {
+    point.name = editPoint.name
+  }
   applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
 }
 
@@ -109,10 +115,11 @@ watch(
   () => {
     if (!editing.value || editing.value.type !== 'point') return null
     const p = props.scene.points.get(editing.value.id)
-    return p ? { x: p.position.x, y: p.position.y, z: p.position.z } : null
+    return p ? { name: p.name ?? '', x: p.position.x, y: p.position.y, z: p.position.z } : null
   },
   (newPos) => {
     if (!newPos) return
+    editPoint.name = newPos.name
     editPoint.x = toFixed2(newPos.x)
     editPoint.y = toFixed2(newPos.y)
     editPoint.z = toFixed2(newPos.z)
@@ -170,6 +177,8 @@ onUnmounted(() => {
           <span>ID: {{ p!.id }}</span>
         </div>
         <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
+          <label>name</label>
+          <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
           <label>x</label>
           <input type="number" v-model="editPoint.x" @input="applyEditPoint" step="0.5" />
           <label>y</label>
@@ -178,6 +187,7 @@ onUnmounted(() => {
           <input type="number" v-model="editPoint.z" @input="applyEditPoint" step="0.5" />
         </div>
         <div v-else>
+          name: {{ p!.name ?? '' }}<br />
           x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
           {{ p!.position.z.toFixed(2) }}
         </div>
@@ -226,6 +236,7 @@ onUnmounted(() => {
       <div v-if="pointsInScene.length === 0 && linesInScene.length === 0">无</div>
       <div v-for="p in pointsInScene" :key="p!.id" class="point-info">
         <div>ID: {{ p!.id }}</div>
+        <div>name: {{ p!.name ?? '' }}</div>
         <div>
           x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
           {{ p!.position.z.toFixed(2) }}

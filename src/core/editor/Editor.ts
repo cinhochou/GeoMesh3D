@@ -17,6 +17,17 @@ export enum EditorMode {
 
 let idCounter = 0
 const genId = (prefix: string) => `${prefix}_${idCounter++}`
+let nameCounter = 0
+const genPointName = () => {
+  // A-Z, AA, AB, ...
+  let n = nameCounter++
+  let name = ''
+  while (n >= 0) {
+    name = String.fromCharCode(65 + (n % 26)) + name
+    n = Math.floor(n / 26) - 1
+  }
+  return name
+}
 
 export class Editor {
   scene: Scene
@@ -37,7 +48,7 @@ export class Editor {
 
   /* ---------- 点的创建 (现在支持撤销) ---------- */
   createPoint(position: Vec3) {
-    const p = new Point3(genId('p'), position)
+    const p = new Point3(genId('p'), genPointName(), position)
     const cmd = new AddElementCommand(this.scene, p, 'point')
     this.executeCommand(cmd)
     return p

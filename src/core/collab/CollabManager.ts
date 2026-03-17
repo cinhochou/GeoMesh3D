@@ -74,11 +74,12 @@ export class CollabManager {
           const point = this.scene.points.get(id)
           if (point) {
             if (point.locked) return
+            point.name = data.name ?? point.name
             point.setPosition(new Vec3(data.x, data.y, data.z))
           } else {
             const isOrigin = id === Scene.ORIGIN_ID
             this.scene.addPoint(
-              new Point3(id, new Vec3(data.x, data.y, data.z), isOrigin),
+              new Point3(id, data.name ?? '', new Vec3(data.x, data.y, data.z), isOrigin),
             )
           }
         }
@@ -106,7 +107,7 @@ export class CollabManager {
 
     this.ydoc.transact(() => {
       this.scene.points.forEach((p, id) => {
-        this.yPoints.set(id, { x: p.position.x, y: p.position.y, z: p.position.z })
+        this.yPoints.set(id, { x: p.position.x, y: p.position.y, z: p.position.z, name: p.name })
       })
       this.scene.lines.forEach((l, id) => {
         this.yLines.set(id, { p1Id: l.p1.id, p2Id: l.p2.id })

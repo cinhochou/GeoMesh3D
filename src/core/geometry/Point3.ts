@@ -3,7 +3,7 @@
 export class Point3 {
   id: string
   name: string
-  position: Vec3 //鍚戦噺浣嶇疆
+  position: Vec3
   locked: boolean
 
   constructor(id: string, name: string, position = new Vec3(), locked: boolean = false) {
