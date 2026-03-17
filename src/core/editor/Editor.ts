@@ -46,6 +46,7 @@ export class Editor {
   movePoint(pointId: string, delta: Vec3) {
     const point = this.scene.points.get(pointId)
     if (!point) return
+    if (point.locked) return
     const before = point.position.clone()
     const after = before.add(delta)
     this.executeCommand(new TransformCommand(point, before, after))

@@ -48,6 +48,7 @@ const toFixed2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : '0.00')
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
+  if (p.locked) return
   editing.value = { type: 'point', id: p.id }
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
@@ -56,6 +57,7 @@ const startEditPoint = (p: Point3 | undefined) => {
 
 const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
+  if (l.p1.locked || l.p2.locked) return
   editing.value = { type: 'line', id: l.id }
   editLine.p1.x = toFixed2(l.p1.position.x)
   editLine.p1.y = toFixed2(l.p1.position.y)

@@ -63,13 +63,23 @@ export class Interaction {
           // 关键点：传入 true，实现点击即多选，不再清空之前的
           this.editor.scene.selection.selectPoint(geoId, true)
           const p = this.editor.scene.points.get(geoId)
-          if (p) this.startDrag(p.position)
+          if (p) {
+            if (p.locked) {
+              this.draggingPointId = null
+            } else {
+              this.startDrag(p.position)
+            }
+          }
         } else if (type === 'line') {
-          this.draggingLineId = geoId
           // 关键点：传入 true，多选线
           this.editor.scene.selection.selectLine(geoId, true)
           const l = this.editor.scene.lines.get(geoId)
           if (l) {
+            if (l.p1.locked || l.p2.locked) {
+              this.draggingLineId = null
+              return
+            }
+            this.draggingLineId = geoId
             const mid = new Vec3(
               (l.p1.position.x + l.p2.position.x) / 2,
               (l.p1.position.y + l.p2.position.y) / 2,

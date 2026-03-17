@@ -28,7 +28,7 @@ export class ThreeRenderer {
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
   private axisGridGroup: THREE.Group
-  private axisGridSize = 20
+  private axisGridSize = 10
   private axisSizeSelectorWrap: HTMLDivElement | null = null
   private axisSizeSelector: HTMLSelectElement | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
@@ -396,7 +396,8 @@ export class ThreeRenderer {
 
       // 选中高亮
       const isSelected = scene.selection.points.has(p.id)
-      ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : 0xff5555)
+      const baseColor = p.locked ? 0xffffff : 0xff5555
+      ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
     })
   }
 
@@ -530,6 +531,13 @@ export class ThreeRenderer {
     const divisions = gridSize
     const gridHelper = new THREE.GridHelper(gridSize, divisions)
     this.axisGridGroup.add(gridHelper)
+    if (this.axisGridSize === 20) {
+      this.camera.position.set(25, 25, 25)
+    } else if (this.axisGridSize === 40) {
+      this.camera.position.set(30, 65, 30)
+    } else {
+      this.camera.position.set(15, 15, 15)
+    }
   }
 
   private createAxisSizeSelector() {

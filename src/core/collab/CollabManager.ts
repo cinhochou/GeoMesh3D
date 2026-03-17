@@ -30,8 +30,7 @@ export class CollabManager {
     // 2. 初始化 WebrtcProvider
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
       signaling: [
-        'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/',
-        'ws://localhost:4444/', //npx y-webrtc-signaling命令部署本地信令服务器
+        'ws://localhost:4444/', //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/',
       ],
       // 这里的 peerOpts 可以设置连接超时等
     })
@@ -74,9 +73,13 @@ export class CollabManager {
           if (!data) return
           const point = this.scene.points.get(id)
           if (point) {
+            if (point.locked) return
             point.setPosition(new Vec3(data.x, data.y, data.z))
           } else {
-            this.scene.addPoint(new Point3(id, new Vec3(data.x, data.y, data.z)))
+            const isOrigin = id === Scene.ORIGIN_ID
+            this.scene.addPoint(
+              new Point3(id, new Vec3(data.x, data.y, data.z), isOrigin),
+            )
           }
         }
       })
