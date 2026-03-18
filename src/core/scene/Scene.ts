@@ -13,7 +13,7 @@ export class Scene {
 
   constructor() {
     // 固定原点：可参与连线/选择，但不可移动
-    const origin = new Point3(Scene.ORIGIN_ID, 'O', new Vec3(0, 0, 0), true)
+    const origin = new Point3(Scene.ORIGIN_ID, 'O', new Vec3(0, 0, 0), true, true)
     this.points.set(origin.id, origin)
   }
 

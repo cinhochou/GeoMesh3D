@@ -57,7 +57,7 @@ export class Editor {
   }
 
   createPoint(position: Vec3) {
-    const p = new Point3(genId('p'), genPointName(), position)
+    const p = new Point3(genId('p'), genPointName(), position, false, true)
     const cmd = new AddElementCommand(this.scene, p, 'point')
     this.executeCommand(cmd)
     return p
@@ -88,7 +88,7 @@ export class Editor {
           (l.p1.id === p2!.id && l.p2.id === p1!.id),
       )
       if (!exists) {
-        const line = new Line3(genId('l'), genLineName(), p1!, p2!)
+        const line = new Line3(genId('l'), genLineName(), p1!, p2!, true)
         this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
       } else {
         window.dispatchEvent(

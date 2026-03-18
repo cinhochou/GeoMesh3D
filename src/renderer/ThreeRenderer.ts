@@ -417,6 +417,10 @@ export class ThreeRenderer {
       const labelColor = isSelected ? 0x43f260 : 0xffffff
       const labelKey = '__labelSprite'
       const existingLabel = (sprite.userData as any)[labelKey] as THREE.Sprite | undefined
+      if (!p.nameVisible) {
+        if (existingLabel) existingLabel.visible = false
+        return
+      }
       if (!existingLabel) {
         const nameSprite = this.makePointLabelSprite(p.name ?? '', labelColor)
         nameSprite.position.copy(
@@ -431,6 +435,7 @@ export class ThreeRenderer {
         ;(sprite.userData as any)[labelKey] = nameSprite
         this.world.add(nameSprite)
       } else {
+        existingLabel.visible = true
         existingLabel.position.copy(
           this.getSmartLabelPosition(new THREE.Vector3(p.position.x, p.position.y, p.position.z)),
         )
@@ -499,6 +504,10 @@ export class ThreeRenderer {
       const labelKey = '__labelSprite'
       const existingLabel = (line.userData as any)[labelKey] as THREE.Sprite | undefined
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      if (!lineData.nameVisible) {
+        if (existingLabel) existingLabel.visible = false
+        return
+      }
       if (!existingLabel) {
         const nameSprite = this.makeLineLabelSprite(lineData.name ?? '', labelColor)
         nameSprite.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
@@ -511,6 +520,7 @@ export class ThreeRenderer {
         ;(line.userData as any)[labelKey] = nameSprite
         this.world.add(nameSprite)
       } else {
+        existingLabel.visible = true
         existingLabel.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
         const labelText = (existingLabel as any).userData?.text ?? ''
         if (labelText !== (lineData.name ?? '')) {

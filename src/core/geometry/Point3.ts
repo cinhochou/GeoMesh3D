@@ -3,12 +3,20 @@
 export class Point3 {
   id: string
   name: string
+  nameVisible: boolean
   position: Vec3
   locked: boolean
 
-  constructor(id: string, name: string, position = new Vec3(), locked: boolean = false) {
+  constructor(
+    id: string,
+    name: string,
+    position = new Vec3(),
+    locked: boolean = false,
+    nameVisible: boolean = true,
+  ) {
     this.id = id
     this.name = name
+    this.nameVisible = nameVisible
     this.position = position
     this.locked = locked
   }

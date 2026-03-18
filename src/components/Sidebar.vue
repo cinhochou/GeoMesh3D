@@ -28,9 +28,10 @@ const linesInScene = computed(() => {
 
 const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
 const sidebarRef = ref<HTMLElement | null>(null)
-const editPoint = reactive({ name: '', x: '', y: '', z: '' })
+const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
 const editLine = reactive({
   name: '',
+  nameVisible: true,
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
@@ -52,6 +53,7 @@ const startEditPoint = (p: Point3 | undefined) => {
   if (p.locked) return
   editing.value = { type: 'point', id: p.id }
   editPoint.name = p.name ?? ''
+  editPoint.nameVisible = p.nameVisible !== false
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
   editPoint.z = toFixed2(p.position.z)
@@ -61,6 +63,7 @@ const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
   editing.value = { type: 'line', id: l.id }
   editLine.name = l.name ?? ''
+  editLine.nameVisible = l.nameVisible !== false
   editLine.p1.x = toFixed2(l.p1.position.x)
   editLine.p1.y = toFixed2(l.p1.position.y)
   editLine.p1.z = toFixed2(l.p1.position.z)
@@ -88,6 +91,7 @@ const applyEditPoint = () => {
   const point = props.scene.points.get(editing.value.id)
   if (point && !point.locked) {
     point.name = editPoint.name
+    point.nameVisible = editPoint.nameVisible
   }
   applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
 }
@@ -97,6 +101,7 @@ const applyEditLine = () => {
   const line = props.scene.lines.get(editing.value.id)
   if (!line) return
   line.name = editLine.name
+  line.nameVisible = editLine.nameVisible
   applyPointPosition(line.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
   applyPointPosition(line.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
 }
@@ -117,11 +122,20 @@ watch(
   () => {
     if (!editing.value || editing.value.type !== 'point') return null
     const p = props.scene.points.get(editing.value.id)
-    return p ? { name: p.name ?? '', x: p.position.x, y: p.position.y, z: p.position.z } : null
+    return p
+      ? {
+          name: p.name ?? '',
+          nameVisible: p.nameVisible !== false,
+          x: p.position.x,
+          y: p.position.y,
+          z: p.position.z,
+        }
+      : null
   },
   (newPos) => {
     if (!newPos) return
     editPoint.name = newPos.name
+    editPoint.nameVisible = newPos.nameVisible
     editPoint.x = toFixed2(newPos.x)
     editPoint.y = toFixed2(newPos.y)
     editPoint.z = toFixed2(newPos.z)
@@ -137,6 +151,7 @@ watch(
     if (!l) return null
     return {
       name: l.name ?? '',
+      nameVisible: l.nameVisible !== false,
       p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
       p2: { x: l.p2.position.x, y: l.p2.position.y, z: l.p2.position.z },
     }
@@ -144,6 +159,7 @@ watch(
   (newLine) => {
     if (!newLine) return
     editLine.name = newLine.name
+    editLine.nameVisible = newLine.nameVisible
     editLine.p1.x = toFixed2(newLine.p1.x)
     editLine.p1.y = toFixed2(newLine.p1.y)
     editLine.p1.z = toFixed2(newLine.p1.z)
@@ -184,6 +200,10 @@ onUnmounted(() => {
           <div class="name-row">
             <label>名称</label>
             <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
+              {{ editPoint.nameVisible ? '隐藏' : '显示' }}
+            </label>
           </div>
           <div class="coord-row">
             <label>x</label>
@@ -216,6 +236,10 @@ onUnmounted(() => {
           <div class="name-row">
             <label>名称</label>
             <input type="text" v-model="editLine.name" @input="applyEditLine" />
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
+              {{ editLine.nameVisible ? '隐藏' : '显示' }}
+            </label>
           </div>
           <div class="line-point-row">
             <span class="line-point-label">点{{ l!.p1.name ?? '' }}(x,y,z)</span>
@@ -412,6 +436,16 @@ hr {
   align-items: center;
   gap: 4px;
   grid-column: 1 / -1;
+}
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #8fdc9b;
+}
+.toggle-label input {
+  margin: 0;
 }
 .line-point-row {
   display: flex;

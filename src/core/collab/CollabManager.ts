@@ -75,11 +75,18 @@ export class CollabManager {
           if (point) {
             if (point.locked) return
             point.name = data.name ?? point.name
+            if (typeof data.nameVisible === 'boolean') point.nameVisible = data.nameVisible
             point.setPosition(new Vec3(data.x, data.y, data.z))
           } else {
             const isOrigin = id === Scene.ORIGIN_ID
             this.scene.addPoint(
-              new Point3(id, data.name ?? '', new Vec3(data.x, data.y, data.z), isOrigin),
+              new Point3(
+                id,
+                data.name ?? '',
+                new Vec3(data.x, data.y, data.z),
+                isOrigin,
+                typeof data.nameVisible === 'boolean' ? data.nameVisible : true,
+              ),
             )
           }
         }
@@ -94,7 +101,9 @@ export class CollabManager {
           const p1 = this.scene.points.get(data.p1Id)
           const p2 = this.scene.points.get(data.p2Id)
           if (p1 && p2 && !this.scene.lines.has(id)) {
-            this.scene.addLine(new Line3(id, data.name ?? '', p1, p2))
+            this.scene.addLine(
+              new Line3(id, data.name ?? '', p1, p2, data.nameVisible ?? true),
+            )
           }
         }
       })
@@ -107,10 +116,21 @@ export class CollabManager {
 
     this.ydoc.transact(() => {
       this.scene.points.forEach((p, id) => {
-        this.yPoints.set(id, { x: p.position.x, y: p.position.y, z: p.position.z, name: p.name })
+        this.yPoints.set(id, {
+          x: p.position.x,
+          y: p.position.y,
+          z: p.position.z,
+          name: p.name,
+          nameVisible: p.nameVisible,
+        })
       })
       this.scene.lines.forEach((l, id) => {
-        this.yLines.set(id, { p1Id: l.p1.id, p2Id: l.p2.id, name: l.name })
+        this.yLines.set(id, {
+          p1Id: l.p1.id,
+          p2Id: l.p2.id,
+          name: l.name,
+          nameVisible: l.nameVisible,
+        })
       })
     })
   }
