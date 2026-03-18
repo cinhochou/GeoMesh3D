@@ -1,9 +1,8 @@
-// src/core/editor/Editor.ts
+﻿// src/core/editor/Editor.ts
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { TransformCommand } from './TransformCommand'
-import { AddElementCommand } from './AddElementCommand' // 引入新命令
-import { Vec3 } from '../geometry/Vec3'
+import { AddElementCommand } from './AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { MoveLineCommand } from './MoveLineCommand'
@@ -28,6 +27,17 @@ const genPointName = () => {
   }
   return name
 }
+let lineNameCounter = 0
+const genLineName = () => {
+  // a-z, aa, ab, ...
+  let n = lineNameCounter++
+  let name = ''
+  while (n >= 0) {
+    name = String.fromCharCode(97 + (n % 26)) + name
+    n = Math.floor(n / 26) - 1
+  }
+  return name
+}
 
 export class Editor {
   scene: Scene
@@ -46,7 +56,6 @@ export class Editor {
     this.selectedPoints = []
   }
 
-  /* ---------- 点的创建 (现在支持撤销) ---------- */
   createPoint(position: Vec3) {
     const p = new Point3(genId('p'), genPointName(), position)
     const cmd = new AddElementCommand(this.scene, p, 'point')
@@ -63,10 +72,8 @@ export class Editor {
     this.executeCommand(new TransformCommand(point, before, after))
   }
 
-  /* ---------- 线的创建 (现在支持撤销) ---------- */
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
-    // 将点加入选中列表（用于视觉高亮）
     this.scene.selection.selectPoint(point.id, true)
 
     if (!this.selectedPoints.includes(point)) {
@@ -75,10 +82,20 @@ export class Editor {
 
     if (this.selectedPoints.length === 2) {
       const [p1, p2] = this.selectedPoints
-      const line = new Line3(genId('l'), p1!, p2!)
-      this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+      const exists = [...this.scene.lines.values()].some(
+        (l) =>
+          (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
+          (l.p1.id === p2!.id && l.p2.id === p1!.id),
+      )
+      if (!exists) {
+        const line = new Line3(genId('l'), genLineName(), p1!, p2!)
+        this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+      } else {
+        window.dispatchEvent(
+          new CustomEvent('toast', { detail: '线段已存在，创建线段失败' }),
+        )
+      }
 
-      // 创建完成后清空选中
       this.selectedPoints = []
       this.scene.selection.clear()
     }
@@ -94,19 +111,16 @@ export class Editor {
     const a1 = b1.add(delta)
     const a2 = b2.add(delta)
 
-    // 执行移动线段的命令
-    this.executeCommand(new MoveLineCommand(line, b1, b2, a1, a2))
+    //this.executeCommand(new MoveLineCommand(line, b1, b2, a1, a2))
   }
 
-  /* ---------- 命令调度 ---------- */
   executeCommand(cmd: Command) {
     cmd.execute()
-    // 执行新命令时，删除“重做”队列中的旧命令
     this.history = this.history.slice(0, this.historyIndex + 1)
     this.history.push(cmd)
     this.historyIndex++
   }
-  //切换点吸附
+
   toggleSnapping() {
     this.isSnappingEnabled = !this.isSnappingEnabled
   }

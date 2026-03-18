@@ -30,6 +30,7 @@ const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
 const sidebarRef = ref<HTMLElement | null>(null)
 const editPoint = reactive({ name: '', x: '', y: '', z: '' })
 const editLine = reactive({
+  name: '',
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
@@ -60,6 +61,7 @@ const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
   if (l.p1.locked || l.p2.locked) return
   editing.value = { type: 'line', id: l.id }
+  editLine.name = l.name ?? ''
   editLine.p1.x = toFixed2(l.p1.position.x)
   editLine.p1.y = toFixed2(l.p1.position.y)
   editLine.p1.z = toFixed2(l.p1.position.z)
@@ -95,6 +97,7 @@ const applyEditLine = () => {
   if (!editing.value || editing.value.type !== 'line') return
   const line = props.scene.lines.get(editing.value.id)
   if (!line) return
+  line.name = editLine.name
   applyPointPosition(line.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
   applyPointPosition(line.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
 }
@@ -134,12 +137,14 @@ watch(
     const l = props.scene.lines.get(editing.value.id)
     if (!l) return null
     return {
+      name: l.name ?? '',
       p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
       p2: { x: l.p2.position.x, y: l.p2.position.y, z: l.p2.position.z },
     }
   },
   (newLine) => {
     if (!newLine) return
+    editLine.name = newLine.name
     editLine.p1.x = toFixed2(newLine.p1.x)
     editLine.p1.y = toFixed2(newLine.p1.y)
     editLine.p1.z = toFixed2(newLine.p1.z)
@@ -203,6 +208,8 @@ onUnmounted(() => {
           <span>ID: {{ l!.id }}</span>
         </div>
         <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
+          <label>name</label>
+          <input type="text" v-model="editLine.name" @input="applyEditLine" />
           <label>{{ l!.p1.id }} x</label>
           <input type="number" v-model="editLine.p1.x" @input="applyEditLine" step="0.5" />
           <label>{{ l!.p1.id }} y</label>
@@ -217,6 +224,7 @@ onUnmounted(() => {
           <input type="number" v-model="editLine.p2.z" @input="applyEditLine" step="0.5" />
         </div>
         <div v-else>
+          <div>name: {{ l!.name ?? '' }}</div>
           <div>
             {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
             {{ l!.p1.position.y.toFixed(2) }},
@@ -244,6 +252,7 @@ onUnmounted(() => {
       </div>
       <div v-for="l in linesInScene" :key="l!.id" class="line-info">
         <div>ID: {{ l!.id }}</div>
+        <div>name: {{ l!.name ?? '' }}</div>
         <div>
           <div>
             {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},

@@ -1,4 +1,4 @@
-<!-- src/views/EditorView.vue -->
+﻿<!-- src/views/EditorView.vue -->
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, reactive } from 'vue'
 
@@ -24,6 +24,9 @@ const peerCount = ref(1)
 const collabManager = ref<CollabManager | null>(null)
 const isARMode = ref(false)
 const lastModeBeforeAR = ref<EditorMode | null>(null)
+const fps = ref(0)
+let lastFpsTime = performance.now()
+let frameCount = 0
 
 // 提示框相关的响应式变量
 const toastMessage = ref('')
@@ -62,6 +65,14 @@ onMounted(() => {
   }
 
   const loop = () => {
+    frameCount++
+    const now = performance.now()
+    const elapsed = now - lastFpsTime
+    if (elapsed >= 1000) {
+      fps.value = Math.round((frameCount * 1000) / elapsed)
+      frameCount = 0
+      lastFpsTime = now
+    }
     scene.constraints.forEach((c) => c.solve())
     renderer.render()
     renderer.sync(scene, interaction.rubberBandData)
@@ -156,7 +167,9 @@ const showToast = (msg: string) => {
     <div class="editor-body">
       <Sidebar :scene="scene" :editor="editor" :modeName="modeName" />
 
-      <div ref="viewportRef" class="viewport"></div>
+      <div ref="viewportRef" class="viewport">
+        <div class="fps-indicator">FPS: {{ fps }}</div>
+      </div>
     </div>
 
     <Timeline />
@@ -174,6 +187,20 @@ const showToast = (msg: string) => {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+.fps-indicator {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  background: transparent;
+  color: #ffffff;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  pointer-events: none;
 }
 
 .viewport {

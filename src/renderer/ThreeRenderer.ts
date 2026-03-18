@@ -31,6 +31,7 @@ export class ThreeRenderer {
   private axisGridSize = 10
   private axisSizeSelectorWrap: HTMLDivElement | null = null
   private axisSizeSelector: HTMLSelectElement | null = null
+  private pointTexture: THREE.CanvasTexture | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
   private static readonly AR_SCENE_SCALE = 0.2
 
@@ -132,12 +133,17 @@ export class ThreeRenderer {
     const basePixel = 6
     const spriteScale = basePixel / h / this.worldScale
     const labelPixel = 64
+    const lineLabelPixel = 64
     const labelScale = labelPixel / h / this.worldScale
+    const lineLabelScale = lineLabelPixel / h / this.worldScale
     this.meshMap.forEach((obj) => {
       if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
         const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
         if (label) label.scale.set(labelScale, labelScale, 1)
+      } else if ((obj as any).userData?.type === 'line') {
+        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
     })
 
@@ -376,12 +382,15 @@ export class ThreeRenderer {
           depthWrite: false,
           sizeAttenuation: false,
         })
+        material.map = this.getPointTexture()
+        material.transparent = true
+        material.alphaTest = 0.1
 
         sprite = new THREE.Sprite(material)
         sprite.renderOrder = 2
 
         // 屏幕空间 ≈ 10px
-        const pixelSize = 6
+        const pixelSize = 10
         const h = this.renderer.domElement.clientHeight
         const scale = pixelSize / h / this.worldScale
 
@@ -484,6 +493,51 @@ export class ThreeRenderer {
       // 选中高亮逻辑
       const isSelected = scene.selection.lines.has(id)
       ;(line.material as THREE.LineBasicMaterial).color.set(isSelected ? 0x43f260 : 0xffffff)
+
+      // 线段名称标签（始终在屏幕上方）
+      const labelColor = isSelected ? 0x43f260 : 0xffffff
+      const labelKey = '__labelSprite'
+      const existingLabel = (line.userData as any)[labelKey] as THREE.Sprite | undefined
+      const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      if (!existingLabel) {
+        const nameSprite = this.makeLineLabelSprite(lineData.name ?? '', labelColor)
+        nameSprite.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
+        nameSprite.renderOrder = 1
+        const h = this.renderer.domElement.clientHeight || 1
+        const pixelSize = 64
+        const scale = pixelSize / h / this.worldScale
+        nameSprite.scale.set(scale, scale, 1)
+        ;(nameSprite as any).userData = { text: lineData.name ?? '' }
+        ;(line.userData as any)[labelKey] = nameSprite
+        this.world.add(nameSprite)
+      } else {
+        existingLabel.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
+        const labelText = (existingLabel as any).userData?.text ?? ''
+        if (labelText !== (lineData.name ?? '')) {
+          ;(existingLabel as any).userData = { text: lineData.name ?? '' }
+          const material = existingLabel.material as THREE.SpriteMaterial
+          const newSprite = this.makeLineLabelSprite(lineData.name ?? '', labelColor)
+          material.map = (newSprite.material as THREE.SpriteMaterial).map
+        } else {
+          const material = existingLabel.material as THREE.SpriteMaterial
+          const map = material.map as THREE.CanvasTexture | null
+          if (map) {
+            const ctx = (map.image as HTMLCanvasElement).getContext('2d')
+            if (ctx) {
+              const r = (labelColor >> 16) & 255
+              const g = (labelColor >> 8) & 255
+              const b = labelColor & 255
+              ctx.clearRect(0, 0, map.image.width, map.image.height)
+              ctx.font = 'Bold 56px Arial'
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
+              ctx.fillText(lineData.name ?? '', map.image.width / 2, map.image.height / 2)
+              map.needsUpdate = true
+            }
+          }
+        }
+      }
     })
   }
 
@@ -703,22 +757,73 @@ export class ThreeRenderer {
     return new THREE.Sprite(material)
   }
 
-  /** 计算标签位置：始终显示在点的“屏幕右上方” */
-  private getSmartLabelPosition(pointPos: THREE.Vector3): THREE.Vector3 {
+  /** 创建线段名称标签（无背景） */
+  private makeLineLabelSprite(message: string, color: number): THREE.Sprite {
+    const canvas = document.createElement('canvas')
+    const size = 256
+    canvas.width = size
+    canvas.height = size
+
+    const context = canvas.getContext('2d')!
+    context.font = 'Bold 56px Arial'
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+
+    const r = (color >> 16) & 255
+    const g = (color >> 8) & 255
+    const b = color & 255
+    context.fillStyle = `rgb(${r}, ${g}, ${b})`
+    context.fillText(message, size / 2, size / 2)
+
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.minFilter = THREE.LinearFilter
+
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      depthTest: false,
+      sizeAttenuation: false,
+    })
+
+    return new THREE.Sprite(material)
+  }
+
+  /** 计算标签位置：始终显示在屏幕上方 */
+  private getScreenOffsetPosition(pointPos: THREE.Vector3, offsetXpx: number, offsetYpx: number) {
     const camera = this.getActiveCamera()
     const ndc = pointPos.clone().project(camera)
-
-    // 屏幕空间偏移（像素）
-    const offsetPx = 12
     const w = this.renderer.domElement.clientWidth || 1
     const h = this.renderer.domElement.clientHeight || 1
-    const offsetNdcX = (offsetPx / w) * 2
-    const offsetNdcY = (offsetPx / h) * 2
-
+    const offsetNdcX = (offsetXpx / w) * 2
+    const offsetNdcY = (offsetYpx / h) * 2
     ndc.x += offsetNdcX
     ndc.y += offsetNdcY
-
     return ndc.unproject(camera)
+  }
+
+  /** 生成圆点贴图（白色圆形 + 透明背景），供 SpriteMaterial 使用 */
+  private getPointTexture(): THREE.CanvasTexture {
+    if (this.pointTexture) return this.pointTexture
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+    ctx.clearRect(0, 0, size, size)
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(size / 2, size / 2, size * 0.45, 0, Math.PI * 2)
+    ctx.fill()
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.minFilter = THREE.LinearFilter
+    texture.magFilter = THREE.LinearFilter
+    texture.needsUpdate = true
+    this.pointTexture = texture
+    return texture
+  }
+
+  /** 计算标签位置：始终显示在点的“屏幕右上方” */
+  private getSmartLabelPosition(pointPos: THREE.Vector3): THREE.Vector3 {
+    return this.getScreenOffsetPosition(pointPos, 12, 12)
   }
 
   /**

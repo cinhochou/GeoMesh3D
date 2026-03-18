@@ -94,7 +94,7 @@ export class CollabManager {
           const p1 = this.scene.points.get(data.p1Id)
           const p2 = this.scene.points.get(data.p2Id)
           if (p1 && p2 && !this.scene.lines.has(id)) {
-            this.scene.addLine(new Line3(id, p1, p2))
+            this.scene.addLine(new Line3(id, data.name ?? '', p1, p2))
           }
         }
       })
@@ -110,7 +110,7 @@ export class CollabManager {
         this.yPoints.set(id, { x: p.position.x, y: p.position.y, z: p.position.z, name: p.name })
       })
       this.scene.lines.forEach((l, id) => {
-        this.yLines.set(id, { p1Id: l.p1.id, p2Id: l.p2.id })
+        this.yLines.set(id, { p1Id: l.p1.id, p2Id: l.p2.id, name: l.name })
       })
     })
   }
