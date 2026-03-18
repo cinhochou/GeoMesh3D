@@ -168,6 +168,9 @@ onUnmounted(() => {
     <p>当前操作模式：{{ modeName }}</p>
     <div class="divider"></div>
     <h3>选中</h3>
+    <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0">
+      双击标签以编辑几何元素~
+    </div>
     <div class="box">
       <div v-if="selectedPoints.length === 0 && selectedLines.length === 0">无</div>
 
@@ -177,15 +180,11 @@ onUnmounted(() => {
         class="selectedPoint-info"
         @dblclick="startEditPoint(p)"
       >
-        <div class="selected-title">
-          <span>
-            ID: {{ p!.id }}
-            <span v-if="p!.locked" class="lock-badge">🔒</span>
-          </span>
-        </div>
         <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
-          <label>name</label>
-          <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
+          </div>
           <div class="coord-row">
             <label>x</label>
             <input type="number" v-model="editPoint.x" @input="applyEditPoint" step="0.5" />
@@ -213,90 +212,71 @@ onUnmounted(() => {
         class="selectedLine-info"
         @dblclick="startEditLine(l)"
       >
-        <div class="selected-title">
-          <span>ID: {{ l!.id }}</span>
-        </div>
         <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
-          <label>name</label>
-          <input type="text" v-model="editLine.name" @input="applyEditLine" />
-          <label>
-            {{ l!.p1.id }} x
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editLine.name" @input="applyEditLine" />
+          </div>
+          <div class="line-point-row">
+            <span class="line-point-label">点{{ l!.p1.name ?? '' }}(x,y,z)</span>
+            <input
+              type="number"
+              v-model="editLine.p1.x"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p1.locked"
+            />
+            <input
+              type="number"
+              v-model="editLine.p1.y"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p1.locked"
+            />
+            <input
+              type="number"
+              v-model="editLine.p1.z"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p1.locked"
+            />
             <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p1.x"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p1.locked"
-          />
-          <label>
-            {{ l!.p1.id }} y
-            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p1.y"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p1.locked"
-          />
-          <label>
-            {{ l!.p1.id }} z
-            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p1.z"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p1.locked"
-          />
-          <label>
-            {{ l!.p2.id }} x
+          </div>
+          <div class="line-point-row">
+            <span class="line-point-label">点{{ l!.p2.name ?? '' }}(x,y,z)</span>
+            <input
+              type="number"
+              v-model="editLine.p2.x"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p2.locked"
+            />
+            <input
+              type="number"
+              v-model="editLine.p2.y"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p2.locked"
+            />
+            <input
+              type="number"
+              v-model="editLine.p2.z"
+              @input="applyEditLine"
+              step="0.5"
+              :disabled="l!.p2.locked"
+            />
             <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p2.x"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p2.locked"
-          />
-          <label>
-            {{ l!.p2.id }} y
-            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p2.y"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p2.locked"
-          />
-          <label>
-            {{ l!.p2.id }} z
-            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
-          </label>
-          <input
-            type="number"
-            v-model="editLine.p2.z"
-            @input="applyEditLine"
-            step="0.5"
-            :disabled="l!.p2.locked"
-          />
+          </div>
         </div>
         <div v-else>
           <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
           <div>
-            {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
-            {{ l!.p1.position.y.toFixed(2) }},
-            {{ l!.p1.position.z.toFixed(2) }}
+            点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+            {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
           </div>
           <div>
-            {{ l!.p2.id }}(x,y,z): {{ l!.p2.position.x.toFixed(2) }},
-            {{ l!.p2.position.y.toFixed(2) }},
-            {{ l!.p2.position.z.toFixed(2) }}
+            点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+            {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
           </div>
         </div>
       </div>
@@ -319,14 +299,12 @@ onUnmounted(() => {
         <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
         <div>
           <div>
-            {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
-            {{ l!.p1.position.y.toFixed(2) }},
-            {{ l!.p1.position.z.toFixed(2) }}
+            点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+            {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
           </div>
           <div>
-            {{ l!.p2.id }}(x,y,z): {{ l!.p2.position.x.toFixed(2) }},
-            {{ l!.p2.position.y.toFixed(2) }},
-            {{ l!.p2.position.z.toFixed(2) }}
+            点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+            {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
           </div>
         </div>
       </div>
@@ -350,6 +328,7 @@ onUnmounted(() => {
 }
 h3 {
   margin-top: 0;
+  margin-bottom: 6px;
   flex-shrink: 0;
 }
 hr {
@@ -398,13 +377,15 @@ hr {
   margin-bottom: 4px;
 }
 .hint {
-  color: #8fdc9b;
+  color: #ffffff;
   font-size: 12px;
+  margin-top: -4px;
+  margin-bottom: 6px;
 }
 .edit-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 8px;
+  grid-template-columns: auto auto;
+  gap: 2px 4px;
 }
 .edit-grid input {
   background: #0f0f0f;
@@ -413,6 +394,33 @@ hr {
   padding: 2px 4px;
   border-radius: 2px;
   font-size: 12px;
+}
+.edit-grid input[type='text'] {
+  width: 56px;
+}
+.edit-grid input[type='number'] {
+  width: 48px;
+}
+.coord-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  grid-column: 1 / -1;
+}
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  grid-column: 1 / -1;
+}
+.line-point-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  grid-column: 1 / -1;
+}
+.line-point-label {
+  white-space: nowrap;
 }
 .lock-badge {
   font-size: 11px;
