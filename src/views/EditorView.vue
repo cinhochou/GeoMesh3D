@@ -31,6 +31,7 @@ let frameCount = 0
 // 提示框相关的响应式变量
 const toastMessage = ref('')
 const isToastVisible = ref(false)
+const toastScope = ref<'global' | 'viewport'>('global')
 let toastTimer: number | null = null
 
 const modeName = computed(() => {
@@ -127,22 +128,26 @@ const handleToggleAR = async (enabled: boolean) => {
 const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => {
   if (open) {
     collabManager.value?.joinRoom(room)
-    showToast(`😉 成功加入房间: ${room}`)
+    showToast(`😉 成功加入房间: ${room}`, 'global')
   } else {
     collabManager.value?.leaveRoom()
-    showToast('😶‍🌫️ 已成功退出协作')
+    showToast('😶‍🌫️ 已成功退出协作', 'global')
   }
 }
 
 const handleToast = (e: Event) => {
   const detail = (e as CustomEvent).detail
-  if (typeof detail === 'string') showToast(detail)
+  if (typeof detail === 'string') showToast(detail, 'viewport')
+  else if (detail && typeof detail.msg === 'string') {
+    showToast(detail.msg, detail.scope === 'global' ? 'global' : 'viewport')
+  }
 }
 
 // 统一的提示函数
-const showToast = (msg: string) => {
+const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   if (toastTimer) clearTimeout(toastTimer)
   toastMessage.value = msg
+  toastScope.value = scope
   isToastVisible.value = true
   toastTimer = window.setTimeout(() => {
     isToastVisible.value = false
@@ -153,7 +158,7 @@ const showToast = (msg: string) => {
 <template>
   <div class="editor-root">
     <Transition name="toast-fade">
-      <div v-if="isToastVisible" class="toast-container">
+      <div v-if="isToastVisible && toastScope === 'global'" class="toast-container">
         <div class="toast-content">
           {{ toastMessage }}
         </div>
@@ -175,6 +180,13 @@ const showToast = (msg: string) => {
       <Sidebar :scene="scene" :editor="editor" :modeName="modeName" />
 
       <div ref="viewportRef" class="viewport">
+        <Transition name="toast-fade">
+          <div v-if="isToastVisible && toastScope === 'viewport'" class="toast-container-viewport">
+            <div class="toast-content">
+              {{ toastMessage }}
+            </div>
+          </div>
+        </Transition>
         <div class="fps-indicator">FPS: {{ fps }}</div>
       </div>
     </div>
@@ -226,6 +238,14 @@ const showToast = (msg: string) => {
   transform: translate(-50%, -50%);
   z-index: 9999;
   pointer-events: none; /* 确保不影响对页面的操作 */
+}
+.toast-container-viewport {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  pointer-events: none;
 }
 
 .toast-content {

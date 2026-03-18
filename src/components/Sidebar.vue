@@ -59,7 +59,6 @@ const startEditPoint = (p: Point3 | undefined) => {
 
 const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
-  if (l.p1.locked || l.p2.locked) return
   editing.value = { type: 'line', id: l.id }
   editLine.name = l.name ?? ''
   editLine.p1.x = toFixed2(l.p1.position.x)
@@ -179,22 +178,32 @@ onUnmounted(() => {
         @dblclick="startEditPoint(p)"
       >
         <div class="selected-title">
-          <span>ID: {{ p!.id }}</span>
+          <span>
+            ID: {{ p!.id }}
+            <span v-if="p!.locked" class="lock-badge">🔒</span>
+          </span>
         </div>
         <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
           <label>name</label>
           <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
-          <label>x</label>
-          <input type="number" v-model="editPoint.x" @input="applyEditPoint" step="0.5" />
-          <label>y</label>
-          <input type="number" v-model="editPoint.y" @input="applyEditPoint" step="0.5" />
-          <label>z</label>
-          <input type="number" v-model="editPoint.z" @input="applyEditPoint" step="0.5" />
+          <div class="coord-row">
+            <label>x</label>
+            <input type="number" v-model="editPoint.x" @input="applyEditPoint" step="0.5" />
+            <label>y</label>
+            <input type="number" v-model="editPoint.y" @input="applyEditPoint" step="0.5" />
+            <label>z</label>
+            <input type="number" v-model="editPoint.z" @input="applyEditPoint" step="0.5" />
+          </div>
         </div>
         <div v-else>
-          name: {{ p!.name ?? '' }}<br />
-          x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
-          {{ p!.position.z.toFixed(2) }}
+          <div>
+            点{{ p!.name ?? '' }}，ID: {{ p!.id }}
+            <span v-if="p!.locked" class="lock-badge">🔒</span>
+          </div>
+          <div>
+            x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
+            {{ p!.position.z.toFixed(2) }}
+          </div>
         </div>
       </div>
 
@@ -210,21 +219,75 @@ onUnmounted(() => {
         <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
           <label>name</label>
           <input type="text" v-model="editLine.name" @input="applyEditLine" />
-          <label>{{ l!.p1.id }} x</label>
-          <input type="number" v-model="editLine.p1.x" @input="applyEditLine" step="0.5" />
-          <label>{{ l!.p1.id }} y</label>
-          <input type="number" v-model="editLine.p1.y" @input="applyEditLine" step="0.5" />
-          <label>{{ l!.p1.id }} z</label>
-          <input type="number" v-model="editLine.p1.z" @input="applyEditLine" step="0.5" />
-          <label>{{ l!.p2.id }} x</label>
-          <input type="number" v-model="editLine.p2.x" @input="applyEditLine" step="0.5" />
-          <label>{{ l!.p2.id }} y</label>
-          <input type="number" v-model="editLine.p2.y" @input="applyEditLine" step="0.5" />
-          <label>{{ l!.p2.id }} z</label>
-          <input type="number" v-model="editLine.p2.z" @input="applyEditLine" step="0.5" />
+          <label>
+            {{ l!.p1.id }} x
+            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p1.x"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p1.locked"
+          />
+          <label>
+            {{ l!.p1.id }} y
+            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p1.y"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p1.locked"
+          />
+          <label>
+            {{ l!.p1.id }} z
+            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p1.z"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p1.locked"
+          />
+          <label>
+            {{ l!.p2.id }} x
+            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p2.x"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p2.locked"
+          />
+          <label>
+            {{ l!.p2.id }} y
+            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p2.y"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p2.locked"
+          />
+          <label>
+            {{ l!.p2.id }} z
+            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
+          </label>
+          <input
+            type="number"
+            v-model="editLine.p2.z"
+            @input="applyEditLine"
+            step="0.5"
+            :disabled="l!.p2.locked"
+          />
         </div>
         <div v-else>
-          <div>name: {{ l!.name ?? '' }}</div>
+          <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
           <div>
             {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
             {{ l!.p1.position.y.toFixed(2) }},
@@ -243,16 +306,17 @@ onUnmounted(() => {
     <div class="box">
       <div v-if="pointsInScene.length === 0 && linesInScene.length === 0">无</div>
       <div v-for="p in pointsInScene" :key="p!.id" class="point-info">
-        <div>ID: {{ p!.id }}</div>
-        <div>name: {{ p!.name ?? '' }}</div>
+        <div>
+          点{{ p!.name ?? '' }}，ID: {{ p!.id }}
+          <span v-if="p!.locked" class="lock-badge">🔒</span>
+        </div>
         <div>
           x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
           {{ p!.position.z.toFixed(2) }}
         </div>
       </div>
       <div v-for="l in linesInScene" :key="l!.id" class="line-info">
-        <div>ID: {{ l!.id }}</div>
-        <div>name: {{ l!.name ?? '' }}</div>
+        <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
         <div>
           <div>
             {{ l!.p1.id }}(x,y,z): {{ l!.p1.position.x.toFixed(2) }},
@@ -349,5 +413,11 @@ hr {
   padding: 2px 4px;
   border-radius: 2px;
   font-size: 12px;
+}
+.lock-badge {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 6px;
 }
 </style>

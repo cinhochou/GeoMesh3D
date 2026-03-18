@@ -75,10 +75,6 @@ export class Interaction {
           this.editor.scene.selection.selectLine(geoId, true)
           const l = this.editor.scene.lines.get(geoId)
           if (l) {
-            if (l.p1.locked || l.p2.locked) {
-              this.draggingLineId = null
-              return
-            }
             this.draggingLineId = geoId
             const mid = new Vec3(
               (l.p1.position.x + l.p2.position.x) / 2,

@@ -92,7 +92,7 @@ export class Editor {
         this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
       } else {
         window.dispatchEvent(
-          new CustomEvent('toast', { detail: '线段已存在，创建线段失败' }),
+          new CustomEvent('toast', { detail: { msg: '线段已存在，创建线段失败', scope: 'viewport' } }),
         )
       }
 
