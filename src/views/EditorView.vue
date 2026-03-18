@@ -83,12 +83,14 @@ onMounted(() => {
   window.addEventListener('resize', () => {
     renderer.onResize()
   })
+  window.addEventListener('toast', handleToast as EventListener)
 })
 
 // 生命周期钩子，防止页面刷新或销毁后连接残留
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
   collabManager.value?.leaveRoom()
+  window.removeEventListener('toast', handleToast as EventListener)
 })
 
 function onModeChange(mode: EditorMode) {
@@ -130,6 +132,11 @@ const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => 
     collabManager.value?.leaveRoom()
     showToast('😶‍🌫️ 已成功退出协作')
   }
+}
+
+const handleToast = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  if (typeof detail === 'string') showToast(detail)
 }
 
 // 统一的提示函数
