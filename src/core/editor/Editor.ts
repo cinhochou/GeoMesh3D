@@ -74,6 +74,18 @@ export class Editor {
     this.scene.selection.lines.delete(lineId)
   }
 
+  clearAll() {
+    this.scene.lines.clear()
+
+    this.scene.points.forEach((point, id) => {
+      if (!point.locked) this.scene.points.delete(id)
+    })
+
+    this.scene.selection.clear()
+    this.scene.constraints.length = 0
+    this.selectedPoints = []
+  }
+
   createPoint(position: Vec3) {
     const p = new Point3(genId('p'), genPointName(), position, false, true)
     const cmd = new AddElementCommand(this.scene, p, 'point')

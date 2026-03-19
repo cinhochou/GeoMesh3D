@@ -102,6 +102,14 @@ function onModeChange(mode: EditorMode) {
   editor.setMode(mode)
 }
 
+const handleClearAll = () => {
+  const confirmed = window.confirm('⚠"清空"会删除场景中的所有对象。确定要继续吗？')
+  if (!confirmed) return
+
+  editor.clearAll()
+  showToast('已清空所有对象', 'global')
+}
+
 const handleToggleAR = async (enabled: boolean) => {
   if (enabled) {
     lastModeBeforeAR.value = editor.mode
@@ -173,6 +181,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       :peer-count="peerCount"
       :is-ar-mode="isARMode"
       @mode-change="onModeChange"
+      @clear-all="handleClearAll"
       @toggle-snapping="editor.toggleSnapping()"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"
