@@ -156,9 +156,28 @@ export class ThreeRenderer {
   /* ---------- Scene → Three ---------- */
 
   sync(geoScene: GeoScene, previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null) {
+    this.cleanupMissingMeshes(geoScene)
     this.syncPoints(geoScene)
     this.syncLines(geoScene)
     this.updateRubberBand(previewData) // 处理虚线
+  }
+
+  /** 删除已从场景移除的点/线对应的 Mesh 与标签 */
+  private cleanupMissingMeshes(scene: GeoScene) {
+    this.meshMap.forEach((obj, id) => {
+      const type = (obj as any).userData?.type
+      if (type === 'point' && !scene.points.has(id)) {
+        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        if (label) this.world.remove(label)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
+      } else if (type === 'line' && !scene.lines.has(id)) {
+        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        if (label) this.world.remove(label)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
+      }
+    })
   }
 
   // 切换 AR 模式

@@ -5,10 +5,11 @@ import { TransformCommand } from './TransformCommand'
 import { AddElementCommand } from './AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
-import { MoveLineCommand } from './MoveLineCommand'
+import { Vec3 } from '../geometry/Vec3'
 
 export enum EditorMode {
   Select,
+  Delete,
   CreatePoint,
   CreateLine,
   CreatePlane,
@@ -56,6 +57,29 @@ export class Editor {
     this.selectedPoints = []
   }
 
+  deletePoint(pointId: string) {
+    const point = this.scene.points.get(pointId)
+    if (!point || point.locked) return
+
+    // 删除与该点相关的线段
+    const linesToDelete: string[] = []
+    this.scene.lines.forEach((l, id) => {
+      if (l.p1.id === pointId || l.p2.id === pointId) linesToDelete.push(id)
+    })
+    linesToDelete.forEach((id) => this.scene.lines.delete(id))
+
+    this.scene.points.delete(pointId)
+    this.scene.selection.points.delete(pointId)
+    linesToDelete.forEach((id) => this.scene.selection.lines.delete(id))
+    this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
+  }
+
+  deleteLine(lineId: string) {
+    if (!this.scene.lines.has(lineId)) return
+    this.scene.lines.delete(lineId)
+    this.scene.selection.lines.delete(lineId)
+  }
+
   createPoint(position: Vec3) {
     const p = new Point3(genId('p'), genPointName(), position, false, true)
     const cmd = new AddElementCommand(this.scene, p, 'point')
@@ -84,15 +108,16 @@ export class Editor {
       const [p1, p2] = this.selectedPoints
       const exists = [...this.scene.lines.values()].some(
         (l) =>
-          (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
-          (l.p1.id === p2!.id && l.p2.id === p1!.id),
+          (l.p1.id === p1!.id && l.p2.id === p2!.id) || (l.p1.id === p2!.id && l.p2.id === p1!.id),
       )
       if (!exists) {
         const line = new Line3(genId('l'), genLineName(), p1!, p2!, true)
         this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
       } else {
         window.dispatchEvent(
-          new CustomEvent('toast', { detail: { msg: '线段已存在，创建线段失败', scope: 'viewport' } }),
+          new CustomEvent('toast', {
+            detail: { msg: '线段已存在，创建线段失败', scope: 'viewport' },
+          }),
         )
       }
 

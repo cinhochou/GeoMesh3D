@@ -51,6 +51,13 @@ const toggleAR = () => {
       选择
     </button>
     <button
+      :class="{ 'is-active': currentMode === EditorMode.Delete }"
+      @click="emit('mode-change', EditorMode.Delete)"
+      :disabled="isArLocked"
+    >
+      删除
+    </button>
+    <button
       :class="{ 'is-active': currentMode === EditorMode.CreatePoint }"
       @click="emit('mode-change', EditorMode.CreatePoint)"
       :disabled="isArLocked"

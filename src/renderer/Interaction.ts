@@ -56,6 +56,14 @@ export class Interaction {
     if (hit) {
       this.renderer.controls.enabled = false
       const { geoId, type } = hit.userData
+      if (this.editor.mode === EditorMode.Delete) {
+        if (type === 'point') {
+          this.editor.deletePoint(geoId)
+        } else if (type === 'line') {
+          this.editor.deleteLine(geoId)
+        }
+        return
+      }
       if (this.editor.mode === EditorMode.Select) {
         this.renderer.renderer.domElement.style.cursor = 'grabbing'
         if (type === 'point') {
@@ -260,6 +268,7 @@ export class Interaction {
   private handleDrag(referencePos: Vec3, applyDelta: (d: Vec3) => void, isAltPressed: boolean) {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const targetPos = new THREE.Vector3()
+    const currentPos = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
 
     // 拖拽平面在拖拽开始时固定，避免 AR 相机抖动导致跳动
     if (!this.dragPlane || !this.dragLastPos) this.startDrag(referencePos)
@@ -285,22 +294,24 @@ export class Interaction {
     }
 
     const snapping = this.editor.isSnappingEnabled && !isAltPressed
+    let delta: Vec3
+
     // 吸附逻辑判断
     if (snapping) {
       targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
-      // 保证 delta 基于同一吸附空间，避免拖拽时“吸不上格”
-      this.dragLastPos.set(
-        this.snap(this.dragLastPos.x),
-        this.snap(this.dragLastPos.y),
-        this.snap(this.dragLastPos.z),
+      // 基于对象当前真实坐标计算位移，确保重新开启吸附后会回到实际网格。
+      delta = new Vec3(
+        targetPos.x - currentPos.x,
+        targetPos.y - currentPos.y,
+        targetPos.z - currentPos.z,
+      )
+    } else {
+      delta = new Vec3(
+        targetPos.x - this.dragLastPos.x,
+        targetPos.y - this.dragLastPos.y,
+        targetPos.z - this.dragLastPos.z,
       )
     }
-
-    const delta = new Vec3(
-      targetPos.x - this.dragLastPos.x,
-      targetPos.y - this.dragLastPos.y,
-      targetPos.z - this.dragLastPos.z,
-    )
 
     if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
       applyDelta(delta)

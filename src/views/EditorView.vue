@@ -38,6 +38,8 @@ const modeName = computed(() => {
   switch (editor.mode) {
     case EditorMode.Select:
       return '选择'
+    case EditorMode.Delete:
+      return '删除'
     case EditorMode.CreatePoint:
       return '创建点'
     case EditorMode.CreateLine:
