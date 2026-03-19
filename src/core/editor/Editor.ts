@@ -18,26 +18,20 @@ export enum EditorMode {
 let idCounter = 0
 const genId = (prefix: string) => `${prefix}_${idCounter++}`
 let nameCounter = 0
+const genIndexedAlphabetName = (index: number, baseCharCode: number) => {
+  const letter = String.fromCharCode(baseCharCode + (index % 26))
+  const suffix = Math.floor(index / 26)
+  return suffix === 0 ? letter : `${letter}${suffix}`
+}
+
 const genPointName = () => {
-  // A-Z, AA, AB, ...
-  let n = nameCounter++
-  let name = ''
-  while (n >= 0) {
-    name = String.fromCharCode(65 + (n % 26)) + name
-    n = Math.floor(n / 26) - 1
-  }
-  return name
+  // A-Z, A1-Z1, A2-Z2, ...
+  return genIndexedAlphabetName(nameCounter++, 65)
 }
 let lineNameCounter = 0
 const genLineName = () => {
-  // a-z, aa, ab, ...
-  let n = lineNameCounter++
-  let name = ''
-  while (n >= 0) {
-    name = String.fromCharCode(97 + (n % 26)) + name
-    n = Math.floor(n / 26) - 1
-  }
-  return name
+  // a-z, a1-z1, a2-z2, ...
+  return genIndexedAlphabetName(lineNameCounter++, 97)
 }
 
 export class Editor {

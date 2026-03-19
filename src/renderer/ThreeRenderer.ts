@@ -470,15 +470,7 @@ export class ThreeRenderer {
           if (map) {
             const ctx = (map.image as HTMLCanvasElement).getContext('2d')
             if (ctx) {
-              const r = (labelColor >> 16) & 255
-              const g = (labelColor >> 8) & 255
-              const b = labelColor & 255
-              ctx.clearRect(0, 0, map.image.width, map.image.height)
-              ctx.font = 'Bold 72px Arial'
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-              ctx.fillText(p.name ?? '', map.image.width / 2, map.image.height / 2)
+              this.drawNameLabel(ctx, map.image as HTMLCanvasElement, p.name ?? '', labelColor, 72)
               map.needsUpdate = true
             }
           }
@@ -553,15 +545,13 @@ export class ThreeRenderer {
           if (map) {
             const ctx = (map.image as HTMLCanvasElement).getContext('2d')
             if (ctx) {
-              const r = (labelColor >> 16) & 255
-              const g = (labelColor >> 8) & 255
-              const b = labelColor & 255
-              ctx.clearRect(0, 0, map.image.width, map.image.height)
-              ctx.font = 'Bold 56px Arial'
-              ctx.textAlign = 'center'
-              ctx.textBaseline = 'middle'
-              ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
-              ctx.fillText(lineData.name ?? '', map.image.width / 2, map.image.height / 2)
+              this.drawNameLabel(
+                ctx,
+                map.image as HTMLCanvasElement,
+                lineData.name ?? '',
+                labelColor,
+                56,
+              )
               map.needsUpdate = true
             }
           }
@@ -722,6 +712,49 @@ export class ThreeRenderer {
     this.axisSizeSelectorWrap.style.display = this.isARMode ? 'none' : 'block'
   }
 
+  private drawNameLabel(
+    context: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    message: string,
+    color: number,
+    mainFontSize: number,
+  ) {
+    const match = message.match(/^(.+?)(\d+)$/)
+    const mainText = match?.[1] ?? message
+    const suffixText = match?.[2] ?? ''
+    const suffixFontSize = Math.round(mainFontSize * 0.58)
+    const gap = suffixText ? Math.max(4, Math.round(mainFontSize * 0.04)) : 0
+    const baselineY = canvas.height / 2 + mainFontSize * 0.18
+
+    const r = (color >> 16) & 255
+    const g = (color >> 8) & 255
+    const b = color & 255
+
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.fillStyle = `rgb(${r}, ${g}, ${b})`
+    context.textAlign = 'left'
+    context.textBaseline = 'alphabetic'
+
+    context.font = `Bold ${mainFontSize}px Arial`
+    const mainWidth = context.measureText(mainText).width
+
+    let suffixWidth = 0
+    if (suffixText) {
+      context.font = `Bold ${suffixFontSize}px Arial`
+      suffixWidth = context.measureText(suffixText).width
+    }
+
+    const startX = (canvas.width - (mainWidth + gap + suffixWidth)) / 2
+
+    context.font = `Bold ${mainFontSize}px Arial`
+    context.fillText(mainText, startX, baselineY)
+
+    if (suffixText) {
+      context.font = `Bold ${suffixFontSize}px Arial`
+      context.fillText(suffixText, startX + mainWidth + gap, baselineY + mainFontSize * 0.22)
+    }
+  }
+
   /** 创建与轴同色的纯文字 Sprite（无背景、无边框） */
   private makeColoredTextSprite(message: string, axisColor: number): THREE.Sprite {
     const canvas = document.createElement('canvas')
@@ -764,15 +797,7 @@ export class ThreeRenderer {
     canvas.height = size
 
     const context = canvas.getContext('2d')!
-    context.font = 'Bold 72px Arial'
-    context.textAlign = 'center'
-    context.textBaseline = 'middle'
-
-    const r = (color >> 16) & 255
-    const g = (color >> 8) & 255
-    const b = color & 255
-    context.fillStyle = `rgb(${r}, ${g}, ${b})`
-    context.fillText(message, size / 2, size / 2)
+    this.drawNameLabel(context, canvas, message, color, 72)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.minFilter = THREE.LinearFilter
@@ -794,15 +819,7 @@ export class ThreeRenderer {
     canvas.height = size
 
     const context = canvas.getContext('2d')!
-    context.font = 'Bold 56px Arial'
-    context.textAlign = 'center'
-    context.textBaseline = 'middle'
-
-    const r = (color >> 16) & 255
-    const g = (color >> 8) & 255
-    const b = color & 255
-    context.fillStyle = `rgb(${r}, ${g}, ${b})`
-    context.fillText(message, size / 2, size / 2)
+    this.drawNameLabel(context, canvas, message, color, 56)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.minFilter = THREE.LinearFilter

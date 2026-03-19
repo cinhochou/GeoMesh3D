@@ -10,6 +10,19 @@ export default defineConfig({
     vue(),
     //vueDevTools(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+
+          if (id.includes('/three/')) return 'three'
+          if (id.includes('/vue-router/')) return 'vue-router'
+          if (id.includes('/vue/')) return 'vue'
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
