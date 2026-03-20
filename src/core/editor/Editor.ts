@@ -6,6 +6,12 @@ import { AddElementCommand } from './AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Vec3 } from '../geometry/Vec3'
+import { TransformPointsCommand } from './TransformPointsCommand'
+import { UpdatePointCommand } from './UpdatePointCommand'
+import { UpdateLineCommand } from './UpdateLineCommand'
+import { DeletePointCommand } from './DeletePointCommand'
+import { DeleteLineCommand } from './DeleteLineCommand'
+import { ClearSceneCommand } from './ClearSceneCommand'
 
 export enum EditorMode {
   Select,
@@ -46,6 +52,14 @@ export class Editor {
     this.scene = scene
   }
 
+  get canUndo() {
+    return this.historyIndex >= 0
+  }
+
+  get canRedo() {
+    return this.historyIndex < this.history.length - 1
+  }
+
   setMode(mode: EditorMode) {
     this.mode = mode
     this.selectedPoints = []
@@ -55,34 +69,28 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point || point.locked) return
 
-    // 删除与该点相关的线段
-    const linesToDelete: string[] = []
-    this.scene.lines.forEach((l, id) => {
-      if (l.p1.id === pointId || l.p2.id === pointId) linesToDelete.push(id)
-    })
-    linesToDelete.forEach((id) => this.scene.lines.delete(id))
+    const relatedLines = [...this.scene.lines.values()].filter(
+      (line) => line.p1.id === pointId || line.p2.id === pointId,
+    )
 
-    this.scene.points.delete(pointId)
-    this.scene.selection.points.delete(pointId)
-    linesToDelete.forEach((id) => this.scene.selection.lines.delete(id))
+    this.executeCommand(new DeletePointCommand(this.scene, point, relatedLines))
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
 
   deleteLine(lineId: string) {
-    if (!this.scene.lines.has(lineId)) return
-    this.scene.lines.delete(lineId)
-    this.scene.selection.lines.delete(lineId)
+    const line = this.scene.lines.get(lineId)
+    if (!line) return
+    this.executeCommand(new DeleteLineCommand(this.scene, line))
   }
 
   clearAll() {
-    this.scene.lines.clear()
+    const points = [...this.scene.points.values()].filter((point) => !point.locked)
+    const lines = [...this.scene.lines.values()]
+    const constraints = [...this.scene.constraints]
 
-    this.scene.points.forEach((point, id) => {
-      if (!point.locked) this.scene.points.delete(id)
-    })
+    if (points.length === 0 && lines.length === 0 && constraints.length === 0) return
 
-    this.scene.selection.clear()
-    this.scene.constraints.length = 0
+    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, constraints))
     this.selectedPoints = []
   }
 
@@ -100,6 +108,108 @@ export class Editor {
     const before = point.position.clone()
     const after = before.add(delta)
     this.executeCommand(new TransformCommand(point, before, after))
+  }
+
+  setPointPosition(pointId: string, position: Vec3) {
+    const point = this.scene.points.get(pointId)
+    if (!point || point.locked) return
+
+    const before = point.position.clone()
+    if (before.x === position.x && before.y === position.y && before.z === position.z) return
+
+    this.executeCommand(new TransformCommand(point, before, position.clone()))
+  }
+
+  setPointsPositions(updates: Array<{ id: string; position: Vec3 }>) {
+    const transforms = updates
+      .map(({ id, position }) => {
+        const point = this.scene.points.get(id)
+        if (!point || point.locked) return null
+
+        const before = point.position.clone()
+        if (before.x === position.x && before.y === position.y && before.z === position.z) {
+          return null
+        }
+
+        return {
+          point,
+          before,
+          after: position.clone(),
+        }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
+      )
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      const transform = transforms[0]!
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      return
+    }
+
+    this.executeCommand(new TransformPointsCommand(transforms))
+  }
+
+  applyPointTransformHistory(transforms: Array<{ id: string; before: Vec3; after: Vec3 }>) {
+    const commandTransforms = transforms
+      .map(({ id, before, after }) => {
+        const point = this.scene.points.get(id)
+        if (!point || point.locked) return null
+        if (before.x === after.x && before.y === after.y && before.z === after.z) return null
+
+        return {
+          point,
+          before: before.clone(),
+          after: after.clone(),
+        }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
+      )
+
+    if (commandTransforms.length === 0) return
+    if (commandTransforms.length === 1) {
+      const transform = commandTransforms[0]!
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      return
+    }
+
+    this.executeCommand(new TransformPointsCommand(commandTransforms))
+  }
+
+  updatePoint(pointId: string, patch: { name?: string; nameVisible?: boolean }) {
+    const point = this.scene.points.get(pointId)
+    if (!point) return
+
+    const nextName = patch.name ?? point.name
+    const nextVisible = patch.nameVisible ?? point.nameVisible
+    if (nextName === point.name && nextVisible === point.nameVisible) return
+
+    this.executeCommand(
+      new UpdatePointCommand(
+        point,
+        { name: point.name, nameVisible: point.nameVisible },
+        { name: nextName, nameVisible: nextVisible },
+      ),
+    )
+  }
+
+  updateLine(lineId: string, patch: { name?: string; nameVisible?: boolean }) {
+    const line = this.scene.lines.get(lineId)
+    if (!line) return
+
+    const nextName = patch.name ?? line.name
+    const nextVisible = patch.nameVisible ?? line.nameVisible
+    if (nextName === line.name && nextVisible === line.nameVisible) return
+
+    this.executeCommand(
+      new UpdateLineCommand(
+        line,
+        { name: line.name, nameVisible: line.nameVisible },
+        { name: nextName, nameVisible: nextVisible },
+      ),
+    )
   }
 
   tryCreateLineWith(point: Point3) {
@@ -130,19 +240,6 @@ export class Editor {
       this.selectedPoints = []
       this.scene.selection.clear()
     }
-  }
-
-  moveLine(lineId: string, delta: Vec3) {
-    const line = this.scene.lines.get(lineId)
-    if (!line) return
-
-    const b1 = line.p1.position.clone()
-    const b2 = line.p2.position.clone()
-
-    const a1 = b1.add(delta)
-    const a2 = b2.add(delta)
-
-    //this.executeCommand(new MoveLineCommand(line, b1, b2, a1, a2))
   }
 
   executeCommand(cmd: Command) {

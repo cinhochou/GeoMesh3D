@@ -89,22 +89,41 @@ export class CollabManager {
               ),
             )
           }
+        } else if (change.action === 'delete') {
+          if (id === Scene.ORIGIN_ID) return
+
+          this.scene.lines.forEach((line, lineId) => {
+            if (line.p1.id === id || line.p2.id === id) {
+              this.scene.lines.delete(lineId)
+            }
+          })
+          this.scene.points.delete(id)
+          this.scene.selection.points.delete(id)
         }
       })
     })
 
     this.yLines.observe((event) => {
       event.changes.keys.forEach((change, id) => {
-        if (change.action === 'add') {
+        if (change.action === 'add' || change.action === 'update') {
           const data = this.yLines.get(id)
           if (!data) return
           const p1 = this.scene.points.get(data.p1Id)
           const p2 = this.scene.points.get(data.p2Id)
-          if (p1 && p2 && !this.scene.lines.has(id)) {
-            this.scene.addLine(
-              new Line3(id, data.name ?? '', p1, p2, data.nameVisible ?? true),
-            )
+          if (!p1 || !p2) return
+
+          const line = this.scene.lines.get(id)
+          if (line) {
+            line.name = data.name ?? line.name
+            line.nameVisible = data.nameVisible ?? line.nameVisible
+            line.p1 = p1
+            line.p2 = p2
+          } else {
+            this.scene.addLine(new Line3(id, data.name ?? '', p1, p2, data.nameVisible ?? true))
           }
+        } else if (change.action === 'delete') {
+          this.scene.lines.delete(id)
+          this.scene.selection.lines.delete(id)
         }
       })
     })
@@ -115,6 +134,16 @@ export class CollabManager {
     if (!this.provider || !this.provider.connected) return
 
     this.ydoc.transact(() => {
+      const pointIds = new Set(this.scene.points.keys())
+      const lineIds = new Set(this.scene.lines.keys())
+
+      ;[...this.yPoints.keys()].forEach((id) => {
+        if (!pointIds.has(id)) this.yPoints.delete(id)
+      })
+      ;[...this.yLines.keys()].forEach((id) => {
+        if (!lineIds.has(id)) this.yLines.delete(id)
+      })
+
       this.scene.points.forEach((p, id) => {
         this.yPoints.set(id, {
           x: p.position.x,

@@ -34,6 +34,39 @@ const isToastVisible = ref(false)
 const toastScope = ref<'global' | 'viewport'>('global')
 let toastTimer: number | null = null
 
+const handleResize = () => {
+  renderer.onResize()
+}
+
+const isEditableTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.isContentEditable ||
+    target.tagName === 'SELECT'
+  )
+}
+
+const handleKeydown = (e: KeyboardEvent) => {
+  if (isEditableTarget(e.target)) return
+
+  const modKey = e.ctrlKey || e.metaKey
+  if (!modKey) return
+
+  const key = e.key.toLowerCase()
+  if (key === 'z' && !e.shiftKey) {
+    e.preventDefault()
+    editor.undo()
+    return
+  }
+
+  if (key === 'y' || (key === 'z' && e.shiftKey)) {
+    e.preventDefault()
+    editor.redo()
+  }
+}
+
 const modeName = computed(() => {
   switch (editor.mode) {
     case EditorMode.Select:
@@ -83,9 +116,8 @@ onMounted(() => {
   }
   loop()
 
-  window.addEventListener('resize', () => {
-    renderer.onResize()
-  })
+  window.addEventListener('resize', handleResize)
+  window.addEventListener('keydown', handleKeydown)
   window.addEventListener('toast', handleToast as EventListener)
 })
 
@@ -93,12 +125,15 @@ onMounted(() => {
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
   collabManager.value?.leaveRoom()
+  window.removeEventListener('resize', handleResize)
+  window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('toast', handleToast as EventListener)
 })
 
 function onModeChange(mode: EditorMode) {
   // AR 模式下仅允许“选择”功能
   if (isARMode.value && mode !== EditorMode.Select) return
+  interaction.clearPreview()
   editor.setMode(mode)
 }
 
@@ -110,7 +145,16 @@ const handleClearAll = () => {
   showToast('已清空所有对象', 'global')
 }
 
+const handleUndo = () => {
+  editor.undo()
+}
+
+const handleRedo = () => {
+  editor.redo()
+}
+
 const handleToggleAR = async (enabled: boolean) => {
+  interaction.clearPreview()
   if (enabled) {
     lastModeBeforeAR.value = editor.mode
     editor.setMode(EditorMode.Select)
@@ -180,8 +224,12 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       :is-snapping-enabled="editor.isSnappingEnabled"
       :peer-count="peerCount"
       :is-ar-mode="isARMode"
+      :can-undo="editor.canUndo"
+      :can-redo="editor.canRedo"
       @mode-change="onModeChange"
       @clear-all="handleClearAll"
+      @undo="handleUndo"
+      @redo="handleRedo"
       @toggle-snapping="editor.toggleSnapping()"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"

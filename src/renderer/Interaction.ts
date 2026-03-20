@@ -13,6 +13,7 @@ export class Interaction {
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragDepth: number | null = null
+  private dragStartPositions = new Map<string, Vec3>()
 
   constructor(
     public editor: Editor,
@@ -26,6 +27,7 @@ export class Interaction {
     dom.addEventListener('mousedown', this.onMouseDown)
     dom.addEventListener('mousemove', this.onMouseMove)
     dom.addEventListener('mouseup', this.onMouseUp)
+    dom.addEventListener('mouseleave', this.onMouseLeave)
   }
 
   /** 网格吸附工具函数 */
@@ -168,7 +170,7 @@ export class Interaction {
             // 确保当前拖拽的对象也在里面（防止它没被选中也能拖）
             toMove.add(this.draggingPointId!)
 
-            toMove.forEach((id) => this.editor.movePoint(id, delta))
+            this.previewMovePoints([...toMove], delta)
           },
           e.altKey,
         )
@@ -203,7 +205,7 @@ export class Interaction {
             toMove.add(line.p1.id)
             toMove.add(line.p2.id)
 
-            toMove.forEach((id) => this.editor.movePoint(id, delta))
+            this.previewMovePoints([...toMove], delta)
           },
           e.altKey,
         )
@@ -212,6 +214,7 @@ export class Interaction {
   }
 
   onMouseUp = () => {
+    this.commitDragHistory()
     this.draggingPointId = null
     this.draggingLineId = null
     this.endDrag()
@@ -221,6 +224,10 @@ export class Interaction {
     if (this.editor.mode !== EditorMode.CreatePoint) {
       this.renderer.hideAxisGuides()
     }
+  }
+
+  onMouseLeave = () => {
+    this.clearPreview()
   }
 
   /** 统一的拾取函数，支持点和线 */
@@ -338,9 +345,50 @@ export class Interaction {
     this.dragDepth = this.raycaster.ray.origin.distanceTo(ref)
   }
 
+  private previewMovePoints(pointIds: string[], delta: Vec3) {
+    pointIds.forEach((id) => {
+      const point = this.editor.scene.points.get(id)
+      if (!point || point.locked) return
+
+      if (!this.dragStartPositions.has(id)) {
+        this.dragStartPositions.set(id, point.position.clone())
+      }
+
+      point.setPosition(point.position.add(delta))
+    })
+  }
+
+  private commitDragHistory() {
+    if (this.dragStartPositions.size === 0) return
+
+    const transforms = [...this.dragStartPositions.entries()]
+      .map(([id, before]) => {
+        const point = this.editor.scene.points.get(id)
+        if (!point) return null
+
+        return {
+          id,
+          before,
+          after: point.position.clone(),
+        }
+      })
+      .filter(
+        (transform): transform is { id: string; before: Vec3; after: Vec3 } => transform !== null,
+      )
+
+    this.editor.applyPointTransformHistory(transforms)
+    this.dragStartPositions.clear()
+  }
+
+  clearPreview() {
+    this.rubberBandData = null
+    this.renderer.hideAxisGuides()
+  }
+
   private endDrag() {
     this.dragPlane = null
     this.dragLastPos = null
     this.dragDepth = null
+    this.dragStartPositions.clear()
   }
 }

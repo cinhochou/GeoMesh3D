@@ -27,7 +27,6 @@ const linesInScene = computed(() => {
 })
 
 const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
-const sidebarRef = ref<HTMLElement | null>(null)
 const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
 const editLine = reactive({
   name: '',
@@ -80,18 +79,17 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
   const point = props.scene.points.get(id)
   if (!point) return
   if (point.locked) return
-  const before = point.position
-  const delta = new Vec3(x - before.x, y - before.y, z - before.z)
-  if (Math.abs(delta.x) + Math.abs(delta.y) + Math.abs(delta.z) < 1e-6) return
-  props.editor.movePoint(id, delta)
+  props.editor.setPointPosition(id, new Vec3(x, y, z))
 }
 
 const applyEditPoint = () => {
   if (!editing.value || editing.value.type !== 'point') return
   const point = props.scene.points.get(editing.value.id)
   if (point && !point.locked) {
-    point.name = editPoint.name
-    point.nameVisible = editPoint.nameVisible
+    props.editor.updatePoint(editing.value.id, {
+      name: editPoint.name,
+      nameVisible: editPoint.nameVisible,
+    })
   }
   applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
 }
@@ -100,8 +98,10 @@ const applyEditLine = () => {
   if (!editing.value || editing.value.type !== 'line') return
   const line = props.scene.lines.get(editing.value.id)
   if (!line) return
-  line.name = editLine.name
-  line.nameVisible = editLine.nameVisible
+  props.editor.updateLine(editing.value.id, {
+    name: editLine.name,
+    nameVisible: editLine.nameVisible,
+  })
   applyPointPosition(line.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
   applyPointPosition(line.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
 }
@@ -180,7 +180,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="sidebar" ref="sidebarRef">
+  <div class="sidebar">
     <p>当前操作模式：{{ modeName }}</p>
     <div class="divider"></div>
     <h3>选中</h3>

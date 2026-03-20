@@ -3,11 +3,17 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { EditorMode } from '../core/editor/Editor'
 
+defineOptions({
+  name: 'EditorToolbar',
+})
+
 const props = defineProps<{
   currentMode: EditorMode
   isSnappingEnabled: boolean
   peerCount: number
   isArMode: boolean
+  canUndo: boolean
+  canRedo: boolean
 }>()
 
 const emit = defineEmits<{
@@ -16,6 +22,8 @@ const emit = defineEmits<{
   (e: 'toggle-ar', isOpen: boolean): void
   (e: 'toggle-collab', data: { open: boolean; room: string }): void
   (e: 'clear-all'): void
+  (e: 'undo'): void
+  (e: 'redo'): void
 }>()
 
 const roomName = ref('default-room')
@@ -160,6 +168,11 @@ onUnmounted(() => {
     <button @click="toggleAR" :class="{ active: isAROpen }">
       {{ isAROpen ? '退出 AR' : '开启 AR' }}
     </button>
+
+    <div class="toolbar-spacer"></div>
+
+    <button class="history-button" @click="emit('undo')" :disabled="!canUndo">撤销</button>
+    <button class="history-button" @click="emit('redo')" :disabled="!canRedo">重做</button>
   </div>
 </template>
 
@@ -285,5 +298,13 @@ button.is-active {
   margin-left: 8px;
   color: #43f260;
   font-family: monospace;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.history-button {
+  min-width: 64px;
 }
 </style>
