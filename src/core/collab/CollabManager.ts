@@ -6,13 +6,29 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Vec3 } from '../geometry/Vec3'
 
+export type CollabStatus = {
+  room: string | null
+  connecting: boolean
+  connected: boolean
+}
+
 export class CollabManager {
   private ydoc: Y.Doc
   private provider: WebrtcProvider | null = null
   private yPoints: Y.Map<any>
   private yLines: Y.Map<any>
+  private pointsObserver: ((event: Y.YMapEvent<any>) => void) | null = null
+  private linesObserver: ((event: Y.YMapEvent<any>) => void) | null = null
+
+  private roomName: string | null = null
+  private connecting = false
+  private connected = false
+
+  private syncTimer: number | null = null
+  private syncPending = false
 
   public onPeersUpdate: (count: number) => void = () => {}
+  public onStatusUpdate: (status: CollabStatus) => void = () => {}
 
   constructor(private scene: Scene) {
     this.ydoc = new Y.Doc()
@@ -21,52 +37,100 @@ export class CollabManager {
     this.setupObservers()
   }
 
-  joinRoom(roomName: string) {
-    // 1. 如果已有连接，先彻底退出
+  getStatus(): CollabStatus {
+    return {
+      room: this.roomName,
+      connecting: this.connecting,
+      connected: this.connected,
+    }
+  }
+
+  async joinRoom(roomName: string) {
+    if (!roomName.trim()) throw new Error('roomName is empty')
+
     this.leaveRoom()
+    this.resetDoc()
+
+    this.roomName = roomName
+    this.connecting = true
+    this.connected = false
+    this.emitStatus()
 
     console.log(`正在加入房间: ${roomName}`)
 
-    // 2. 初始化 WebrtcProvider
+    //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
-      signaling: [
-        'ws://localhost:4444/', //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/',
-      ],
-      // 这里的 peerOpts 可以设置连接超时等
+      signaling: ['ws://localhost:4444/'],
     })
 
-    // 3. 监听人数变化
     this.provider.on('peers', (params: any) => {
-      // webrtcPeers 是其他人的数量，所以要 +1 (自己)
       const count = params.webrtcPeers ? params.webrtcPeers.length + 1 : 1
       this.onPeersUpdate(count)
     })
 
-    // 4. 监听连接状态（可选，用于调试）
-    this.provider.on('status', ({ connected }: { connected: boolean }) => {
-      console.log(`协作房间: ${roomName}`, ',协作连接状态:', connected ? '已连接' : '已断开')
-    })
+    const provider = this.provider
+    const timeoutMs = 10_000
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          reject(new Error(`connect timeout after ${timeoutMs}ms`))
+        }, timeoutMs)
+
+        provider.on('status', ({ connected }: { connected: boolean }) => {
+          this.connected = connected
+          this.connecting = !connected
+          this.emitStatus()
+          console.log(`协作房间: ${roomName}`, ',协作连接状态:', connected ? '已连接' : '已断开')
+          if (connected) {
+            window.clearTimeout(timer)
+            resolve()
+          }
+        })
+      })
+    } catch (err) {
+      this.leaveRoom()
+      throw err
+    }
   }
 
   leaveRoom() {
     if (this.provider) {
       console.log('正在断开并清理协作实例...')
-
-      // 显式停止 WebRTC 监听和信令交换
       this.provider.disconnect()
-
-      // 销毁实例，解绑所有事件处理程序
       this.provider.destroy()
-
       this.provider = null
-
-      // 重置外部人数显示
       this.onPeersUpdate(1)
     }
+
+    if (this.syncTimer) {
+      window.clearTimeout(this.syncTimer)
+      this.syncTimer = null
+    }
+    this.syncPending = false
+
+    this.roomName = null
+    this.connecting = false
+    this.connected = false
+    this.emitStatus()
+  }
+
+  private emitStatus() {
+    this.onStatusUpdate(this.getStatus())
+  }
+
+  private resetDoc() {
+    if (this.pointsObserver) this.yPoints.unobserve(this.pointsObserver)
+    if (this.linesObserver) this.yLines.unobserve(this.linesObserver)
+
+    this.ydoc = new Y.Doc()
+    this.yPoints = this.ydoc.getMap('points')
+    this.yLines = this.ydoc.getMap('lines')
+    this.setupObservers()
   }
 
   private setupObservers() {
-    this.yPoints.observe((event) => {
+    this.pointsObserver = (event) => {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'add' || change.action === 'update') {
           const data = this.yPoints.get(id)
@@ -101,9 +165,10 @@ export class CollabManager {
           this.scene.selection.points.delete(id)
         }
       })
-    })
+    }
+    this.yPoints.observe(this.pointsObserver)
 
-    this.yLines.observe((event) => {
+    this.linesObserver = (event) => {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'add' || change.action === 'update') {
           const data = this.yLines.get(id)
@@ -126,40 +191,76 @@ export class CollabManager {
           this.scene.selection.lines.delete(id)
         }
       })
-    })
+    }
+    this.yLines.observe(this.linesObserver)
   }
 
   syncAction() {
-    // 只有在连接状态下才执行同步
+    if (!this.provider || !this.provider.connected) return
+
+    this.syncPending = true
+    if (this.syncTimer) return
+
+    this.syncTimer = window.setTimeout(() => {
+      this.syncTimer = null
+      if (!this.syncPending) return
+      this.syncPending = false
+      this.syncNow()
+    }, 50)
+  }
+
+  private syncNow() {
     if (!this.provider || !this.provider.connected) return
 
     this.ydoc.transact(() => {
       const pointIds = new Set(this.scene.points.keys())
       const lineIds = new Set(this.scene.lines.keys())
 
-      ;[...this.yPoints.keys()].forEach((id) => {
+      for (const id of [...this.yPoints.keys()]) {
         if (!pointIds.has(id)) this.yPoints.delete(id)
-      })
-      ;[...this.yLines.keys()].forEach((id) => {
+      }
+      for (const id of [...this.yLines.keys()]) {
         if (!lineIds.has(id)) this.yLines.delete(id)
-      })
+      }
 
       this.scene.points.forEach((p, id) => {
-        this.yPoints.set(id, {
+        const next = {
           x: p.position.x,
           y: p.position.y,
           z: p.position.z,
           name: p.name,
           nameVisible: p.nameVisible,
-        })
+        }
+        const prev = this.yPoints.get(id)
+        if (
+          !prev ||
+          prev.x !== next.x ||
+          prev.y !== next.y ||
+          prev.z !== next.z ||
+          prev.name !== next.name ||
+          prev.nameVisible !== next.nameVisible
+        ) {
+          this.yPoints.set(id, next)
+        }
       })
+
       this.scene.lines.forEach((l, id) => {
-        this.yLines.set(id, {
+        const next = {
           p1Id: l.p1.id,
           p2Id: l.p2.id,
           name: l.name,
           nameVisible: l.nameVisible,
-        })
+        }
+        const prev = this.yLines.get(id)
+        if (
+          !prev ||
+          prev.p1Id !== next.p1Id ||
+          prev.p2Id !== next.p2Id ||
+          prev.name !== next.name ||
+          prev.nameVisible !== next.nameVisible
+        ) {
+          this.yLines.set(id, next)
+        }
       })
     })
   }

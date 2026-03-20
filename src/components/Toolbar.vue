@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { EditorMode } from '../core/editor/Editor'
+import type { CollabStatus } from '../core/collab/CollabManager'
 
 defineOptions({
   name: 'EditorToolbar',
@@ -12,6 +13,7 @@ const props = defineProps<{
   isSnappingEnabled: boolean
   peerCount: number
   isArMode: boolean
+  collabStatus: CollabStatus
   canUndo: boolean
   canRedo: boolean
 }>()
@@ -27,10 +29,11 @@ const emit = defineEmits<{
 }>()
 
 const roomName = ref('default-room')
-const isCollabOpen = ref(false)
 const isAROpen = ref(false)
 const isDeleteMenuOpen = ref(false)
 const isArLocked = computed(() => props.isArMode)
+const isCollabOpen = computed(() => props.collabStatus.connected)
+const isCollabConnecting = computed(() => props.collabStatus.connecting)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 
 watch(
@@ -48,8 +51,12 @@ const setMode = (mode: EditorMode) => {
 }
 
 const toggleCollab = () => {
-  isCollabOpen.value = !isCollabOpen.value
-  emit('toggle-collab', { open: isCollabOpen.value, room: roomName.value })
+  if (isCollabConnecting.value) return
+  if (isCollabOpen.value) {
+    emit('toggle-collab', { open: false, room: roomName.value })
+  } else {
+    emit('toggle-collab', { open: true, room: roomName.value })
+  }
 }
 
 const toggleAR = () => {
@@ -153,12 +160,16 @@ onUnmounted(() => {
     <div class="collab-box">
       <input
         v-model="roomName"
-        :disabled="isCollabOpen"
+        :disabled="isCollabOpen || isCollabConnecting"
         placeholder="输入房间名"
         class="room-input"
       />
-      <button @click="toggleCollab" :class="{ active: isCollabOpen }">
-        {{ isCollabOpen ? '退出协作' : '开启协作' }}
+      <button
+        @click="toggleCollab"
+        :class="{ active: isCollabOpen }"
+        :disabled="isCollabConnecting"
+      >
+        {{ isCollabOpen ? '退出协作' : isCollabConnecting ? '连接中...' : '开启协作' }}
       </button>
       <span v-if="isCollabOpen" class="peer-count">👥 {{ peerCount }}</span>
     </div>

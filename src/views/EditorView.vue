@@ -10,7 +10,7 @@ import { Scene } from '../core/scene/Scene'
 import { Editor, EditorMode } from '../core/editor/Editor'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
-import { CollabManager } from '../core/collab/CollabManager'
+import { CollabManager, type CollabStatus } from '../core/collab/CollabManager'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 
@@ -22,6 +22,7 @@ let interaction: Interaction
 
 const peerCount = ref(1)
 const collabManager = ref<CollabManager | null>(null)
+const collabStatus = ref<CollabStatus>({ room: null, connecting: false, connected: false })
 const isARMode = ref(false)
 const lastModeBeforeAR = ref<EditorMode | null>(null)
 const fps = ref(0)
@@ -91,6 +92,9 @@ onMounted(() => {
 
   collabManager.value.onPeersUpdate = (count) => {
     peerCount.value = count
+  }
+  collabManager.value.onStatusUpdate = (status) => {
+    collabStatus.value = status
   }
 
   // 劫持 Editor 的命令执行，实现自动同步
@@ -179,14 +183,20 @@ const handleToggleAR = async (enabled: boolean) => {
   }
 }
 
-const handleToggleCollab = ({ open, room }: { open: boolean; room: string }) => {
+const handleToggleCollab = async ({ open, room }: { open: boolean; room: string }) => {
   if (open) {
-    collabManager.value?.joinRoom(room)
-    showToast(`😉 成功加入房间: ${room}`, 'global')
-  } else {
-    collabManager.value?.leaveRoom()
-    showToast('😶‍🌫️ 已成功退出协作', 'global')
+    try {
+      await collabManager.value?.joinRoom(room)
+      showToast(`😉 成功加入房间: ${room}`, 'global')
+    } catch (err) {
+      console.error(err)
+      showToast('⚠️ 协作连接失败（请检查 signaling 服务）', 'global')
+    }
+    return
   }
+
+  collabManager.value?.leaveRoom()
+  showToast('😶‍🌫️ 已成功退出协作', 'global')
 }
 
 const handleToast = (e: Event) => {
@@ -224,6 +234,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       :is-snapping-enabled="editor.isSnappingEnabled"
       :peer-count="peerCount"
       :is-ar-mode="isARMode"
+      :collab-status="collabStatus"
       :can-undo="editor.canUndo"
       :can-redo="editor.canRedo"
       @mode-change="onModeChange"
