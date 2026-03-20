@@ -160,7 +160,7 @@ onUnmounted(() => {
       <button @click="toggleCollab" :class="{ active: isCollabOpen }">
         {{ isCollabOpen ? '退出协作' : '开启协作' }}
       </button>
-      <span v-if="isCollabOpen" class="peer-count">{{ peerCount }}</span>
+      <span v-if="isCollabOpen" class="peer-count">👥 {{ peerCount }}</span>
     </div>
 
     <div class="divider"></div>
