@@ -128,9 +128,14 @@ export class ThreeRenderer {
     this.worldScale = scale
     this.world.scale.setScalar(scale)
 
+    this.refreshScreenSpaceScales()
+  }
+
+  /** 重新按当前画布尺寸刷新点与标签的屏幕空间大小 */
+  private refreshScreenSpaceScales() {
     // 让点精灵在屏幕上保持可点击尺寸
     const h = this.renderer.domElement.clientHeight || 1
-    const basePixel = 6
+    const basePixel = 10
     const spriteScale = basePixel / h / this.worldScale
     const labelPixel = 64
     const lineLabelPixel = 64
@@ -152,7 +157,6 @@ export class ThreeRenderer {
       this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
     }
   }
-
   /* ---------- Scene → Three ---------- */
 
   sync(geoScene: GeoScene, previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null) {
@@ -388,6 +392,8 @@ export class ThreeRenderer {
       this.renderer.domElement.style.height = '100%'
       this.renderer.domElement.style.objectFit = 'contain'
     }
+
+    this.refreshScreenSpaceScales()
   }
 
   private syncPoints(scene: GeoScene) {

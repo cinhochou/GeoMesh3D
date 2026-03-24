@@ -275,7 +275,6 @@ export class Interaction {
   private handleDrag(referencePos: Vec3, applyDelta: (d: Vec3) => void, isAltPressed: boolean) {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const targetPos = new THREE.Vector3()
-    const currentPos = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
 
     // 拖拽平面在拖拽开始时固定，避免 AR 相机抖动导致跳动
     if (!this.dragPlane || !this.dragLastPos) this.startDrag(referencePos)
@@ -291,7 +290,7 @@ export class Interaction {
 
     // 非 AR 或球面未命中时，回退到固定拖拽平面
     if (!hit) {
-      hit = !this.raycaster.ray.intersectPlane(this.dragPlane, targetPos)
+      hit = this.raycaster.ray.intersectPlane(this.dragPlane, targetPos) !== null
     }
 
     // 仍未命中时，用上一次深度兜底
@@ -300,25 +299,16 @@ export class Interaction {
       targetPos.copy(this.raycaster.ray.at(fallbackDepth, new THREE.Vector3()))
     }
 
-    const snapping = this.editor.isSnappingEnabled && !isAltPressed
-    let delta: Vec3
-
     // 吸附逻辑判断
-    if (snapping) {
+    if (this.editor.isSnappingEnabled && !isAltPressed) {
       targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
-      // 基于对象当前真实坐标计算位移，确保重新开启吸附后会回到实际网格。
-      delta = new Vec3(
-        targetPos.x - currentPos.x,
-        targetPos.y - currentPos.y,
-        targetPos.z - currentPos.z,
-      )
-    } else {
-      delta = new Vec3(
-        targetPos.x - this.dragLastPos.x,
-        targetPos.y - this.dragLastPos.y,
-        targetPos.z - this.dragLastPos.z,
-      )
     }
+
+    const delta = new Vec3(
+      targetPos.x - this.dragLastPos.x,
+      targetPos.y - this.dragLastPos.y,
+      targetPos.z - this.dragLastPos.z,
+    )
 
     if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
       applyDelta(delta)
