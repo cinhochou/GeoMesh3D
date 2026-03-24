@@ -270,12 +270,17 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .editor-body {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0;
+  min-width: 0;
 }
 .fps-indicator {
   position: absolute;
@@ -298,6 +303,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   position: relative; /* 必须加上这个！作为 Video 和 Canvas 的定位基准 */
   overflow: hidden; /* 防止视频溢出 */
   min-height: 0;
+  min-width: 0;
 }
 
 /* 提示框样式：位于屏幕正中间 */
@@ -340,5 +346,19 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 .toast-fade-leave-to {
   opacity: 0;
   transform: translate(-50%, -60%); /* 消失时稍微向上位移一点 */
+}
+
+@media (max-width: 1024px) and (orientation: landscape) {
+  .fps-indicator {
+    top: 8px;
+    right: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .toast-content {
+    padding: 12px 20px;
+    font-size: 14px;
+  }
 }
 </style>

@@ -54,6 +54,11 @@ const normalizeCoord = (value: string) => {
   const n = Number(value)
   return Number.isFinite(n) ? toFixed2(n) : value
 }
+const adjustCoordValue = (value: string, delta: number) => {
+  const current = Number(value)
+  const next = Number.isFinite(current) ? current + delta : delta
+  return toFixed2(next)
+}
 const handlePointCoordFocus = (axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`point.${axis}`, true)
 }
@@ -68,6 +73,14 @@ const handleLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
 const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editLine[which][axis] = normalizeCoord(editLine[which][axis])
   setCoordFocus(`line.${which}.${axis}`, false)
+  applyEditLine()
+}
+const nudgePointCoord = (axis: 'x' | 'y' | 'z', delta: number) => {
+  editPoint[axis] = adjustCoordValue(editPoint[axis], delta)
+  applyEditPoint()
+}
+const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', delta: number) => {
+  editLine[which][axis] = adjustCoordValue(editLine[which][axis], delta)
   applyEditLine()
 }
 
@@ -211,7 +224,7 @@ onUnmounted(() => {
     <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0">
       双击标签以编辑几何元素~
     </div>
-    <div class="box">
+    <div class="box selected-box">
       <div v-if="selectedPoints.length === 0 && selectedLines.length === 0">无</div>
 
       <div
@@ -230,33 +243,51 @@ onUnmounted(() => {
             </label>
           </div>
           <div class="coord-row">
-            <label>x</label>
-            <input
-              type="number"
-              v-model="editPoint.x"
-              @input="applyEditPoint"
-              @focus="handlePointCoordFocus('x')"
-              @blur="handlePointCoordBlur('x')"
-              step="0.5"
-            />
-            <label>y</label>
-            <input
-              type="number"
-              v-model="editPoint.y"
-              @input="applyEditPoint"
-              @focus="handlePointCoordFocus('y')"
-              @blur="handlePointCoordBlur('y')"
-              step="0.5"
-            />
-            <label>z</label>
-            <input
-              type="number"
-              v-model="editPoint.z"
-              @input="applyEditPoint"
-              @focus="handlePointCoordFocus('z')"
-              @blur="handlePointCoordBlur('z')"
-              step="0.5"
-            />
+            <div class="axis-field">
+              <label>x</label>
+              <div class="coord-input">
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', -0.5)">-</button>
+                <input
+                  type="number"
+                  v-model="editPoint.x"
+                  @input="applyEditPoint"
+                  @focus="handlePointCoordFocus('x')"
+                  @blur="handlePointCoordBlur('x')"
+                  step="0.5"
+                />
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', 0.5)">+</button>
+              </div>
+            </div>
+            <div class="axis-field">
+              <label>y</label>
+              <div class="coord-input">
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', -0.5)">-</button>
+                <input
+                  type="number"
+                  v-model="editPoint.y"
+                  @input="applyEditPoint"
+                  @focus="handlePointCoordFocus('y')"
+                  @blur="handlePointCoordBlur('y')"
+                  step="0.5"
+                />
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', 0.5)">+</button>
+              </div>
+            </div>
+            <div class="axis-field">
+              <label>z</label>
+              <div class="coord-input">
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', -0.5)">-</button>
+                <input
+                  type="number"
+                  v-model="editPoint.z"
+                  @input="applyEditPoint"
+                  @focus="handlePointCoordFocus('z')"
+                  @blur="handlePointCoordBlur('z')"
+                  step="0.5"
+                />
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', 0.5)">+</button>
+              </div>
+            </div>
           </div>
         </div>
         <div v-else>
@@ -288,64 +319,194 @@ onUnmounted(() => {
           </div>
           <div class="line-point-row">
             <span class="line-point-label">点{{ l!.p1.name ?? '' }}(x,y,z)</span>
-            <input
-              type="number"
-              v-model="editLine.p1.x"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p1', 'x')"
-              @blur="handleLineCoordBlur('p1', 'x')"
-              step="0.5"
-              :disabled="l!.p1.locked"
-            />
-            <input
-              type="number"
-              v-model="editLine.p1.y"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p1', 'y')"
-              @blur="handleLineCoordBlur('p1', 'y')"
-              step="0.5"
-              :disabled="l!.p1.locked"
-            />
-            <input
-              type="number"
-              v-model="editLine.p1.z"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p1', 'z')"
-              @blur="handleLineCoordBlur('p1', 'z')"
-              step="0.5"
-              :disabled="l!.p1.locked"
-            />
+            <div class="line-coord-stack">
+              <div class="axis-field line-axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'x', -0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p1.x"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p1', 'x')"
+                    @blur="handleLineCoordBlur('p1', 'x')"
+                    step="0.5"
+                    :disabled="l!.p1.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'x', 0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field line-axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'y', -0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p1.y"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p1', 'y')"
+                    @blur="handleLineCoordBlur('p1', 'y')"
+                    step="0.5"
+                    :disabled="l!.p1.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'y', 0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field line-axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'z', -0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p1.z"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p1', 'z')"
+                    @blur="handleLineCoordBlur('p1', 'z')"
+                    step="0.5"
+                    :disabled="l!.p1.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p1', 'z', 0.5)"
+                    :disabled="l!.p1.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
             <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
           </div>
           <div class="line-point-row">
             <span class="line-point-label">点{{ l!.p2.name ?? '' }}(x,y,z)</span>
-            <input
-              type="number"
-              v-model="editLine.p2.x"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p2', 'x')"
-              @blur="handleLineCoordBlur('p2', 'x')"
-              step="0.5"
-              :disabled="l!.p2.locked"
-            />
-            <input
-              type="number"
-              v-model="editLine.p2.y"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p2', 'y')"
-              @blur="handleLineCoordBlur('p2', 'y')"
-              step="0.5"
-              :disabled="l!.p2.locked"
-            />
-            <input
-              type="number"
-              v-model="editLine.p2.z"
-              @input="applyEditLine"
-              @focus="handleLineCoordFocus('p2', 'z')"
-              @blur="handleLineCoordBlur('p2', 'z')"
-              step="0.5"
-              :disabled="l!.p2.locked"
-            />
+            <div class="line-coord-stack">
+              <div class="axis-field line-axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'x', -0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p2.x"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p2', 'x')"
+                    @blur="handleLineCoordBlur('p2', 'x')"
+                    step="0.5"
+                    :disabled="l!.p2.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'x', 0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field line-axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'y', -0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p2.y"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p2', 'y')"
+                    @blur="handleLineCoordBlur('p2', 'y')"
+                    step="0.5"
+                    :disabled="l!.p2.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'y', 0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field line-axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'z', -0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    v-model="editLine.p2.z"
+                    @input="applyEditLine"
+                    @focus="handleLineCoordFocus('p2', 'z')"
+                    @blur="handleLineCoordBlur('p2', 'z')"
+                    step="0.5"
+                    :disabled="l!.p2.locked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeLineCoord('p2', 'z', 0.5)"
+                    :disabled="l!.p2.locked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
             <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
           </div>
         </div>
@@ -364,7 +525,7 @@ onUnmounted(() => {
     </div>
     <div class="divider"></div>
     <h3>内容</h3>
-    <div class="box">
+    <div class="box content-box">
       <div v-if="pointsInScene.length === 0 && linesInScene.length === 0">无</div>
       <div v-for="p in pointsInScene" :key="p!.id" class="point-info">
         <div>
@@ -395,14 +556,20 @@ onUnmounted(() => {
 
 <style scoped>
 .sidebar {
-  min-width: 220px;
+  width: clamp(200px, 21vw, 280px);
+  min-width: 200px;
+  max-width: 280px;
   background: #1a1a1a;
   color: #ddd;
   padding: 12px;
   border-right: 1px solid #333;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 防止内部滚动影响 */
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  flex-shrink: 0;
 }
 .sidebar > p {
   flex-shrink: 0;
@@ -428,7 +595,7 @@ hr {
   font-size: 13px;
 }
 .divider {
-  width: 220px;
+  width: 100%;
   height: 1px;
   background: #444;
   margin-top: 5px;
@@ -436,10 +603,18 @@ hr {
   flex-shrink: 0;
 }
 .box {
-  flex: 1; /* 占据剩余空间 */
+  flex: 0 1 auto;
   overflow-y: auto; /* 垂直滚动 */
   overflow-x: hidden;
   margin-bottom: 2px; /* 底部边距 */
+  min-height: 96px;
+}
+.selected-box {
+  flex-basis: 38%;
+}
+.content-box {
+  flex: 1 1 auto;
+  min-height: 140px;
 }
 .box::-webkit-scrollbar {
   width: 5px;
@@ -482,9 +657,63 @@ hr {
 .edit-grid input[type='number'] {
   width: 48px;
 }
-.coord-row {
-  display: flex;
+.coord-input {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+}
+.axis-field {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 4px;
   align-items: center;
+  min-width: 0;
+}
+.compact-axis {
+  flex: 1 1 0;
+}
+.axis-field > label {
+  font-size: 11px;
+  color: #8fdc9b;
+  text-align: center;
+}
+.coord-input input[type='number'] {
+  width: 54px;
+  text-align: center;
+  border-radius: 0;
+}
+.step-btn {
+  min-width: 26px;
+  border: 1px solid #355b3a;
+  background: #214126;
+  color: #e6ffe9;
+  padding: 0 6px;
+  font-size: 14px;
+  line-height: 1;
+  touch-action: manipulation;
+}
+.step-btn:first-child {
+  border-radius: 4px 0 0 4px;
+  border-right: none;
+}
+.step-btn:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+}
+.step-btn:hover:not(:disabled) {
+  background: #2c5a34;
+}
+.step-btn:active:not(:disabled) {
+  background: #43f260;
+  color: #000;
+}
+.step-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.coord-row {
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 4px;
   grid-column: 1 / -1;
 }
@@ -506,17 +735,217 @@ hr {
 }
 .line-point-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 4px;
   grid-column: 1 / -1;
 }
 .line-point-label {
   white-space: nowrap;
 }
+.line-coord-stack {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+}
+.line-axis-field {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.line-axis-field .coord-input {
+  width: 100%;
+}
 .lock-badge {
   font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
   margin-left: 6px;
+}
+
+@media (max-width: 1024px) and (orientation: landscape) {
+  .sidebar {
+    width: clamp(156px, 30vw, 216px);
+    min-width: 156px;
+    padding: 8px;
+    font-size: 12px;
+  }
+
+  .selectedPoint-info,
+  .selectedLine-info,
+  .point-info,
+  .line-info {
+    padding: 6px;
+    font-size: 12px;
+  }
+
+  .selected-box {
+    flex-basis: 44%;
+    min-height: 112px;
+  }
+
+  .content-box {
+    min-height: 0;
+  }
+
+  .hint {
+    font-size: 11px;
+  }
+
+  .edit-grid input[type='text'] {
+    width: 48px;
+  }
+
+  .edit-grid input[type='number'] {
+    width: 44px;
+  }
+
+  .coord-input input[type='number'] {
+    width: 48px;
+  }
+
+  .step-btn {
+    min-width: 30px;
+    font-size: 16px;
+  }
+
+  .name-row,
+  .line-point-row {
+    flex-wrap: wrap;
+  }
+
+  .line-point-label {
+    width: 100%;
+  }
+}
+
+@media (max-width: 820px) and (orientation: landscape) {
+  .sidebar {
+    width: clamp(132px, 28vw, 172px);
+    min-width: 132px;
+    max-width: 172px;
+    display: block;
+    padding: 6px;
+    font-size: 11px;
+    overflow-y: auto;
+  }
+
+  .sidebar > p,
+  h3,
+  .divider,
+  .hint {
+    margin-bottom: 4px;
+  }
+
+  .selectedPoint-info,
+  .selectedLine-info,
+  .point-info,
+  .line-info {
+    margin-bottom: 4px;
+    padding: 5px;
+    font-size: 11px;
+  }
+
+  .box,
+  .selected-box,
+  .content-box {
+    display: block;
+    flex: none;
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .edit-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .edit-grid input[type='text'],
+  .edit-grid input[type='number'] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .coord-input {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) 36px;
+  }
+
+  .coord-input input[type='number'] {
+    flex: 1;
+    width: auto;
+  }
+
+  .step-btn {
+    min-width: 36px;
+    min-height: 36px;
+    font-size: 18px;
+  }
+
+  .name-row,
+  .line-point-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    align-items: center;
+  }
+
+  .line-point-label,
+  .toggle-label {
+    grid-column: 1 / -1;
+  }
+
+  .compact-axis {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .coord-input {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .coord-input input[type='number'] {
+    order: 2;
+    width: 100%;
+    border-radius: 0;
+  }
+
+  .coord-input .step-btn:first-child {
+    order: 1;
+    border-radius: 4px 4px 0 0;
+    border-right: 1px solid #355b3a;
+    border-bottom: none;
+  }
+
+  .coord-input .step-btn:last-child {
+    order: 3;
+    border-radius: 0 0 4px 4px;
+    border-left: 1px solid #355b3a;
+    border-top: none;
+  }
+
+  .step-btn {
+    min-width: 100%;
+    min-height: 28px;
+    padding: 4px 0;
+    font-size: 16px;
+  }
+
+  .axis-field > label {
+    font-size: 10px;
+  }
+
+  .selectedPoint-info,
+  .selectedLine-info,
+  .point-info,
+  .line-info {
+    padding: 4px;
+    font-size: 10px;
+  }
 }
 </style>

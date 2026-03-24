@@ -1,6 +1,6 @@
-<!-- src/components/ToolBar.vue -->
+﻿<!-- src/components/ToolBar.vue -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { EditorMode } from '../core/editor/Editor'
 import type { CollabStatus } from '../core/collab/CollabManager'
 
@@ -35,6 +35,13 @@ const isArLocked = computed(() => props.isArMode)
 const isCollabOpen = computed(() => props.collabStatus.connected)
 const isCollabConnecting = computed(() => props.collabStatus.connecting)
 const deleteMenuRef = ref<HTMLElement | null>(null)
+const deleteTriggerRef = ref<HTMLElement | null>(null)
+const deletePanelRef = ref<HTMLElement | null>(null)
+const deleteMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '108px',
+})
 
 watch(
   () => props.isArMode,
@@ -70,6 +77,17 @@ const toggleDeleteMenu = () => {
   isDeleteMenuOpen.value = !isDeleteMenuOpen.value
 }
 
+const updateDeleteMenuPosition = () => {
+  const trigger = deleteTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  deleteMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 108)}px`,
+  }
+}
+
 const selectDeleteMode = () => {
   setMode(EditorMode.Delete)
 }
@@ -83,17 +101,30 @@ const handleClickOutside = (event: MouseEvent) => {
   if (!isDeleteMenuOpen.value) return
   const target = event.target
   if (!(target instanceof Node)) return
-  if (!deleteMenuRef.value?.contains(target)) {
+  if (
+    !deleteMenuRef.value?.contains(target) &&
+    !deletePanelRef.value?.contains(target)
+  ) {
     isDeleteMenuOpen.value = false
   }
 }
 
+watch(isDeleteMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updateDeleteMenuPosition()
+})
+
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside)
+  window.addEventListener('resize', updateDeleteMenuPosition)
+  document.addEventListener('scroll', updateDeleteMenuPosition, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleClickOutside)
+  window.removeEventListener('resize', updateDeleteMenuPosition)
+  document.removeEventListener('scroll', updateDeleteMenuPosition, true)
 })
 </script>
 
@@ -108,6 +139,7 @@ onUnmounted(() => {
 
     <div ref="deleteMenuRef" class="menu-wrap">
       <button
+        ref="deleteTriggerRef"
         class="menu-trigger"
         :class="{ 'is-active': currentMode === EditorMode.Delete, 'is-open': isDeleteMenuOpen }"
         @click="toggleDeleteMenu"
@@ -116,17 +148,6 @@ onUnmounted(() => {
         <span>删除</span>
         <span class="menu-caret">▾</span>
       </button>
-
-      <div v-if="isDeleteMenuOpen" class="menu-panel">
-        <button
-          class="menu-item"
-          :class="{ 'menu-item-active': currentMode === EditorMode.Delete }"
-          @click="selectDeleteMode"
-        >
-          删除
-        </button>
-        <button class="menu-item menu-item-danger" @click="requestClearAll">清空</button>
-      </div>
     </div>
 
     <button
@@ -185,16 +206,38 @@ onUnmounted(() => {
     <button class="history-button" @click="emit('undo')" :disabled="!canUndo">撤销</button>
     <button class="history-button" @click="emit('redo')" :disabled="!canRedo">重做</button>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="isDeleteMenuOpen"
+      ref="deletePanelRef"
+      class="menu-panel"
+      :style="deleteMenuStyle"
+    >
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.Delete }"
+        @click="selectDeleteMode"
+      >
+        删除
+      </button>
+      <button class="menu-item menu-item-danger" @click="requestClearAll">清空</button>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .toolbar {
   display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
   padding: 8px;
   background: #1e1e1e;
   border-bottom: 1px solid #333;
   align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .divider {
@@ -259,10 +302,8 @@ button.is-active {
 }
 
 .menu-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 50;
+  position: fixed;
+  z-index: 1000;
   min-width: 108px;
   padding: 6px;
   background: #1f1f1f;
@@ -317,5 +358,31 @@ button.is-active {
 
 .history-button {
   min-width: 64px;
+}
+
+.toolbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.toolbar::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 999px;
+}
+
+@media (max-width: 1024px) and (orientation: landscape) {
+  .toolbar {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  button {
+    padding: 5px 9px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .room-input {
+    width: 84px;
+  }
 }
 </style>
