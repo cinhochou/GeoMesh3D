@@ -34,6 +34,7 @@ const editLine = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const focusedCoord = reactive<Record<string, boolean>>({})
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
@@ -46,6 +47,29 @@ watch([selectedPointIds, selectedLineIds], () => {
 })
 
 const toFixed2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : '0.00')
+const setCoordFocus = (key: string, isFocused: boolean) => {
+  focusedCoord[key] = isFocused
+}
+const normalizeCoord = (value: string) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? toFixed2(n) : value
+}
+const handlePointCoordFocus = (axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`point.${axis}`, true)
+}
+const handlePointCoordBlur = (axis: 'x' | 'y' | 'z') => {
+  editPoint[axis] = normalizeCoord(editPoint[axis])
+  setCoordFocus(`point.${axis}`, false)
+  applyEditPoint()
+}
+const handleLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`line.${which}.${axis}`, true)
+}
+const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editLine[which][axis] = normalizeCoord(editLine[which][axis])
+  setCoordFocus(`line.${which}.${axis}`, false)
+  applyEditLine()
+}
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
@@ -136,9 +160,9 @@ watch(
     if (!newPos) return
     editPoint.name = newPos.name
     editPoint.nameVisible = newPos.nameVisible
-    editPoint.x = toFixed2(newPos.x)
-    editPoint.y = toFixed2(newPos.y)
-    editPoint.z = toFixed2(newPos.z)
+    if (!focusedCoord['point.x']) editPoint.x = toFixed2(newPos.x)
+    if (!focusedCoord['point.y']) editPoint.y = toFixed2(newPos.y)
+    if (!focusedCoord['point.z']) editPoint.z = toFixed2(newPos.z)
   },
   { immediate: true },
 )
@@ -160,12 +184,12 @@ watch(
     if (!newLine) return
     editLine.name = newLine.name
     editLine.nameVisible = newLine.nameVisible
-    editLine.p1.x = toFixed2(newLine.p1.x)
-    editLine.p1.y = toFixed2(newLine.p1.y)
-    editLine.p1.z = toFixed2(newLine.p1.z)
-    editLine.p2.x = toFixed2(newLine.p2.x)
-    editLine.p2.y = toFixed2(newLine.p2.y)
-    editLine.p2.z = toFixed2(newLine.p2.z)
+    if (!focusedCoord['line.p1.x']) editLine.p1.x = toFixed2(newLine.p1.x)
+    if (!focusedCoord['line.p1.y']) editLine.p1.y = toFixed2(newLine.p1.y)
+    if (!focusedCoord['line.p1.z']) editLine.p1.z = toFixed2(newLine.p1.z)
+    if (!focusedCoord['line.p2.x']) editLine.p2.x = toFixed2(newLine.p2.x)
+    if (!focusedCoord['line.p2.y']) editLine.p2.y = toFixed2(newLine.p2.y)
+    if (!focusedCoord['line.p2.z']) editLine.p2.z = toFixed2(newLine.p2.z)
   },
   { immediate: true },
 )
@@ -207,11 +231,32 @@ onUnmounted(() => {
           </div>
           <div class="coord-row">
             <label>x</label>
-            <input type="number" v-model="editPoint.x" @input="applyEditPoint" step="0.5" />
+            <input
+              type="number"
+              v-model="editPoint.x"
+              @input="applyEditPoint"
+              @focus="handlePointCoordFocus('x')"
+              @blur="handlePointCoordBlur('x')"
+              step="0.5"
+            />
             <label>y</label>
-            <input type="number" v-model="editPoint.y" @input="applyEditPoint" step="0.5" />
+            <input
+              type="number"
+              v-model="editPoint.y"
+              @input="applyEditPoint"
+              @focus="handlePointCoordFocus('y')"
+              @blur="handlePointCoordBlur('y')"
+              step="0.5"
+            />
             <label>z</label>
-            <input type="number" v-model="editPoint.z" @input="applyEditPoint" step="0.5" />
+            <input
+              type="number"
+              v-model="editPoint.z"
+              @input="applyEditPoint"
+              @focus="handlePointCoordFocus('z')"
+              @blur="handlePointCoordBlur('z')"
+              step="0.5"
+            />
           </div>
         </div>
         <div v-else>
@@ -247,6 +292,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p1.x"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p1', 'x')"
+              @blur="handleLineCoordBlur('p1', 'x')"
               step="0.5"
               :disabled="l!.p1.locked"
             />
@@ -254,6 +301,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p1.y"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p1', 'y')"
+              @blur="handleLineCoordBlur('p1', 'y')"
               step="0.5"
               :disabled="l!.p1.locked"
             />
@@ -261,6 +310,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p1.z"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p1', 'z')"
+              @blur="handleLineCoordBlur('p1', 'z')"
               step="0.5"
               :disabled="l!.p1.locked"
             />
@@ -272,6 +323,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p2.x"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p2', 'x')"
+              @blur="handleLineCoordBlur('p2', 'x')"
               step="0.5"
               :disabled="l!.p2.locked"
             />
@@ -279,6 +332,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p2.y"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p2', 'y')"
+              @blur="handleLineCoordBlur('p2', 'y')"
               step="0.5"
               :disabled="l!.p2.locked"
             />
@@ -286,6 +341,8 @@ onUnmounted(() => {
               type="number"
               v-model="editLine.p2.z"
               @input="applyEditLine"
+              @focus="handleLineCoordFocus('p2', 'z')"
+              @blur="handleLineCoordBlur('p2', 'z')"
               step="0.5"
               :disabled="l!.p2.locked"
             />
