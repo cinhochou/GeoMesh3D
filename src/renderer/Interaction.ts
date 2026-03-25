@@ -12,6 +12,8 @@ export class Interaction {
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
+  private dragStartPointerPos: THREE.Vector3 | null = null
+  private dragReferenceStartPos: THREE.Vector3 | null = null
   private dragDepth: number | null = null
   private dragStartPositions = new Map<string, Vec3>()
 
@@ -277,8 +279,12 @@ export class Interaction {
     const targetPos = new THREE.Vector3()
 
     // 拖拽平面在拖拽开始时固定，避免 AR 相机抖动导致跳动
-    if (!this.dragPlane || !this.dragLastPos) this.startDrag(referencePos)
-    if (!this.dragPlane || !this.dragLastPos) return
+    if (!this.dragPlane || !this.dragLastPos || !this.dragStartPointerPos || !this.dragReferenceStartPos) {
+      this.startDrag(referencePos)
+    }
+    if (!this.dragPlane || !this.dragLastPos || !this.dragStartPointerPos || !this.dragReferenceStartPos) {
+      return
+    }
 
     let hit = false
 
@@ -299,21 +305,29 @@ export class Interaction {
       targetPos.copy(this.raycaster.ray.at(fallbackDepth, new THREE.Vector3()))
     }
 
-    // 吸附逻辑判断
+    const desiredReferencePos = this.dragReferenceStartPos
+      .clone()
+      .add(targetPos.clone().sub(this.dragStartPointerPos))
+
+    // 吸附到“拖拽对象的位置”本身，而不是沿原始偏移做 0.5 增量
     if (this.editor.isSnappingEnabled && !isAltPressed) {
-      targetPos.set(this.snap(targetPos.x), this.snap(targetPos.y), this.snap(targetPos.z))
+      desiredReferencePos.set(
+        this.snap(desiredReferencePos.x),
+        this.snap(desiredReferencePos.y),
+        this.snap(desiredReferencePos.z),
+      )
     }
 
     const delta = new Vec3(
-      targetPos.x - this.dragLastPos.x,
-      targetPos.y - this.dragLastPos.y,
-      targetPos.z - this.dragLastPos.z,
+      desiredReferencePos.x - this.dragReferenceStartPos.x,
+      desiredReferencePos.y - this.dragReferenceStartPos.y,
+      desiredReferencePos.z - this.dragReferenceStartPos.z,
     )
 
     if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
       applyDelta(delta)
-      this.dragLastPos.copy(targetPos)
     }
+    this.dragLastPos.copy(targetPos)
   }
 
   private startDrag(referencePos: Vec3) {
@@ -326,10 +340,13 @@ export class Interaction {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const hit = new THREE.Vector3()
     if (this.raycaster.ray.intersectPlane(this.dragPlane, hit)) {
-      this.dragLastPos = hit
+      this.dragLastPos = hit.clone()
+      this.dragStartPointerPos = hit.clone()
     } else {
-      this.dragLastPos = ref
+      this.dragLastPos = ref.clone()
+      this.dragStartPointerPos = ref.clone()
     }
+    this.dragReferenceStartPos = ref.clone()
 
     // 记录拖拽起始的相机距离，用于 AR 模式的固定深度拖拽
     this.dragDepth = this.raycaster.ray.origin.distanceTo(ref)
@@ -344,7 +361,7 @@ export class Interaction {
         this.dragStartPositions.set(id, point.position.clone())
       }
 
-      point.setPosition(point.position.add(delta))
+      point.setPosition(this.dragStartPositions.get(id)!.add(delta))
     })
   }
 
@@ -378,6 +395,8 @@ export class Interaction {
   private endDrag() {
     this.dragPlane = null
     this.dragLastPos = null
+    this.dragStartPointerPos = null
+    this.dragReferenceStartPos = null
     this.dragDepth = null
     this.dragStartPositions.clear()
   }

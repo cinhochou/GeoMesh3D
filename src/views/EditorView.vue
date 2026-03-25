@@ -114,8 +114,8 @@ onMounted(() => {
       lastFpsTime = now
     }
     scene.constraints.forEach((c) => c.solve())
-    renderer.render()
     renderer.sync(scene, interaction.rubberBandData)
+    renderer.render()
     requestAnimationFrame(loop)
   }
   loop()

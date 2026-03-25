@@ -35,6 +35,7 @@ const editLine = reactive({
   p2: { x: '', y: '', z: '' },
 })
 const focusedCoord = reactive<Record<string, boolean>>({})
+const coordInputs = new Map<string, HTMLInputElement>()
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
@@ -54,10 +55,19 @@ const normalizeCoord = (value: string) => {
   const n = Number(value)
   return Number.isFinite(n) ? toFixed2(n) : value
 }
-const adjustCoordValue = (value: string, delta: number) => {
-  const current = Number(value)
-  const next = Number.isFinite(current) ? current + delta : delta
-  return toFixed2(next)
+const setCoordInputRef = (key: string, el: unknown) => {
+  if (el instanceof HTMLInputElement) {
+    coordInputs.set(key, el)
+    return
+  }
+  coordInputs.delete(key)
+}
+const stepCoordInput = (key: string, direction: 'up' | 'down') => {
+  const input = coordInputs.get(key)
+  if (!input || input.disabled) return null
+  if (direction === 'up') input.stepUp()
+  else input.stepDown()
+  return input.value
 }
 const handlePointCoordFocus = (axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`point.${axis}`, true)
@@ -75,12 +85,20 @@ const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`line.${which}.${axis}`, false)
   applyEditLine()
 }
-const nudgePointCoord = (axis: 'x' | 'y' | 'z', delta: number) => {
-  editPoint[axis] = adjustCoordValue(editPoint[axis], delta)
+const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput(`point.${axis}`, direction)
+  if (nextValue === null) return
+  editPoint[axis] = nextValue
   applyEditPoint()
 }
-const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', delta: number) => {
-  editLine[which][axis] = adjustCoordValue(editLine[which][axis], delta)
+const nudgeLineCoord = (
+  which: 'p1' | 'p2',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`line.${which}.${axis}`, direction)
+  if (nextValue === null) return
+  editLine[which][axis] = nextValue
   applyEditLine()
 }
 
@@ -246,46 +264,49 @@ onUnmounted(() => {
             <div class="axis-field">
               <label>x</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', -0.5)">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'down')">-</button>
                 <input
                   type="number"
+                  :ref="(el) => setCoordInputRef('point.x', el)"
                   v-model="editPoint.x"
                   @input="applyEditPoint"
                   @focus="handlePointCoordFocus('x')"
                   @blur="handlePointCoordBlur('x')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', 0.5)">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'up')">+</button>
               </div>
             </div>
             <div class="axis-field">
               <label>y</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', -0.5)">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'down')">-</button>
                 <input
                   type="number"
+                  :ref="(el) => setCoordInputRef('point.y', el)"
                   v-model="editPoint.y"
                   @input="applyEditPoint"
                   @focus="handlePointCoordFocus('y')"
                   @blur="handlePointCoordBlur('y')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', 0.5)">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'up')">+</button>
               </div>
             </div>
             <div class="axis-field">
               <label>z</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', -0.5)">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'down')">-</button>
                 <input
                   type="number"
+                  :ref="(el) => setCoordInputRef('point.z', el)"
                   v-model="editPoint.z"
                   @input="applyEditPoint"
                   @focus="handlePointCoordFocus('z')"
                   @blur="handlePointCoordBlur('z')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', 0.5)">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'up')">+</button>
               </div>
             </div>
           </div>
@@ -326,13 +347,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'x', -0.5)"
+                    @click="nudgeLineCoord('p1', 'x', 'down')"
                     :disabled="l!.p1.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p1.x', el)"
                     v-model="editLine.p1.x"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p1', 'x')"
@@ -343,7 +365,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'x', 0.5)"
+                    @click="nudgeLineCoord('p1', 'x', 'up')"
                     :disabled="l!.p1.locked"
                   >
                     +
@@ -356,13 +378,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'y', -0.5)"
+                    @click="nudgeLineCoord('p1', 'y', 'down')"
                     :disabled="l!.p1.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p1.y', el)"
                     v-model="editLine.p1.y"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p1', 'y')"
@@ -373,7 +396,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'y', 0.5)"
+                    @click="nudgeLineCoord('p1', 'y', 'up')"
                     :disabled="l!.p1.locked"
                   >
                     +
@@ -386,13 +409,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'z', -0.5)"
+                    @click="nudgeLineCoord('p1', 'z', 'down')"
                     :disabled="l!.p1.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p1.z', el)"
                     v-model="editLine.p1.z"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p1', 'z')"
@@ -403,7 +427,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p1', 'z', 0.5)"
+                    @click="nudgeLineCoord('p1', 'z', 'up')"
                     :disabled="l!.p1.locked"
                   >
                     +
@@ -422,13 +446,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'x', -0.5)"
+                    @click="nudgeLineCoord('p2', 'x', 'down')"
                     :disabled="l!.p2.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p2.x', el)"
                     v-model="editLine.p2.x"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p2', 'x')"
@@ -439,7 +464,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'x', 0.5)"
+                    @click="nudgeLineCoord('p2', 'x', 'up')"
                     :disabled="l!.p2.locked"
                   >
                     +
@@ -452,13 +477,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'y', -0.5)"
+                    @click="nudgeLineCoord('p2', 'y', 'down')"
                     :disabled="l!.p2.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p2.y', el)"
                     v-model="editLine.p2.y"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p2', 'y')"
@@ -469,7 +495,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'y', 0.5)"
+                    @click="nudgeLineCoord('p2', 'y', 'up')"
                     :disabled="l!.p2.locked"
                   >
                     +
@@ -482,13 +508,14 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'z', -0.5)"
+                    @click="nudgeLineCoord('p2', 'z', 'down')"
                     :disabled="l!.p2.locked"
                   >
                     -
                   </button>
                   <input
                     type="number"
+                    :ref="(el) => setCoordInputRef('line.p2.z', el)"
                     v-model="editLine.p2.z"
                     @input="applyEditLine"
                     @focus="handleLineCoordFocus('p2', 'z')"
@@ -499,7 +526,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="step-btn"
-                    @click="nudgeLineCoord('p2', 'z', 0.5)"
+                    @click="nudgeLineCoord('p2', 'z', 'up')"
                     :disabled="l!.p2.locked"
                   >
                     +

@@ -9,6 +9,14 @@ if (typeof (THREE.Matrix4.prototype as any).getInverse !== 'function') {
   }
 }
 export class ThreeRenderer {
+  private static readonly POINT_LABEL_OFFSET_X = 3
+  private static readonly POINT_LABEL_OFFSET_Y = 3
+  private static readonly LINE_LABEL_OFFSET_Y = 3
+  private static readonly POINT_LABEL_CENTER_X = 0.32
+  private static readonly POINT_LABEL_CENTER_Y = 0.32
+  private static readonly LINE_LABEL_CENTER_X = 0.5
+  private static readonly LINE_LABEL_CENTER_Y = 0.3
+
   scene: THREE.Scene
   /** 承载所有几何物体的分组，便于在 AR 模式下整体缩放 */
   world: THREE.Group
@@ -351,6 +359,7 @@ export class ThreeRenderer {
       this.controls.update()
     }
 
+    this.updateScreenSpaceLabels()
     this.renderer.render(this.scene, this.getActiveCamera())
   }
 
@@ -442,16 +451,20 @@ export class ThreeRenderer {
       const labelColor = isSelected ? 0x43f260 : 0xffffff
       const labelKey = '__labelSprite'
       const existingLabel = (sprite.userData as any)[labelKey] as THREE.Sprite | undefined
+      ;(sprite.userData as any).__labelOffsetX = ThreeRenderer.POINT_LABEL_OFFSET_X
+      ;(sprite.userData as any).__labelOffsetY = ThreeRenderer.POINT_LABEL_OFFSET_Y
       if (!p.nameVisible) {
         if (existingLabel) existingLabel.visible = false
         return
       }
       if (!existingLabel) {
         const nameSprite = this.makePointLabelSprite(p.name ?? '', labelColor)
-        nameSprite.position.copy(
-          this.getSmartLabelPosition(new THREE.Vector3(p.position.x, p.position.y, p.position.z)),
+        nameSprite.position.copy(this.getSmartLabelPosition(sprite.position))
+        nameSprite.center.set(
+          ThreeRenderer.POINT_LABEL_CENTER_X,
+          ThreeRenderer.POINT_LABEL_CENTER_Y,
         )
-        nameSprite.renderOrder = 1
+        nameSprite.renderOrder = 10
         const h = this.renderer.domElement.clientHeight || 1
         const pixelSize = 64
         const scale = pixelSize / h / this.worldScale
@@ -461,9 +474,11 @@ export class ThreeRenderer {
         this.world.add(nameSprite)
       } else {
         existingLabel.visible = true
-        existingLabel.position.copy(
-          this.getSmartLabelPosition(new THREE.Vector3(p.position.x, p.position.y, p.position.z)),
+        existingLabel.center.set(
+          ThreeRenderer.POINT_LABEL_CENTER_X,
+          ThreeRenderer.POINT_LABEL_CENTER_Y,
         )
+        existingLabel.position.copy(this.getSmartLabelPosition(sprite.position))
         const labelText = (existingLabel as any).userData?.text ?? ''
         if (labelText !== (p.name ?? '')) {
           ;(existingLabel as any).userData = { text: p.name ?? '' }
@@ -521,14 +536,20 @@ export class ThreeRenderer {
       const labelKey = '__labelSprite'
       const existingLabel = (line.userData as any)[labelKey] as THREE.Sprite | undefined
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      ;(line.userData as any).__labelAnchor = mid.clone()
+      ;(line.userData as any).__labelOffsetX = 0
+      ;(line.userData as any).__labelOffsetY = ThreeRenderer.LINE_LABEL_OFFSET_Y
       if (!lineData.nameVisible) {
         if (existingLabel) existingLabel.visible = false
         return
       }
       if (!existingLabel) {
         const nameSprite = this.makeLineLabelSprite(lineData.name ?? '', labelColor)
-        nameSprite.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
-        nameSprite.renderOrder = 1
+        nameSprite.position.copy(
+          this.getScreenOffsetPosition(mid, 0, ThreeRenderer.LINE_LABEL_OFFSET_Y),
+        )
+        nameSprite.center.set(ThreeRenderer.LINE_LABEL_CENTER_X, ThreeRenderer.LINE_LABEL_CENTER_Y)
+        nameSprite.renderOrder = 10
         const h = this.renderer.domElement.clientHeight || 1
         const pixelSize = 64
         const scale = pixelSize / h / this.worldScale
@@ -538,7 +559,10 @@ export class ThreeRenderer {
         this.world.add(nameSprite)
       } else {
         existingLabel.visible = true
-        existingLabel.position.copy(this.getScreenOffsetPosition(mid, 0, 12))
+        existingLabel.center.set(ThreeRenderer.LINE_LABEL_CENTER_X, ThreeRenderer.LINE_LABEL_CENTER_Y)
+        existingLabel.position.copy(
+          this.getScreenOffsetPosition(mid, 0, ThreeRenderer.LINE_LABEL_OFFSET_Y),
+        )
         const labelText = (existingLabel as any).userData?.text ?? ''
         if (labelText !== (lineData.name ?? '')) {
           ;(existingLabel as any).userData = { text: lineData.name ?? '' }
@@ -811,7 +835,9 @@ export class ThreeRenderer {
     const material = new THREE.SpriteMaterial({
       map: texture,
       depthTest: false,
+      depthWrite: false,
       sizeAttenuation: false,
+      transparent: true,
     })
 
     return new THREE.Sprite(material)
@@ -833,7 +859,9 @@ export class ThreeRenderer {
     const material = new THREE.SpriteMaterial({
       map: texture,
       depthTest: false,
+      depthWrite: false,
       sizeAttenuation: false,
+      transparent: true,
     })
 
     return new THREE.Sprite(material)
@@ -850,6 +878,25 @@ export class ThreeRenderer {
     ndc.x += offsetNdcX
     ndc.y += offsetNdcY
     return ndc.unproject(camera)
+  }
+
+  /** 每帧根据当前相机姿态刷新标签的屏幕空间偏移，保证 AR 下不漂移、不遮挡主体 */
+  private updateScreenSpaceLabels() {
+    this.meshMap.forEach((obj) => {
+      const label = (obj.userData as any)?.__labelSprite as THREE.Sprite | undefined
+      if (!label || !label.visible) return
+
+      const offsetX = Number((obj.userData as any)?.__labelOffsetX ?? 0)
+      const offsetY = Number((obj.userData as any)?.__labelOffsetY ?? 0)
+
+      if ((obj.userData as any)?.type === 'point') {
+        label.position.copy(this.getScreenOffsetPosition(obj.position, offsetX, offsetY))
+      } else if ((obj.userData as any)?.type === 'line') {
+        const anchor = ((obj.userData as any)?.__labelAnchor as THREE.Vector3 | undefined)?.clone()
+        if (!anchor) return
+        label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
+      }
+    })
   }
 
   /** 生成圆点贴图（白色圆形 + 透明背景），供 SpriteMaterial 使用 */
@@ -875,7 +922,11 @@ export class ThreeRenderer {
 
   /** 计算标签位置：始终显示在点的“屏幕右上方” */
   private getSmartLabelPosition(pointPos: THREE.Vector3): THREE.Vector3 {
-    return this.getScreenOffsetPosition(pointPos, 12, 12)
+    return this.getScreenOffsetPosition(
+      pointPos,
+      ThreeRenderer.POINT_LABEL_OFFSET_X,
+      ThreeRenderer.POINT_LABEL_OFFSET_Y,
+    )
   }
 
   /**
