@@ -9,6 +9,20 @@ if (typeof (THREE.Matrix4.prototype as any).getInverse !== 'function') {
   }
 }
 export class ThreeRenderer {
+  private static readonly POINT_PIXEL = 9
+  private static readonly POINT_SCALE_REFERENCE_DISTANCE = Math.sqrt(15 * 15 * 3)
+  private static readonly POINT_SCALE_EXPONENT = 0.72
+  private static readonly POINT_MIN_SCALE_FACTOR = 0.45
+  private static readonly POINT_MAX_SCALE_FACTOR = 1.08
+  private static readonly POINT_LABEL_BASE_PIXEL = 70
+  private static readonly LINE_LABEL_BASE_PIXEL = 68
+  private static readonly POINT_LABEL_SCALE_MULTIPLIER = 5.6
+  private static readonly LINE_LABEL_SCALE_MULTIPLIER = 5.4
+  private static readonly LABEL_MIN_SCALE_FACTOR = 0.52
+  private static readonly LABEL_MAX_SCALE_FACTOR = 1.38
+  private static readonly LABEL_OFFSET_EXPONENT = 0.65
+  private static readonly LABEL_OFFSET_MIN_FACTOR = 0.7
+  private static readonly LABEL_OFFSET_MAX_FACTOR = 1.15
   private static readonly POINT_LABEL_OFFSET_X = 3
   private static readonly POINT_LABEL_OFFSET_Y = 3
   private static readonly LINE_LABEL_OFFSET_Y = 3
@@ -96,7 +110,7 @@ export class ThreeRenderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
-    this.controls.minDistance = 1
+    this.controls.minDistance = 5
     this.controls.maxDistance = 100
 
     this.setAxisGridSize(this.axisGridSize)
@@ -142,14 +156,10 @@ export class ThreeRenderer {
 
   /** 重新按当前画布尺寸刷新点与标签的屏幕空间大小 */
   private refreshScreenSpaceScales() {
-    // 让点精灵在屏幕上保持可点击尺寸
     const h = this.renderer.domElement.clientHeight || 1
-    const basePixel = 10
-    const spriteScale = basePixel / h / this.worldScale
-    const labelPixel = 64
-    const lineLabelPixel = 64
-    const labelScale = labelPixel / h / this.worldScale
-    const lineLabelScale = lineLabelPixel / h / this.worldScale
+    const spriteScale = this.getPointSpriteScale()
+    const labelScale = this.getPointLabelScale()
+    const lineLabelScale = this.getLineLabelScale()
     this.meshMap.forEach((obj) => {
       if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
@@ -171,6 +181,98 @@ export class ThreeRenderer {
     if (this.guideLabel) {
       this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
     }
+    if (this.guidePoint) {
+      this.guidePoint.scale.set(spriteScale, spriteScale, 1)
+    }
+  }
+
+  /** 点大小随缩放距离变化，但不随绕中心旋转的视角角度变化 */
+  private getPointSpriteScale() {
+    const h = this.renderer.domElement.clientHeight || 1
+    const baseScale = ThreeRenderer.POINT_PIXEL / h / this.worldScale
+    if (this.isARMode) return baseScale
+
+    const distance = this.camera.position.distanceTo(this.controls.target)
+    const safeDistance = Math.max(distance, 0.001)
+    const rawFactor = Math.pow(
+      ThreeRenderer.POINT_SCALE_REFERENCE_DISTANCE / safeDistance,
+      ThreeRenderer.POINT_SCALE_EXPONENT,
+    )
+    const clampedFactor = Math.min(
+      ThreeRenderer.POINT_MAX_SCALE_FACTOR,
+      Math.max(ThreeRenderer.POINT_MIN_SCALE_FACTOR, rawFactor),
+    )
+
+    return baseScale * clampedFactor
+  }
+
+  private getPointLabelScale() {
+    return this.getResponsiveLabelScale(
+      ThreeRenderer.POINT_LABEL_BASE_PIXEL,
+      ThreeRenderer.POINT_LABEL_SCALE_MULTIPLIER,
+    )
+  }
+
+  private getLineLabelScale() {
+    return this.getResponsiveLabelScale(
+      ThreeRenderer.LINE_LABEL_BASE_PIXEL,
+      ThreeRenderer.LINE_LABEL_SCALE_MULTIPLIER,
+    )
+  }
+
+  /** 屏幕空间元素大小随缩放距离变化，但不随绕中心旋转的视角角度变化 */
+  private getZoomResponsivePixelScale(basePixel: number) {
+    const h = this.renderer.domElement.clientHeight || 1
+    const baseScale = basePixel / h / this.worldScale
+    if (this.isARMode) return baseScale
+
+    const distance = this.camera.position.distanceTo(this.controls.target)
+    const safeDistance = Math.max(distance, 0.001)
+    return baseScale * (ThreeRenderer.POINT_SCALE_REFERENCE_DISTANCE / safeDistance)
+  }
+
+  /** 标签跟随点缩放，但限制最大/最小范围，避免远处标签压过点或近处过大 */
+  private getResponsiveLabelScale(basePixel: number, pointScaleMultiplier: number) {
+    const h = this.renderer.domElement.clientHeight || 1
+    const baseScale = basePixel / h / this.worldScale
+    const pointDrivenScale = this.getPointSpriteScale() * pointScaleMultiplier
+    const minScale = baseScale * ThreeRenderer.LABEL_MIN_SCALE_FACTOR
+    const maxScale = baseScale * ThreeRenderer.LABEL_MAX_SCALE_FACTOR
+    return Math.min(maxScale, Math.max(minScale, pointDrivenScale))
+  }
+
+  /** 屏幕空间偏移距离随缩放距离变化，但不随绕中心旋转的视角角度变化 */
+  private getZoomResponsivePixelOffset(basePixel: number) {
+    if (this.isARMode) return basePixel
+
+    const distance = this.camera.position.distanceTo(this.controls.target)
+    const safeDistance = Math.max(distance, 0.001)
+    const rawFactor = Math.pow(
+      ThreeRenderer.POINT_SCALE_REFERENCE_DISTANCE / safeDistance,
+      ThreeRenderer.LABEL_OFFSET_EXPONENT,
+    )
+    const clampedFactor = Math.min(
+      ThreeRenderer.LABEL_OFFSET_MAX_FACTOR,
+      Math.max(ThreeRenderer.LABEL_OFFSET_MIN_FACTOR, rawFactor),
+    )
+    return basePixel * clampedFactor
+  }
+
+  private updateResponsiveScales() {
+    const spriteScale = this.getPointSpriteScale()
+    const pointLabelScale = this.getPointLabelScale()
+    const lineLabelScale = this.getLineLabelScale()
+    this.meshMap.forEach((obj) => {
+      if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
+        ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
+        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        if (label) label.scale.set(pointLabelScale, pointLabelScale, 1)
+      } else if ((obj as any).userData?.type === 'line') {
+        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
+      }
+    })
+
     if (this.guidePoint) {
       this.guidePoint.scale.set(spriteScale, spriteScale, 1)
     }
@@ -367,6 +469,7 @@ export class ThreeRenderer {
       this.controls.update()
     }
 
+    this.updateResponsiveScales()
     this.updateScreenSpaceLabels()
     this.renderer.render(this.scene, this.getActiveCamera())
   }
@@ -431,10 +534,7 @@ export class ThreeRenderer {
         sprite = new THREE.Sprite(material)
         sprite.renderOrder = 2
 
-        // 屏幕空间 ≈ 10px
-        const pixelSize = 10
-        const h = this.renderer.domElement.clientHeight
-        const scale = pixelSize / h / this.worldScale
+        const scale = this.getPointSpriteScale()
 
         sprite.scale.set(scale, scale, 1)
 
@@ -473,9 +573,7 @@ export class ThreeRenderer {
           ThreeRenderer.POINT_LABEL_CENTER_Y,
         )
         nameSprite.renderOrder = 10
-        const h = this.renderer.domElement.clientHeight || 1
-        const pixelSize = 64
-        const scale = pixelSize / h / this.worldScale
+        const scale = this.getPointLabelScale()
         nameSprite.scale.set(scale, scale, 1)
         ;(nameSprite as any).userData = { text: p.name ?? '' }
         ;(sprite.userData as any)[labelKey] = nameSprite
@@ -558,9 +656,7 @@ export class ThreeRenderer {
         )
         nameSprite.center.set(ThreeRenderer.LINE_LABEL_CENTER_X, ThreeRenderer.LINE_LABEL_CENTER_Y)
         nameSprite.renderOrder = 10
-        const h = this.renderer.domElement.clientHeight || 1
-        const pixelSize = 64
-        const scale = pixelSize / h / this.worldScale
+        const scale = this.getLineLabelScale()
         nameSprite.scale.set(scale, scale, 1)
         ;(nameSprite as any).userData = { text: lineData.name ?? '' }
         ;(line.userData as any)[labelKey] = nameSprite
@@ -860,8 +956,8 @@ export class ThreeRenderer {
     const ndc = pointPos.clone().project(camera)
     const w = this.renderer.domElement.clientWidth || 1
     const h = this.renderer.domElement.clientHeight || 1
-    const offsetNdcX = (offsetXpx / w) * 2
-    const offsetNdcY = (offsetYpx / h) * 2
+    const offsetNdcX = (this.getZoomResponsivePixelOffset(offsetXpx) / w) * 2
+    const offsetNdcY = (this.getZoomResponsivePixelOffset(offsetYpx) / h) * 2
     ndc.x += offsetNdcX
     ndc.y += offsetNdcY
     return ndc.unproject(camera)
@@ -949,9 +1045,7 @@ export class ThreeRenderer {
         }),
       )
       this.guidePoint.renderOrder = 11
-      const h = this.renderer.domElement.clientHeight || 1
-      const pixelSize = 10
-      const scale = pixelSize / h / this.worldScale
+      const scale = this.getPointSpriteScale()
       this.guidePoint.scale.set(scale, scale, 1)
       this.projectionGroup.add(this.guidePoint)
 

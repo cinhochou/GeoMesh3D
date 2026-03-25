@@ -40,6 +40,21 @@ const coordInputs = new Map<string, HTMLInputElement>()
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
 
+const selectPointFromContent = (id: string) => {
+  editing.value = null
+  props.scene.selection.selectPoint(id)
+}
+
+const selectLineFromContent = (id: string) => {
+  editing.value = null
+  props.scene.selection.selectLine(id)
+}
+
+const clearContentSelection = () => {
+  editing.value = null
+  props.scene.selection.clear()
+}
+
 watch([selectedPointIds, selectedLineIds], () => {
   if (!editing.value) return
   const { type, id } = editing.value
@@ -91,11 +106,7 @@ const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   editPoint[axis] = nextValue
   applyEditPoint()
 }
-const nudgeLineCoord = (
-  which: 'p1' | 'p2',
-  axis: 'x' | 'y' | 'z',
-  direction: 'up' | 'down',
-) => {
+const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`line.${which}.${axis}`, direction)
   if (nextValue === null) return
   editLine[which][axis] = nextValue
@@ -264,7 +275,9 @@ onUnmounted(() => {
             <div class="axis-field">
               <label>x</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'down')">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'down')">
+                  -
+                </button>
                 <input
                   type="number"
                   :ref="(el) => setCoordInputRef('point.x', el)"
@@ -274,13 +287,17 @@ onUnmounted(() => {
                   @blur="handlePointCoordBlur('x')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'up')">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'up')">
+                  +
+                </button>
               </div>
             </div>
             <div class="axis-field">
               <label>y</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'down')">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'down')">
+                  -
+                </button>
                 <input
                   type="number"
                   :ref="(el) => setCoordInputRef('point.y', el)"
@@ -290,13 +307,17 @@ onUnmounted(() => {
                   @blur="handlePointCoordBlur('y')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'up')">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'up')">
+                  +
+                </button>
               </div>
             </div>
             <div class="axis-field">
               <label>z</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'down')">-</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'down')">
+                  -
+                </button>
                 <input
                   type="number"
                   :ref="(el) => setCoordInputRef('point.z', el)"
@@ -306,7 +327,9 @@ onUnmounted(() => {
                   @blur="handlePointCoordBlur('z')"
                   step="0.5"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'up')">+</button>
+                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'up')">
+                  +
+                </button>
               </div>
             </div>
           </div>
@@ -552,9 +575,15 @@ onUnmounted(() => {
     </div>
     <div class="divider"></div>
     <h3>内容</h3>
-    <div class="box content-box">
+    <div class="box content-box" @click.self="clearContentSelection">
       <div v-if="pointsInScene.length === 0 && linesInScene.length === 0">无</div>
-      <div v-for="p in pointsInScene" :key="p!.id" class="point-info">
+      <div
+        v-for="p in pointsInScene"
+        :key="p!.id"
+        class="point-info selectable-geo"
+        :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
+        @click="selectPointFromContent(p!.id)"
+      >
         <div>
           点{{ p!.name ?? '' }}，ID: {{ p!.id }}
           <span v-if="p!.locked" class="lock-badge">🔒</span>
@@ -564,7 +593,13 @@ onUnmounted(() => {
           {{ p!.position.z.toFixed(2) }}
         </div>
       </div>
-      <div v-for="l in linesInScene" :key="l!.id" class="line-info">
+      <div
+        v-for="l in linesInScene"
+        :key="l!.id"
+        class="line-info selectable-geo"
+        :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
+        @click="selectLineFromContent(l!.id)"
+      >
         <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
         <div>
           <div>
@@ -620,6 +655,14 @@ hr {
   margin-bottom: 6px;
   padding: 8px;
   font-size: 13px;
+}
+.selectable-geo {
+  cursor: pointer;
+}
+.selectable-geo.is-selected {
+  background-color: rgba(67, 242, 96, 0.18);
+  border-left-color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(67, 242, 96, 0.35);
 }
 .divider {
   width: 100%;
