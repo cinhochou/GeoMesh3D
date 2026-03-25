@@ -12,6 +12,8 @@ export class ThreeRenderer {
   private static readonly POINT_LABEL_OFFSET_X = 3
   private static readonly POINT_LABEL_OFFSET_Y = 3
   private static readonly LINE_LABEL_OFFSET_Y = 3
+  private static readonly GUIDE_LABEL_OFFSET_X = 12
+  private static readonly GUIDE_LABEL_OFFSET_Y = 0
   private static readonly POINT_LABEL_CENTER_X = 0.32
   private static readonly POINT_LABEL_CENTER_Y = 0.32
   private static readonly LINE_LABEL_CENTER_X = 0.5
@@ -27,6 +29,7 @@ export class ThreeRenderer {
   private container: HTMLElement
   private projectionGroup: THREE.Group | null = null
   private guideLabel: THREE.Sprite | null = null
+  private guidePoint: THREE.Sprite | null = null
   private rubberBand?: THREE.Line
 
   private arToolkitSource: any = null
@@ -163,6 +166,9 @@ export class ThreeRenderer {
     // 引导浮窗大小也保持稳定
     if (this.guideLabel) {
       this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+    }
+    if (this.guidePoint) {
+      this.guidePoint.scale.set(spriteScale, spriteScale, 1)
     }
   }
   /* ---------- Scene → Three ---------- */
@@ -950,10 +956,34 @@ export class ThreeRenderer {
       line.name = 'guideLines'
       this.projectionGroup.add(line)
 
+      this.guidePoint = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: this.getPointTexture(),
+          color: 0xff5555,
+          depthTest: false,
+          depthWrite: false,
+          sizeAttenuation: false,
+          transparent: true,
+          alphaTest: 0.1,
+        }),
+      )
+      this.guidePoint.renderOrder = 11
+      const h = this.renderer.domElement.clientHeight || 1
+      const pixelSize = 10
+      const scale = pixelSize / h / this.worldScale
+      this.guidePoint.scale.set(scale, scale, 1)
+      this.projectionGroup.add(this.guidePoint)
+
       // 创建坐标浮窗
       this.guideLabel = new THREE.Sprite(
-        new THREE.SpriteMaterial({ depthTest: false, sizeAttenuation: false }),
+        new THREE.SpriteMaterial({
+          depthTest: false,
+          depthWrite: false,
+          sizeAttenuation: false,
+          transparent: true,
+        }),
       )
+      this.guideLabel.center.set(0, 0)
       this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
       this.projectionGroup.add(this.guideLabel)
 
@@ -985,8 +1015,15 @@ export class ThreeRenderer {
     line.computeLineDistances() // 虚线必须
 
     // 更新浮窗文字和位置
+    this.guidePoint!.position.copy(pos)
     this.drawLabel(pos)
-    this.guideLabel!.position.copy(pos).add(new THREE.Vector3(0.5, 0.5, 0.5))
+    this.guideLabel!.position.copy(
+      this.getScreenOffsetPosition(
+        pos,
+        ThreeRenderer.GUIDE_LABEL_OFFSET_X,
+        ThreeRenderer.GUIDE_LABEL_OFFSET_Y,
+      ),
+    )
   }
 
   private drawLabel(pos: THREE.Vector3) {
