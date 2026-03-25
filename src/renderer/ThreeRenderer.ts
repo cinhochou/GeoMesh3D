@@ -14,6 +14,7 @@ export class ThreeRenderer {
   private static readonly LINE_LABEL_OFFSET_Y = 3
   private static readonly GUIDE_LABEL_OFFSET_X = 12
   private static readonly GUIDE_LABEL_OFFSET_Y = 0
+  private static readonly AXIS_LABEL_PIXEL = 28
   private static readonly POINT_LABEL_CENTER_X = 0.32
   private static readonly POINT_LABEL_CENTER_Y = 0.32
   private static readonly LINE_LABEL_CENTER_X = 0.5
@@ -40,8 +41,6 @@ export class ThreeRenderer {
   private worldScale = 1
   private axisGridGroup: THREE.Group
   private axisGridSize = 10
-  private axisSizeSelectorWrap: HTMLDivElement | null = null
-  private axisSizeSelector: HTMLSelectElement | null = null
   private pointTexture: THREE.CanvasTexture | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
   private static readonly AR_SCENE_SCALE = 0.2
@@ -101,7 +100,6 @@ export class ThreeRenderer {
     this.controls.maxDistance = 100
 
     this.setAxisGridSize(this.axisGridSize)
-    this.createAxisSizeSelector()
   }
 
   /** 当前用于渲染/拾取的相机（AR 模式下为 arCamera） */
@@ -162,6 +160,12 @@ export class ThreeRenderer {
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
     })
+    this.axisGridGroup.children.forEach((obj) => {
+      if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'axisLabel') {
+        const axisLabelScale = ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale
+        ;(obj as THREE.Sprite).scale.set(axisLabelScale, axisLabelScale, 1)
+      }
+    })
 
     // 引导浮窗大小也保持稳定
     if (this.guideLabel) {
@@ -201,7 +205,6 @@ export class ThreeRenderer {
   // 切换 AR 模式
   async toggleAR(enabled: boolean) {
     this.isARMode = enabled
-    this.updateAxisSizeSelectorVisibility()
 
     if (enabled) {
       // ===== 进入 AR=====
@@ -286,7 +289,6 @@ export class ThreeRenderer {
     canvas.style.marginLeft = '0px'
 
     this.onResize()
-    this.updateAxisSizeSelectorVisibility()
   }
 
   private initAR() {
@@ -565,7 +567,10 @@ export class ThreeRenderer {
         this.world.add(nameSprite)
       } else {
         existingLabel.visible = true
-        existingLabel.center.set(ThreeRenderer.LINE_LABEL_CENTER_X, ThreeRenderer.LINE_LABEL_CENTER_Y)
+        existingLabel.center.set(
+          ThreeRenderer.LINE_LABEL_CENTER_X,
+          ThreeRenderer.LINE_LABEL_CENTER_Y,
+        )
         existingLabel.position.copy(
           this.getScreenOffsetPosition(mid, 0, ThreeRenderer.LINE_LABEL_OFFSET_Y),
         )
@@ -625,8 +630,8 @@ export class ThreeRenderer {
     const negLine = new THREE.Line(negGeo, new THREE.LineBasicMaterial({ color }))
     this.axisGridGroup.add(negLine)
 
-    // 与轴同色的文字标签，位置远离轴端（距离 1.5 单位）
-    const labelPos = dir.clone().multiplyScalar(length + 1.5)
+    // 与轴同色的文字标签，位置远离轴端（距离 0.5 单位），于Y轴分开显示
+    const labelPos = dir.clone().multiplyScalar(length + 0.5)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
     this.axisGridGroup.add(textSprite)
@@ -669,13 +674,34 @@ export class ThreeRenderer {
     }
 
     // 绿色 "Y" 标签，远离轴端
-    const labelPos = dir.clone().multiplyScalar(length + 1.5)
+    const labelPos = dir.clone().multiplyScalar(length + 1)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
     this.axisGridGroup.add(textSprite)
   }
 
-  private setAxisGridSize(size: number) {
+  private getDefaultCameraPositionForAxisSize(size: number): THREE.Vector3 {
+    if (size === 20) return new THREE.Vector3(25, 25, 25)
+    if (size === 40) return new THREE.Vector3(30, 65, 30)
+    return new THREE.Vector3(15, 15, 15)
+  }
+
+  resetView() {
+    const defaultPos = this.getDefaultCameraPositionForAxisSize(this.axisGridSize)
+    this.controls.target.set(0, 0, 0)
+    this.camera.position.copy(defaultPos)
+    this.camera.zoom = 1
+    this.camera.lookAt(0, 0, 0)
+    this.camera.updateProjectionMatrix()
+    this.camera.updateMatrixWorld(true)
+    this.controls.update()
+  }
+
+  getAxisGridSize() {
+    return this.axisGridSize
+  }
+
+  setAxisGridSize(size: number) {
     this.axisGridSize = size
 
     // 清空旧的坐标轴与网格
@@ -693,59 +719,8 @@ export class ThreeRenderer {
     const divisions = gridSize
     const gridHelper = new THREE.GridHelper(gridSize, divisions)
     this.axisGridGroup.add(gridHelper)
-    if (this.axisGridSize === 20) {
-      this.camera.position.set(25, 25, 25)
-    } else if (this.axisGridSize === 40) {
-      this.camera.position.set(30, 65, 30)
-    } else {
-      this.camera.position.set(15, 15, 15)
-    }
-  }
-
-  private createAxisSizeSelector() {
-    const wrap = document.createElement('div')
-    wrap.style.position = 'absolute'
-    wrap.style.right = '12px'
-    wrap.style.bottom = '12px'
-    wrap.style.zIndex = '20'
-    wrap.style.pointerEvents = 'auto'
-
-    const select = document.createElement('select')
-    select.style.border = '1px solid #444'
-    select.style.background = 'transparent'
-    select.style.color = '#ffffff'
-    select.style.padding = '6px 10px'
-    select.style.fontSize = '14px'
-    select.style.borderRadius = '4px'
-    select.style.outline = 'none'
-
-    const sizes = [10, 20, 40]
-    sizes.forEach((size) => {
-      const opt = document.createElement('option')
-      opt.value = `${size}`
-      opt.textContent = `${size}`
-      opt.style.background = '#111111'
-      opt.style.color = '#ffffff'
-      select.appendChild(opt)
-    })
-
-    select.value = `${this.axisGridSize}`
-    select.addEventListener('change', () => {
-      const nextSize = Number.parseInt(select.value, 10)
-      if (!Number.isNaN(nextSize)) this.setAxisGridSize(nextSize)
-    })
-
-    wrap.appendChild(select)
-    this.container.appendChild(wrap)
-
-    this.axisSizeSelectorWrap = wrap
-    this.axisSizeSelector = select
-    this.updateAxisSizeSelectorVisibility()
-  }
-
-  private updateAxisSizeSelectorVisibility() {
-    if (!this.axisSizeSelectorWrap) return
-    this.axisSizeSelectorWrap.style.display = this.isARMode ? 'none' : 'block'
+    this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridSize))
+    this.refreshScreenSpaceScales()
   }
 
   private drawNameLabel(
@@ -817,10 +792,16 @@ export class ThreeRenderer {
     const material = new THREE.SpriteMaterial({
       map: texture,
       depthTest: false, // 始终可见
+      depthWrite: false,
+      sizeAttenuation: false,
+      transparent: true,
     })
 
     const sprite = new THREE.Sprite(material)
-    sprite.scale.set(1.2, 1.2, 1) // 略微放大一点，更醒目
+    const h = this.renderer.domElement.clientHeight || 1
+    const axisLabelScale = ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale
+    sprite.scale.set(axisLabelScale, axisLabelScale, 1)
+    sprite.userData = { type: 'axisLabel' }
 
     return sprite
   }

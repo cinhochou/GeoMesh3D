@@ -5,6 +5,8 @@ import { Vec3 } from '../core/geometry/Vec3'
 import { ThreeRenderer } from './ThreeRenderer'
 
 export class Interaction {
+  private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
+
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
@@ -16,6 +18,11 @@ export class Interaction {
   private dragReferenceStartPos: THREE.Vector3 | null = null
   private dragDepth: number | null = null
   private dragStartPositions = new Map<string, Vec3>()
+  private mobileCreatePointerId: number | null = null
+  private mobileCreatePreviewPos: Vec3 | null = null
+  private mobileCreateHadPreviewAtPointerDown = false
+  private mobileCreateMoved = false
+  private mobileCreateStartClient = new THREE.Vector2()
 
   constructor(
     public editor: Editor,
@@ -30,11 +37,52 @@ export class Interaction {
     dom.addEventListener('mousemove', this.onMouseMove)
     dom.addEventListener('mouseup', this.onMouseUp)
     dom.addEventListener('mouseleave', this.onMouseLeave)
+    dom.addEventListener('pointerdown', this.onPointerDown, { capture: true })
+    dom.addEventListener('pointermove', this.onPointerMove, { capture: true })
+    dom.addEventListener('pointerup', this.onPointerUp, { capture: true })
+    dom.addEventListener('pointercancel', this.onPointerCancel, { capture: true })
   }
 
   /** 网格吸附工具函数 */
   private snap(value: number, step: number = 0.5): number {
     return Math.round(value / step) * step
+  }
+
+  private updatePointerPosition(clientX: number, clientY: number) {
+    let rect = this.renderer.renderer.domElement.getBoundingClientRect()
+    if (this.renderer.isARActive()) {
+      const video = this.renderer.getARVideoElement()
+      if (video) {
+        const videoRect = video.getBoundingClientRect()
+        if (videoRect.width > 0 && videoRect.height > 0) rect = videoRect
+      }
+    }
+
+    this.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1
+    this.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1
+  }
+
+  private getCreatePointPosition(shouldSnap: boolean): THREE.Vector3 {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const direction = this.raycaster.ray.direction
+    const pos = this.renderer.getActiveCameraWorldPosition().add(direction.multiplyScalar(30))
+
+    if (shouldSnap) {
+      pos.set(this.snap(pos.x), this.snap(pos.y), this.snap(pos.z))
+    }
+
+    return pos
+  }
+
+  private showCreatePointPreview(pos: THREE.Vector3) {
+    this.mobileCreatePreviewPos = new Vec3(pos.x, pos.y, pos.z)
+    this.renderer.showAxisGuidesAt(pos)
+  }
+
+  private resetMobileCreatePointerState() {
+    this.mobileCreatePointerId = null
+    this.mobileCreateHadPreviewAtPointerDown = false
+    this.mobileCreateMoved = false
   }
 
   onMouseDown = (e: MouseEvent) => {
@@ -43,16 +91,7 @@ export class Interaction {
 
     if (this.editor.mode === EditorMode.CreatePoint) {
       this.renderer.controls.enabled = false
-      // 在 AR 模式下需要使用 arCamera，否则射线会偏移
-      this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-      const direction = this.raycaster.ray.direction
-      const camPos = this.renderer.getActiveCameraWorldPosition()
-      const pos = camPos.add(direction.multiplyScalar(30))
-
-      //只有当开关开启且没有按住 Alt 时，才进行吸附
-      if (this.editor.isSnappingEnabled && !e.altKey) {
-        pos.set(this.snap(pos.x), this.snap(pos.y), this.snap(pos.z))
-      }
+      const pos = this.getCreatePointPosition(this.editor.isSnappingEnabled && !e.altKey)
       this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
       return
     }
@@ -109,18 +148,9 @@ export class Interaction {
 
     // --- 处理创建点模式下的辅助线预览 ---
     if (this.editor.mode === EditorMode.CreatePoint) {
-      this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-      const direction = this.raycaster.ray.direction
-      const previewPos = this.renderer
-        .getActiveCameraWorldPosition()
-        .add(direction.multiplyScalar(30))
-
-      if (this.editor.isSnappingEnabled && !e.altKey) {
-        previewPos.set(this.snap(previewPos.x), this.snap(previewPos.y), this.snap(previewPos.z))
-      }
-
-      // 调用渲染器显示三轴辅助线
-      this.renderer.showAxisGuidesAt(previewPos)
+      this.showCreatePointPreview(
+        this.getCreatePointPosition(this.editor.isSnappingEnabled && !e.altKey),
+      )
       return // 预览模式下不执行后续拖拽逻辑
     }
 
@@ -232,6 +262,92 @@ export class Interaction {
     this.clearPreview()
   }
 
+  onPointerDown = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch' || this.editor.mode !== EditorMode.CreatePoint) return
+
+    if (this.mobileCreatePointerId !== null && this.mobileCreatePointerId !== e.pointerId) {
+      this.renderer.controls.enabled = true
+      this.resetMobileCreatePointerState()
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+    this.renderer.controls.enabled = false
+    this.updatePointerPosition(e.clientX, e.clientY)
+
+    this.mobileCreatePointerId = e.pointerId
+    this.mobileCreateHadPreviewAtPointerDown = this.mobileCreatePreviewPos !== null
+    this.mobileCreateMoved = false
+    this.mobileCreateStartClient.set(e.clientX, e.clientY)
+
+    if (!this.mobileCreateHadPreviewAtPointerDown) {
+      this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+    }
+  }
+
+  onPointerMove = (e: PointerEvent) => {
+    if (
+      e.pointerType !== 'touch' ||
+      this.editor.mode !== EditorMode.CreatePoint ||
+      this.mobileCreatePointerId !== e.pointerId
+    ) {
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    this.updatePointerPosition(e.clientX, e.clientY)
+
+    if (
+      !this.mobileCreateMoved &&
+      this.mobileCreateStartClient.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) >=
+        Interaction.MOBILE_TAP_MOVE_THRESHOLD
+    ) {
+      this.mobileCreateMoved = true
+    }
+
+    this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+  }
+
+  onPointerUp = (e: PointerEvent) => {
+    if (
+      e.pointerType !== 'touch' ||
+      this.editor.mode !== EditorMode.CreatePoint ||
+      this.mobileCreatePointerId !== e.pointerId
+    ) {
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+
+    const shouldConfirm =
+      !this.mobileCreateMoved &&
+      this.mobileCreateHadPreviewAtPointerDown &&
+      this.mobileCreatePreviewPos !== null
+
+    this.renderer.controls.enabled = true
+    this.resetMobileCreatePointerState()
+
+    if (shouldConfirm) {
+      const pos = this.mobileCreatePreviewPos!
+      this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+    }
+  }
+
+  onPointerCancel = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch' || this.mobileCreatePointerId !== e.pointerId) return
+
+    ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+    this.renderer.controls.enabled = true
+    this.resetMobileCreatePointerState()
+  }
+
   /** 统一的拾取函数，支持点和线 */
   pick(): THREE.Object3D | null {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
@@ -252,21 +368,7 @@ export class Interaction {
   }
 
   updateMouse(e: MouseEvent) {
-    // 关键：实时获取最新的矩形位置，不要缓存 rect
-    // AR 模式下优先使用视频元素的尺寸，避免 AR.js 对 <video> 的缩放导致拾取偏移
-    let rect = this.renderer.renderer.domElement.getBoundingClientRect()
-    if (this.renderer.isARActive()) {
-      const video = this.renderer.getARVideoElement()
-      if (video) {
-        const videoRect = video.getBoundingClientRect()
-        if (videoRect.width > 0 && videoRect.height > 0) rect = videoRect
-      }
-    }
-
-    // 这里的 rect 会受到 CSS marginTop 或 top 的影响
-    // 如果退出 AR 后偏移，说明这里的 rect.top 和 rect.left 与 AR 开启前不一致
-    this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-    this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    this.updatePointerPosition(e.clientX, e.clientY)
   }
 
   /**
@@ -389,6 +491,9 @@ export class Interaction {
 
   clearPreview() {
     this.rubberBandData = null
+    this.mobileCreatePreviewPos = null
+    this.resetMobileCreatePointerState()
+    this.renderer.controls.enabled = true
     this.renderer.hideAxisGuides()
   }
 

@@ -25,6 +25,7 @@ const collabManager = ref<CollabManager | null>(null)
 const collabStatus = ref<CollabStatus>({ room: null, connecting: false, connected: false })
 const isARMode = ref(false)
 const lastModeBeforeAR = ref<EditorMode | null>(null)
+const axisGridSize = ref(10)
 const fps = ref(0)
 let lastFpsTime = performance.now()
 let frameCount = 0
@@ -85,6 +86,7 @@ const modeName = computed(() => {
 
 onMounted(() => {
   renderer = new ThreeRenderer(viewportRef.value!)
+  axisGridSize.value = renderer.getAxisGridSize()
   interaction = new Interaction(editor, renderer)
   interaction.bind(renderer.renderer.domElement)
 
@@ -155,6 +157,14 @@ const handleUndo = () => {
 
 const handleRedo = () => {
   editor.redo()
+}
+
+const handleAxisGridSizeChange = () => {
+  renderer.setAxisGridSize(axisGridSize.value)
+}
+
+const handleResetView = () => {
+  renderer.resetView()
 }
 
 const handleToggleAR = async (enabled: boolean) => {
@@ -258,6 +268,14 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
           </div>
         </Transition>
         <div class="fps-indicator">FPS: {{ fps }}</div>
+        <div v-if="!isARMode" class="viewport-controls">
+          <button type="button" class="axis-control" @click="handleResetView">复位</button>
+          <select v-model.number="axisGridSize" class="axis-control" @change="handleAxisGridSizeChange">
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+            <option :value="40">40</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -295,6 +313,41 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   font-size: 12px;
   font-family: monospace;
   pointer-events: none;
+}
+
+.viewport-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.axis-control {
+  width: 72px;
+  height: 34px;
+  box-sizing: border-box;
+  border: 1px solid #444;
+  background: transparent;
+  color: #ffffff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  outline: none;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+}
+
+button.axis-control {
+  cursor: pointer;
+}
+
+select.axis-control option {
+  background: #111111;
+  color: #ffffff;
 }
 
 .viewport {
@@ -354,6 +407,11 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     right: 8px;
     padding: 4px 8px;
     font-size: 11px;
+  }
+
+  .viewport-controls {
+    right: 8px;
+    bottom: 8px;
   }
 
   .toast-content {

@@ -61,11 +61,14 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 ├─ .prettierrc.json
 ├─ env.d.ts
 ├─ eslint.config.ts
+├─ idea.txt
 ├─ index.html
 ├─ package-lock.json
 ├─ package.json
 ├─ public
 │  ├─ arcode
+│  │  ├─ marker.patt
+│  │  ├─ marker.png
 │  │  └─ marker89.td
 │  ├─ data
 │  │  └─ camera_para.dat
@@ -86,10 +89,15 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  └─ DistanceConstraint.ts
 │  │  ├─ editor
 │  │  │  ├─ AddElementCommand.ts
+│  │  │  ├─ ClearSceneCommand.ts
 │  │  │  ├─ Command.ts
+│  │  │  ├─ DeleteLineCommand.ts
+│  │  │  ├─ DeletePointCommand.ts
 │  │  │  ├─ Editor.ts
-│  │  │  ├─ MoveLineCommand.ts
-│  │  │  └─ TransformCommand.ts
+│  │  │  ├─ TransformCommand.ts
+│  │  │  ├─ TransformPointsCommand.ts
+│  │  │  ├─ UpdateLineCommand.ts
+│  │  │  └─ UpdatePointCommand.ts
 │  │  ├─ geometry
 │  │  │  ├─ Line3.ts
 │  │  │  ├─ Plane.ts
@@ -124,6 +132,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ sceneStore.ts
 │  │  └─ uiStore.ts
 │  ├─ styles
+│  ├─ styles.css
 │  ├─ utils
 │  └─ views
 │     └─ EditorView.vue
