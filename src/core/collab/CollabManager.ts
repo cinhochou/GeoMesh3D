@@ -12,6 +12,11 @@ export type CollabStatus = {
   connected: boolean
 }
 
+type LocalSceneSnapshot = {
+  points: Point3[]
+  lines: Line3[]
+}
+
 export class CollabManager {
   private ydoc: Y.Doc
   private provider: WebrtcProvider | null = null
@@ -48,17 +53,18 @@ export class CollabManager {
   async joinRoom(roomName: string) {
     if (!roomName.trim()) throw new Error('roomName is empty')
 
+    const localSnapshot = this.captureLocalSnapshot()
     this.leaveRoom()
     this.resetDoc()
+    this.clearLocalSceneForJoin()
 
     this.roomName = roomName
     this.connecting = true
     this.connected = false
     this.emitStatus()
 
-    console.log(`正在加入房间: ${roomName}`)
+    console.log(`joining room: ${roomName}`)
 
-    //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
       signaling: ['ws://localhost:4444/'],
     })
@@ -72,31 +78,18 @@ export class CollabManager {
     const timeoutMs = 10_000
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(() => {
-          reject(new Error(`connect timeout after ${timeoutMs}ms`))
-        }, timeoutMs)
-
-        provider.on('status', ({ connected }: { connected: boolean }) => {
-          this.connected = connected
-          this.connecting = !connected
-          this.emitStatus()
-          console.log(`协作房间: ${roomName}`, ',协作连接状态:', connected ? '已连接' : '已断开')
-          if (connected) {
-            window.clearTimeout(timer)
-            resolve()
-          }
-        })
-      })
+      await this.waitForInitialRoomState(provider, roomName, timeoutMs)
+      this.reconcileInitialScene(localSnapshot)
     } catch (err) {
       this.leaveRoom()
+      this.restoreLocalSnapshot(localSnapshot)
       throw err
     }
   }
 
   leaveRoom() {
     if (this.provider) {
-      console.log('正在断开并清理协作实例...')
+      console.log('disconnecting collaboration provider...')
       this.provider.disconnect()
       this.provider.destroy()
       this.provider = null
@@ -117,6 +110,105 @@ export class CollabManager {
 
   private emitStatus() {
     this.onStatusUpdate(this.getStatus())
+  }
+
+  private captureLocalSnapshot(): LocalSceneSnapshot {
+    return {
+      points: [...this.scene.points.values()].filter((point) => !point.locked),
+      lines: [...this.scene.lines.values()],
+    }
+  }
+
+  private clearLocalSceneForJoin() {
+    this.scene.lines.clear()
+    this.scene.points.forEach((point, id) => {
+      if (!point.locked) this.scene.points.delete(id)
+    })
+    this.scene.constraints.length = 0
+    this.scene.selection.clear()
+  }
+
+  private restoreLocalSnapshot(snapshot: LocalSceneSnapshot) {
+    snapshot.points.forEach((point) => this.scene.addPoint(point))
+    snapshot.lines.forEach((line) => this.scene.addLine(line))
+  }
+
+  private roomHasSharedGeometry() {
+    return [...this.yPoints.keys()].some((id) => id !== Scene.ORIGIN_ID) || this.yLines.size > 0
+  }
+
+  private reconcileInitialScene(localSnapshot: LocalSceneSnapshot) {
+    if (this.roomHasSharedGeometry()) return
+    if (localSnapshot.points.length === 0 && localSnapshot.lines.length === 0) return
+
+    this.restoreLocalSnapshot(localSnapshot)
+    this.syncNow()
+  }
+
+  private waitForInitialRoomState(provider: WebrtcProvider, roomName: string, timeoutMs: number) {
+    const settleMs = 600
+
+    return new Promise<void>((resolve, reject) => {
+      let done = false
+      let settleTimer: number | null = null
+
+      const cleanup = () => {
+        provider.off('status', handleStatus)
+        provider.off('synced', handleSynced)
+        window.clearTimeout(connectTimer)
+        if (settleTimer !== null) window.clearTimeout(settleTimer)
+      }
+
+      const finish = () => {
+        if (done) return
+        done = true
+        cleanup()
+        resolve()
+      }
+
+      const fail = (err: Error) => {
+        if (done) return
+        done = true
+        cleanup()
+        reject(err)
+      }
+
+      const scheduleSettle = () => {
+        if (settleTimer !== null) return
+        settleTimer = window.setTimeout(() => {
+          finish()
+        }, settleMs)
+      }
+
+      const connectTimer = window.setTimeout(() => {
+        fail(new Error(`connect timeout after ${timeoutMs}ms`))
+      }, timeoutMs)
+
+      const handleStatus = ({ connected }: { connected: boolean }) => {
+        this.connected = connected
+        this.connecting = !connected
+        this.emitStatus()
+        console.log(
+          `collab room: ${roomName}, connection: ${connected ? 'connected' : 'disconnected'}`,
+        )
+
+        if (connected) {
+          window.clearTimeout(connectTimer)
+          scheduleSettle()
+        }
+      }
+
+      const handleSynced = ({ synced }: { synced: boolean }) => {
+        if (synced) finish()
+      }
+
+      provider.on('status', handleStatus)
+      provider.on('synced', handleSynced)
+
+      if (provider.connected) {
+        handleStatus({ connected: true })
+      }
+    })
   }
 
   private resetDoc() {

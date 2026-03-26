@@ -6,6 +6,7 @@ import { ThreeRenderer } from './ThreeRenderer'
 
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
+  private static readonly COLLAB_SETTLE_SYNC_MS = 250
 
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
@@ -23,6 +24,7 @@ export class Interaction {
   private mobileCreateHadPreviewAtPointerDown = false
   private mobileCreateMoved = false
   private mobileCreateStartClient = new THREE.Vector2()
+  private liveSyncUntil = 0
 
   constructor(
     public editor: Editor,
@@ -246,10 +248,14 @@ export class Interaction {
   }
 
   onMouseUp = () => {
+    const hadDragPreview = this.dragStartPositions.size > 0
     this.commitDragHistory()
     this.draggingPointId = null
     this.draggingLineId = null
     this.endDrag()
+    if (hadDragPreview) {
+      this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
+    }
     this.renderer.controls.enabled = true
     this.renderer.renderer.domElement.style.cursor = 'default'
 
@@ -504,5 +510,9 @@ export class Interaction {
     this.dragReferenceStartPos = null
     this.dragDepth = null
     this.dragStartPositions.clear()
+  }
+
+  shouldSyncLiveScene() {
+    return this.draggingPointId !== null || this.draggingLineId !== null || performance.now() < this.liveSyncUntil
   }
 }

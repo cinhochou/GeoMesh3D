@@ -106,6 +106,18 @@ onMounted(() => {
     collabManager.value?.syncAction() // 每次操作后同步
   }
 
+  const originalUndo = editor.undo.bind(editor)
+  editor.undo = () => {
+    originalUndo()
+    collabManager.value?.syncAction()
+  }
+
+  const originalRedo = editor.redo.bind(editor)
+  editor.redo = () => {
+    originalRedo()
+    collabManager.value?.syncAction()
+  }
+
   const loop = () => {
     frameCount++
     const now = performance.now()
@@ -116,6 +128,9 @@ onMounted(() => {
       lastFpsTime = now
     }
     scene.constraints.forEach((c) => c.solve())
+    if (interaction.shouldSyncLiveScene()) {
+      collabManager.value?.syncAction()
+    }
     renderer.sync(scene, interaction.rubberBandData)
     renderer.render()
     requestAnimationFrame(loop)
@@ -197,6 +212,10 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
   if (open) {
     try {
       await collabManager.value?.joinRoom(room)
+      scene.selection.clear()
+      editor.selectedPoints = []
+      editor.history = []
+      editor.historyIndex = -1
       showToast(`😉 成功加入房间: ${room}`, 'global')
     } catch (err) {
       console.error(err)
