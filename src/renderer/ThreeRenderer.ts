@@ -37,6 +37,8 @@ export class ThreeRenderer {
   scene: THREE.Scene
   /** 承载所有几何物体的分组，便于在 AR 模式下整体缩放 */
   world: THREE.Group
+  private arAnchorGroup: THREE.Group
+  private arMarkerRoot: THREE.Group
   camera: THREE.PerspectiveCamera
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
@@ -51,6 +53,8 @@ export class ThreeRenderer {
   private arToolkitContext: any = null
   private arMarkerControls: any = null
   private isARMode = false
+  private arAnchorInitialized = false
+  private arLastMarkerSeenAt = 0
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
   private axisGridGroup: THREE.Group
@@ -58,6 +62,9 @@ export class ThreeRenderer {
   private pointTexture: THREE.CanvasTexture | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
   private static readonly AR_SCENE_SCALE = 0.2
+  private static readonly AR_MARKER_FOLLOW_LERP = 0.35
+  private static readonly AR_MARKER_REACQUIRE_LERP = 0.18
+  private static readonly AR_MARKER_PERSIST_MS = 1500
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -75,8 +82,14 @@ export class ThreeRenderer {
     this.container = container
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color(0x111111)
+    this.arAnchorGroup = new THREE.Group()
+    this.scene.add(this.arAnchorGroup)
     this.world = new THREE.Group()
-    this.scene.add(this.world)
+    this.arAnchorGroup.add(this.world)
+    this.arMarkerRoot = new THREE.Group()
+    this.arMarkerRoot.matrixAutoUpdate = false
+    this.arMarkerRoot.visible = false
+    this.scene.add(this.arMarkerRoot)
     this.axisGridGroup = new THREE.Group()
     this.world.add(this.axisGridGroup)
 
@@ -146,10 +159,33 @@ export class ThreeRenderer {
     return cam.getWorldDirection(new THREE.Vector3())
   }
 
+  /** 数学世界局部坐标 -> 当前渲染世界坐标 */
+  toMathWorldPosition(point: THREE.Vector3): THREE.Vector3 {
+    return this.world.localToWorld(point.clone())
+  }
+
+  /** 当前渲染世界坐标 -> 数学世界局部坐标 */
+  toMathLocalPosition(point: THREE.Vector3): THREE.Vector3 {
+    return this.world.worldToLocal(point.clone())
+  }
+
+  /** AR 下让网格平面中心尽量贴近 marker 中心，便于把整个坐标系“坐”在标记上 */
+  private updateARWorldPlacement() {
+    this.world.position.set(0, 0, 0)
+  }
+
+  /** 按不同网格档位优化 AR 下的整体可见性 */
+  private getARSceneScaleForAxisSize(size: number) {
+    if (size >= 40) return 0.05
+    if (size >= 20) return 0.095
+    return 0.16
+  }
+
   /** 统一设置世界缩放，同时保持标记点/浮窗等屏幕尺寸不变 */
   private setWorldScale(scale: number) {
     this.worldScale = scale
     this.world.scale.setScalar(scale)
+    this.updateARWorldPlacement()
 
     this.refreshScreenSpaceScales()
   }
@@ -286,6 +322,54 @@ export class ThreeRenderer {
     this.updateRubberBand(previewData) // 处理虚线
   }
 
+  private resetARAnchor() {
+    this.arAnchorInitialized = false
+    this.arLastMarkerSeenAt = 0
+    this.arAnchorGroup.position.set(0, 0, 0)
+    this.arAnchorGroup.quaternion.identity()
+    this.arAnchorGroup.scale.set(1, 1, 1)
+    this.arAnchorGroup.updateMatrixWorld(true)
+    this.arMarkerRoot.visible = false
+    this.arMarkerRoot.matrix.identity()
+    this.arMarkerRoot.matrixWorld.identity()
+    this.arMarkerRoot.position.set(0, 0, 0)
+    this.arMarkerRoot.quaternion.identity()
+    this.arMarkerRoot.scale.set(1, 1, 1)
+  }
+
+  private syncARAnchorFromMarker() {
+    if (!this.arMarkerRoot.visible) return
+
+    this.arMarkerRoot.updateMatrixWorld(true)
+
+    const nextPosition = new THREE.Vector3()
+    const nextQuaternion = new THREE.Quaternion()
+    const nextScale = new THREE.Vector3()
+    this.arMarkerRoot.matrixWorld.decompose(nextPosition, nextQuaternion, nextScale)
+
+    const now = performance.now()
+    const lerpAlpha = !this.arAnchorInitialized
+      ? 1
+      : now - this.arLastMarkerSeenAt <= 120
+        ? ThreeRenderer.AR_MARKER_FOLLOW_LERP
+        : ThreeRenderer.AR_MARKER_REACQUIRE_LERP
+
+    this.arAnchorGroup.position.lerp(nextPosition, lerpAlpha)
+    this.arAnchorGroup.quaternion.slerp(nextQuaternion, lerpAlpha)
+    this.arAnchorGroup.scale.lerp(nextScale, lerpAlpha)
+    this.arAnchorGroup.updateMatrixWorld(true)
+
+    this.arAnchorInitialized = true
+    this.arLastMarkerSeenAt = now
+  }
+
+  private shouldRenderPersistentARWorld() {
+    return (
+      this.arAnchorInitialized &&
+      performance.now() - this.arLastMarkerSeenAt <= ThreeRenderer.AR_MARKER_PERSIST_MS
+    )
+  }
+
   /** 删除已从场景移除的点/线对应的 Mesh 与标签 */
   private cleanupMissingMeshes(scene: GeoScene) {
     this.meshMap.forEach((obj, id) => {
@@ -319,8 +403,9 @@ export class ThreeRenderer {
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
       this.controls.enabled = false
+      this.resetARAnchor()
       // AR 模式整体缩放，避免相机贴得太近导致看不到边缘
-      this.setWorldScale(ThreeRenderer.AR_SCENE_SCALE)
+      this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridSize))
 
       try {
         this.initAR()
@@ -336,6 +421,7 @@ export class ThreeRenderer {
 
   private restoreFromBackupState() {
     this.isARMode = false
+    this.resetARAnchor()
     // 恢复世界缩放
     this.setWorldScale(1)
     // ===== 退出 AR =====
@@ -425,14 +511,19 @@ export class ThreeRenderer {
       this.arCamera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
       // Three.js r150+ 需要同步 projectionMatrixInverse，否则 Raycaster 在 AR 模式下会算出错误射线
       this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
+      this.arCamera.matrix.identity()
+      this.arCamera.matrixWorld.identity()
+      this.arCamera.position.set(0, 0, 0)
+      this.arCamera.quaternion.identity()
+      this.arCamera.updateMatrixWorld(true)
     })
 
     //@ts-expect-error THREEx
-    // marker → camera
-    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arCamera, {
+    // marker 仅作为数学世界锚点的初始化/校准来源
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arMarkerRoot, {
       type: 'pattern',
       patternUrl: '/arcode/marker89.td',
-      changeMatrixMode: 'cameraTransformMatrix',
+      changeMatrixMode: 'modelViewMatrix',
       maxDetectionRate: 60,
     })
 
@@ -461,9 +552,8 @@ export class ThreeRenderer {
 
       this.arToolkitContext.update(this.arToolkitSource.domElement)
       this.arCamera.updateMatrixWorld(true)
-
-      // 关键：完全交给 AR.js
-      this.scene.visible = this.arCamera.visible
+      this.syncARAnchorFromMarker()
+      this.scene.visible = this.arMarkerRoot.visible || this.shouldRenderPersistentARWorld()
     } else {
       this.scene.visible = true
       this.controls.update()
@@ -816,6 +906,10 @@ export class ThreeRenderer {
     const gridHelper = new THREE.GridHelper(gridSize, divisions)
     this.axisGridGroup.add(gridHelper)
     this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridSize))
+    if (this.isARMode) {
+      this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridSize))
+      return
+    }
     this.refreshScreenSpaceScales()
   }
 
@@ -953,14 +1047,15 @@ export class ThreeRenderer {
   /** 计算标签位置：始终显示在屏幕上方 */
   private getScreenOffsetPosition(pointPos: THREE.Vector3, offsetXpx: number, offsetYpx: number) {
     const camera = this.getActiveCamera()
-    const ndc = pointPos.clone().project(camera)
+    const worldPoint = this.toMathWorldPosition(pointPos)
+    const ndc = worldPoint.project(camera)
     const w = this.renderer.domElement.clientWidth || 1
     const h = this.renderer.domElement.clientHeight || 1
     const offsetNdcX = (this.getZoomResponsivePixelOffset(offsetXpx) / w) * 2
     const offsetNdcY = (this.getZoomResponsivePixelOffset(offsetYpx) / h) * 2
     ndc.x += offsetNdcX
     ndc.y += offsetNdcY
-    return ndc.unproject(camera)
+    return this.toMathLocalPosition(ndc.unproject(camera))
   }
 
   /** 每帧根据当前相机姿态刷新标签的屏幕空间偏移，保证 AR 下不漂移、不遮挡主体 */

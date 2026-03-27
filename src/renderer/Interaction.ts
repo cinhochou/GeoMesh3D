@@ -17,6 +17,7 @@ export class Interaction {
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
   private dragReferenceStartPos: THREE.Vector3 | null = null
+  private dragReferenceStartMathPos: THREE.Vector3 | null = null
   private dragDepth: number | null = null
   private dragStartPositions = new Map<string, Vec3>()
   private mobileCreatePointerId: number | null = null
@@ -91,6 +92,14 @@ export class Interaction {
     this.updateMouse(e)
     const hit = this.pick()
 
+    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
+      return
+    }
+
+    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreateLine) {
+      return
+    }
+
     if (this.editor.mode === EditorMode.CreatePoint) {
       this.renderer.controls.enabled = false
       const pos = this.getCreatePointPosition(this.editor.isSnappingEnabled && !e.altKey)
@@ -147,6 +156,16 @@ export class Interaction {
 
   onMouseMove = (e: MouseEvent) => {
     this.updateMouse(e)
+
+    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
+      this.renderer.hideAxisGuides()
+      return
+    }
+
+    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreateLine) {
+      this.rubberBandData = null
+      return
+    }
 
     // --- 处理创建点模式下的辅助线预览 ---
     if (this.editor.mode === EditorMode.CreatePoint) {
@@ -270,6 +289,7 @@ export class Interaction {
 
   onPointerDown = (e: PointerEvent) => {
     if (e.pointerType !== 'touch' || this.editor.mode !== EditorMode.CreatePoint) return
+    if (this.renderer.isARActive()) return
 
     if (this.mobileCreatePointerId !== null && this.mobileCreatePointerId !== e.pointerId) {
       this.renderer.controls.enabled = true
@@ -302,6 +322,7 @@ export class Interaction {
     ) {
       return
     }
+    if (this.renderer.isARActive()) return
 
     e.preventDefault()
     e.stopPropagation()
@@ -327,6 +348,7 @@ export class Interaction {
     ) {
       return
     }
+    if (this.renderer.isARActive()) return
 
     e.preventDefault()
     e.stopPropagation()
@@ -387,10 +409,22 @@ export class Interaction {
     const targetPos = new THREE.Vector3()
 
     // 拖拽平面在拖拽开始时固定，避免 AR 相机抖动导致跳动
-    if (!this.dragPlane || !this.dragLastPos || !this.dragStartPointerPos || !this.dragReferenceStartPos) {
+    if (
+      !this.dragPlane ||
+      !this.dragLastPos ||
+      !this.dragStartPointerPos ||
+      !this.dragReferenceStartPos ||
+      !this.dragReferenceStartMathPos
+    ) {
       this.startDrag(referencePos)
     }
-    if (!this.dragPlane || !this.dragLastPos || !this.dragStartPointerPos || !this.dragReferenceStartPos) {
+    if (
+      !this.dragPlane ||
+      !this.dragLastPos ||
+      !this.dragStartPointerPos ||
+      !this.dragReferenceStartPos ||
+      !this.dragReferenceStartMathPos
+    ) {
       return
     }
 
@@ -417,19 +451,21 @@ export class Interaction {
       .clone()
       .add(targetPos.clone().sub(this.dragStartPointerPos))
 
-    // 吸附到“拖拽对象的位置”本身，而不是沿原始偏移做 0.5 增量
+    const desiredMathPos = this.renderer.toMathLocalPosition(desiredReferencePos)
+
+    // 吸附到数学坐标系里的目标位置本身，而不是沿原始偏移做 0.5 增量
     if (this.editor.isSnappingEnabled && !isAltPressed) {
-      desiredReferencePos.set(
-        this.snap(desiredReferencePos.x),
-        this.snap(desiredReferencePos.y),
-        this.snap(desiredReferencePos.z),
+      desiredMathPos.set(
+        this.snap(desiredMathPos.x),
+        this.snap(desiredMathPos.y),
+        this.snap(desiredMathPos.z),
       )
     }
 
     const delta = new Vec3(
-      desiredReferencePos.x - this.dragReferenceStartPos.x,
-      desiredReferencePos.y - this.dragReferenceStartPos.y,
-      desiredReferencePos.z - this.dragReferenceStartPos.z,
+      desiredMathPos.x - this.dragReferenceStartMathPos.x,
+      desiredMathPos.y - this.dragReferenceStartMathPos.y,
+      desiredMathPos.z - this.dragReferenceStartMathPos.z,
     )
 
     if (delta.x !== 0 || delta.y !== 0 || delta.z !== 0) {
@@ -440,7 +476,8 @@ export class Interaction {
 
   private startDrag(referencePos: Vec3) {
     const cameraDir = this.renderer.getActiveCameraWorldDirection()
-    const ref = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
+    const refMath = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
+    const ref = this.renderer.toMathWorldPosition(refMath)
 
     // 固定拖拽平面：法线取拖拽开始时的相机朝向
     this.dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, ref)
@@ -455,6 +492,7 @@ export class Interaction {
       this.dragStartPointerPos = ref.clone()
     }
     this.dragReferenceStartPos = ref.clone()
+    this.dragReferenceStartMathPos = refMath.clone()
 
     // 记录拖拽起始的相机距离，用于 AR 模式的固定深度拖拽
     this.dragDepth = this.raycaster.ray.origin.distanceTo(ref)
@@ -508,6 +546,7 @@ export class Interaction {
     this.dragLastPos = null
     this.dragStartPointerPos = null
     this.dragReferenceStartPos = null
+    this.dragReferenceStartMathPos = null
     this.dragDepth = null
     this.dragStartPositions.clear()
   }
