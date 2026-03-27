@@ -35,6 +35,8 @@ const toastMessage = ref('')
 const isToastVisible = ref(false)
 const toastScope = ref<'global' | 'viewport'>('global')
 let toastTimer: number | null = null
+const isCollabJoinDialogVisible = ref(false)
+const collabJoinDialogMessage = ref('正在加入房间中...')
 
 const handleResize = () => {
   renderer.onResize()
@@ -210,15 +212,19 @@ const handleToggleAR = async (enabled: boolean) => {
 
 const handleToggleCollab = async ({ open, room }: { open: boolean; room: string }) => {
   if (open) {
+    isCollabJoinDialogVisible.value = true
+    collabJoinDialogMessage.value = '正在加入房间中...'
     try {
       await collabManager.value?.joinRoom(room)
       scene.selection.clear()
       editor.selectedPoints = []
       editor.history = []
       editor.historyIndex = -1
+      isCollabJoinDialogVisible.value = false
       showToast(`😉 成功加入房间: ${room}`, 'global')
     } catch (err) {
       console.error(err)
+      isCollabJoinDialogVisible.value = false
       showToast('⚠️ 协作连接失败（请检查 signaling 服务）', 'global')
     }
     return
@@ -250,6 +256,15 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 
 <template>
   <div class="editor-root">
+    <Transition name="fade-overlay">
+      <div v-if="isCollabJoinDialogVisible" class="collab-wait-overlay">
+        <div class="collab-wait-dialog">
+          <div class="collab-spinner"></div>
+          <div class="collab-wait-text">{{ collabJoinDialogMessage }}</div>
+        </div>
+      </div>
+    </Transition>
+
     <Transition name="toast-fade">
       <div v-if="isToastVisible && toastScope === 'global'" class="toast-container">
         <div class="toast-content">
@@ -387,6 +402,45 @@ select.axis-control option {
   z-index: 9999;
   pointer-events: none; /* 确保不影响对页面的操作 */
 }
+
+.collab-wait-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.collab-wait-dialog {
+  min-width: 240px;
+  padding: 20px 24px;
+  border: 1px solid #ffffff;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.94);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.collab-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #43f260;
+  border-radius: 50%;
+  animation: collab-spin 0.8s linear infinite;
+}
+
+.collab-wait-text {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
 .toast-container-viewport {
   position: absolute;
   top: 50%;
@@ -418,6 +472,25 @@ select.axis-control option {
 .toast-fade-leave-to {
   opacity: 0;
   transform: translate(-50%, -60%); /* 消失时稍微向上位移一点 */
+}
+
+@keyframes collab-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.fade-overlay-enter-active,
+.fade-overlay-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-overlay-enter-from,
+.fade-overlay-leave-to {
+  opacity: 0;
 }
 
 @media (max-width: 1024px) and (orientation: landscape) {

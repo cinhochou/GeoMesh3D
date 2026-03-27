@@ -17,6 +17,13 @@ type LocalSceneSnapshot = {
   lines: Line3[]
 }
 
+type SignalingConnLike = {
+  connected: boolean
+  connecting: boolean
+  on: (event: 'connect' | 'disconnect', listener: () => void) => void
+  off: (event: 'connect' | 'disconnect', listener: () => void) => void
+}
+
 export class CollabManager {
   private ydoc: Y.Doc
   private provider: WebrtcProvider | null = null
@@ -31,6 +38,7 @@ export class CollabManager {
 
   private syncTimer: number | null = null
   private syncPending = false
+  private signalingCleanup: Array<() => void> = []
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -65,6 +73,7 @@ export class CollabManager {
 
     console.log(`joining room: ${roomName}`)
 
+    //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
       signaling: ['ws://localhost:4444/'],
     })
@@ -78,6 +87,7 @@ export class CollabManager {
     const timeoutMs = 10_000
 
     try {
+      this.bindSignalingStatus(provider)
       await this.waitForInitialRoomState(provider, roomName, timeoutMs)
       this.reconcileInitialScene(localSnapshot)
     } catch (err) {
@@ -88,6 +98,8 @@ export class CollabManager {
   }
 
   leaveRoom() {
+    this.clearSignalingBindings()
+
     if (this.provider) {
       console.log('disconnecting collaboration provider...')
       this.provider.disconnect()
@@ -110,6 +122,47 @@ export class CollabManager {
 
   private emitStatus() {
     this.onStatusUpdate(this.getStatus())
+  }
+
+  private getSignalingConnections(provider: WebrtcProvider): SignalingConnLike[] {
+    return ((provider as any).signalingConns ?? []) as SignalingConnLike[]
+  }
+
+  private hasConnectedSignaling(provider: WebrtcProvider) {
+    return this.getSignalingConnections(provider).some((conn) => conn.connected)
+  }
+
+  private updateConnectionStateFromProvider(provider: WebrtcProvider) {
+    const hasConnectedSignaling = this.hasConnectedSignaling(provider)
+    this.connected = hasConnectedSignaling
+    this.connecting = this.roomName !== null && !hasConnectedSignaling
+    this.emitStatus()
+  }
+
+  private clearSignalingBindings() {
+    this.signalingCleanup.forEach((cleanup) => cleanup())
+    this.signalingCleanup = []
+  }
+
+  private bindSignalingStatus(provider: WebrtcProvider) {
+    this.clearSignalingBindings()
+
+    const syncStatus = () => {
+      this.updateConnectionStateFromProvider(provider)
+    }
+
+    this.getSignalingConnections(provider).forEach((conn) => {
+      const handleConnect = () => syncStatus()
+      const handleDisconnect = () => syncStatus()
+      conn.on('connect', handleConnect)
+      conn.on('disconnect', handleDisconnect)
+      this.signalingCleanup.push(() => {
+        conn.off('connect', handleConnect)
+        conn.off('disconnect', handleDisconnect)
+      })
+    })
+
+    syncStatus()
   }
 
   private captureLocalSnapshot(): LocalSceneSnapshot {
@@ -153,9 +206,8 @@ export class CollabManager {
       let settleTimer: number | null = null
 
       const cleanup = () => {
-        provider.off('status', handleStatus)
         provider.off('synced', handleSynced)
-        window.clearTimeout(connectTimer)
+        window.clearTimeout(timeoutTimer)
         if (settleTimer !== null) window.clearTimeout(settleTimer)
       }
 
@@ -180,34 +232,28 @@ export class CollabManager {
         }, settleMs)
       }
 
-      const connectTimer = window.setTimeout(() => {
+      const timeoutTimer = window.setTimeout(() => {
         fail(new Error(`connect timeout after ${timeoutMs}ms`))
       }, timeoutMs)
-
-      const handleStatus = ({ connected }: { connected: boolean }) => {
-        this.connected = connected
-        this.connecting = !connected
-        this.emitStatus()
-        console.log(
-          `collab room: ${roomName}, connection: ${connected ? 'connected' : 'disconnected'}`,
-        )
-
-        if (connected) {
-          window.clearTimeout(connectTimer)
-          scheduleSettle()
-        }
-      }
 
       const handleSynced = ({ synced }: { synced: boolean }) => {
         if (synced) finish()
       }
 
-      provider.on('status', handleStatus)
       provider.on('synced', handleSynced)
+      console.log(`collab room: ${roomName}, waiting for signaling server connection...`)
 
-      if (provider.connected) {
-        handleStatus({ connected: true })
+      const waitForSignal = () => {
+        if (done) return
+        if (this.hasConnectedSignaling(provider)) {
+          console.log(`collab room: ${roomName}, signaling server connected`)
+          scheduleSettle()
+          return
+        }
+        window.setTimeout(waitForSignal, 100)
       }
+
+      waitForSignal()
     })
   }
 
@@ -288,7 +334,7 @@ export class CollabManager {
   }
 
   syncAction() {
-    if (!this.provider || !this.provider.connected) return
+    if (!this.provider || !this.connected) return
 
     this.syncPending = true
     if (this.syncTimer) return
@@ -302,7 +348,7 @@ export class CollabManager {
   }
 
   private syncNow() {
-    if (!this.provider || !this.provider.connected) return
+    if (!this.provider || !this.connected) return
 
     this.ydoc.transact(() => {
       const pointIds = new Set(this.scene.points.keys())
