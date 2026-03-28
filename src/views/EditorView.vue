@@ -81,7 +81,9 @@ const modeName = computed(() => {
     case EditorMode.CreatePoint:
       return '创建点'
     case EditorMode.CreateLine:
-      return '连线'
+      return '创建线段'
+    case EditorMode.CreateRay:
+      return '创建射线'
     default:
       return ''
   }
@@ -152,7 +154,13 @@ onMounted(() => {
 })
 
 watch(
-  [() => scene.selection.points.size, () => editor.mode, isARMode],
+  [
+    () => scene.selection.points.size,
+    () => scene.selection.lines.size,
+    () => scene.selection.rays.size,
+    () => editor.mode,
+    isARMode,
+  ],
   () => {
     if (!isTouchDevice.value || !interaction) return
     interaction.syncControlLockState()
@@ -320,7 +328,11 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         <div class="fps-indicator">FPS: {{ fps }}</div>
         <div v-if="!isARMode" class="viewport-controls">
           <button type="button" class="axis-control" @click="handleResetView">复位</button>
-          <select v-model.number="axisGridSize" class="axis-control" @change="handleAxisGridSizeChange">
+          <select
+            v-model.number="axisGridSize"
+            class="axis-control"
+            @change="handleAxisGridSizeChange"
+          >
             <option :value="10">10</option>
             <option :value="20">20</option>
             <option :value="40">40</option>

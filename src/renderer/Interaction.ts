@@ -16,6 +16,7 @@ export class Interaction {
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
   draggingLineId: string | null = null
+  draggingRayId: string | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
@@ -119,6 +120,7 @@ export class Interaction {
     if (
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
+      this.draggingRayId !== null ||
       this.mobileCreatePointerId !== null
     ) {
       this.renderer.controls.enabled = false
@@ -153,6 +155,7 @@ export class Interaction {
     this.commitDragHistory()
     this.draggingPointId = null
     this.draggingLineId = null
+    this.draggingRayId = null
     this.endDrag()
     if (hadDragPreview) {
       this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
@@ -194,42 +197,48 @@ export class Interaction {
     return bestId ? (this.renderer.meshMap.get(bestId) ?? null) : null
   }
 
-  private pickLineWithThreshold(lineThreshold: number) {
+  private pickLinearWithThreshold(lineThreshold: number) {
     const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     this.raycaster.params.Line = { threshold: lineThreshold }
     const lineHits = this.raycaster.intersectObjects(
-      [...this.renderer.meshMap.values()].filter((obj) => obj.userData?.type === 'line'),
+      [...this.renderer.meshMap.values()].filter(
+        (obj) => obj.userData?.type === 'line' || obj.userData?.type === 'ray',
+      ),
     )
     this.raycaster.params.Line = { threshold: previousThreshold }
     return lineHits[0]?.object ?? null
   }
 
   private getProtectedEndpointHit(
-    lineId: string,
+    linearId: string,
+    type: 'line' | 'ray',
     clientX: number,
     clientY: number,
     radiusPx: number,
   ) {
-    const line = this.editor.scene.lines.get(lineId)
-    if (!line) return null
+    const linear =
+      type === 'line'
+        ? this.editor.scene.lines.get(linearId)
+        : this.editor.scene.rays.get(linearId)
+    if (!linear) return null
 
     const rect = this.getPointerClientRect()
-    const p1Screen = this.projectMathPositionToClient(line.p1.position, rect)
-    const p2Screen = this.projectMathPositionToClient(line.p2.position, rect)
+    const p1Screen = this.projectMathPositionToClient(linear.p1.position, rect)
+    const p2Screen = this.projectMathPositionToClient(linear.p2.position, rect)
     if (!p1Screen && !p2Screen) return null
 
     const pointer = new THREE.Vector2(clientX, clientY)
     const candidates = [
       p1Screen
         ? {
-            id: line.p1.id,
+            id: linear.p1.id,
             distance: p1Screen.distanceTo(pointer),
           }
         : null,
       p2Screen
         ? {
-            id: line.p2.id,
+            id: linear.p2.id,
             distance: p2Screen.distanceTo(pointer),
           }
         : null,
@@ -248,11 +257,12 @@ export class Interaction {
     )
     if (pointHit) return pointHit
 
-    const lineHit = this.pickLineWithThreshold(Interaction.MOBILE_LINE_PICK_THRESHOLD)
+    const lineHit = this.pickLinearWithThreshold(Interaction.MOBILE_LINE_PICK_THRESHOLD)
     if (!lineHit) return null
 
     const protectedEndpoint = this.getProtectedEndpointHit(
       lineHit.userData.geoId,
+      lineHit.userData.type,
       clientX,
       clientY,
       Interaction.MOBILE_ENDPOINT_PROTECTION_RADIUS_PX,
@@ -277,6 +287,13 @@ export class Interaction {
             if (l) {
               toMove.add(l.p1.id)
               toMove.add(l.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
             }
           })
           toMove.add(this.draggingPointId!)
@@ -307,9 +324,53 @@ export class Interaction {
               toMove.add(l.p2.id)
             }
           })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
           toMove.add(line.p2.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+    }
+
+    if (this.draggingRayId) {
+      const ray = this.editor.scene.rays.get(this.draggingRayId)
+      if (!ray) return
+
+      const end = ray.getDisplayEndPoint()
+      const mid = new Vec3(
+        (ray.p1.position.x + end.x) / 2,
+        (ray.p1.position.y + end.y) / 2,
+        (ray.p1.position.z + end.z) / 2,
+      )
+      this.handleDrag(
+        mid,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const selectedRay = this.editor.scene.rays.get(rid)
+            if (selectedRay) {
+              toMove.add(selectedRay.p1.id)
+              toMove.add(selectedRay.p2.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(ray.p1.id)
+          toMove.add(ray.p2.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -326,7 +387,10 @@ export class Interaction {
       return
     }
 
-    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreateLine) {
+    if (
+      this.renderer.isARActive() &&
+      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay)
+    ) {
       return
     }
 
@@ -345,6 +409,8 @@ export class Interaction {
           this.editor.deletePoint(geoId)
         } else if (type === 'line') {
           this.editor.deleteLine(geoId)
+        } else if (type === 'ray') {
+          this.editor.deleteRay(geoId)
         }
         return
       }
@@ -375,9 +441,24 @@ export class Interaction {
             )
             this.startDrag(mid)
           }
+        } else if (type === 'ray') {
+          this.editor.scene.selection.selectRay(geoId, true)
+          const ray = this.editor.scene.rays.get(geoId)
+          if (ray) {
+            this.draggingRayId = geoId
+            const end = ray.getDisplayEndPoint()
+            const mid = new Vec3(
+              (ray.p1.position.x + end.x) / 2,
+              (ray.p1.position.y + end.y) / 2,
+              (ray.p1.position.z + end.z) / 2,
+            )
+            this.startDrag(mid)
+          }
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
         this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      } else if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
+        this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
       }
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
@@ -393,7 +474,10 @@ export class Interaction {
       return
     }
 
-    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreateLine) {
+    if (
+      this.renderer.isARActive() &&
+      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay)
+    ) {
       this.rubberBandData = null
       return
     }
@@ -407,7 +491,10 @@ export class Interaction {
     }
 
     // 橡皮筋逻辑
-    if (this.editor.mode === EditorMode.CreateLine && this.editor.selectedPoints.length === 1) {
+    if (
+      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay) &&
+      this.editor.selectedPoints.length === 1
+    ) {
       const startPoint = this.editor.selectedPoints[0]
       const from = new THREE.Vector3(
         startPoint!.position.x,
@@ -497,22 +584,31 @@ export class Interaction {
 
     const { geoId, type } = hit.userData
 
-    if (this.editor.mode === EditorMode.Delete) {
-      e.preventDefault()
-      e.stopPropagation()
-      if (type === 'point') this.editor.deletePoint(geoId)
-      else if (type === 'line') this.editor.deleteLine(geoId)
-      this.resetMobileInteractionState()
-      return
-    }
+      if (this.editor.mode === EditorMode.Delete) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (type === 'point') this.editor.deletePoint(geoId)
+        else if (type === 'line') this.editor.deleteLine(geoId)
+        else if (type === 'ray') this.editor.deleteRay(geoId)
+        this.resetMobileInteractionState()
+        return
+      }
 
-    if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
+      if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
-      this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
-      this.resetMobileInteractionState()
-      return
-    }
+        this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+        this.resetMobileInteractionState()
+        return
+      }
+
+      if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
+        e.preventDefault()
+        e.stopPropagation()
+        this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+        this.resetMobileInteractionState()
+        return
+      }
 
     if (this.editor.mode !== EditorMode.Select) {
       this.resetMobileInteractionState()
@@ -576,6 +672,39 @@ export class Interaction {
         (line.p1.position.z + line.p2.position.z) / 2,
       )
       this.startDrag(mid)
+      return
+    }
+
+    if (type === 'ray') {
+      const alreadySelected = this.editor.scene.selection.rays.has(geoId)
+      this.editor.scene.selection.selectRay(geoId, true)
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const ray = this.editor.scene.rays.get(geoId)
+      if (!ray) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingRayId = geoId
+      const end = ray.getDisplayEndPoint()
+      const mid = new Vec3(
+        (ray.p1.position.x + end.x) / 2,
+        (ray.p1.position.y + end.y) / 2,
+        (ray.p1.position.z + end.z) / 2,
+      )
+      this.startDrag(mid)
     }
   }
 
@@ -613,7 +742,7 @@ export class Interaction {
 
     this.updateMobileMoveThreshold(e.clientX, e.clientY)
 
-    if (!this.draggingPointId && !this.draggingLineId) return
+    if (!this.draggingPointId && !this.draggingLineId && !this.draggingRayId) return
 
     e.preventDefault()
     e.stopPropagation()
@@ -703,7 +832,9 @@ export class Interaction {
       if (pointHit) return pointHit.object
 
       // 如果没点中点，再看有没有点中“线”
-      const lineHit = hits.find((h) => h.object.userData.type === 'line')
+      const lineHit = hits.find(
+        (h) => h.object.userData.type === 'line' || h.object.userData.type === 'ray',
+      )
       if (lineHit) return lineHit.object
 
       return hits[0]!.object
@@ -871,6 +1002,7 @@ export class Interaction {
     return (
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
+      this.draggingRayId !== null ||
       performance.now() < this.liveSyncUntil
     )
   }

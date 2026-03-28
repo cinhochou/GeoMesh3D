@@ -5,12 +5,15 @@ import { TransformCommand } from './TransformCommand'
 import { AddElementCommand } from './AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
+import { Ray3 } from '../geometry/Ray3'
 import { Vec3 } from '../geometry/Vec3'
 import { TransformPointsCommand } from './TransformPointsCommand'
 import { UpdatePointCommand } from './UpdatePointCommand'
 import { UpdateLineCommand } from './UpdateLineCommand'
+import { UpdateRayCommand } from './UpdateRayCommand'
 import { DeletePointCommand } from './DeletePointCommand'
 import { DeleteLineCommand } from './DeleteLineCommand'
+import { DeleteRayCommand } from './DeleteRayCommand'
 import { ClearSceneCommand } from './ClearSceneCommand'
 
 export enum EditorMode {
@@ -18,6 +21,7 @@ export enum EditorMode {
   Delete,
   CreatePoint,
   CreateLine,
+  CreateRay,
   CreatePlane,
 }
 
@@ -38,6 +42,11 @@ let lineNameCounter = 0
 const genLineName = () => {
   // a-z, a1-z1, a2-z2, ...
   return genIndexedAlphabetName(lineNameCounter++, 97)
+}
+let rayNameCounter = 0
+const genRayName = () => {
+  const current = rayNameCounter++
+  return current === 0 ? 'r' : `r${current}`
 }
 
 export class Editor {
@@ -72,8 +81,11 @@ export class Editor {
     const relatedLines = [...this.scene.lines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
+    const relatedRays = [...this.scene.rays.values()].filter(
+      (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
+    )
 
-    this.executeCommand(new DeletePointCommand(this.scene, point, relatedLines))
+    this.executeCommand(new DeletePointCommand(this.scene, point, relatedLines, relatedRays))
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
 
@@ -83,14 +95,22 @@ export class Editor {
     this.executeCommand(new DeleteLineCommand(this.scene, line))
   }
 
+  deleteRay(rayId: string) {
+    const ray = this.scene.rays.get(rayId)
+    if (!ray) return
+    this.executeCommand(new DeleteRayCommand(this.scene, ray))
+  }
+
   clearAll() {
     const points = [...this.scene.points.values()].filter((point) => !point.locked)
     const lines = [...this.scene.lines.values()]
+    const rays = [...this.scene.rays.values()]
     const constraints = [...this.scene.constraints]
 
-    if (points.length === 0 && lines.length === 0 && constraints.length === 0) return
+    if (points.length === 0 && lines.length === 0 && rays.length === 0 && constraints.length === 0)
+      return
 
-    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, constraints))
+    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, rays, constraints))
     this.selectedPoints = []
   }
 
@@ -212,8 +232,56 @@ export class Editor {
     )
   }
 
+  updateRay(
+    rayId: string,
+    patch: { name?: string; nameVisible?: boolean; visible?: boolean; displayLength?: number },
+  ) {
+    const ray = this.scene.rays.get(rayId)
+    if (!ray) return
+
+    const nextName = patch.name ?? ray.name
+    const nextNameVisible = patch.nameVisible ?? ray.nameVisible
+    const nextVisible = patch.visible ?? ray.visible
+    const nextDisplayLength = Ray3.normalizeDisplayLength(patch.displayLength ?? ray.displayLength)
+    if (
+      nextName === ray.name &&
+      nextNameVisible === ray.nameVisible &&
+      nextVisible === ray.visible &&
+      nextDisplayLength === ray.displayLength
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateRayCommand(
+        ray,
+        {
+          name: ray.name,
+          nameVisible: ray.nameVisible,
+          visible: ray.visible,
+          displayLength: ray.displayLength,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          visible: nextVisible,
+          displayLength: nextDisplayLength,
+        },
+      ),
+    )
+  }
+
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
+    this.tryCreateLinearWith(point, 'line')
+  }
+
+  tryCreateRayWith(point: Point3) {
+    if (this.mode !== EditorMode.CreateRay) return
+    this.tryCreateLinearWith(point, 'ray')
+  }
+
+  tryCreateLinearWith(point: Point3, type: 'line' | 'ray') {
     this.scene.selection.selectPoint(point.id, true)
 
     if (!this.selectedPoints.includes(point)) {
@@ -222,17 +290,30 @@ export class Editor {
 
     if (this.selectedPoints.length === 2) {
       const [p1, p2] = this.selectedPoints
-      const exists = [...this.scene.lines.values()].some(
-        (l) =>
-          (l.p1.id === p1!.id && l.p2.id === p2!.id) || (l.p1.id === p2!.id && l.p2.id === p1!.id),
-      )
+      const exists =
+        type === 'line'
+          ? [...this.scene.lines.values()].some(
+              (l) =>
+                (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
+                (l.p1.id === p2!.id && l.p2.id === p1!.id),
+            )
+          : [...this.scene.rays.values()].some((ray) => ray.p1.id === p1!.id && ray.p2.id === p2!.id)
+
       if (!exists) {
-        const line = new Line3(genId('l'), genLineName(), p1!, p2!, true)
-        this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+        if (type === 'line') {
+          const line = new Line3(genId('l'), genLineName(), p1!, p2!, true)
+          this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+        } else {
+          const ray = new Ray3(genId('r'), genRayName(), p1!, p2!, true, true)
+          this.executeCommand(new AddElementCommand(this.scene, ray, 'ray'))
+        }
       } else {
         window.dispatchEvent(
           new CustomEvent('toast', {
-            detail: { msg: '线段已存在，创建线段失败', scope: 'viewport' },
+            detail: {
+              msg: type === 'line' ? '线段已存在，创建线段失败' : '射线已存在，创建射线失败',
+              scope: 'viewport',
+            },
           }),
         )
       }

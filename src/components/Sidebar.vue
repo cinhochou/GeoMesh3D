@@ -6,6 +6,7 @@ import { Editor } from '../core/editor/Editor'
 import { Vec3 } from '../core/geometry/Vec3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
+import type { Ray3 } from '../core/geometry/Ray3'
 
 const props = defineProps<{
   scene: Scene
@@ -19,16 +20,23 @@ const selectedPoints = computed(() => {
 const selectedLines = computed(() => {
   return [...props.scene.selection.lines].map((id) => props.scene.lines.get(id))
 })
+const selectedRays = computed(() => {
+  return [...props.scene.selection.rays].map((id) => props.scene.rays.get(id))
+})
 const pointsInScene = computed(() => {
   return [...props.scene.points.values()]
 })
 const linesInScene = computed(() => {
   return [...props.scene.lines.values()]
 })
+const raysInScene = computed(() => {
+  return [...props.scene.rays.values()]
+})
 
-const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
+const editing = ref<{ type: 'point' | 'line' | 'ray'; id: string } | null>(null)
 const isCompactLineEditor = ref(false)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
+const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
 const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
 const editLine = reactive({
   name: '',
@@ -36,28 +44,48 @@ const editLine = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editRay = reactive({
+  name: '',
+  nameVisible: true,
+  visible: true,
+  displayLength: '',
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
+let rayCoordCollapseTimer: number | null = null
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
+const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
 
 const selectPointFromContent = (id: string) => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
   props.scene.selection.selectPoint(id)
 }
 
 const selectLineFromContent = (id: string) => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
   props.scene.selection.selectLine(id)
+}
+
+const selectRayFromContent = (id: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectRay(id)
 }
 
 const clearContentSelection = () => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
   props.scene.selection.clear()
 }
 
@@ -71,11 +99,12 @@ const updateCompactLineEditorMode = () => {
   isCompactLineEditor.value = touchLike || mobileUA
 }
 
-watch([selectedPointIds, selectedLineIds], () => {
+watch([selectedPointIds, selectedLineIds, selectedRayIds], () => {
   if (!editing.value) return
   const { type, id } = editing.value
   if (type === 'point' && !selectedPointIds.value.includes(id)) editing.value = null
   if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
+  if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
 })
 
 const toFixed2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : '0.00')
@@ -85,6 +114,10 @@ const setCoordFocus = (key: string, isFocused: boolean) => {
 const normalizeCoord = (value: string) => {
   const n = Number(value)
   return Number.isFinite(n) ? toFixed2(n) : value
+}
+const normalizeDisplayLength = (value: string) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(1, n).toFixed(2) : value
 }
 const setCoordInputRef = (key: string, el: unknown) => {
   if (el instanceof HTMLInputElement) {
@@ -134,6 +167,32 @@ const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
     lineCoordCollapseTimer = null
   }, 0)
 }
+const handleRayCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  if (rayCoordCollapseTimer !== null) {
+    window.clearTimeout(rayCoordCollapseTimer)
+    rayCoordCollapseTimer = null
+  }
+  expandedRayEditorPoint.value = which
+  setCoordFocus(`ray.${which}.${axis}`, true)
+}
+const handleRayCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editRay[which][axis] = normalizeCoord(editRay[which][axis])
+  setCoordFocus(`ray.${which}.${axis}`, false)
+  applyEditRay()
+  if (rayCoordCollapseTimer !== null) {
+    window.clearTimeout(rayCoordCollapseTimer)
+  }
+  rayCoordCollapseTimer = window.setTimeout(() => {
+    const stillFocused =
+      focusedCoord[`ray.${which}.x`] ||
+      focusedCoord[`ray.${which}.y`] ||
+      focusedCoord[`ray.${which}.z`]
+    if (!stillFocused && expandedRayEditorPoint.value === which) {
+      expandedRayEditorPoint.value = null
+    }
+    rayCoordCollapseTimer = null
+  }, 0)
+}
 const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`point.${axis}`, direction)
   if (nextValue === null) return
@@ -153,12 +212,40 @@ const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'u
   editLine[which][axis] = nextValue
   applyEditLine()
 }
+const keepRayCoordExpanded = (which: 'p1' | 'p2') => {
+  if (rayCoordCollapseTimer !== null) {
+    window.clearTimeout(rayCoordCollapseTimer)
+    rayCoordCollapseTimer = null
+  }
+  expandedRayEditorPoint.value = which
+}
+const nudgeRayCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput(`ray.${which}.${axis}`, direction)
+  if (nextValue === null) return
+  editRay[which][axis] = nextValue
+  applyEditRay()
+}
+const handleRayDisplayLengthFocus = () => {
+  setCoordFocus('ray.displayLength', true)
+}
+const handleRayDisplayLengthBlur = () => {
+  editRay.displayLength = normalizeDisplayLength(editRay.displayLength)
+  setCoordFocus('ray.displayLength', false)
+  applyEditRay()
+}
+const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('ray.displayLength', direction)
+  if (nextValue === null) return
+  editRay.displayLength = nextValue
+  applyEditRay()
+}
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
   if (p.locked) return
   editing.value = { type: 'point', id: p.id }
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
   editPoint.x = toFixed2(p.position.x)
@@ -170,6 +257,7 @@ const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
   editing.value = { type: 'line', id: l.id }
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
   editLine.p1.x = toFixed2(l.p1.position.x)
@@ -178,6 +266,22 @@ const startEditLine = (l: Line3 | undefined) => {
   editLine.p2.x = toFixed2(l.p2.position.x)
   editLine.p2.y = toFixed2(l.p2.position.y)
   editLine.p2.z = toFixed2(l.p2.position.z)
+}
+const startEditRay = (r: Ray3 | undefined) => {
+  if (!r) return
+  editing.value = { type: 'ray', id: r.id }
+  expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editRay.name = r.name ?? ''
+  editRay.nameVisible = r.nameVisible !== false
+  editRay.visible = r.visible !== false
+  editRay.displayLength = toFixed2(r.displayLength)
+  editRay.p1.x = toFixed2(r.p1.position.x)
+  editRay.p1.y = toFixed2(r.p1.position.y)
+  editRay.p1.z = toFixed2(r.p1.position.z)
+  editRay.p2.x = toFixed2(r.p2.position.x)
+  editRay.p2.y = toFixed2(r.p2.position.y)
+  editRay.p2.z = toFixed2(r.p2.position.z)
 }
 
 const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string) => {
@@ -214,6 +318,22 @@ const applyEditLine = () => {
   applyPointPosition(line.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
   applyPointPosition(line.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
 }
+const applyEditRay = () => {
+  if (!editing.value || editing.value.type !== 'ray') return
+  const ray = props.scene.rays.get(editing.value.id)
+  if (!ray) return
+  const displayLength = Number(editRay.displayLength)
+  props.editor.updateRay(editing.value.id, {
+    name: editRay.name,
+    nameVisible: editRay.nameVisible,
+    visible: editRay.visible,
+    displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
+  })
+  applyPointPosition(ray.p1.id, editRay.p1.x, editRay.p1.y, editRay.p1.z)
+  applyPointPosition(ray.p2.id, editRay.p2.x, editRay.p2.y, editRay.p2.z)
+}
+const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
+const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 
 const handleGlobalClick = (e: MouseEvent) => {
   if (!editing.value) return
@@ -225,6 +345,7 @@ const handleGlobalClick = (e: MouseEvent) => {
   if (target.closest('.viewport')) return
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
 }
 
 // 监听当前编辑的点位置变化
@@ -280,6 +401,36 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'ray') return null
+    const r = props.scene.rays.get(editing.value.id)
+    if (!r) return null
+    return {
+      name: r.name ?? '',
+      nameVisible: r.nameVisible !== false,
+      visible: r.visible !== false,
+      displayLength: r.displayLength,
+      p1: { x: r.p1.position.x, y: r.p1.position.y, z: r.p1.position.z },
+      p2: { x: r.p2.position.x, y: r.p2.position.y, z: r.p2.position.z },
+    }
+  },
+  (newRay) => {
+    if (!newRay) return
+    editRay.name = newRay.name
+    editRay.nameVisible = newRay.nameVisible
+    editRay.visible = newRay.visible
+    if (!focusedCoord['ray.displayLength']) editRay.displayLength = toFixed2(newRay.displayLength)
+    if (!focusedCoord['ray.p1.x']) editRay.p1.x = toFixed2(newRay.p1.x)
+    if (!focusedCoord['ray.p1.y']) editRay.p1.y = toFixed2(newRay.p1.y)
+    if (!focusedCoord['ray.p1.z']) editRay.p1.z = toFixed2(newRay.p1.z)
+    if (!focusedCoord['ray.p2.x']) editRay.p2.x = toFixed2(newRay.p2.x)
+    if (!focusedCoord['ray.p2.y']) editRay.p2.y = toFixed2(newRay.p2.y)
+    if (!focusedCoord['ray.p2.z']) editRay.p2.z = toFixed2(newRay.p2.z)
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   updateCompactLineEditorMode()
   window.addEventListener('resize', updateCompactLineEditorMode)
@@ -289,6 +440,9 @@ onMounted(() => {
 onUnmounted(() => {
   if (lineCoordCollapseTimer !== null) {
     window.clearTimeout(lineCoordCollapseTimer)
+  }
+  if (rayCoordCollapseTimer !== null) {
+    window.clearTimeout(rayCoordCollapseTimer)
   }
   window.removeEventListener('resize', updateCompactLineEditorMode)
   document.removeEventListener('mousedown', handleGlobalClick)
@@ -300,11 +454,13 @@ onUnmounted(() => {
     <p>当前操作模式：{{ modeName }}</p>
     <div class="divider"></div>
     <h3>选中</h3>
-    <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0">
+    <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0 || selectedRays.length > 0">
       双击标签以编辑几何元素~
     </div>
     <div class="box selected-box">
-      <div v-if="selectedPoints.length === 0 && selectedLines.length === 0">无</div>
+      <div v-if="selectedPoints.length === 0 && selectedLines.length === 0 && selectedRays.length === 0">
+        无
+      </div>
 
       <div
         v-for="p in selectedPoints"
@@ -645,11 +801,293 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <div
+        v-for="r in selectedRays"
+        :key="r!.id"
+        class="selectedRay-info"
+        @dblclick="startEditRay(r)"
+      >
+        <div v-if="editing?.type === 'ray' && editing?.id === r!.id" class="edit-grid">
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editRay.name" @input="applyEditRay" />
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editRay.visible" @change="applyEditRay" />
+              {{ editRay.visible ? '射线显示' : '射线隐藏' }}
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editRay.nameVisible" @change="applyEditRay" />
+              {{ editRay.nameVisible ? '名称显示' : '名称隐藏' }}
+            </label>
+          </div>
+          <div class="name-row">
+            <label>长度</label>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.displayLength', el)"
+                v-model="editRay.displayLength"
+                @input="applyEditRay"
+                @focus="handleRayDisplayLengthFocus"
+                @blur="handleRayDisplayLengthBlur"
+                step="1"
+                min="1"
+              />
+              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">+</button>
+            </div>
+          </div>
+          <div class="line-editor-grid" :class="{ 'line-editor-grid--compact': isCompactLineEditor }">
+            <div class="line-editor-head"></div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                起点{{ r!.p1.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">起点</span>
+              <span v-if="r!.p1.locked" class="lock-badge">🔒</span>
+            </div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                方向点{{ r!.p2.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">方向点</span>
+              <span v-if="r!.p2.locked" class="lock-badge">🔒</span>
+            </div>
+
+            <div class="line-axis-label">x</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'x', 'down')"
+                :disabled="r!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p1.x', el)"
+                v-model="editRay.p1.x"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p1', 'x')"
+                @blur="handleRayCoordBlur('p1', 'x')"
+                step="0.5"
+                :disabled="r!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'x', 'up')"
+                :disabled="r!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'x', 'down')"
+                :disabled="r!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p2.x', el)"
+                v-model="editRay.p2.x"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p2', 'x')"
+                @blur="handleRayCoordBlur('p2', 'x')"
+                step="0.5"
+                :disabled="r!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'x', 'up')"
+                :disabled="r!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">y</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'y', 'down')"
+                :disabled="r!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p1.y', el)"
+                v-model="editRay.p1.y"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p1', 'y')"
+                @blur="handleRayCoordBlur('p1', 'y')"
+                step="0.5"
+                :disabled="r!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'y', 'up')"
+                :disabled="r!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'y', 'down')"
+                :disabled="r!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p2.y', el)"
+                v-model="editRay.p2.y"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p2', 'y')"
+                @blur="handleRayCoordBlur('p2', 'y')"
+                step="0.5"
+                :disabled="r!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'y', 'up')"
+                :disabled="r!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">z</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'z', 'down')"
+                :disabled="r!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p1.z', el)"
+                v-model="editRay.p1.z"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p1', 'z')"
+                @blur="handleRayCoordBlur('p1', 'z')"
+                step="0.5"
+                :disabled="r!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                @click="nudgeRayCoord('p1', 'z', 'up')"
+                :disabled="r!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'z', 'down')"
+                :disabled="r!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('ray.p2.z', el)"
+                v-model="editRay.p2.z"
+                @input="applyEditRay"
+                @focus="handleRayCoordFocus('p2', 'z')"
+                @blur="handleRayCoordBlur('p2', 'z')"
+                step="0.5"
+                :disabled="r!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                @click="nudgeRayCoord('p2', 'z', 'up')"
+                :disabled="r!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else>
+          <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
+          <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
+          <div>
+            起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+            {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
+          </div>
+          <div>
+            方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+            {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
+          </div>
+          <div>
+            方向向量（{{ getRayDirection(r!).x.toFixed(2) }}, {{ getRayDirection(r!).y.toFixed(2) }},
+            {{ getRayDirection(r!).z.toFixed(2) }}）
+          </div>
+          <div>
+            显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }}, {{ getRayDisplayEnd(r!).y.toFixed(2) }},
+            {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
+          </div>
+        </div>
+      </div>
     </div>
     <div class="divider"></div>
     <h3>内容</h3>
     <div class="box content-box" @click.self="clearContentSelection">
-      <div v-if="pointsInScene.length === 0 && linesInScene.length === 0">无</div>
+      <div v-if="pointsInScene.length === 0 && linesInScene.length === 0 && raysInScene.length === 0">
+        无
+      </div>
       <div
         v-for="p in pointsInScene"
         :key="p!.id"
@@ -683,6 +1121,32 @@ onUnmounted(() => {
             点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
             {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
           </div>
+        </div>
+      </div>
+      <div
+        v-for="r in raysInScene"
+        :key="r!.id"
+        class="ray-info selectable-geo"
+        :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
+        @click="selectRayFromContent(r!.id)"
+      >
+        <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
+        <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
+        <div>
+          起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+          {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
+        </div>
+        <div>
+          方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+          {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
+        </div>
+        <div>
+          方向向量（{{ getRayDirection(r!).x.toFixed(2) }}, {{ getRayDirection(r!).y.toFixed(2) }},
+          {{ getRayDirection(r!).z.toFixed(2) }}）
+        </div>
+        <div>
+          显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }}, {{ getRayDisplayEnd(r!).y.toFixed(2) }},
+          {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
         </div>
       </div>
     </div>
@@ -720,14 +1184,26 @@ hr {
   margin: 12px 0;
 }
 .selectedPoint-info,
-.selectedLine-info,
 .point-info,
-.line-info {
+.selectedLine-info,
+.selectedRay-info,
+.line-info,
+.ray-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
   margin-bottom: 6px;
   padding: 8px;
   font-size: 13px;
+}
+.selectedLine-info,
+.line-info {
+  background-color: rgba(158, 106, 28, 0.28);
+  border-left-color: #ffb347;
+}
+.selectedRay-info,
+.ray-info {
+  background-color: rgba(80, 136, 194, 0.28);
+  border-left-color: #7fc8ff;
 }
 .selectable-geo {
   cursor: pointer;
@@ -934,8 +1410,10 @@ hr {
 
   .selectedPoint-info,
   .selectedLine-info,
+  .selectedRay-info,
   .point-info,
-  .line-info {
+  .line-info,
+  .ray-info {
     padding: 6px;
     font-size: 12px;
   }
@@ -1004,8 +1482,10 @@ hr {
 
   .selectedPoint-info,
   .selectedLine-info,
+  .selectedRay-info,
   .point-info,
-  .line-info {
+  .line-info,
+  .ray-info {
     margin-bottom: 4px;
     padding: 5px;
     font-size: 11px;
@@ -1155,8 +1635,10 @@ hr {
 @media (hover: none) and (pointer: coarse) {
   .selectedPoint-info,
   .selectedLine-info,
+  .selectedRay-info,
   .point-info,
-  .line-info {
+  .line-info,
+  .ray-info {
     padding: 4px;
     font-size: 10px;
   }

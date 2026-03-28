@@ -4,6 +4,7 @@ import { WebrtcProvider } from 'y-webrtc'
 import { Scene } from '../scene/Scene'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
+import { Ray3 } from '../geometry/Ray3'
 import { Vec3 } from '../geometry/Vec3'
 
 export type CollabStatus = {
@@ -15,6 +16,7 @@ export type CollabStatus = {
 type LocalSceneSnapshot = {
   points: Point3[]
   lines: Line3[]
+  rays: Ray3[]
 }
 
 type SignalingConnLike = {
@@ -29,8 +31,10 @@ export class CollabManager {
   private provider: WebrtcProvider | null = null
   private yPoints: Y.Map<any>
   private yLines: Y.Map<any>
+  private yRays: Y.Map<any>
   private pointsObserver: ((event: Y.YMapEvent<any>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<any>) => void) | null = null
+  private raysObserver: ((event: Y.YMapEvent<any>) => void) | null = null
 
   private roomName: string | null = null
   private connecting = false
@@ -47,6 +51,7 @@ export class CollabManager {
     this.ydoc = new Y.Doc()
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
+    this.yRays = this.ydoc.getMap('rays')
     this.setupObservers()
   }
 
@@ -169,11 +174,13 @@ export class CollabManager {
     return {
       points: [...this.scene.points.values()].filter((point) => !point.locked),
       lines: [...this.scene.lines.values()],
+      rays: [...this.scene.rays.values()],
     }
   }
 
   private clearLocalSceneForJoin() {
     this.scene.lines.clear()
+    this.scene.rays.clear()
     this.scene.points.forEach((point, id) => {
       if (!point.locked) this.scene.points.delete(id)
     })
@@ -184,15 +191,26 @@ export class CollabManager {
   private restoreLocalSnapshot(snapshot: LocalSceneSnapshot) {
     snapshot.points.forEach((point) => this.scene.addPoint(point))
     snapshot.lines.forEach((line) => this.scene.addLine(line))
+    snapshot.rays.forEach((ray) => this.scene.addRay(ray))
   }
 
   private roomHasSharedGeometry() {
-    return [...this.yPoints.keys()].some((id) => id !== Scene.ORIGIN_ID) || this.yLines.size > 0
+    return (
+      [...this.yPoints.keys()].some((id) => id !== Scene.ORIGIN_ID) ||
+      this.yLines.size > 0 ||
+      this.yRays.size > 0
+    )
   }
 
   private reconcileInitialScene(localSnapshot: LocalSceneSnapshot) {
     if (this.roomHasSharedGeometry()) return
-    if (localSnapshot.points.length === 0 && localSnapshot.lines.length === 0) return
+    if (
+      localSnapshot.points.length === 0 &&
+      localSnapshot.lines.length === 0 &&
+      localSnapshot.rays.length === 0
+    ) {
+      return
+    }
 
     this.restoreLocalSnapshot(localSnapshot)
     this.syncNow()
@@ -260,10 +278,12 @@ export class CollabManager {
   private resetDoc() {
     if (this.pointsObserver) this.yPoints.unobserve(this.pointsObserver)
     if (this.linesObserver) this.yLines.unobserve(this.linesObserver)
+    if (this.raysObserver) this.yRays.unobserve(this.raysObserver)
 
     this.ydoc = new Y.Doc()
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
+    this.yRays = this.ydoc.getMap('rays')
     this.setupObservers()
   }
 
@@ -299,6 +319,12 @@ export class CollabManager {
               this.scene.lines.delete(lineId)
             }
           })
+          this.scene.rays.forEach((ray, rayId) => {
+            if (ray.p1.id === id || ray.p2.id === id) {
+              this.scene.rays.delete(rayId)
+              this.scene.selection.rays.delete(rayId)
+            }
+          })
           this.scene.points.delete(id)
           this.scene.selection.points.delete(id)
         }
@@ -331,6 +357,47 @@ export class CollabManager {
       })
     }
     this.yLines.observe(this.linesObserver)
+
+    this.raysObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'add' || change.action === 'update') {
+          const data = this.yRays.get(id)
+          if (!data) return
+          const p1 = this.scene.points.get(data.p1Id)
+          const p2 = this.scene.points.get(data.p2Id)
+          if (!p1 || !p2) return
+
+          const ray = this.scene.rays.get(id)
+          if (ray) {
+            ray.name = data.name ?? ray.name
+            ray.nameVisible = data.nameVisible ?? ray.nameVisible
+            ray.visible = data.visible ?? ray.visible
+            ray.displayLength =
+              typeof data.displayLength === 'number'
+                ? Ray3.normalizeDisplayLength(data.displayLength)
+                : ray.displayLength
+            ray.p1 = p1
+            ray.p2 = p2
+          } else {
+            this.scene.addRay(
+              new Ray3(
+                id,
+                data.name ?? '',
+                p1,
+                p2,
+                data.nameVisible ?? true,
+                data.visible ?? true,
+                Ray3.normalizeDisplayLength(data.displayLength ?? Ray3.DEFAULT_DISPLAY_LENGTH),
+              ),
+            )
+          }
+        } else if (change.action === 'delete') {
+          this.scene.rays.delete(id)
+          this.scene.selection.rays.delete(id)
+        }
+      })
+    }
+    this.yRays.observe(this.raysObserver)
   }
 
   syncAction() {
@@ -353,12 +420,16 @@ export class CollabManager {
     this.ydoc.transact(() => {
       const pointIds = new Set(this.scene.points.keys())
       const lineIds = new Set(this.scene.lines.keys())
+      const rayIds = new Set(this.scene.rays.keys())
 
       for (const id of [...this.yPoints.keys()]) {
         if (!pointIds.has(id)) this.yPoints.delete(id)
       }
       for (const id of [...this.yLines.keys()]) {
         if (!lineIds.has(id)) this.yLines.delete(id)
+      }
+      for (const id of [...this.yRays.keys()]) {
+        if (!rayIds.has(id)) this.yRays.delete(id)
       }
 
       this.scene.points.forEach((p, id) => {
@@ -398,6 +469,29 @@ export class CollabManager {
           prev.nameVisible !== next.nameVisible
         ) {
           this.yLines.set(id, next)
+        }
+      })
+
+      this.scene.rays.forEach((ray, id) => {
+        const next = {
+          p1Id: ray.p1.id,
+          p2Id: ray.p2.id,
+          name: ray.name,
+          nameVisible: ray.nameVisible,
+          visible: ray.visible,
+          displayLength: ray.displayLength,
+        }
+        const prev = this.yRays.get(id)
+        if (
+          !prev ||
+          prev.p1Id !== next.p1Id ||
+          prev.p2Id !== next.p2Id ||
+          prev.name !== next.name ||
+          prev.nameVisible !== next.nameVisible ||
+          prev.visible !== next.visible ||
+          prev.displayLength !== next.displayLength
+        ) {
+          this.yRays.set(id, next)
         }
       })
     })

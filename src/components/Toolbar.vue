@@ -31,16 +31,25 @@ const emit = defineEmits<{
 const roomName = ref('default-room')
 const isAROpen = ref(false)
 const isDeleteMenuOpen = ref(false)
+const isLineMenuOpen = ref(false)
 const isArLocked = computed(() => props.isArMode)
 const isCollabOpen = computed(() => props.collabStatus.connected)
 const isCollabConnecting = computed(() => props.collabStatus.connecting)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
 const deletePanelRef = ref<HTMLElement | null>(null)
+const lineMenuRef = ref<HTMLElement | null>(null)
+const lineTriggerRef = ref<HTMLElement | null>(null)
+const linePanelRef = ref<HTMLElement | null>(null)
 const deleteMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '108px',
+})
+const lineMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '132px',
 })
 
 watch(
@@ -48,12 +57,14 @@ watch(
   (val) => {
     isAROpen.value = val
     if (val) isDeleteMenuOpen.value = false
+    if (val) isLineMenuOpen.value = false
   },
   { immediate: true },
 )
 
 const setMode = (mode: EditorMode) => {
   isDeleteMenuOpen.value = false
+  isLineMenuOpen.value = false
   emit('mode-change', mode)
 }
 
@@ -68,12 +79,14 @@ const toggleCollab = () => {
 
 const toggleAR = () => {
   isDeleteMenuOpen.value = false
+  isLineMenuOpen.value = false
   isAROpen.value = !isAROpen.value
   emit('toggle-ar', isAROpen.value)
 }
 
 const toggleDeleteMenu = () => {
   if (isArLocked.value) return
+  isLineMenuOpen.value = false
   isDeleteMenuOpen.value = !isDeleteMenuOpen.value
 }
 
@@ -88,6 +101,23 @@ const updateDeleteMenuPosition = () => {
   }
 }
 
+const toggleLineMenu = () => {
+  if (isArLocked.value) return
+  isDeleteMenuOpen.value = false
+  isLineMenuOpen.value = !isLineMenuOpen.value
+}
+
+const updateLineMenuPosition = () => {
+  const trigger = lineTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  lineMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 132)}px`,
+  }
+}
+
 const selectDeleteMode = () => {
   setMode(EditorMode.Delete)
 }
@@ -97,15 +127,30 @@ const requestClearAll = () => {
   emit('clear-all')
 }
 
+const selectCreateLineMode = () => {
+  setMode(EditorMode.CreateLine)
+}
+
+const selectCreateRayMode = () => {
+  setMode(EditorMode.CreateRay)
+}
+
 const handleClickOutside = (event: MouseEvent) => {
-  if (!isDeleteMenuOpen.value) return
   const target = event.target
   if (!(target instanceof Node)) return
   if (
+    isDeleteMenuOpen.value &&
     !deleteMenuRef.value?.contains(target) &&
     !deletePanelRef.value?.contains(target)
   ) {
     isDeleteMenuOpen.value = false
+  }
+  if (
+    isLineMenuOpen.value &&
+    !lineMenuRef.value?.contains(target) &&
+    !linePanelRef.value?.contains(target)
+  ) {
+    isLineMenuOpen.value = false
   }
 }
 
@@ -115,16 +160,26 @@ watch(isDeleteMenuOpen, async (isOpen) => {
   updateDeleteMenuPosition()
 })
 
+watch(isLineMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updateLineMenuPosition()
+})
+
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside)
   window.addEventListener('resize', updateDeleteMenuPosition)
+  window.addEventListener('resize', updateLineMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
+  document.addEventListener('scroll', updateLineMenuPosition, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleClickOutside)
   window.removeEventListener('resize', updateDeleteMenuPosition)
+  window.removeEventListener('resize', updateLineMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
+  document.removeEventListener('scroll', updateLineMenuPosition, true)
 })
 </script>
 
@@ -158,13 +213,22 @@ onUnmounted(() => {
       点
     </button>
 
-    <button
-      :class="{ 'is-active': currentMode === EditorMode.CreateLine }"
-      @click="setMode(EditorMode.CreateLine)"
-      :disabled="isArLocked"
-    >
-      线
-    </button>
+    <div ref="lineMenuRef" class="menu-wrap">
+      <button
+        ref="lineTriggerRef"
+        class="menu-trigger"
+        :class="{
+          'is-active':
+            currentMode === EditorMode.CreateLine || currentMode === EditorMode.CreateRay,
+          'is-open': isLineMenuOpen,
+        }"
+        @click="toggleLineMenu"
+        :disabled="isArLocked"
+      >
+        <span>线</span>
+        <span class="menu-caret">▾</span>
+      </button>
+    </div>
 
     <div class="divider"></div>
 
@@ -208,12 +272,7 @@ onUnmounted(() => {
   </div>
 
   <Teleport to="body">
-    <div
-      v-if="isDeleteMenuOpen"
-      ref="deletePanelRef"
-      class="menu-panel"
-      :style="deleteMenuStyle"
-    >
+    <div v-if="isDeleteMenuOpen" ref="deletePanelRef" class="menu-panel" :style="deleteMenuStyle">
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.Delete }"
@@ -222,6 +281,25 @@ onUnmounted(() => {
         删除
       </button>
       <button class="menu-item menu-item-danger" @click="requestClearAll">清空</button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="isLineMenuOpen" ref="linePanelRef" class="menu-panel" :style="lineMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateLine }"
+        @click="selectCreateLineMode"
+      >
+        线段
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateRay }"
+        @click="selectCreateRayMode"
+      >
+        射线
+      </button>
     </div>
   </Teleport>
 </template>
