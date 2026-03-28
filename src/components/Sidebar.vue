@@ -998,8 +998,10 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
-          <div>长度：{{ l!.getLength().toFixed(2) }}</div>
-          <div v-if="l!.lengthLocked">约束长度：{{ l!.lockedLength.toFixed(2) }}</div>
+          <div>
+            长度：{{ l!.getLength().toFixed(2) }}
+            <span v-if="l!.lengthLocked" class="constraint-badge">受约束</span>
+          </div>
           <div>
             点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
             {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
@@ -1346,12 +1348,9 @@ onUnmounted(() => {
             @click="selectPointFromContent(p!.id)"
           >
             <div>
-              点{{ p!.name ?? '' }}，ID: {{ p!.id }}
+              点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
+              {{ p!.position.z.toFixed(2) }}），ID: {{ p!.id }}
               <span v-if="p!.locked" class="lock-badge">🔒</span>
-            </div>
-            <div>
-              x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
-              {{ p!.position.z.toFixed(2) }}
             </div>
           </div>
         </div>
@@ -1429,7 +1428,6 @@ onUnmounted(() => {
             @click="selectRayFromContent(r!.id)"
           >
             <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
-            <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
             <div>
               起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
               {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
@@ -1437,14 +1435,6 @@ onUnmounted(() => {
             <div>
               方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
               {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
-            </div>
-            <div>
-              方向向量（{{ getRayDirection(r!).x.toFixed(2) }},
-              {{ getRayDirection(r!).y.toFixed(2) }}, {{ getRayDirection(r!).z.toFixed(2) }}）
-            </div>
-            <div>
-              显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }},
-              {{ getRayDisplayEnd(r!).y.toFixed(2) }}, {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
             </div>
           </div>
         </div>
@@ -1781,6 +1771,18 @@ hr {
   padding: 1px 4px;
   border-radius: 3px;
   margin-left: 6px;
+}
+.constraint-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #ffe2b7;
+  background: rgba(255, 179, 71, 0.18);
+  border: 1px solid rgba(255, 179, 71, 0.42);
+  vertical-align: middle;
 }
 
 @media (max-width: 1024px) and (orientation: landscape) {

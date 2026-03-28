@@ -109,7 +109,7 @@ export class ThreeRenderer {
     this.scene.add(this.arCamera)
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    this.renderer.setPixelRatio(window.devicePixelRatio)
+    this.updateRendererPixelRatio()
     this.renderer.setSize(w, h)
 
     // 设置 Canvas 样式，确保它覆盖在视频之上
@@ -322,6 +322,21 @@ export class ThreeRenderer {
     if (this.guidePoint) {
       this.guidePoint.scale.set(spriteScale, spriteScale, 1)
     }
+  }
+
+  /**
+   * 大网格档位下原点附近会同时出现大量细线。
+   * 像素比按 10 -> 20 -> 40 做梯度下降，避免档位切换时观感割裂过强。
+   */
+  private updateRendererPixelRatio() {
+    const deviceRatio = window.devicePixelRatio || 1
+    let cap = deviceRatio
+    if (this.axisGridSize >= 40) {
+      cap = Math.min(deviceRatio, 1.45)
+    } else if (this.axisGridSize >= 20) {
+      cap = Math.min(deviceRatio, 1.7)
+    }
+    this.renderer.setPixelRatio(cap)
   }
   /* ---------- Scene → Three ---------- */
 
@@ -587,6 +602,7 @@ export class ThreeRenderer {
     const h = this.container.clientHeight
 
     // 更新渲染器
+    this.updateRendererPixelRatio()
     this.renderer.setSize(w, h)
 
     if (!this.isARMode) {
@@ -961,14 +977,29 @@ export class ThreeRenderer {
     this.axisGridGroup.add(arrow)
 
     // 白色刻度线（每1单位一条短横线）
+    // 合并到一个 LineSegments，避免每条刻度都产生单独的 draw call。
+    const tickVertices: number[] = []
     for (let i = -length; i <= length; i++) {
       if (i === 0) continue
 
       const tickStart = dir.clone().multiplyScalar(i)
       const tickEnd = tickStart.clone().add(new THREE.Vector3(0.4, 0, 0)) // 向 X 方向偏移
-
-      const tickGeo = new THREE.BufferGeometry().setFromPoints([tickStart, tickEnd])
-      const tickLine = new THREE.Line(tickGeo, new THREE.LineBasicMaterial({ color: 0xffffff }))
+      tickVertices.push(
+        tickStart.x,
+        tickStart.y,
+        tickStart.z,
+        tickEnd.x,
+        tickEnd.y,
+        tickEnd.z,
+      )
+    }
+    if (tickVertices.length > 0) {
+      const tickGeo = new THREE.BufferGeometry()
+      tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickVertices, 3))
+      const tickLine = new THREE.LineSegments(
+        tickGeo,
+        new THREE.LineBasicMaterial({ color: 0xffffff }),
+      )
       this.axisGridGroup.add(tickLine)
     }
 
@@ -1002,11 +1033,20 @@ export class ThreeRenderer {
 
   setAxisGridSize(size: number) {
     this.axisGridSize = size
+    this.updateRendererPixelRatio()
 
     // 清空旧的坐标轴与网格
     while (this.axisGridGroup.children.length > 0) {
       const child = this.axisGridGroup.children.pop()!
       this.axisGridGroup.remove(child)
+      const geometry = (child as THREE.Mesh).geometry as THREE.BufferGeometry | undefined
+      const material = (child as THREE.Mesh).material as
+        | THREE.Material
+        | THREE.Material[]
+        | undefined
+      geometry?.dispose()
+      if (Array.isArray(material)) material.forEach((m) => m.dispose())
+      else material?.dispose()
     }
 
     // 坐标轴正负方向长度 = size（总长度 = 2 * size）
