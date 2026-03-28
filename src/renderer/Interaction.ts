@@ -784,7 +784,10 @@ export class Interaction {
 
     if (this.mobileInteractionPointerId !== e.pointerId) return
 
-    const hadDrag = this.draggingPointId !== null || this.draggingLineId !== null
+    const hadDrag =
+      this.draggingPointId !== null ||
+      this.draggingLineId !== null ||
+      this.draggingRayId !== null
 
     if (hadDrag) {
       e.preventDefault()

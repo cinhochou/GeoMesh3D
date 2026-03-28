@@ -64,6 +64,40 @@ let rayCoordCollapseTimer: number | null = null
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
+const totalContentCount = computed(
+  () => pointsInScene.value.length + linesInScene.value.length + raysInScene.value.length,
+)
+const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
+const collapsedContentGroups = reactive({
+  point: false,
+  line: false,
+  ray: false,
+})
+const contentGroupLabels: Record<'point' | 'line' | 'ray', string> = {
+  point: '点',
+  line: '线段',
+  ray: '射线',
+}
+const hasAutoCollapsedContentGroups = ref(false)
+
+const setContentGroupsCollapsed = (collapsed: boolean) => {
+  collapsedContentGroups.point = collapsed
+  collapsedContentGroups.line = collapsed
+  collapsedContentGroups.ray = collapsed
+}
+
+const toggleContentGroup = (type: 'point' | 'line' | 'ray') => {
+  if (!canCollapseContentGroups.value) return
+  collapsedContentGroups[type] = !collapsedContentGroups[type]
+}
+
+const emitToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
+  window.dispatchEvent(
+    new CustomEvent('toast', {
+      detail: { msg, scope },
+    }),
+  )
+}
 
 const selectPointFromContent = (id: string) => {
   editing.value = null
@@ -110,6 +144,22 @@ watch([selectedPointIds, selectedLineIds, selectedRayIds], () => {
   if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
   if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
 })
+
+watch(
+  totalContentCount,
+  (count) => {
+    if (count > 10) {
+      if (!hasAutoCollapsedContentGroups.value) {
+        setContentGroupsCollapsed(true)
+        hasAutoCollapsedContentGroups.value = true
+        emitToast('内容区元素数量大于10，已自动折叠')
+      }
+      return
+    }
+    setContentGroupsCollapsed(false)
+  },
+  { immediate: true },
+)
 
 const toFixed2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : '0.00')
 const setCoordFocus = (key: string, isFocused: boolean) => {
@@ -386,8 +436,10 @@ const applyEditLine = () => {
     y: p2y - updatedLine.p2.position.y,
     z: p2z - updatedLine.p2.position.z,
   }
-  const hasDeltaP1 = Math.abs(deltaP1.x) > 1e-6 || Math.abs(deltaP1.y) > 1e-6 || Math.abs(deltaP1.z) > 1e-6
-  const hasDeltaP2 = Math.abs(deltaP2.x) > 1e-6 || Math.abs(deltaP2.y) > 1e-6 || Math.abs(deltaP2.z) > 1e-6
+  const hasDeltaP1 =
+    Math.abs(deltaP1.x) > 1e-6 || Math.abs(deltaP1.y) > 1e-6 || Math.abs(deltaP1.z) > 1e-6
+  const hasDeltaP2 =
+    Math.abs(deltaP2.x) > 1e-6 || Math.abs(deltaP2.y) > 1e-6 || Math.abs(deltaP2.z) > 1e-6
   const sameDelta =
     Math.abs(deltaP1.x - deltaP2.x) <= 1e-6 &&
     Math.abs(deltaP1.y - deltaP2.y) <= 1e-6 &&
@@ -479,7 +531,9 @@ watch(
     editLine.visible = newLine.visible
     editLine.lengthLocked = newLine.lengthLocked
     if (!focusedCoord['line.lockedLength']) {
-      editLine.lockedLength = toFixed2(newLine.lengthLocked ? newLine.lockedLength : newLine.actualLength)
+      editLine.lockedLength = toFixed2(
+        newLine.lengthLocked ? newLine.lockedLength : newLine.actualLength,
+      )
     }
     if (!focusedCoord['line.p1.x']) editLine.p1.x = toFixed2(newLine.p1.x)
     if (!focusedCoord['line.p1.y']) editLine.p1.y = toFixed2(newLine.p1.y)
@@ -545,11 +599,18 @@ onUnmounted(() => {
     <div v-if="modeHint" class="hint mode-hint">{{ modeHint }}</div>
     <div class="divider"></div>
     <h3>选中</h3>
-    <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0 || selectedRays.length > 0">
+    <div
+      class="hint"
+      v-if="selectedPoints.length > 0 || selectedLines.length > 0 || selectedRays.length > 0"
+    >
       双击标签以编辑几何元素~
     </div>
     <div class="box selected-box">
-      <div v-if="selectedPoints.length === 0 && selectedLines.length === 0 && selectedRays.length === 0">
+      <div
+        v-if="
+          selectedPoints.length === 0 && selectedLines.length === 0 && selectedRays.length === 0
+        "
+      >
         无
       </div>
 
@@ -698,7 +759,10 @@ onUnmounted(() => {
               长度约束
             </label>
           </div>
-          <div class="line-editor-grid" :class="{ 'line-editor-grid--compact': isCompactLineEditor }">
+          <div
+            class="line-editor-grid"
+            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+          >
             <div class="line-editor-head"></div>
             <div class="line-editor-head">
               <span v-if="!isCompactLineEditor" class="line-editor-title-full">
@@ -718,7 +782,9 @@ onUnmounted(() => {
             <div class="line-axis-label">x</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -751,7 +817,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -786,7 +854,9 @@ onUnmounted(() => {
             <div class="line-axis-label">y</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -819,7 +889,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -854,7 +926,9 @@ onUnmounted(() => {
             <div class="line-axis-label">z</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -887,7 +961,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -957,7 +1033,9 @@ onUnmounted(() => {
           <div class="name-row">
             <label>长度</label>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">-</button>
+              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('ray.displayLength', el)"
@@ -971,7 +1049,10 @@ onUnmounted(() => {
               <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">+</button>
             </div>
           </div>
-          <div class="line-editor-grid" :class="{ 'line-editor-grid--compact': isCompactLineEditor }">
+          <div
+            class="line-editor-grid"
+            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+          >
             <div class="line-editor-head"></div>
             <div class="line-editor-head">
               <span v-if="!isCompactLineEditor" class="line-editor-title-full">
@@ -991,7 +1072,9 @@ onUnmounted(() => {
             <div class="line-axis-label">x</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -1024,7 +1107,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -1059,7 +1144,9 @@ onUnmounted(() => {
             <div class="line-axis-label">y</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -1092,7 +1179,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -1127,7 +1216,9 @@ onUnmounted(() => {
             <div class="line-axis-label">z</div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+              }"
             >
               <button
                 type="button"
@@ -1160,7 +1251,9 @@ onUnmounted(() => {
             </div>
             <div
               class="coord-input"
-              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2' }"
+              :class="{
+                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+              }"
             >
               <button
                 type="button"
@@ -1205,12 +1298,12 @@ onUnmounted(() => {
             {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
           </div>
           <div>
-            方向向量（{{ getRayDirection(r!).x.toFixed(2) }}, {{ getRayDirection(r!).y.toFixed(2) }},
-            {{ getRayDirection(r!).z.toFixed(2) }}）
+            方向向量（{{ getRayDirection(r!).x.toFixed(2) }},
+            {{ getRayDirection(r!).y.toFixed(2) }}, {{ getRayDirection(r!).z.toFixed(2) }}）
           </div>
           <div>
-            显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }}, {{ getRayDisplayEnd(r!).y.toFixed(2) }},
-            {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
+            显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }},
+            {{ getRayDisplayEnd(r!).y.toFixed(2) }}, {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
           </div>
         </div>
       </div>
@@ -1218,68 +1311,142 @@ onUnmounted(() => {
     <div class="divider"></div>
     <h3>内容</h3>
     <div class="box content-box" @click.self="clearContentSelection">
-      <div v-if="pointsInScene.length === 0 && linesInScene.length === 0 && raysInScene.length === 0">
+      <div
+        v-if="pointsInScene.length === 0 && linesInScene.length === 0 && raysInScene.length === 0"
+      >
         无
       </div>
-      <div
-        v-for="p in pointsInScene"
-        :key="p!.id"
-        class="point-info selectable-geo"
-        :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
-        @click="selectPointFromContent(p!.id)"
-      >
-        <div>
-          点{{ p!.name ?? '' }}，ID: {{ p!.id }}
-          <span v-if="p!.locked" class="lock-badge">🔒</span>
+      <div v-if="pointsInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.point"
+          @click="toggleContentGroup('point')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.point ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.point }}</span>
+          <span class="content-group-count">{{ pointsInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.point }}</span>
+          <span class="content-group-count">{{ pointsInScene.length }}</span>
         </div>
-        <div>
-          x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
-          {{ p!.position.z.toFixed(2) }}
+        <div
+          v-show="!collapsedContentGroups.point || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="p in pointsInScene"
+            :key="p!.id"
+            class="point-info selectable-geo"
+            :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
+            @click="selectPointFromContent(p!.id)"
+          >
+            <div>
+              点{{ p!.name ?? '' }}，ID: {{ p!.id }}
+              <span v-if="p!.locked" class="lock-badge">🔒</span>
+            </div>
+            <div>
+              x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
+              {{ p!.position.z.toFixed(2) }}
+            </div>
+          </div>
         </div>
       </div>
-      <div
-        v-for="l in linesInScene"
-        :key="l!.id"
-        class="line-info selectable-geo"
-        :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
-        @click="selectLineFromContent(l!.id)"
-      >
-        <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
-        <div>
-          <div>
-            点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
-            {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
-            {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
+      <div v-if="linesInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.line"
+          @click="toggleContentGroup('line')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.line ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.line }}</span>
+          <span class="content-group-count">{{ linesInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.line }}</span>
+          <span class="content-group-count">{{ linesInScene.length }}</span>
+        </div>
+        <div
+          v-show="!collapsedContentGroups.line || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="l in linesInScene"
+            :key="l!.id"
+            class="line-info selectable-geo"
+            :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
+            @click="selectLineFromContent(l!.id)"
+          >
+            <div>线段{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
+            <div>
+              <div>
+                点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+                {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+                {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <div
-        v-for="r in raysInScene"
-        :key="r!.id"
-        class="ray-info selectable-geo"
-        :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
-        @click="selectRayFromContent(r!.id)"
-      >
-        <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
-        <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
-        <div>
-          起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
-          {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
+      <div v-if="raysInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.ray"
+          @click="toggleContentGroup('ray')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.ray ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
+          <span class="content-group-count">{{ raysInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
+          <span class="content-group-count">{{ raysInScene.length }}</span>
         </div>
-        <div>
-          方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
-          {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
-        </div>
-        <div>
-          方向向量（{{ getRayDirection(r!).x.toFixed(2) }}, {{ getRayDirection(r!).y.toFixed(2) }},
-          {{ getRayDirection(r!).z.toFixed(2) }}）
-        </div>
-        <div>
-          显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }}, {{ getRayDisplayEnd(r!).y.toFixed(2) }},
-          {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
+        <div
+          v-show="!collapsedContentGroups.ray || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="r in raysInScene"
+            :key="r!.id"
+            class="ray-info selectable-geo"
+            :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
+            @click="selectRayFromContent(r!.id)"
+          >
+            <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
+            <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
+            <div>
+              起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+              {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+              {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              方向向量（{{ getRayDirection(r!).x.toFixed(2) }},
+              {{ getRayDirection(r!).y.toFixed(2) }}, {{ getRayDirection(r!).z.toFixed(2) }}）
+            </div>
+            <div>
+              显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }},
+              {{ getRayDisplayEnd(r!).y.toFixed(2) }}, {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1367,6 +1534,89 @@ hr {
 .content-box {
   flex: 1 1 auto;
   min-height: 140px;
+}
+.content-group {
+  margin-bottom: 8px;
+}
+.content-group:last-child {
+  margin-bottom: 0;
+}
+.content-group-header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  isolation: isolate;
+}
+.content-group-header::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  right: -8px;
+  top: -8px;
+  bottom: -2px;
+  background: #1a1a1a;
+  pointer-events: none;
+  z-index: 0;
+}
+.content-group-toggle,
+.content-group-title {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border: 1px solid #9d9c9c;
+  border-radius: 5px;
+  background: rgba(26, 26, 26, 0.96);
+  color: #f0f0f0;
+  font-size: 11px;
+  box-sizing: border-box;
+  backdrop-filter: blur(4px);
+}
+.content-group-header::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -8px;
+  height: 12px;
+  background: #1a1a1a;
+  pointer-events: none;
+  z-index: 0;
+}
+.content-group-toggle > *,
+.content-group-title > * {
+  position: relative;
+  z-index: 1;
+}
+.content-group-toggle {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.content-group-toggle:hover {
+  background: rgba(42, 42, 42, 0.98);
+}
+.content-group-toggle-icon {
+  width: 10px;
+  flex-shrink: 0;
+  text-align: center;
+  color: #9fd8ff;
+  font-size: 10px;
+}
+.content-group-label {
+  font-weight: 600;
+}
+.content-group-count {
+  margin-left: auto;
+  color: #a8a8a8;
+  font-size: 10px;
+}
+.content-group-body {
+  display: flex;
+  flex-direction: column;
 }
 .box::-webkit-scrollbar {
   width: 5px;
