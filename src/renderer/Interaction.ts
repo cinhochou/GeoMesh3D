@@ -946,7 +946,9 @@ export class Interaction {
   }
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
-    pointIds.forEach((id) => {
+    const expandedPointIds = this.expandLockedLinePreviewPointIds(pointIds)
+
+    expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
       if (!point || point.locked) return
 
@@ -956,6 +958,27 @@ export class Interaction {
 
       point.setPosition(this.dragStartPositions.get(id)!.add(delta))
     })
+  }
+
+  private expandLockedLinePreviewPointIds(pointIds: string[]) {
+    const expanded = new Set(pointIds)
+    const queue = [...pointIds]
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!
+      this.editor.scene.lines.forEach((line) => {
+        if (!line.lengthLocked) return
+        if (line.p1.id !== currentId && line.p2.id !== currentId) return
+
+        const otherId = line.p1.id === currentId ? line.p2.id : line.p1.id
+        if (!expanded.has(otherId)) {
+          expanded.add(otherId)
+          queue.push(otherId)
+        }
+      })
+    }
+
+    return [...expanded]
   }
 
   private commitDragHistory() {

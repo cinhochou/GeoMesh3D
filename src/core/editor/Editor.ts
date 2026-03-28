@@ -125,9 +125,10 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point) return
     if (point.locked) return
-    const before = point.position.clone()
-    const after = before.add(delta)
-    this.executeCommand(new TransformCommand(point, before, after))
+    if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
+
+    const group = this.getLockedTranslationGroup([pointId])
+    this.translatePointGroup([...group], delta)
   }
 
   setPointPosition(pointId: string, position: Vec3) {
@@ -137,7 +138,9 @@ export class Editor {
     const before = point.position.clone()
     if (before.x === position.x && before.y === position.y && before.z === position.z) return
 
-    this.executeCommand(new TransformCommand(point, before, position.clone()))
+    const delta = new Vec3(position.x - before.x, position.y - before.y, position.z - before.z)
+    const group = this.getLockedTranslationGroup([pointId])
+    this.translatePointGroup([...group], delta)
   }
 
   setPointsPositions(updates: Array<{ id: string; position: Vec3 }>) {
@@ -215,19 +218,74 @@ export class Editor {
     )
   }
 
-  updateLine(lineId: string, patch: { name?: string; nameVisible?: boolean }) {
+  updateLine(
+    lineId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      visible?: boolean
+      lengthLocked?: boolean
+      lockedLength?: number
+    },
+  ) {
     const line = this.scene.lines.get(lineId)
     if (!line) return
 
     const nextName = patch.name ?? line.name
-    const nextVisible = patch.nameVisible ?? line.nameVisible
-    if (nextName === line.name && nextVisible === line.nameVisible) return
+    const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextVisible = patch.visible ?? line.visible
+    const nextLengthLocked = patch.lengthLocked ?? line.lengthLocked
+    const nextLockedLength = Line3.normalizeLockedLength(
+      patch.lockedLength ??
+        (nextLengthLocked && !line.lengthLocked ? line.getLength() : line.lockedLength),
+    )
+
+    let nextP2Position = line.p2.position.clone()
+    const shouldAdjustLength =
+      nextLengthLocked &&
+      (!line.lengthLocked || Math.abs(nextLockedLength - line.lockedLength) > 1e-6)
+
+    if (shouldAdjustLength) {
+      const direction = line.getNormalizedDirectionVector()
+      nextP2Position = new Vec3(
+        line.p1.position.x + direction.x * nextLockedLength,
+        line.p1.position.y + direction.y * nextLockedLength,
+        line.p1.position.z + direction.z * nextLockedLength,
+      )
+    }
+
+    if (
+      nextName === line.name &&
+      nextNameVisible === line.nameVisible &&
+      nextVisible === line.visible &&
+      nextLengthLocked === line.lengthLocked &&
+      nextLockedLength === line.lockedLength &&
+      nextP2Position.x === line.p2.position.x &&
+      nextP2Position.y === line.p2.position.y &&
+      nextP2Position.z === line.p2.position.z
+    ) {
+      return
+    }
 
     this.executeCommand(
       new UpdateLineCommand(
         line,
-        { name: line.name, nameVisible: line.nameVisible },
-        { name: nextName, nameVisible: nextVisible },
+        {
+          name: line.name,
+          nameVisible: line.nameVisible,
+          visible: line.visible,
+          lengthLocked: line.lengthLocked,
+          lockedLength: line.lockedLength,
+          p2Position: line.p2.position.clone(),
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          visible: nextVisible,
+          lengthLocked: nextLengthLocked,
+          lockedLength: nextLockedLength,
+          p2Position: nextP2Position,
+        },
       ),
     )
   }
@@ -321,6 +379,53 @@ export class Editor {
       this.selectedPoints = []
       this.scene.selection.clear()
     }
+  }
+
+  getLockedTranslationGroup(pointIds: string[]) {
+    const group = new Set(pointIds)
+    const queue = [...pointIds]
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!
+      this.scene.lines.forEach((line) => {
+        if (!line.lengthLocked) return
+        if (line.p1.id !== currentId && line.p2.id !== currentId) return
+
+        const otherId = line.p1.id === currentId ? line.p2.id : line.p1.id
+        if (!group.has(otherId)) {
+          group.add(otherId)
+          queue.push(otherId)
+        }
+      })
+    }
+
+    return group
+  }
+
+  translatePointGroup(pointIds: string[], delta: Vec3) {
+    const transforms = pointIds
+      .map((id) => {
+        const point = this.scene.points.get(id)
+        if (!point || point.locked) return null
+
+        const before = point.position.clone()
+        const after = before.add(delta)
+        if (before.x === after.x && before.y === after.y && before.z === after.z) return null
+
+        return { point, before, after }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
+      )
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      const transform = transforms[0]!
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      return
+    }
+
+    this.executeCommand(new TransformPointsCommand(transforms))
   }
 
   executeCommand(cmd: Command) {

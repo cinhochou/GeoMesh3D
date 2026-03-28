@@ -739,12 +739,20 @@ export class ThreeRenderer {
         line.geometry.computeBoundingSphere()
       }
 
+      line.visible = lineData.visible !== false
+
       // 选中高亮逻辑
       const isSelected = scene.selection.lines.has(id)
       ;(line.material as THREE.LineBasicMaterial).color.set(isSelected ? 0x43f260 : 0xffffff)
 
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
-      this.syncLinearLabel(line, lineData.name ?? '', lineData.nameVisible, mid, isSelected ? 0x43f260 : 0xffffff)
+      this.syncLinearLabel(
+        line,
+        lineData.name ?? '',
+        lineData.nameVisible && lineData.visible !== false,
+        mid,
+        isSelected ? 0x43f260 : 0xffffff,
+      )
     })
   }
 

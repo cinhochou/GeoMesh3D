@@ -345,10 +345,34 @@ export class CollabManager {
           if (line) {
             line.name = data.name ?? line.name
             line.nameVisible = data.nameVisible ?? line.nameVisible
+            line.visible = data.visible ?? line.visible
+            line.lengthLocked = data.lengthLocked ?? line.lengthLocked
+            line.lockedLength =
+              typeof data.lockedLength === 'number'
+                ? Line3.normalizeLockedLength(data.lockedLength)
+                : line.lockedLength
             line.p1 = p1
             line.p2 = p2
           } else {
-            this.scene.addLine(new Line3(id, data.name ?? '', p1, p2, data.nameVisible ?? true))
+            this.scene.addLine(
+              new Line3(
+                id,
+                data.name ?? '',
+                p1,
+                p2,
+                data.nameVisible ?? true,
+                data.visible ?? true,
+                data.lengthLocked ?? false,
+                Line3.normalizeLockedLength(
+                  data.lockedLength ??
+                    Math.hypot(
+                      p2.position.x - p1.position.x,
+                      p2.position.y - p1.position.y,
+                      p2.position.z - p1.position.z,
+                    ),
+                ),
+              ),
+            )
           }
         } else if (change.action === 'delete') {
           this.scene.lines.delete(id)
@@ -459,6 +483,9 @@ export class CollabManager {
           p2Id: l.p2.id,
           name: l.name,
           nameVisible: l.nameVisible,
+          visible: l.visible,
+          lengthLocked: l.lengthLocked,
+          lockedLength: l.lockedLength,
         }
         const prev = this.yLines.get(id)
         if (
@@ -466,7 +493,10 @@ export class CollabManager {
           prev.p1Id !== next.p1Id ||
           prev.p2Id !== next.p2Id ||
           prev.name !== next.name ||
-          prev.nameVisible !== next.nameVisible
+          prev.nameVisible !== next.nameVisible ||
+          prev.visible !== next.visible ||
+          prev.lengthLocked !== next.lengthLocked ||
+          prev.lockedLength !== next.lockedLength
         ) {
           this.yLines.set(id, next)
         }

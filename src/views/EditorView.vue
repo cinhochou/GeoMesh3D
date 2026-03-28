@@ -89,6 +89,19 @@ const modeName = computed(() => {
   }
 })
 
+const modeHint = computed(() => {
+  switch (editor.mode) {
+    case EditorMode.Delete:
+      return '单击场景中的几何元素对象以删除~'
+    case EditorMode.CreateLine:
+      return '点击场景中的两个不同的点以创建线段~'
+    case EditorMode.CreateRay:
+      return '点击场景中的两个不同的点以创建射线~'
+    default:
+      return ''
+  }
+})
+
 onMounted(() => {
   isTouchDevice.value =
     navigator.maxTouchPoints > 0 ||
@@ -315,7 +328,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     />
 
     <div class="editor-body">
-      <Sidebar :scene="scene" :editor="editor" :modeName="modeName" />
+      <Sidebar :scene="scene" :editor="editor" :modeName="modeName" :modeHint="modeHint" />
 
       <div ref="viewportRef" class="viewport">
         <Transition name="toast-fade">

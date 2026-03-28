@@ -12,6 +12,7 @@ const props = defineProps<{
   scene: Scene
   editor: Editor
   modeName: string
+  modeHint: string
 }>()
 
 const selectedPoints = computed(() => {
@@ -41,6 +42,9 @@ const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
 const editLine = reactive({
   name: '',
   nameVisible: true,
+  visible: true,
+  lengthLocked: false,
+  lockedLength: '',
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
@@ -212,6 +216,20 @@ const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'u
   editLine[which][axis] = nextValue
   applyEditLine()
 }
+const handleLineLengthFocus = () => {
+  setCoordFocus('line.lockedLength', true)
+}
+const handleLineLengthBlur = () => {
+  editLine.lockedLength = normalizeDisplayLength(editLine.lockedLength)
+  setCoordFocus('line.lockedLength', false)
+  applyEditLine()
+}
+const nudgeLineLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('line.lockedLength', direction)
+  if (nextValue === null) return
+  editLine.lockedLength = nextValue
+  applyEditLine()
+}
 const keepRayCoordExpanded = (which: 'p1' | 'p2') => {
   if (rayCoordCollapseTimer !== null) {
     window.clearTimeout(rayCoordCollapseTimer)
@@ -260,6 +278,9 @@ const startEditLine = (l: Line3 | undefined) => {
   expandedRayEditorPoint.value = null
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
+  editLine.visible = l.visible !== false
+  editLine.lengthLocked = l.lengthLocked === true
+  editLine.lockedLength = toFixed2(l.lengthLocked ? l.lockedLength : l.getLength())
   editLine.p1.x = toFixed2(l.p1.position.x)
   editLine.p1.y = toFixed2(l.p1.position.y)
   editLine.p1.z = toFixed2(l.p1.position.z)
@@ -311,12 +332,72 @@ const applyEditLine = () => {
   if (!editing.value || editing.value.type !== 'line') return
   const line = props.scene.lines.get(editing.value.id)
   if (!line) return
+  const previousLengthLocked = line.lengthLocked
+  const previousLockedLength = line.lockedLength
+  const parsedLockedLength = Number(editLine.lockedLength)
   props.editor.updateLine(editing.value.id, {
     name: editLine.name,
     nameVisible: editLine.nameVisible,
+    visible: editLine.visible,
+    lengthLocked: editLine.lengthLocked,
+    lockedLength: Number.isFinite(parsedLockedLength) ? parsedLockedLength : undefined,
   })
-  applyPointPosition(line.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
-  applyPointPosition(line.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
+
+  const updatedLine = props.scene.lines.get(editing.value.id)
+  if (!updatedLine) return
+
+  const constraintChanged =
+    editLine.lengthLocked !== previousLengthLocked ||
+    (editLine.lengthLocked &&
+      Number.isFinite(parsedLockedLength) &&
+      Math.abs(parsedLockedLength - previousLockedLength) > 1e-6)
+  if (constraintChanged) return
+
+  const p1x = Number(editLine.p1.x)
+  const p1y = Number(editLine.p1.y)
+  const p1z = Number(editLine.p1.z)
+  const p2x = Number(editLine.p2.x)
+  const p2y = Number(editLine.p2.y)
+  const p2z = Number(editLine.p2.z)
+  if (
+    !Number.isFinite(p1x) ||
+    !Number.isFinite(p1y) ||
+    !Number.isFinite(p1z) ||
+    !Number.isFinite(p2x) ||
+    !Number.isFinite(p2y) ||
+    !Number.isFinite(p2z)
+  ) {
+    return
+  }
+
+  if (!updatedLine.lengthLocked) {
+    applyPointPosition(updatedLine.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
+    applyPointPosition(updatedLine.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
+    return
+  }
+
+  const deltaP1 = {
+    x: p1x - updatedLine.p1.position.x,
+    y: p1y - updatedLine.p1.position.y,
+    z: p1z - updatedLine.p1.position.z,
+  }
+  const deltaP2 = {
+    x: p2x - updatedLine.p2.position.x,
+    y: p2y - updatedLine.p2.position.y,
+    z: p2z - updatedLine.p2.position.z,
+  }
+  const hasDeltaP1 = Math.abs(deltaP1.x) > 1e-6 || Math.abs(deltaP1.y) > 1e-6 || Math.abs(deltaP1.z) > 1e-6
+  const hasDeltaP2 = Math.abs(deltaP2.x) > 1e-6 || Math.abs(deltaP2.y) > 1e-6 || Math.abs(deltaP2.z) > 1e-6
+  const sameDelta =
+    Math.abs(deltaP1.x - deltaP2.x) <= 1e-6 &&
+    Math.abs(deltaP1.y - deltaP2.y) <= 1e-6 &&
+    Math.abs(deltaP1.z - deltaP2.z) <= 1e-6
+
+  if (hasDeltaP1 && (!hasDeltaP2 || sameDelta)) {
+    props.editor.setPointPosition(updatedLine.p1.id, new Vec3(p1x, p1y, p1z))
+  } else if (hasDeltaP2) {
+    props.editor.setPointPosition(updatedLine.p2.id, new Vec3(p2x, p2y, p2z))
+  }
 }
 const applyEditRay = () => {
   if (!editing.value || editing.value.type !== 'ray') return
@@ -383,6 +464,10 @@ watch(
     return {
       name: l.name ?? '',
       nameVisible: l.nameVisible !== false,
+      visible: l.visible !== false,
+      lengthLocked: l.lengthLocked === true,
+      lockedLength: l.lockedLength,
+      actualLength: l.getLength(),
       p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
       p2: { x: l.p2.position.x, y: l.p2.position.y, z: l.p2.position.z },
     }
@@ -391,6 +476,11 @@ watch(
     if (!newLine) return
     editLine.name = newLine.name
     editLine.nameVisible = newLine.nameVisible
+    editLine.visible = newLine.visible
+    editLine.lengthLocked = newLine.lengthLocked
+    if (!focusedCoord['line.lockedLength']) {
+      editLine.lockedLength = toFixed2(newLine.lengthLocked ? newLine.lockedLength : newLine.actualLength)
+    }
     if (!focusedCoord['line.p1.x']) editLine.p1.x = toFixed2(newLine.p1.x)
     if (!focusedCoord['line.p1.y']) editLine.p1.y = toFixed2(newLine.p1.y)
     if (!focusedCoord['line.p1.z']) editLine.p1.z = toFixed2(newLine.p1.z)
@@ -452,6 +542,7 @@ onUnmounted(() => {
 <template>
   <div class="sidebar">
     <p>当前操作模式：{{ modeName }}</p>
+    <div v-if="modeHint" class="hint mode-hint">{{ modeHint }}</div>
     <div class="divider"></div>
     <h3>选中</h3>
     <div class="hint" v-if="selectedPoints.length > 0 || selectedLines.length > 0 || selectedRays.length > 0">
@@ -563,8 +654,48 @@ onUnmounted(() => {
             <label>名称</label>
             <input type="text" v-model="editLine.name" @input="applyEditLine" />
             <label class="toggle-label">
+              <input type="checkbox" v-model="editLine.visible" @change="applyEditLine" />
+              线段显示
+            </label>
+            <label class="toggle-label">
               <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
-              {{ editLine.nameVisible ? '隐藏' : '显示' }}
+              名称显示
+            </label>
+          </div>
+          <div class="name-row">
+            <label>长度</label>
+            <div class="coord-input">
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeLineLength('down')"
+                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.lockedLength', el)"
+                v-model="editLine.lockedLength"
+                @input="applyEditLine"
+                @focus="handleLineLengthFocus"
+                @blur="handleLineLengthBlur"
+                step="0.5"
+                min="0"
+                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeLineLength('up')"
+                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editLine.lengthLocked" @change="applyEditLine" />
+              长度约束
             </label>
           </div>
           <div class="line-editor-grid" :class="{ 'line-editor-grid--compact': isCompactLineEditor }">
@@ -791,6 +922,8 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
+          <div>长度：{{ l!.getLength().toFixed(2) }}</div>
+          <div v-if="l!.lengthLocked">约束长度：{{ l!.lockedLength.toFixed(2) }}</div>
           <div>
             点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
             {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
