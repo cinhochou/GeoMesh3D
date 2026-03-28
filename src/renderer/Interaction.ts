@@ -7,6 +7,10 @@ import { ThreeRenderer } from './ThreeRenderer'
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
   private static readonly COLLAB_SETTLE_SYNC_MS = 250
+  private static readonly TOUCH_MOUSE_GUARD_MS = 500
+  private static readonly MOBILE_POINT_PICK_RADIUS_PX = 20
+  private static readonly MOBILE_ENDPOINT_PROTECTION_RADIUS_PX = 2
+  private static readonly MOBILE_LINE_PICK_THRESHOLD = 0.2
 
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
@@ -25,6 +29,11 @@ export class Interaction {
   private mobileCreateHadPreviewAtPointerDown = false
   private mobileCreateMoved = false
   private mobileCreateStartClient = new THREE.Vector2()
+  private mobileInteractionPointerId: number | null = null
+  private mobileInteractionMoved = false
+  private mobileInteractionStartedOnEmpty = false
+  private mobileInteractionStartClient = new THREE.Vector2()
+  private lastTouchEventAt = 0
   private liveSyncUntil = 0
 
   constructor(
@@ -51,7 +60,7 @@ export class Interaction {
     return Math.round(value / step) * step
   }
 
-  private updatePointerPosition(clientX: number, clientY: number) {
+  private getPointerClientRect() {
     let rect = this.renderer.renderer.domElement.getBoundingClientRect()
     if (this.renderer.isARActive()) {
       const video = this.renderer.getARVideoElement()
@@ -60,7 +69,11 @@ export class Interaction {
         if (videoRect.width > 0 && videoRect.height > 0) rect = videoRect
       }
     }
+    return rect
+  }
 
+  private updatePointerPosition(clientX: number, clientY: number) {
+    const rect = this.getPointerClientRect()
     this.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1
     this.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1
   }
@@ -88,7 +101,224 @@ export class Interaction {
     this.mobileCreateMoved = false
   }
 
+  private resetMobileInteractionState() {
+    this.mobileInteractionPointerId = null
+    this.mobileInteractionMoved = false
+    this.mobileInteractionStartedOnEmpty = false
+  }
+
+  private isTouchPreferredDevice() {
+    return (
+      navigator.maxTouchPoints > 0 ||
+      window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(hover: none)').matches
+    )
+  }
+
+  syncControlLockState() {
+    if (
+      this.draggingPointId !== null ||
+      this.draggingLineId !== null ||
+      this.mobileCreatePointerId !== null
+    ) {
+      this.renderer.controls.enabled = false
+      return
+    }
+
+    const shouldLockPointSelection =
+      !this.renderer.isARActive() &&
+      this.isTouchPreferredDevice() &&
+      this.editor.mode === EditorMode.Select &&
+      this.editor.scene.selection.points.size > 0
+
+    this.renderer.controls.enabled = !shouldLockPointSelection
+  }
+
+  private shouldIgnoreMouseEvent() {
+    return performance.now() - this.lastTouchEventAt < Interaction.TOUCH_MOUSE_GUARD_MS
+  }
+
+  private updateMobileMoveThreshold(clientX: number, clientY: number) {
+    if (
+      !this.mobileInteractionMoved &&
+      this.mobileInteractionStartClient.distanceTo(new THREE.Vector2(clientX, clientY)) >=
+        Interaction.MOBILE_TAP_MOVE_THRESHOLD
+    ) {
+      this.mobileInteractionMoved = true
+    }
+  }
+
+  private finishDragInteraction() {
+    const hadDragPreview = this.dragStartPositions.size > 0
+    this.commitDragHistory()
+    this.draggingPointId = null
+    this.draggingLineId = null
+    this.endDrag()
+    if (hadDragPreview) {
+      this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
+    }
+    this.syncControlLockState()
+    this.renderer.renderer.domElement.style.cursor = 'default'
+
+    if (this.editor.mode !== EditorMode.CreatePoint) {
+      this.renderer.hideAxisGuides()
+    }
+  }
+
+  private projectMathPositionToClient(pos: Vec3, rect: DOMRect) {
+    const worldPos = this.renderer.toMathWorldPosition(new THREE.Vector3(pos.x, pos.y, pos.z))
+    const projected = worldPos.clone().project(this.renderer.getActiveCamera())
+    if (projected.z < -1 || projected.z > 1) return null
+
+    return new THREE.Vector2(
+      rect.left + (projected.x + 1) * 0.5 * rect.width,
+      rect.top + (1 - projected.y) * 0.5 * rect.height,
+    )
+  }
+
+  private getTouchPointHit(clientX: number, clientY: number, radiusPx: number) {
+    const rect = this.getPointerClientRect()
+    let bestId: string | null = null
+    let bestDistance = radiusPx
+
+    this.editor.scene.points.forEach((point, id) => {
+      const screenPos = this.projectMathPositionToClient(point.position, rect)
+      if (!screenPos) return
+      const distance = screenPos.distanceTo(new THREE.Vector2(clientX, clientY))
+      if (distance <= bestDistance) {
+        bestDistance = distance
+        bestId = id
+      }
+    })
+
+    return bestId ? (this.renderer.meshMap.get(bestId) ?? null) : null
+  }
+
+  private pickLineWithThreshold(lineThreshold: number) {
+    const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    this.raycaster.params.Line = { threshold: lineThreshold }
+    const lineHits = this.raycaster.intersectObjects(
+      [...this.renderer.meshMap.values()].filter((obj) => obj.userData?.type === 'line'),
+    )
+    this.raycaster.params.Line = { threshold: previousThreshold }
+    return lineHits[0]?.object ?? null
+  }
+
+  private getProtectedEndpointHit(
+    lineId: string,
+    clientX: number,
+    clientY: number,
+    radiusPx: number,
+  ) {
+    const line = this.editor.scene.lines.get(lineId)
+    if (!line) return null
+
+    const rect = this.getPointerClientRect()
+    const p1Screen = this.projectMathPositionToClient(line.p1.position, rect)
+    const p2Screen = this.projectMathPositionToClient(line.p2.position, rect)
+    if (!p1Screen && !p2Screen) return null
+
+    const pointer = new THREE.Vector2(clientX, clientY)
+    const candidates = [
+      p1Screen
+        ? {
+            id: line.p1.id,
+            distance: p1Screen.distanceTo(pointer),
+          }
+        : null,
+      p2Screen
+        ? {
+            id: line.p2.id,
+            distance: p2Screen.distanceTo(pointer),
+          }
+        : null,
+    ].filter((candidate): candidate is { id: string; distance: number } => candidate !== null)
+
+    const nearest = candidates.sort((a, b) => a.distance - b.distance)[0]
+    if (!nearest || nearest.distance > radiusPx) return null
+    return this.renderer.meshMap.get(nearest.id) ?? null
+  }
+
+  private pickTouchTarget(clientX: number, clientY: number) {
+    const pointHit = this.getTouchPointHit(
+      clientX,
+      clientY,
+      Interaction.MOBILE_POINT_PICK_RADIUS_PX,
+    )
+    if (pointHit) return pointHit
+
+    const lineHit = this.pickLineWithThreshold(Interaction.MOBILE_LINE_PICK_THRESHOLD)
+    if (!lineHit) return null
+
+    const protectedEndpoint = this.getProtectedEndpointHit(
+      lineHit.userData.geoId,
+      clientX,
+      clientY,
+      Interaction.MOBILE_ENDPOINT_PROTECTION_RADIUS_PX,
+    )
+    return protectedEndpoint ?? lineHit
+  }
+
+  private handleSelectionDragMove(isAltPressed: boolean) {
+    const selection = this.editor.scene.selection
+
+    if (this.draggingPointId) {
+      const point = this.editor.scene.points.get(this.draggingPointId)
+      if (!point) return
+
+      this.handleDrag(
+        point.position,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.points.forEach((id) => toMove.add(id))
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          toMove.add(this.draggingPointId!)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingLineId) {
+      const line = this.editor.scene.lines.get(this.draggingLineId)
+      if (!line) return
+
+      const mid = new Vec3(
+        (line.p1.position.x + line.p2.position.x) / 2,
+        (line.p1.position.y + line.p2.position.y) / 2,
+        (line.p1.position.z + line.p2.position.z) / 2,
+      )
+      this.handleDrag(
+        mid,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(line.p1.id)
+          toMove.add(line.p2.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+    }
+  }
+
   onMouseDown = (e: MouseEvent) => {
+    if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
     const hit = this.pick()
 
@@ -155,6 +385,7 @@ export class Interaction {
   }
 
   onMouseMove = (e: MouseEvent) => {
+    if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
 
     if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
@@ -199,88 +430,12 @@ export class Interaction {
       this.rubberBandData = null
     }
 
-    const selection = this.editor.scene.selection
-
-    // 拖动点（包含选中的所有点和线段端点）
-    if (this.draggingPointId) {
-      const point = this.editor.scene.points.get(this.draggingPointId)
-      if (point) {
-        this.handleDrag(
-          point.position,
-          (delta) => {
-            const toMove = new Set<string>()
-
-            // 核心逻辑：只要我们在拖拽，就把所有选中的点和线关联的点都加进移动列表
-            selection.points.forEach((id) => toMove.add(id))
-            selection.lines.forEach((lid) => {
-              const l = this.editor.scene.lines.get(lid)
-              if (l) {
-                toMove.add(l.p1.id)
-                toMove.add(l.p2.id)
-              }
-            })
-
-            // 确保当前拖拽的对象也在里面（防止它没被选中也能拖）
-            toMove.add(this.draggingPointId!)
-
-            this.previewMovePoints([...toMove], delta)
-          },
-          e.altKey,
-        )
-      }
-    }
-    // 拖动线
-    else if (this.draggingLineId) {
-      const line = this.editor.scene.lines.get(this.draggingLineId)
-      if (line) {
-        const mid = new Vec3(
-          (line.p1.position.x + line.p2.position.x) / 2,
-          (line.p1.position.y + line.p2.position.y) / 2,
-          (line.p1.position.z + line.p2.position.z) / 2,
-        )
-        this.handleDrag(
-          mid,
-          (delta) => {
-            const toMove = new Set<string>()
-
-            // 移动所有选中的线段的所有端点
-            selection.lines.forEach((lid) => {
-              const l = this.editor.scene.lines.get(lid)
-              if (l) {
-                toMove.add(l.p1.id)
-                toMove.add(l.p2.id)
-              }
-            })
-            // 也要移动选中的孤立点
-            selection.points.forEach((id) => toMove.add(id))
-
-            // 确保当前拖拽的线关联的点也在里面
-            toMove.add(line.p1.id)
-            toMove.add(line.p2.id)
-
-            this.previewMovePoints([...toMove], delta)
-          },
-          e.altKey,
-        )
-      }
-    }
+    this.handleSelectionDragMove(e.altKey)
   }
 
   onMouseUp = () => {
-    const hadDragPreview = this.dragStartPositions.size > 0
-    this.commitDragHistory()
-    this.draggingPointId = null
-    this.draggingLineId = null
-    this.endDrag()
-    if (hadDragPreview) {
-      this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
-    }
-    this.renderer.controls.enabled = true
-    this.renderer.renderer.domElement.style.cursor = 'default'
-
-    if (this.editor.mode !== EditorMode.CreatePoint) {
-      this.renderer.hideAxisGuides()
-    }
+    if (this.shouldIgnoreMouseEvent()) return
+    this.finishDragInteraction()
   }
 
   onMouseLeave = () => {
@@ -288,92 +443,253 @@ export class Interaction {
   }
 
   onPointerDown = (e: PointerEvent) => {
-    if (e.pointerType !== 'touch' || this.editor.mode !== EditorMode.CreatePoint) return
-    if (this.renderer.isARActive()) return
+    if (e.pointerType !== 'touch') return
+    this.lastTouchEventAt = performance.now()
 
-    if (this.mobileCreatePointerId !== null && this.mobileCreatePointerId !== e.pointerId) {
-      this.renderer.controls.enabled = true
-      this.resetMobileCreatePointerState()
+    if (this.editor.mode === EditorMode.CreatePoint) {
+      if (this.renderer.isARActive()) return
+
+      if (this.mobileCreatePointerId !== null && this.mobileCreatePointerId !== e.pointerId) {
+        this.resetMobileCreatePointerState()
+        this.syncControlLockState()
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.updatePointerPosition(e.clientX, e.clientY)
+
+      this.mobileCreatePointerId = e.pointerId
+      this.mobileCreateHadPreviewAtPointerDown = this.mobileCreatePreviewPos !== null
+      this.mobileCreateMoved = false
+      this.mobileCreateStartClient.set(e.clientX, e.clientY)
+
+      if (!this.mobileCreateHadPreviewAtPointerDown) {
+        this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+      }
       return
     }
 
-    e.preventDefault()
-    e.stopPropagation()
-    ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+    if (
+      this.mobileInteractionPointerId !== null &&
+      this.mobileInteractionPointerId !== e.pointerId
+    ) {
+      this.finishDragInteraction()
+      this.resetMobileInteractionState()
+      return
+    }
 
-    this.renderer.controls.enabled = false
+    this.mobileInteractionPointerId = e.pointerId
+    this.mobileInteractionMoved = false
+    this.mobileInteractionStartedOnEmpty = false
+    this.mobileInteractionStartClient.set(e.clientX, e.clientY)
     this.updatePointerPosition(e.clientX, e.clientY)
 
-    this.mobileCreatePointerId = e.pointerId
-    this.mobileCreateHadPreviewAtPointerDown = this.mobileCreatePreviewPos !== null
-    this.mobileCreateMoved = false
-    this.mobileCreateStartClient.set(e.clientX, e.clientY)
+    const hit = this.pickTouchTarget(e.clientX, e.clientY)
 
-    if (!this.mobileCreateHadPreviewAtPointerDown) {
-      this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+    if (!hit) {
+      this.mobileInteractionStartedOnEmpty = this.editor.mode === EditorMode.Select
+      return
+    }
+
+    const { geoId, type } = hit.userData
+
+    if (this.editor.mode === EditorMode.Delete) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') this.editor.deletePoint(geoId)
+      else if (type === 'line') this.editor.deleteLine(geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
+      e.preventDefault()
+      e.stopPropagation()
+      this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode !== EditorMode.Select) {
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (type === 'point') {
+      const alreadySelected = this.editor.scene.selection.points.has(geoId)
+      this.editor.scene.selection.selectPoint(geoId, true)
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      this.draggingPointId = geoId
+      const point = this.editor.scene.points.get(geoId)
+      if (!point || point.locked) {
+        this.draggingPointId = null
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+      } else {
+        this.startDrag(point.position)
+      }
+      return
+    }
+
+    if (type === 'line') {
+      const alreadySelected = this.editor.scene.selection.lines.has(geoId)
+      this.editor.scene.selection.selectLine(geoId, true)
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const line = this.editor.scene.lines.get(geoId)
+      if (!line) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingLineId = geoId
+      const mid = new Vec3(
+        (line.p1.position.x + line.p2.position.x) / 2,
+        (line.p1.position.y + line.p2.position.y) / 2,
+        (line.p1.position.z + line.p2.position.z) / 2,
+      )
+      this.startDrag(mid)
     }
   }
 
   onPointerMove = (e: PointerEvent) => {
-    if (
-      e.pointerType !== 'touch' ||
-      this.editor.mode !== EditorMode.CreatePoint ||
-      this.mobileCreatePointerId !== e.pointerId
-    ) {
+    if (e.pointerType !== 'touch') return
+    this.lastTouchEventAt = performance.now()
+
+    if (this.editor.mode === EditorMode.CreatePoint) {
+      if (
+        this.editor.mode !== EditorMode.CreatePoint ||
+        this.mobileCreatePointerId !== e.pointerId
+      ) {
+        return
+      }
+      if (this.renderer.isARActive()) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      this.updatePointerPosition(e.clientX, e.clientY)
+
+      if (
+        !this.mobileCreateMoved &&
+        this.mobileCreateStartClient.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) >=
+          Interaction.MOBILE_TAP_MOVE_THRESHOLD
+      ) {
+        this.mobileCreateMoved = true
+      }
+
+      this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
       return
     }
-    if (this.renderer.isARActive()) return
+
+    if (this.mobileInteractionPointerId !== e.pointerId) return
+
+    this.updateMobileMoveThreshold(e.clientX, e.clientY)
+
+    if (!this.draggingPointId && !this.draggingLineId) return
 
     e.preventDefault()
     e.stopPropagation()
-
     this.updatePointerPosition(e.clientX, e.clientY)
-
-    if (
-      !this.mobileCreateMoved &&
-      this.mobileCreateStartClient.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) >=
-        Interaction.MOBILE_TAP_MOVE_THRESHOLD
-    ) {
-      this.mobileCreateMoved = true
-    }
-
-    this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+    this.handleSelectionDragMove(false)
   }
 
   onPointerUp = (e: PointerEvent) => {
-    if (
-      e.pointerType !== 'touch' ||
-      this.editor.mode !== EditorMode.CreatePoint ||
-      this.mobileCreatePointerId !== e.pointerId
-    ) {
+    if (e.pointerType !== 'touch') return
+    this.lastTouchEventAt = performance.now()
+
+    if (this.editor.mode === EditorMode.CreatePoint) {
+      if (
+        this.editor.mode !== EditorMode.CreatePoint ||
+        this.mobileCreatePointerId !== e.pointerId
+      ) {
+        return
+      }
+      if (this.renderer.isARActive()) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+
+      const shouldConfirm =
+        !this.mobileCreateMoved &&
+        this.mobileCreateHadPreviewAtPointerDown &&
+        this.mobileCreatePreviewPos !== null
+
+      this.resetMobileCreatePointerState()
+      this.syncControlLockState()
+
+      if (shouldConfirm) {
+        const pos = this.mobileCreatePreviewPos!
+        this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+      }
       return
     }
-    if (this.renderer.isARActive()) return
 
-    e.preventDefault()
-    e.stopPropagation()
-    ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+    if (this.mobileInteractionPointerId !== e.pointerId) return
 
-    const shouldConfirm =
-      !this.mobileCreateMoved &&
-      this.mobileCreateHadPreviewAtPointerDown &&
-      this.mobileCreatePreviewPos !== null
+    const hadDrag = this.draggingPointId !== null || this.draggingLineId !== null
 
-    this.renderer.controls.enabled = true
-    this.resetMobileCreatePointerState()
-
-    if (shouldConfirm) {
-      const pos = this.mobileCreatePreviewPos!
-      this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+    if (hadDrag) {
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+      this.finishDragInteraction()
+    } else if (
+      this.editor.mode === EditorMode.Select &&
+      this.mobileInteractionStartedOnEmpty &&
+      !this.mobileInteractionMoved
+    ) {
+      this.editor.scene.selection.clear()
     }
+
+    this.resetMobileInteractionState()
+    this.syncControlLockState()
   }
 
   onPointerCancel = (e: PointerEvent) => {
-    if (e.pointerType !== 'touch' || this.mobileCreatePointerId !== e.pointerId) return
+    if (e.pointerType !== 'touch') return
+    this.lastTouchEventAt = performance.now()
 
+    if (this.mobileCreatePointerId === e.pointerId) {
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+      this.resetMobileCreatePointerState()
+      this.syncControlLockState()
+      return
+    }
+
+    if (this.mobileInteractionPointerId !== e.pointerId) return
     ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
-    this.renderer.controls.enabled = true
-    this.resetMobileCreatePointerState()
+    this.finishDragInteraction()
+    this.resetMobileInteractionState()
+    this.syncControlLockState()
   }
 
   /** 统一的拾取函数，支持点和线 */
@@ -537,7 +853,7 @@ export class Interaction {
     this.rubberBandData = null
     this.mobileCreatePreviewPos = null
     this.resetMobileCreatePointerState()
-    this.renderer.controls.enabled = true
+    this.syncControlLockState()
     this.renderer.hideAxisGuides()
   }
 
@@ -552,6 +868,10 @@ export class Interaction {
   }
 
   shouldSyncLiveScene() {
-    return this.draggingPointId !== null || this.draggingLineId !== null || performance.now() < this.liveSyncUntil
+    return (
+      this.draggingPointId !== null ||
+      this.draggingLineId !== null ||
+      performance.now() < this.liveSyncUntil
+    )
   }
 }

@@ -1,6 +1,6 @@
 ﻿<!-- src/views/EditorView.vue -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, reactive } from 'vue'
+import { onMounted, onUnmounted, ref, computed, reactive, watch } from 'vue'
 
 import Toolbar from '../components/ToolBar.vue'
 import Sidebar from '../components/SideBar.vue'
@@ -29,6 +29,7 @@ const axisGridSize = ref(10)
 const fps = ref(0)
 let lastFpsTime = performance.now()
 let frameCount = 0
+const isTouchDevice = ref(false)
 
 // 提示框相关的响应式变量
 const toastMessage = ref('')
@@ -87,10 +88,16 @@ const modeName = computed(() => {
 })
 
 onMounted(() => {
+  isTouchDevice.value =
+    navigator.maxTouchPoints > 0 ||
+    window.matchMedia('(pointer: coarse)').matches ||
+    window.matchMedia('(hover: none)').matches
+
   renderer = new ThreeRenderer(viewportRef.value!)
   axisGridSize.value = renderer.getAxisGridSize()
   interaction = new Interaction(editor, renderer)
   interaction.bind(renderer.renderer.domElement)
+  interaction.syncControlLockState()
 
   collabManager.value = new CollabManager(scene)
 
@@ -143,6 +150,15 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('toast', handleToast as EventListener)
 })
+
+watch(
+  [() => scene.selection.points.size, () => editor.mode, isARMode],
+  () => {
+    if (!isTouchDevice.value || !interaction) return
+    interaction.syncControlLockState()
+  },
+  { flush: 'post' },
+)
 
 // 生命周期钩子，防止页面刷新或销毁后连接残留
 onUnmounted(() => {

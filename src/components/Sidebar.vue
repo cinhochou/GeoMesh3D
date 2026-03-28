@@ -27,6 +27,8 @@ const linesInScene = computed(() => {
 })
 
 const editing = ref<{ type: 'point' | 'line'; id: string } | null>(null)
+const isCompactLineEditor = ref(false)
+const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
 const editLine = reactive({
   name: '',
@@ -36,23 +38,37 @@ const editLine = reactive({
 })
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
+let lineCoordCollapseTimer: number | null = null
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
 
 const selectPointFromContent = (id: string) => {
   editing.value = null
+  expandedLineEditorPoint.value = null
   props.scene.selection.selectPoint(id)
 }
 
 const selectLineFromContent = (id: string) => {
   editing.value = null
+  expandedLineEditorPoint.value = null
   props.scene.selection.selectLine(id)
 }
 
 const clearContentSelection = () => {
   editing.value = null
+  expandedLineEditorPoint.value = null
   props.scene.selection.clear()
+}
+
+const updateCompactLineEditorMode = () => {
+  const touchLike =
+    navigator.maxTouchPoints > 0 ||
+    'ontouchstart' in window ||
+    window.matchMedia('(pointer: coarse)').matches ||
+    window.matchMedia('(hover: none)').matches
+  const mobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+  isCompactLineEditor.value = touchLike || mobileUA
 }
 
 watch([selectedPointIds, selectedLineIds], () => {
@@ -93,18 +109,43 @@ const handlePointCoordBlur = (axis: 'x' | 'y' | 'z') => {
   applyEditPoint()
 }
 const handleLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  if (lineCoordCollapseTimer !== null) {
+    window.clearTimeout(lineCoordCollapseTimer)
+    lineCoordCollapseTimer = null
+  }
+  expandedLineEditorPoint.value = which
   setCoordFocus(`line.${which}.${axis}`, true)
 }
 const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editLine[which][axis] = normalizeCoord(editLine[which][axis])
   setCoordFocus(`line.${which}.${axis}`, false)
   applyEditLine()
+  if (lineCoordCollapseTimer !== null) {
+    window.clearTimeout(lineCoordCollapseTimer)
+  }
+  lineCoordCollapseTimer = window.setTimeout(() => {
+    const stillFocused =
+      focusedCoord[`line.${which}.x`] ||
+      focusedCoord[`line.${which}.y`] ||
+      focusedCoord[`line.${which}.z`]
+    if (!stillFocused && expandedLineEditorPoint.value === which) {
+      expandedLineEditorPoint.value = null
+    }
+    lineCoordCollapseTimer = null
+  }, 0)
 }
 const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`point.${axis}`, direction)
   if (nextValue === null) return
   editPoint[axis] = nextValue
   applyEditPoint()
+}
+const keepLineCoordExpanded = (which: 'p1' | 'p2') => {
+  if (lineCoordCollapseTimer !== null) {
+    window.clearTimeout(lineCoordCollapseTimer)
+    lineCoordCollapseTimer = null
+  }
+  expandedLineEditorPoint.value = which
 }
 const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`line.${which}.${axis}`, direction)
@@ -117,6 +158,7 @@ const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
   if (p.locked) return
   editing.value = { type: 'point', id: p.id }
+  expandedLineEditorPoint.value = null
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
   editPoint.x = toFixed2(p.position.x)
@@ -127,6 +169,7 @@ const startEditPoint = (p: Point3 | undefined) => {
 const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
   editing.value = { type: 'line', id: l.id }
+  expandedLineEditorPoint.value = null
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
   editLine.p1.x = toFixed2(l.p1.position.x)
@@ -181,6 +224,7 @@ const handleGlobalClick = (e: MouseEvent) => {
   // 点击 3D 视口区域（viewport）→ 不退出
   if (target.closest('.viewport')) return
   editing.value = null
+  expandedLineEditorPoint.value = null
 }
 
 // 监听当前编辑的点位置变化
@@ -237,10 +281,16 @@ watch(
 )
 
 onMounted(() => {
+  updateCompactLineEditorMode()
+  window.addEventListener('resize', updateCompactLineEditorMode)
   document.addEventListener('mousedown', handleGlobalClick)
 })
 
 onUnmounted(() => {
+  if (lineCoordCollapseTimer !== null) {
+    window.clearTimeout(lineCoordCollapseTimer)
+  }
+  window.removeEventListener('resize', updateCompactLineEditorMode)
   document.removeEventListener('mousedown', handleGlobalClick)
 })
 </script>
@@ -361,203 +411,226 @@ onUnmounted(() => {
               {{ editLine.nameVisible ? '隐藏' : '显示' }}
             </label>
           </div>
-          <div class="line-point-row">
-            <span class="line-point-label">点{{ l!.p1.name ?? '' }}(x,y,z)</span>
-            <div class="line-coord-stack">
-              <div class="axis-field line-axis-field">
-                <label>x</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'x', 'down')"
-                    :disabled="l!.p1.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p1.x', el)"
-                    v-model="editLine.p1.x"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p1', 'x')"
-                    @blur="handleLineCoordBlur('p1', 'x')"
-                    step="0.5"
-                    :disabled="l!.p1.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'x', 'up')"
-                    :disabled="l!.p1.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <div class="axis-field line-axis-field">
-                <label>y</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'y', 'down')"
-                    :disabled="l!.p1.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p1.y', el)"
-                    v-model="editLine.p1.y"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p1', 'y')"
-                    @blur="handleLineCoordBlur('p1', 'y')"
-                    step="0.5"
-                    :disabled="l!.p1.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'y', 'up')"
-                    :disabled="l!.p1.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <div class="axis-field line-axis-field">
-                <label>z</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'z', 'down')"
-                    :disabled="l!.p1.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p1.z', el)"
-                    v-model="editLine.p1.z"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p1', 'z')"
-                    @blur="handleLineCoordBlur('p1', 'z')"
-                    step="0.5"
-                    :disabled="l!.p1.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p1', 'z', 'up')"
-                    :disabled="l!.p1.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
+          <div class="line-editor-grid" :class="{ 'line-editor-grid--compact': isCompactLineEditor }">
+            <div class="line-editor-head"></div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                点{{ l!.p1.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">点A</span>
+              <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
             </div>
-            <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
-          </div>
-          <div class="line-point-row">
-            <span class="line-point-label">点{{ l!.p2.name ?? '' }}(x,y,z)</span>
-            <div class="line-coord-stack">
-              <div class="axis-field line-axis-field">
-                <label>x</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'x', 'down')"
-                    :disabled="l!.p2.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p2.x', el)"
-                    v-model="editLine.p2.x"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p2', 'x')"
-                    @blur="handleLineCoordBlur('p2', 'x')"
-                    step="0.5"
-                    :disabled="l!.p2.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'x', 'up')"
-                    :disabled="l!.p2.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <div class="axis-field line-axis-field">
-                <label>y</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'y', 'down')"
-                    :disabled="l!.p2.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p2.y', el)"
-                    v-model="editLine.p2.y"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p2', 'y')"
-                    @blur="handleLineCoordBlur('p2', 'y')"
-                    step="0.5"
-                    :disabled="l!.p2.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'y', 'up')"
-                    :disabled="l!.p2.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <div class="axis-field line-axis-field">
-                <label>z</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'z', 'down')"
-                    :disabled="l!.p2.locked"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef('line.p2.z', el)"
-                    v-model="editLine.p2.z"
-                    @input="applyEditLine"
-                    @focus="handleLineCoordFocus('p2', 'z')"
-                    @blur="handleLineCoordBlur('p2', 'z')"
-                    step="0.5"
-                    :disabled="l!.p2.locked"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeLineCoord('p2', 'z', 'up')"
-                    :disabled="l!.p2.locked"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                点{{ l!.p2.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">点B</span>
+              <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
             </div>
-            <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
+
+            <div class="line-axis-label">x</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'x', 'down')"
+                :disabled="l!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p1.x', el)"
+                v-model="editLine.p1.x"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p1', 'x')"
+                @blur="handleLineCoordBlur('p1', 'x')"
+                step="0.5"
+                :disabled="l!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'x', 'up')"
+                :disabled="l!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'x', 'down')"
+                :disabled="l!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p2.x', el)"
+                v-model="editLine.p2.x"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p2', 'x')"
+                @blur="handleLineCoordBlur('p2', 'x')"
+                step="0.5"
+                :disabled="l!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'x', 'up')"
+                :disabled="l!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">y</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'y', 'down')"
+                :disabled="l!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p1.y', el)"
+                v-model="editLine.p1.y"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p1', 'y')"
+                @blur="handleLineCoordBlur('p1', 'y')"
+                step="0.5"
+                :disabled="l!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'y', 'up')"
+                :disabled="l!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'y', 'down')"
+                :disabled="l!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p2.y', el)"
+                v-model="editLine.p2.y"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p2', 'y')"
+                @blur="handleLineCoordBlur('p2', 'y')"
+                step="0.5"
+                :disabled="l!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'y', 'up')"
+                :disabled="l!.p2.locked"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">z</div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'z', 'down')"
+                :disabled="l!.p1.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p1.z', el)"
+                v-model="editLine.p1.z"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p1', 'z')"
+                @blur="handleLineCoordBlur('p1', 'z')"
+                step="0.5"
+                :disabled="l!.p1.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                @click="nudgeLineCoord('p1', 'z', 'up')"
+                :disabled="l!.p1.locked"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{ 'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2' }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'z', 'down')"
+                :disabled="l!.p2.locked"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('line.p2.z', el)"
+                v-model="editLine.p2.z"
+                @input="applyEditLine"
+                @focus="handleLineCoordFocus('p2', 'z')"
+                @blur="handleLineCoordBlur('p2', 'z')"
+                step="0.5"
+                :disabled="l!.p2.locked"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                @click="nudgeLineCoord('p2', 'z', 'up')"
+                :disabled="l!.p2.locked"
+              >
+                +
+              </button>
+            </div>
           </div>
         </div>
         <div v-else>
@@ -813,6 +886,26 @@ hr {
 .line-point-label {
   white-space: nowrap;
 }
+.line-editor-grid {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 8px;
+  align-items: center;
+  grid-column: 1 / -1;
+}
+.line-editor-head {
+  font-size: 12px;
+  color: #e6ffe9;
+  white-space: nowrap;
+}
+.line-editor-title-short {
+  display: none;
+}
+.line-axis-label {
+  font-size: 11px;
+  color: #8fdc9b;
+  text-align: center;
+}
 .line-coord-stack {
   display: grid;
   gap: 4px;
@@ -884,6 +977,10 @@ hr {
 
   .line-point-label {
     width: 100%;
+  }
+
+  .line-editor-grid {
+    gap: 4px 6px;
   }
 }
 
@@ -966,50 +1063,96 @@ hr {
     grid-column: 1 / -1;
   }
 
+  .line-editor-grid {
+    grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr);
+  }
+
   .compact-axis {
     grid-column: 1 / -1;
   }
 }
 
-@media (max-width: 640px) {
-  .coord-input {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    width: 100%;
-  }
+.line-editor-grid--compact {
+  grid-template-columns: 12px minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 5px;
+}
 
-  .coord-input input[type='number'] {
-    order: 2;
-    width: 100%;
-    border-radius: 0;
-  }
+.line-editor-grid--compact > .line-editor-head:first-child {
+  display: block;
+}
 
-  .coord-input .step-btn:first-child {
-    order: 1;
-    border-radius: 4px 4px 0 0;
-    border-right: 1px solid #355b3a;
-    border-bottom: none;
-  }
+.line-editor-grid--compact > .line-editor-head {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.2;
+  font-size: 11px;
+}
 
-  .coord-input .step-btn:last-child {
-    order: 3;
-    border-radius: 0 0 4px 4px;
-    border-left: 1px solid #355b3a;
-    border-top: none;
-  }
+.line-editor-grid--compact .line-editor-title-short {
+  display: inline;
+}
 
-  .step-btn {
-    min-width: 100%;
-    min-height: 28px;
-    padding: 4px 0;
-    font-size: 16px;
-  }
+.line-editor-grid--compact > .line-editor-head:nth-child(2) {
+  padding-right: 3px;
+}
 
-  .axis-field > label {
-    font-size: 10px;
-  }
+.line-editor-grid--compact > .line-editor-head:nth-child(3) {
+  padding-left: 3px;
+}
 
+.line-editor-grid--compact > .coord-input {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  transition: grid-template-columns 0.16s ease;
+}
+
+.line-editor-grid--compact > .coord-input:nth-child(3n + 2) {
+  margin-right: 2px;
+}
+
+.line-editor-grid--compact > .coord-input:nth-child(3n) {
+  margin-left: 2px;
+}
+
+.line-editor-grid--compact > .coord-input input[type='number'] {
+  width: 100%;
+  min-width: 0;
+  padding-left: 2px;
+  padding-right: 2px;
+  font-size: 11px;
+}
+
+.line-editor-grid--compact > .coord-input.line-point-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
+.line-editor-grid--compact > .coord-input.line-point-collapsed .step-btn {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.line-editor-grid--compact > .coord-input .step-btn {
+  min-width: 24px;
+  min-height: 26px;
+  font-size: 13px;
+}
+
+.line-editor-grid--compact .line-axis-label {
+  font-size: 10px;
+  text-align: left;
+}
+
+@media (hover: none) and (pointer: coarse) {
   .selectedPoint-info,
   .selectedLine-info,
   .point-info,
