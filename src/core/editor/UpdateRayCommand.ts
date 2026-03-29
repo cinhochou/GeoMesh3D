@@ -6,6 +6,7 @@ type RayState = {
   nameVisible: boolean
   visible: boolean
   displayLength: number
+  userLocked: boolean
 }
 
 export class UpdateRayCommand implements Command {
@@ -20,6 +21,7 @@ export class UpdateRayCommand implements Command {
     this.ray.nameVisible = this.after.nameVisible
     this.ray.visible = this.after.visible
     this.ray.displayLength = Ray3.normalizeDisplayLength(this.after.displayLength)
+    this.ray.userLocked = this.after.userLocked
   }
 
   undo() {
@@ -27,5 +29,6 @@ export class UpdateRayCommand implements Command {
     this.ray.nameVisible = this.before.nameVisible
     this.ray.visible = this.before.visible
     this.ray.displayLength = Ray3.normalizeDisplayLength(this.before.displayLength)
+    this.ray.userLocked = this.before.userLocked
   }
 }

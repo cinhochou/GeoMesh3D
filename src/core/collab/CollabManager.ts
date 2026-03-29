@@ -298,6 +298,7 @@ export class CollabManager {
             if (point.locked) return
             point.name = data.name ?? point.name
             if (typeof data.nameVisible === 'boolean') point.nameVisible = data.nameVisible
+            if (typeof data.userLocked === 'boolean') point.userLocked = data.userLocked
             point.setPosition(new Vec3(data.x, data.y, data.z))
           } else {
             const isOrigin = id === Scene.ORIGIN_ID
@@ -308,6 +309,7 @@ export class CollabManager {
                 new Vec3(data.x, data.y, data.z),
                 isOrigin,
                 typeof data.nameVisible === 'boolean' ? data.nameVisible : true,
+                typeof data.userLocked === 'boolean' ? data.userLocked : false,
               ),
             )
           }
@@ -346,6 +348,7 @@ export class CollabManager {
             line.name = data.name ?? line.name
             line.nameVisible = data.nameVisible ?? line.nameVisible
             line.visible = data.visible ?? line.visible
+            line.userLocked = data.userLocked ?? line.userLocked
             line.lengthLocked = data.lengthLocked ?? line.lengthLocked
             line.lockedLength =
               typeof data.lockedLength === 'number'
@@ -371,6 +374,7 @@ export class CollabManager {
                       p2.position.z - p1.position.z,
                     ),
                 ),
+                data.userLocked ?? false,
               ),
             )
           }
@@ -396,6 +400,7 @@ export class CollabManager {
             ray.name = data.name ?? ray.name
             ray.nameVisible = data.nameVisible ?? ray.nameVisible
             ray.visible = data.visible ?? ray.visible
+            ray.userLocked = data.userLocked ?? ray.userLocked
             ray.displayLength =
               typeof data.displayLength === 'number'
                 ? Ray3.normalizeDisplayLength(data.displayLength)
@@ -412,6 +417,7 @@ export class CollabManager {
                 data.nameVisible ?? true,
                 data.visible ?? true,
                 Ray3.normalizeDisplayLength(data.displayLength ?? Ray3.DEFAULT_DISPLAY_LENGTH),
+                data.userLocked ?? false,
               ),
             )
           }
@@ -463,6 +469,7 @@ export class CollabManager {
           z: p.position.z,
           name: p.name,
           nameVisible: p.nameVisible,
+          userLocked: p.userLocked,
         }
         const prev = this.yPoints.get(id)
         if (
@@ -471,7 +478,8 @@ export class CollabManager {
           prev.y !== next.y ||
           prev.z !== next.z ||
           prev.name !== next.name ||
-          prev.nameVisible !== next.nameVisible
+          prev.nameVisible !== next.nameVisible ||
+          prev.userLocked !== next.userLocked
         ) {
           this.yPoints.set(id, next)
         }
@@ -484,6 +492,7 @@ export class CollabManager {
           name: l.name,
           nameVisible: l.nameVisible,
           visible: l.visible,
+          userLocked: l.userLocked,
           lengthLocked: l.lengthLocked,
           lockedLength: l.lockedLength,
         }
@@ -495,6 +504,7 @@ export class CollabManager {
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
           prev.visible !== next.visible ||
+          prev.userLocked !== next.userLocked ||
           prev.lengthLocked !== next.lengthLocked ||
           prev.lockedLength !== next.lockedLength
         ) {
@@ -510,6 +520,7 @@ export class CollabManager {
           nameVisible: ray.nameVisible,
           visible: ray.visible,
           displayLength: ray.displayLength,
+          userLocked: ray.userLocked,
         }
         const prev = this.yRays.get(id)
         if (
@@ -519,7 +530,8 @@ export class CollabManager {
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
           prev.visible !== next.visible ||
-          prev.displayLength !== next.displayLength
+          prev.displayLength !== next.displayLength ||
+          prev.userLocked !== next.userLocked
         ) {
           this.yRays.set(id, next)
         }

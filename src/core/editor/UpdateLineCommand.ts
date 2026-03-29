@@ -6,6 +6,7 @@ type LineState = {
   name: string
   nameVisible: boolean
   visible: boolean
+  userLocked: boolean
   lengthLocked: boolean
   lockedLength: number
   p1Position?: Vec3
@@ -23,6 +24,7 @@ export class UpdateLineCommand implements Command {
     this.line.name = this.after.name
     this.line.nameVisible = this.after.nameVisible
     this.line.visible = this.after.visible
+    this.line.userLocked = this.after.userLocked
     this.line.lengthLocked = this.after.lengthLocked
     this.line.lockedLength = Line3.normalizeLockedLength(this.after.lockedLength)
     if (this.after.p1Position) this.line.p1.setPosition(this.after.p1Position.clone())
@@ -33,6 +35,7 @@ export class UpdateLineCommand implements Command {
     this.line.name = this.before.name
     this.line.nameVisible = this.before.nameVisible
     this.line.visible = this.before.visible
+    this.line.userLocked = this.before.userLocked
     this.line.lengthLocked = this.before.lengthLocked
     this.line.lockedLength = Line3.normalizeLockedLength(this.before.lockedLength)
     if (this.before.p1Position) this.line.p1.setPosition(this.before.p1Position.clone())

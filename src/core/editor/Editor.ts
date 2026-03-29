@@ -15,6 +15,7 @@ import { DeletePointCommand } from './DeletePointCommand'
 import { DeleteLineCommand } from './DeleteLineCommand'
 import { DeleteRayCommand } from './DeleteRayCommand'
 import { ClearSceneCommand } from './ClearSceneCommand'
+import { SyncLockStateCommand } from './SyncLockStateCommand'
 
 export enum EditorMode {
   Select,
@@ -59,6 +60,113 @@ export class Editor {
 
   constructor(scene: Scene) {
     this.scene = scene
+  }
+
+  isPointConstrainedByLockedLinear(pointId: string) {
+    for (const line of this.scene.lines.values()) {
+      if (!line.userLocked) continue
+      if (line.p1.id === pointId || line.p2.id === pointId) return true
+    }
+
+    for (const ray of this.scene.rays.values()) {
+      if (!ray.userLocked) continue
+      if (ray.p1.id === pointId || ray.p2.id === pointId) return true
+    }
+
+    return false
+  }
+
+  isPointCoordinateLocked(point: Point3 | null | undefined) {
+    return Boolean(
+      point &&
+        (point.locked || point.userLocked || this.isPointConstrainedByLockedLinear(point.id)),
+    )
+  }
+
+  isLineLocked(line: Line3 | null | undefined) {
+    return Boolean(line && line.userLocked)
+  }
+
+  isRayLocked(ray: Ray3 | null | undefined) {
+    return Boolean(ray && ray.userLocked)
+  }
+
+  isLineGeometryLocked(line: Line3 | null | undefined) {
+    return Boolean(
+      line && (line.userLocked || this.isPointCoordinateLocked(line.p1) || this.isPointCoordinateLocked(line.p2)),
+    )
+  }
+
+  isRayGeometryLocked(ray: Ray3 | null | undefined) {
+    return Boolean(
+      ray && (ray.userLocked || this.isPointCoordinateLocked(ray.p1) || this.isPointCoordinateLocked(ray.p2)),
+    )
+  }
+
+  setPointLockState(pointId: string, locked: boolean) {
+    const point = this.scene.points.get(pointId)
+    if (!point || point.locked) return
+
+    const relatedLines = [...this.scene.lines.values()].filter(
+      (line) => line.p1.id === pointId || line.p2.id === pointId,
+    )
+    const relatedRays = [...this.scene.rays.values()].filter(
+      (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
+    )
+
+    const pointTransforms = [
+      {
+        point,
+        before: point.userLocked,
+        after: locked,
+      },
+    ].filter((transform) => transform.before !== transform.after)
+
+    const lineTransforms = locked
+      ? []
+      : relatedLines
+          .map((line) => ({
+            line,
+            before: line.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
+    const rayTransforms = locked
+      ? []
+      : relatedRays
+          .map((ray) => ({
+            ray,
+            before: ray.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
+    if (pointTransforms.length === 0 && lineTransforms.length === 0 && rayTransforms.length === 0) {
+      return
+    }
+
+    this.executeCommand(new SyncLockStateCommand(pointTransforms, lineTransforms, rayTransforms))
+  }
+
+  setLineLockState(lineId: string, locked: boolean) {
+    const line = this.scene.lines.get(lineId)
+    if (!line) return
+    if (line.userLocked === locked) return
+
+    this.executeCommand(
+      new SyncLockStateCommand([], [{ line, before: line.userLocked, after: locked }], []),
+    )
+  }
+
+  setRayLockState(rayId: string, locked: boolean) {
+    const ray = this.scene.rays.get(rayId)
+    if (!ray) return
+    if (ray.userLocked === locked) return
+
+    this.executeCommand(
+      new SyncLockStateCommand([], [], [{ ray, before: ray.userLocked, after: locked }]),
+    )
   }
 
   get canUndo() {
@@ -124,7 +232,7 @@ export class Editor {
   movePoint(pointId: string, delta: Vec3) {
     const point = this.scene.points.get(pointId)
     if (!point) return
-    if (point.locked) return
+    if (this.isPointCoordinateLocked(point)) return
     if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
 
     this.setPointPosition(pointId, point.position.add(delta))
@@ -132,7 +240,7 @@ export class Editor {
 
   setPointPosition(pointId: string, position: Vec3) {
     const point = this.scene.points.get(pointId)
-    if (!point || point.locked) return
+    if (!point || this.isPointCoordinateLocked(point)) return
 
     const before = point.position.clone()
     const nextPosition = this.resolveLockedLinePointPosition(pointId, position)
@@ -157,7 +265,7 @@ export class Editor {
     const transforms = updates
       .map(({ id, position }) => {
         const point = this.scene.points.get(id)
-        if (!point || point.locked) return null
+        if (!point || this.isPointCoordinateLocked(point)) return null
 
         const before = point.position.clone()
         if (before.x === position.x && before.y === position.y && before.z === position.z) {
@@ -188,7 +296,7 @@ export class Editor {
     const commandTransforms = transforms
       .map(({ id, before, after }) => {
         const point = this.scene.points.get(id)
-        if (!point || point.locked) return null
+        if (!point || this.isPointCoordinateLocked(point)) return null
         if (before.x === after.x && before.y === after.y && before.z === after.z) return null
 
         return {
@@ -211,19 +319,26 @@ export class Editor {
     this.executeCommand(new TransformPointsCommand(commandTransforms))
   }
 
-  updatePoint(pointId: string, patch: { name?: string; nameVisible?: boolean }) {
+  updatePoint(pointId: string, patch: { name?: string; nameVisible?: boolean; userLocked?: boolean }) {
     const point = this.scene.points.get(pointId)
     if (!point) return
 
     const nextName = patch.name ?? point.name
     const nextVisible = patch.nameVisible ?? point.nameVisible
-    if (nextName === point.name && nextVisible === point.nameVisible) return
+    const nextUserLocked = patch.userLocked ?? point.userLocked
+    if (
+      nextName === point.name &&
+      nextVisible === point.nameVisible &&
+      nextUserLocked === point.userLocked
+    ) {
+      return
+    }
 
     this.executeCommand(
       new UpdatePointCommand(
         point,
-        { name: point.name, nameVisible: point.nameVisible },
-        { name: nextName, nameVisible: nextVisible },
+        { name: point.name, nameVisible: point.nameVisible, userLocked: point.userLocked },
+        { name: nextName, nameVisible: nextVisible, userLocked: nextUserLocked },
       ),
     )
   }
@@ -234,6 +349,7 @@ export class Editor {
       name?: string
       nameVisible?: boolean
       visible?: boolean
+      userLocked?: boolean
       lengthLocked?: boolean
       lockedLength?: number
     },
@@ -244,27 +360,31 @@ export class Editor {
     const nextName = patch.name ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextVisible = patch.visible ?? line.visible
-    const nextLengthLocked = patch.lengthLocked ?? line.lengthLocked
+    const nextUserLocked = patch.userLocked ?? line.userLocked
+    const nextLengthLocked = nextUserLocked ? line.lengthLocked : (patch.lengthLocked ?? line.lengthLocked)
     const nextLockedLength = Line3.normalizeLockedLength(
-      patch.lockedLength ??
-        (nextLengthLocked && !line.lengthLocked ? line.getLength() : line.lockedLength),
+      nextUserLocked
+        ? line.lockedLength
+        : (patch.lockedLength ??
+            (nextLengthLocked && !line.lengthLocked ? line.getLength() : line.lockedLength)),
     )
 
     let nextP1Position = line.p1.position.clone()
     let nextP2Position = line.p2.position.clone()
     const shouldAdjustLength =
+      !nextUserLocked &&
       nextLengthLocked &&
       (!line.lengthLocked || Math.abs(nextLockedLength - line.lockedLength) > 1e-6)
 
     if (shouldAdjustLength) {
       const direction = line.getNormalizedDirectionVector()
-      if (line.p2.locked && !line.p1.locked) {
+      if (this.isPointCoordinateLocked(line.p2) && !this.isPointCoordinateLocked(line.p1)) {
         nextP1Position = new Vec3(
           line.p2.position.x - direction.x * nextLockedLength,
           line.p2.position.y - direction.y * nextLockedLength,
           line.p2.position.z - direction.z * nextLockedLength,
         )
-      } else if (!line.p2.locked) {
+      } else if (!this.isPointCoordinateLocked(line.p2)) {
         nextP2Position = new Vec3(
           line.p1.position.x + direction.x * nextLockedLength,
           line.p1.position.y + direction.y * nextLockedLength,
@@ -277,6 +397,7 @@ export class Editor {
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
       nextVisible === line.visible &&
+      nextUserLocked === line.userLocked &&
       nextLengthLocked === line.lengthLocked &&
       nextLockedLength === line.lockedLength &&
       nextP1Position.x === line.p1.position.x &&
@@ -296,6 +417,7 @@ export class Editor {
           name: line.name,
           nameVisible: line.nameVisible,
           visible: line.visible,
+          userLocked: line.userLocked,
           lengthLocked: line.lengthLocked,
           lockedLength: line.lockedLength,
           p1Position: line.p1.position.clone(),
@@ -305,6 +427,7 @@ export class Editor {
           name: nextName,
           nameVisible: nextNameVisible,
           visible: nextVisible,
+          userLocked: nextUserLocked,
           lengthLocked: nextLengthLocked,
           lockedLength: nextLockedLength,
           p1Position: nextP1Position,
@@ -316,7 +439,13 @@ export class Editor {
 
   updateRay(
     rayId: string,
-    patch: { name?: string; nameVisible?: boolean; visible?: boolean; displayLength?: number },
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      visible?: boolean
+      displayLength?: number
+      userLocked?: boolean
+    },
   ) {
     const ray = this.scene.rays.get(rayId)
     if (!ray) return
@@ -325,11 +454,13 @@ export class Editor {
     const nextNameVisible = patch.nameVisible ?? ray.nameVisible
     const nextVisible = patch.visible ?? ray.visible
     const nextDisplayLength = Ray3.normalizeDisplayLength(patch.displayLength ?? ray.displayLength)
+    const nextUserLocked = patch.userLocked ?? ray.userLocked
     if (
       nextName === ray.name &&
       nextNameVisible === ray.nameVisible &&
       nextVisible === ray.visible &&
-      nextDisplayLength === ray.displayLength
+      nextDisplayLength === ray.displayLength &&
+      nextUserLocked === ray.userLocked
     ) {
       return
     }
@@ -342,12 +473,14 @@ export class Editor {
           nameVisible: ray.nameVisible,
           visible: ray.visible,
           displayLength: ray.displayLength,
+          userLocked: ray.userLocked,
         },
         {
           name: nextName,
           nameVisible: nextNameVisible,
           visible: nextVisible,
           displayLength: nextDisplayLength,
+          userLocked: nextUserLocked,
         },
       ),
     )
@@ -430,7 +563,7 @@ export class Editor {
     const transforms = pointIds
       .map((id) => {
         const point = this.scene.points.get(id)
-        if (!point || point.locked) return null
+        if (!point || this.isPointCoordinateLocked(point)) return null
 
         const before = point.position.clone()
         const after = before.add(delta)
@@ -470,7 +603,7 @@ export class Editor {
       if (!isP1 && !isP2) return
 
       const anchor = isP1 ? line.p2 : line.p1
-      if (!anchor.locked) return
+      if (!this.isPointCoordinateLocked(anchor)) return
 
       const anchorPosition = positionOverrides?.get(anchor.id) ?? anchor.position
       let dx = resolved.x - anchorPosition.x

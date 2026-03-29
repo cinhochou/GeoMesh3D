@@ -52,11 +52,26 @@ const editing = ref<{ type: 'point' | 'line' | 'ray'; id: string } | null>(null)
 const isCompactLineEditor = ref(false)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
-const editPoint = reactive({ name: '', nameVisible: true, x: '', y: '', z: '' })
+const isPointCoordinateLocked = (point: Point3 | undefined) =>
+  Boolean(point && props.editor.isPointCoordinateLocked(point))
+const isLineCoordinateLocked = (line: Line3 | undefined) =>
+  Boolean(line && props.editor.isLineGeometryLocked(line))
+const isRayCoordinateLocked = (ray: Ray3 | undefined) =>
+  Boolean(ray && props.editor.isRayGeometryLocked(ray))
+
+const editPoint = reactive({
+  name: '',
+  nameVisible: true,
+  userLocked: false,
+  x: '',
+  y: '',
+  z: '',
+})
 const editLine = reactive({
   name: '',
   nameVisible: true,
   visible: true,
+  userLocked: false,
   lengthLocked: false,
   lockedLength: '',
   p1: { x: '', y: '', z: '' },
@@ -66,6 +81,7 @@ const editRay = reactive({
   name: '',
   nameVisible: true,
   visible: true,
+  userLocked: false,
   displayLength: '',
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
@@ -324,12 +340,13 @@ const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
-  if (p.locked) return
+  if (p.id === Scene.ORIGIN_ID) return
   editing.value = { type: 'point', id: p.id }
   expandedLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
+  editPoint.userLocked = isPointCoordinateLocked(p)
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
   editPoint.z = toFixed2(p.position.z)
@@ -343,6 +360,7 @@ const startEditLine = (l: Line3 | undefined) => {
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
   editLine.visible = l.visible !== false
+  editLine.userLocked = props.editor.isLineLocked(l)
   editLine.lengthLocked = l.lengthLocked === true
   editLine.lockedLength = toFixed2(l.lengthLocked ? l.lockedLength : l.getLength())
   editLine.p1.x = toFixed2(l.p1.position.x)
@@ -360,6 +378,7 @@ const startEditRay = (r: Ray3 | undefined) => {
   editRay.name = r.name ?? ''
   editRay.nameVisible = r.nameVisible !== false
   editRay.visible = r.visible !== false
+  editRay.userLocked = props.editor.isRayLocked(r)
   editRay.displayLength = toFixed2(r.displayLength)
   editRay.p1.x = toFixed2(r.p1.position.x)
   editRay.p1.y = toFixed2(r.p1.position.y)
@@ -376,18 +395,21 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return
   const point = props.scene.points.get(id)
   if (!point) return
-  if (point.locked) return
+  if (isPointCoordinateLocked(point)) return
   props.editor.setPointPosition(id, new Vec3(x, y, z))
 }
 
 const applyEditPoint = () => {
   if (!editing.value || editing.value.type !== 'point') return
   const point = props.scene.points.get(editing.value.id)
-  if (point && !point.locked) {
+  if (point) {
     props.editor.updatePoint(editing.value.id, {
       name: editPoint.name,
       nameVisible: editPoint.nameVisible,
     })
+    if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
+      props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
+    }
   }
   applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
 }
@@ -396,6 +418,7 @@ const applyEditLine = () => {
   if (!editing.value || editing.value.type !== 'line') return
   const line = props.scene.lines.get(editing.value.id)
   if (!line) return
+  const previousUserLocked = props.editor.isLineLocked(line)
   const previousLengthLocked = line.lengthLocked
   const previousLockedLength = line.lockedLength
   const parsedLockedLength = Number(editLine.lockedLength)
@@ -406,9 +429,13 @@ const applyEditLine = () => {
     lengthLocked: editLine.lengthLocked,
     lockedLength: Number.isFinite(parsedLockedLength) ? parsedLockedLength : undefined,
   })
+  if (editLine.userLocked !== previousUserLocked) {
+    props.editor.setLineLockState(editing.value.id, editLine.userLocked)
+  }
 
   const updatedLine = props.scene.lines.get(editing.value.id)
   if (!updatedLine) return
+  if (isLineCoordinateLocked(updatedLine)) return
 
   const constraintChanged =
     editLine.lengthLocked !== previousLengthLocked ||
@@ -469,6 +496,7 @@ const applyEditRay = () => {
   if (!editing.value || editing.value.type !== 'ray') return
   const ray = props.scene.rays.get(editing.value.id)
   if (!ray) return
+  const previousUserLocked = props.editor.isRayLocked(ray)
   const displayLength = Number(editRay.displayLength)
   props.editor.updateRay(editing.value.id, {
     name: editRay.name,
@@ -476,6 +504,11 @@ const applyEditRay = () => {
     visible: editRay.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
+  if (editRay.userLocked !== previousUserLocked) {
+    props.editor.setRayLockState(editing.value.id, editRay.userLocked)
+  }
+  const updatedRay = props.scene.rays.get(editing.value.id)
+  if (!updatedRay || isRayCoordinateLocked(updatedRay)) return
   applyPointPosition(ray.p1.id, editRay.p1.x, editRay.p1.y, editRay.p1.z)
   applyPointPosition(ray.p2.id, editRay.p2.x, editRay.p2.y, editRay.p2.z)
 }
@@ -504,6 +537,7 @@ watch(
       ? {
           name: p.name ?? '',
           nameVisible: p.nameVisible !== false,
+          userLocked: isPointCoordinateLocked(p),
           x: p.position.x,
           y: p.position.y,
           z: p.position.z,
@@ -514,6 +548,7 @@ watch(
     if (!newPos) return
     editPoint.name = newPos.name
     editPoint.nameVisible = newPos.nameVisible
+    editPoint.userLocked = newPos.userLocked
     if (!focusedCoord['point.x']) editPoint.x = toFixed2(newPos.x)
     if (!focusedCoord['point.y']) editPoint.y = toFixed2(newPos.y)
     if (!focusedCoord['point.z']) editPoint.z = toFixed2(newPos.z)
@@ -531,6 +566,7 @@ watch(
       name: l.name ?? '',
       nameVisible: l.nameVisible !== false,
       visible: l.visible !== false,
+      userLocked: props.editor.isLineLocked(l),
       lengthLocked: l.lengthLocked === true,
       lockedLength: l.lockedLength,
       actualLength: l.getLength(),
@@ -543,6 +579,7 @@ watch(
     editLine.name = newLine.name
     editLine.nameVisible = newLine.nameVisible
     editLine.visible = newLine.visible
+    editLine.userLocked = newLine.userLocked
     editLine.lengthLocked = newLine.lengthLocked
     if (!focusedCoord['line.lockedLength']) {
       editLine.lockedLength = toFixed2(
@@ -568,6 +605,7 @@ watch(
       name: r.name ?? '',
       nameVisible: r.nameVisible !== false,
       visible: r.visible !== false,
+      userLocked: props.editor.isRayLocked(r),
       displayLength: r.displayLength,
       p1: { x: r.p1.position.x, y: r.p1.position.y, z: r.p1.position.z },
       p2: { x: r.p2.position.x, y: r.p2.position.y, z: r.p2.position.z },
@@ -578,6 +616,7 @@ watch(
     editRay.name = newRay.name
     editRay.nameVisible = newRay.nameVisible
     editRay.visible = newRay.visible
+    editRay.userLocked = newRay.userLocked
     if (!focusedCoord['ray.displayLength']) editRay.displayLength = toFixed2(newRay.displayLength)
     if (!focusedCoord['ray.p1.x']) editRay.p1.x = toFixed2(newRay.p1.x)
     if (!focusedCoord['ray.p1.y']) editRay.p1.y = toFixed2(newRay.p1.y)
@@ -642,12 +681,21 @@ onUnmounted(() => {
               <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
               {{ editPoint.nameVisible ? '隐藏' : '显示' }}
             </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" />
+              锁定
+            </label>
           </div>
           <div class="coord-row">
             <div class="axis-field">
               <label>x</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'down')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('x', 'down')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   -
                 </button>
                 <input
@@ -658,8 +706,14 @@ onUnmounted(() => {
                   @focus="handlePointCoordFocus('x')"
                   @blur="handlePointCoordBlur('x')"
                   step="0.5"
+                  :disabled="isPointCoordinateLocked(p!)"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('x', 'up')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('x', 'up')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   +
                 </button>
               </div>
@@ -667,7 +721,12 @@ onUnmounted(() => {
             <div class="axis-field">
               <label>y</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'down')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('y', 'down')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   -
                 </button>
                 <input
@@ -678,8 +737,14 @@ onUnmounted(() => {
                   @focus="handlePointCoordFocus('y')"
                   @blur="handlePointCoordBlur('y')"
                   step="0.5"
+                  :disabled="isPointCoordinateLocked(p!)"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('y', 'up')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('y', 'up')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   +
                 </button>
               </div>
@@ -687,7 +752,12 @@ onUnmounted(() => {
             <div class="axis-field">
               <label>z</label>
               <div class="coord-input">
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'down')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('z', 'down')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   -
                 </button>
                 <input
@@ -698,8 +768,14 @@ onUnmounted(() => {
                   @focus="handlePointCoordFocus('z')"
                   @blur="handlePointCoordBlur('z')"
                   step="0.5"
+                  :disabled="isPointCoordinateLocked(p!)"
                 />
-                <button type="button" class="step-btn" @click="nudgePointCoord('z', 'up')">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePointCoord('z', 'up')"
+                  :disabled="isPointCoordinateLocked(p!)"
+                >
                   +
                 </button>
               </div>
@@ -709,7 +785,7 @@ onUnmounted(() => {
         <div v-else>
           <div>
             点{{ p!.name ?? '' }}，ID: {{ p!.id }}
-            <span v-if="p!.locked" class="lock-badge">🔒</span>
+            <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
           </div>
           <div>
             x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
@@ -736,6 +812,10 @@ onUnmounted(() => {
               <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
               名称显示
             </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editLine.userLocked" @change="applyEditLine" />
+              锁定
+            </label>
           </div>
           <div class="name-row">
             <label>长度</label>
@@ -744,7 +824,7 @@ onUnmounted(() => {
                 type="button"
                 class="step-btn"
                 @click="nudgeLineLength('down')"
-                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+                :disabled="!editLine.lengthLocked || isLineCoordinateLocked(l!)"
               >
                 -
               </button>
@@ -757,19 +837,24 @@ onUnmounted(() => {
                 @blur="handleLineLengthBlur"
                 step="0.5"
                 min="0"
-                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+                :disabled="!editLine.lengthLocked || isLineCoordinateLocked(l!)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @click="nudgeLineLength('up')"
-                :disabled="!editLine.lengthLocked || l!.p1.locked || l!.p2.locked"
+                :disabled="!editLine.lengthLocked || isLineCoordinateLocked(l!)"
               >
                 +
               </button>
             </div>
             <label class="toggle-label">
-              <input type="checkbox" v-model="editLine.lengthLocked" @change="applyEditLine" />
+              <input
+                type="checkbox"
+                v-model="editLine.lengthLocked"
+                @change="applyEditLine"
+                :disabled="isLineCoordinateLocked(l!)"
+              />
               长度约束
             </label>
           </div>
@@ -783,14 +868,14 @@ onUnmounted(() => {
                 点{{ l!.p1.name ?? '' }}(x,y,z)
               </span>
               <span v-else class="line-editor-title-short">点A</span>
-              <span v-if="l!.p1.locked" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(l!.p1)" class="lock-badge">🔒</span>
             </div>
             <div class="line-editor-head">
               <span v-if="!isCompactLineEditor" class="line-editor-title-full">
                 点{{ l!.p2.name ?? '' }}(x,y,z)
               </span>
               <span v-else class="line-editor-title-short">点B</span>
-              <span v-if="l!.p2.locked" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(l!.p2)" class="lock-badge">🔒</span>
             </div>
 
             <div class="line-axis-label">x</div>
@@ -805,7 +890,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'x', 'down')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 -
               </button>
@@ -817,14 +902,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p1', 'x')"
                 @blur="handleLineCoordBlur('p1', 'x')"
                 step="0.5"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'x', 'up')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 +
               </button>
@@ -840,7 +925,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'x', 'down')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 -
               </button>
@@ -852,14 +937,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p2', 'x')"
                 @blur="handleLineCoordBlur('p2', 'x')"
                 step="0.5"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'x', 'up')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 +
               </button>
@@ -877,7 +962,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'y', 'down')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 -
               </button>
@@ -889,14 +974,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p1', 'y')"
                 @blur="handleLineCoordBlur('p1', 'y')"
                 step="0.5"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'y', 'up')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 +
               </button>
@@ -912,7 +997,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'y', 'down')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 -
               </button>
@@ -924,14 +1009,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p2', 'y')"
                 @blur="handleLineCoordBlur('p2', 'y')"
                 step="0.5"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'y', 'up')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 +
               </button>
@@ -949,7 +1034,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'z', 'down')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 -
               </button>
@@ -961,14 +1046,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p1', 'z')"
                 @blur="handleLineCoordBlur('p1', 'z')"
                 step="0.5"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p1')"
                 @click="nudgeLineCoord('p1', 'z', 'up')"
-                :disabled="l!.p1.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p1)"
               >
                 +
               </button>
@@ -984,7 +1069,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'z', 'down')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 -
               </button>
@@ -996,14 +1081,14 @@ onUnmounted(() => {
                 @focus="handleLineCoordFocus('p2', 'z')"
                 @blur="handleLineCoordBlur('p2', 'z')"
                 step="0.5"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepLineCoordExpanded('p2')"
                 @click="nudgeLineCoord('p2', 'z', 'up')"
-                :disabled="l!.p2.locked"
+                :disabled="isLineCoordinateLocked(l!) || isPointCoordinateLocked(l!.p2)"
               >
                 +
               </button>
@@ -1011,7 +1096,10 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else>
-          <div>线{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
+          <div>
+            线{{ l!.name ?? '' }}，ID: {{ l!.id }}
+            <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
+          </div>
           <div>
             长度：{{ l!.getLength().toFixed(2) }}
             <span v-if="l!.lengthLocked" class="constraint-badge">受约束</span>
@@ -1045,6 +1133,10 @@ onUnmounted(() => {
               <input type="checkbox" v-model="editRay.nameVisible" @change="applyEditRay" />
               {{ editRay.nameVisible ? '名称显示' : '名称隐藏' }}
             </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editRay.userLocked" @change="applyEditRay" />
+              锁定
+            </label>
           </div>
           <div class="name-row">
             <label>长度</label>
@@ -1075,14 +1167,14 @@ onUnmounted(() => {
                 起点{{ r!.p1.name ?? '' }}(x,y,z)
               </span>
               <span v-else class="line-editor-title-short">起点</span>
-              <span v-if="r!.p1.locked" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(r!.p1)" class="lock-badge">🔒</span>
             </div>
             <div class="line-editor-head">
               <span v-if="!isCompactLineEditor" class="line-editor-title-full">
                 方向点{{ r!.p2.name ?? '' }}(x,y,z)
               </span>
               <span v-else class="line-editor-title-short">方向点</span>
-              <span v-if="r!.p2.locked" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(r!.p2)" class="lock-badge">🔒</span>
             </div>
 
             <div class="line-axis-label">x</div>
@@ -1097,7 +1189,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'x', 'down')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 -
               </button>
@@ -1109,14 +1201,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p1', 'x')"
                 @blur="handleRayCoordBlur('p1', 'x')"
                 step="0.5"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'x', 'up')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 +
               </button>
@@ -1132,7 +1224,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'x', 'down')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 -
               </button>
@@ -1144,14 +1236,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p2', 'x')"
                 @blur="handleRayCoordBlur('p2', 'x')"
                 step="0.5"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'x', 'up')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 +
               </button>
@@ -1169,7 +1261,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'y', 'down')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 -
               </button>
@@ -1181,14 +1273,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p1', 'y')"
                 @blur="handleRayCoordBlur('p1', 'y')"
                 step="0.5"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'y', 'up')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 +
               </button>
@@ -1204,7 +1296,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'y', 'down')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 -
               </button>
@@ -1216,14 +1308,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p2', 'y')"
                 @blur="handleRayCoordBlur('p2', 'y')"
                 step="0.5"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'y', 'up')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 +
               </button>
@@ -1241,7 +1333,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'z', 'down')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 -
               </button>
@@ -1253,14 +1345,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p1', 'z')"
                 @blur="handleRayCoordBlur('p1', 'z')"
                 step="0.5"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p1')"
                 @click="nudgeRayCoord('p1', 'z', 'up')"
-                :disabled="r!.p1.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p1)"
               >
                 +
               </button>
@@ -1276,7 +1368,7 @@ onUnmounted(() => {
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'z', 'down')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 -
               </button>
@@ -1288,14 +1380,14 @@ onUnmounted(() => {
                 @focus="handleRayCoordFocus('p2', 'z')"
                 @blur="handleRayCoordBlur('p2', 'z')"
                 step="0.5"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               />
               <button
                 type="button"
                 class="step-btn"
                 @pointerdown.prevent="keepRayCoordExpanded('p2')"
                 @click="nudgeRayCoord('p2', 'z', 'up')"
-                :disabled="r!.p2.locked"
+                :disabled="isRayCoordinateLocked(r!) || isPointCoordinateLocked(r!.p2)"
               >
                 +
               </button>
@@ -1303,7 +1395,10 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else>
-          <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
+          <div>
+            射线{{ r!.name ?? '' }}，ID: {{ r!.id }}
+            <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+          </div>
           <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
           <div>
             起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
@@ -1364,7 +1459,7 @@ onUnmounted(() => {
             <div>
               点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
               {{ p!.position.z.toFixed(2) }}），ID: {{ p!.id }}
-              <span v-if="p!.locked" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
             </div>
           </div>
         </div>
@@ -1398,7 +1493,10 @@ onUnmounted(() => {
             :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
             @click="selectLineFromContent(l!.id)"
           >
-            <div>线段{{ l!.name ?? '' }}，ID: {{ l!.id }}</div>
+            <div>
+              线段{{ l!.name ?? '' }}，ID: {{ l!.id }}
+              <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
+            </div>
             <div>
               <div>
                 点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
@@ -1441,7 +1539,10 @@ onUnmounted(() => {
             :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
             @click="selectRayFromContent(r!.id)"
           >
-            <div>射线{{ r!.name ?? '' }}，ID: {{ r!.id }}</div>
+            <div>
+              射线{{ r!.name ?? '' }}，ID: {{ r!.id }}
+              <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+            </div>
             <div>
               起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
               {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）

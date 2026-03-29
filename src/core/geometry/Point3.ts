@@ -6,6 +6,7 @@ export class Point3 {
   nameVisible: boolean
   position: Vec3
   locked: boolean
+  userLocked: boolean
 
   constructor(
     id: string,
@@ -13,12 +14,14 @@ export class Point3 {
     position = new Vec3(),
     locked: boolean = false,
     nameVisible: boolean = true,
+    userLocked: boolean = false,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
     this.position = position
     this.locked = locked
+    this.userLocked = userLocked
   }
 
   setPosition(v: Vec3) {

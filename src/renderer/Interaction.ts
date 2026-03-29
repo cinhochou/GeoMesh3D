@@ -1,6 +1,8 @@
 ﻿// src/renderer/Interaction.ts
 import * as THREE from 'three'
 import { Editor, EditorMode } from '../core/editor/Editor'
+import type { Line3 } from '../core/geometry/Line3'
+import type { Point3 } from '../core/geometry/Point3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { ThreeRenderer } from './ThreeRenderer'
 
@@ -270,6 +272,27 @@ export class Interaction {
     return protectedEndpoint ?? lineHit
   }
 
+  private getLinePivotDragPoint(line: Line3): Point3 | null {
+    if (line.userLocked) return null
+
+    const p1Locked = this.editor.isPointCoordinateLocked(line.p1)
+    const p2Locked = this.editor.isPointCoordinateLocked(line.p2)
+    if (p1Locked === p2Locked) return null
+
+    return p1Locked ? line.p2 : line.p1
+  }
+
+  private getLineDragReferencePoint(line: Line3) {
+    const pivotPoint = this.getLinePivotDragPoint(line)
+    if (pivotPoint) return pivotPoint.position
+
+    return new Vec3(
+      (line.p1.position.x + line.p2.position.x) / 2,
+      (line.p1.position.y + line.p2.position.y) / 2,
+      (line.p1.position.z + line.p2.position.z) / 2,
+    )
+  }
+
   private handleSelectionDragMove(isAltPressed: boolean) {
     const selection = this.editor.scene.selection
 
@@ -284,14 +307,14 @@ export class Interaction {
           selection.points.forEach((id) => toMove.add(id))
           selection.lines.forEach((lid) => {
             const l = this.editor.scene.lines.get(lid)
-            if (l) {
+            if (l && !this.editor.isLineGeometryLocked(l)) {
               toMove.add(l.p1.id)
               toMove.add(l.p2.id)
             }
           })
           selection.rays.forEach((rid) => {
             const ray = this.editor.scene.rays.get(rid)
-            if (ray) {
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
               toMove.add(ray.p1.id)
               toMove.add(ray.p2.id)
             }
@@ -308,25 +331,35 @@ export class Interaction {
       const line = this.editor.scene.lines.get(this.draggingLineId)
       if (!line) return
 
-      const mid = new Vec3(
-        (line.p1.position.x + line.p2.position.x) / 2,
-        (line.p1.position.y + line.p2.position.y) / 2,
-        (line.p1.position.z + line.p2.position.z) / 2,
-      )
+      const pivotPoint = this.getLinePivotDragPoint(line)
+      if (pivotPoint) {
+        this.handleDrag(
+          pivotPoint.position,
+          (delta) => {
+            this.previewMovePoints([pivotPoint.id], delta)
+          },
+          isAltPressed,
+        )
+        return
+      }
+
+      if (this.editor.isLineGeometryLocked(line)) return
+
+      const mid = this.getLineDragReferencePoint(line)
       this.handleDrag(
         mid,
         (delta) => {
           const toMove = new Set<string>()
           selection.lines.forEach((lid) => {
             const l = this.editor.scene.lines.get(lid)
-            if (l) {
+            if (l && !this.editor.isLineGeometryLocked(l)) {
               toMove.add(l.p1.id)
               toMove.add(l.p2.id)
             }
           })
           selection.rays.forEach((rid) => {
             const ray = this.editor.scene.rays.get(rid)
-            if (ray) {
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
               toMove.add(ray.p1.id)
               toMove.add(ray.p2.id)
             }
@@ -338,11 +371,12 @@ export class Interaction {
         },
         isAltPressed,
       )
+      return
     }
 
     if (this.draggingRayId) {
       const ray = this.editor.scene.rays.get(this.draggingRayId)
-      if (!ray) return
+      if (!ray || this.editor.isRayGeometryLocked(ray)) return
 
       const end = ray.getDisplayEndPoint()
       const mid = new Vec3(
@@ -356,14 +390,14 @@ export class Interaction {
           const toMove = new Set<string>()
           selection.lines.forEach((lid) => {
             const l = this.editor.scene.lines.get(lid)
-            if (l) {
+            if (l && !this.editor.isLineGeometryLocked(l)) {
               toMove.add(l.p1.id)
               toMove.add(l.p2.id)
             }
           })
           selection.rays.forEach((rid) => {
             const selectedRay = this.editor.scene.rays.get(rid)
-            if (selectedRay) {
+            if (selectedRay && !this.editor.isRayGeometryLocked(selectedRay)) {
               toMove.add(selectedRay.p1.id)
               toMove.add(selectedRay.p2.id)
             }
@@ -422,7 +456,7 @@ export class Interaction {
           this.editor.scene.selection.selectPoint(geoId, true)
           const p = this.editor.scene.points.get(geoId)
           if (p) {
-            if (p.locked) {
+            if (this.editor.isPointCoordinateLocked(p)) {
               this.draggingPointId = null
             } else {
               this.startDrag(p.position)
@@ -433,26 +467,30 @@ export class Interaction {
           this.editor.scene.selection.selectLine(geoId, true)
           const l = this.editor.scene.lines.get(geoId)
           if (l) {
-            this.draggingLineId = geoId
-            const mid = new Vec3(
-              (l.p1.position.x + l.p2.position.x) / 2,
-              (l.p1.position.y + l.p2.position.y) / 2,
-              (l.p1.position.z + l.p2.position.z) / 2,
-            )
-            this.startDrag(mid)
+            const referencePoint = this.getLineDragReferencePoint(l)
+            if (this.editor.isLineGeometryLocked(l) && !this.getLinePivotDragPoint(l)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingLineId = geoId
+              this.startDrag(referencePoint)
+            }
           }
         } else if (type === 'ray') {
           this.editor.scene.selection.selectRay(geoId, true)
           const ray = this.editor.scene.rays.get(geoId)
           if (ray) {
-            this.draggingRayId = geoId
-            const end = ray.getDisplayEndPoint()
-            const mid = new Vec3(
-              (ray.p1.position.x + end.x) / 2,
-              (ray.p1.position.y + end.y) / 2,
-              (ray.p1.position.z + end.z) / 2,
-            )
-            this.startDrag(mid)
+            if (this.editor.isRayGeometryLocked(ray)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingRayId = geoId
+              const end = ray.getDisplayEndPoint()
+              const mid = new Vec3(
+                (ray.p1.position.x + end.x) / 2,
+                (ray.p1.position.y + end.y) / 2,
+                (ray.p1.position.z + end.z) / 2,
+              )
+              this.startDrag(mid)
+            }
           }
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
@@ -633,7 +671,7 @@ export class Interaction {
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       this.draggingPointId = geoId
       const point = this.editor.scene.points.get(geoId)
-      if (!point || point.locked) {
+      if (!point || this.editor.isPointCoordinateLocked(point)) {
         this.draggingPointId = null
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
@@ -660,18 +698,13 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       const line = this.editor.scene.lines.get(geoId)
-      if (!line) {
+      if (!line || (this.editor.isLineGeometryLocked(line) && !this.getLinePivotDragPoint(line))) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
       }
       this.draggingLineId = geoId
-      const mid = new Vec3(
-        (line.p1.position.x + line.p2.position.x) / 2,
-        (line.p1.position.y + line.p2.position.y) / 2,
-        (line.p1.position.z + line.p2.position.z) / 2,
-      )
-      this.startDrag(mid)
+      this.startDrag(this.getLineDragReferencePoint(line))
       return
     }
 
@@ -692,7 +725,7 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       const ray = this.editor.scene.rays.get(geoId)
-      if (!ray) {
+      if (!ray || this.editor.isRayGeometryLocked(ray)) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
@@ -954,7 +987,7 @@ export class Interaction {
 
     expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
-      if (!point || point.locked) return
+      if (!point || this.editor.isPointCoordinateLocked(point)) return
 
       if (!this.dragStartPositions.has(id)) {
         this.dragStartPositions.set(id, point.position.clone())

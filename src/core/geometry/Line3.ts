@@ -6,6 +6,7 @@ export class Line3 {
   name: string
   nameVisible: boolean
   visible: boolean
+  userLocked: boolean
   lengthLocked: boolean
   lockedLength: number
   p1: Point3
@@ -20,11 +21,13 @@ export class Line3 {
     visible: boolean = true,
     lengthLocked: boolean = false,
     lockedLength?: number,
+    userLocked: boolean = false,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
     this.visible = visible
+    this.userLocked = userLocked
     this.lengthLocked = lengthLocked
     this.p1 = p1
     this.p2 = p2

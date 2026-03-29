@@ -8,6 +8,7 @@ export class Ray3 {
   name: string
   nameVisible: boolean
   visible: boolean
+  userLocked: boolean
   p1: Point3
   p2: Point3
   displayLength: number
@@ -20,11 +21,13 @@ export class Ray3 {
     nameVisible: boolean = true,
     visible: boolean = true,
     displayLength: number = Ray3.DEFAULT_DISPLAY_LENGTH,
+    userLocked: boolean = false,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
     this.visible = visible
+    this.userLocked = userLocked
     this.p1 = p1
     this.p2 = p2
     this.displayLength = Ray3.normalizeDisplayLength(displayLength)
