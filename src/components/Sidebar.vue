@@ -15,22 +15,36 @@ const props = defineProps<{
   modeHint: string
 }>()
 
+const commandRevision = computed(() => props.editor.historyIndex)
+
 const selectedPoints = computed(() => {
-  return [...props.scene.selection.points].map((id) => props.scene.points.get(id))
+  commandRevision.value
+  return [...props.scene.selection.points]
+    .map((id) => props.scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined)
 })
 const selectedLines = computed(() => {
-  return [...props.scene.selection.lines].map((id) => props.scene.lines.get(id))
+  commandRevision.value
+  return [...props.scene.selection.lines]
+    .map((id) => props.scene.lines.get(id))
+    .filter((line): line is Line3 => line !== undefined)
 })
 const selectedRays = computed(() => {
-  return [...props.scene.selection.rays].map((id) => props.scene.rays.get(id))
+  commandRevision.value
+  return [...props.scene.selection.rays]
+    .map((id) => props.scene.rays.get(id))
+    .filter((ray): ray is Ray3 => ray !== undefined)
 })
 const pointsInScene = computed(() => {
+  commandRevision.value
   return [...props.scene.points.values()]
 })
 const linesInScene = computed(() => {
+  commandRevision.value
   return [...props.scene.lines.values()]
 })
 const raysInScene = computed(() => {
+  commandRevision.value
   return [...props.scene.rays.values()]
 })
 

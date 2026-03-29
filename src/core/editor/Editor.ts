@@ -127,8 +127,7 @@ export class Editor {
     if (point.locked) return
     if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
 
-    const group = this.getLockedTranslationGroup([pointId])
-    this.translatePointGroup([...group], delta)
+    this.setPointPosition(pointId, point.position.add(delta))
   }
 
   setPointPosition(pointId: string, position: Vec3) {
@@ -136,9 +135,20 @@ export class Editor {
     if (!point || point.locked) return
 
     const before = point.position.clone()
-    if (before.x === position.x && before.y === position.y && before.z === position.z) return
+    const nextPosition = this.resolveLockedLinePointPosition(pointId, position)
+    if (
+      before.x === nextPosition.x &&
+      before.y === nextPosition.y &&
+      before.z === nextPosition.z
+    ) {
+      return
+    }
 
-    const delta = new Vec3(position.x - before.x, position.y - before.y, position.z - before.z)
+    const delta = new Vec3(
+      nextPosition.x - before.x,
+      nextPosition.y - before.y,
+      nextPosition.z - before.z,
+    )
     const group = this.getLockedTranslationGroup([pointId])
     this.translatePointGroup([...group], delta)
   }
@@ -240,6 +250,7 @@ export class Editor {
         (nextLengthLocked && !line.lengthLocked ? line.getLength() : line.lockedLength),
     )
 
+    let nextP1Position = line.p1.position.clone()
     let nextP2Position = line.p2.position.clone()
     const shouldAdjustLength =
       nextLengthLocked &&
@@ -247,11 +258,19 @@ export class Editor {
 
     if (shouldAdjustLength) {
       const direction = line.getNormalizedDirectionVector()
-      nextP2Position = new Vec3(
-        line.p1.position.x + direction.x * nextLockedLength,
-        line.p1.position.y + direction.y * nextLockedLength,
-        line.p1.position.z + direction.z * nextLockedLength,
-      )
+      if (line.p2.locked && !line.p1.locked) {
+        nextP1Position = new Vec3(
+          line.p2.position.x - direction.x * nextLockedLength,
+          line.p2.position.y - direction.y * nextLockedLength,
+          line.p2.position.z - direction.z * nextLockedLength,
+        )
+      } else if (!line.p2.locked) {
+        nextP2Position = new Vec3(
+          line.p1.position.x + direction.x * nextLockedLength,
+          line.p1.position.y + direction.y * nextLockedLength,
+          line.p1.position.z + direction.z * nextLockedLength,
+        )
+      }
     }
 
     if (
@@ -260,6 +279,9 @@ export class Editor {
       nextVisible === line.visible &&
       nextLengthLocked === line.lengthLocked &&
       nextLockedLength === line.lockedLength &&
+      nextP1Position.x === line.p1.position.x &&
+      nextP1Position.y === line.p1.position.y &&
+      nextP1Position.z === line.p1.position.z &&
       nextP2Position.x === line.p2.position.x &&
       nextP2Position.y === line.p2.position.y &&
       nextP2Position.z === line.p2.position.z
@@ -276,6 +298,7 @@ export class Editor {
           visible: line.visible,
           lengthLocked: line.lengthLocked,
           lockedLength: line.lockedLength,
+          p1Position: line.p1.position.clone(),
           p2Position: line.p2.position.clone(),
         },
         {
@@ -284,6 +307,7 @@ export class Editor {
           visible: nextVisible,
           lengthLocked: nextLengthLocked,
           lockedLength: nextLockedLength,
+          p1Position: nextP1Position,
           p2Position: nextP2Position,
         },
       ),
@@ -426,6 +450,58 @@ export class Editor {
     }
 
     this.executeCommand(new TransformPointsCommand(transforms))
+  }
+
+  resolveLockedLinePointPosition(
+    pointId: string,
+    position: Vec3,
+    positionOverrides?: Map<string, Vec3>,
+  ) {
+    const point = this.scene.points.get(pointId)
+    if (!point) return position.clone()
+
+    let resolved = position.clone()
+
+    this.scene.lines.forEach((line) => {
+      if (!line.lengthLocked) return
+
+      const isP1 = line.p1.id === pointId
+      const isP2 = line.p2.id === pointId
+      if (!isP1 && !isP2) return
+
+      const anchor = isP1 ? line.p2 : line.p1
+      if (!anchor.locked) return
+
+      const anchorPosition = positionOverrides?.get(anchor.id) ?? anchor.position
+      let dx = resolved.x - anchorPosition.x
+      let dy = resolved.y - anchorPosition.y
+      let dz = resolved.z - anchorPosition.z
+      let distance = Math.hypot(dx, dy, dz)
+
+      if (distance <= 1e-6) {
+        const currentPosition = positionOverrides?.get(pointId) ?? point.position
+        dx = currentPosition.x - anchorPosition.x
+        dy = currentPosition.y - anchorPosition.y
+        dz = currentPosition.z - anchorPosition.z
+        distance = Math.hypot(dx, dy, dz)
+      }
+
+      if (distance <= 1e-6) {
+        dx = isP1 ? -1 : 1
+        dy = 0
+        dz = 0
+        distance = 1
+      }
+
+      const scale = line.lockedLength / distance
+      resolved = new Vec3(
+        anchorPosition.x + dx * scale,
+        anchorPosition.y + dy * scale,
+        anchorPosition.z + dz * scale,
+      )
+    })
+
+    return resolved
   }
 
   executeCommand(cmd: Command) {

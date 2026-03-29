@@ -29,10 +29,13 @@ export class AddElementCommand implements Command {
   undo() {
     if (this.type === 'point') {
       this.scene.points.delete(this.element.id)
+      this.scene.selection.points.delete(this.element.id)
     } else if (this.type === 'line') {
       this.scene.lines.delete(this.element.id)
+      this.scene.selection.lines.delete(this.element.id)
     } else {
       this.scene.rays.delete(this.element.id)
+      this.scene.selection.rays.delete(this.element.id)
     }
   }
 }

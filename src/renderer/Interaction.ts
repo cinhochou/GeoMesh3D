@@ -950,6 +950,7 @@ export class Interaction {
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
     const expandedPointIds = this.expandLockedLinePreviewPointIds(pointIds)
+    const previewPositions = new Map<string, Vec3>()
 
     expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
@@ -959,7 +960,13 @@ export class Interaction {
         this.dragStartPositions.set(id, point.position.clone())
       }
 
-      point.setPosition(this.dragStartPositions.get(id)!.add(delta))
+      const previewPosition = this.editor.resolveLockedLinePointPosition(
+        id,
+        this.dragStartPositions.get(id)!.add(delta),
+        previewPositions,
+      )
+      previewPositions.set(id, previewPosition)
+      point.setPosition(previewPosition)
     })
   }
 
