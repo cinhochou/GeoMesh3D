@@ -80,7 +80,7 @@ export class CollabManager {
 
     //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'
     this.provider = new WebrtcProvider(roomName, this.ydoc, {
-      signaling: ['ws://localhost:4444/'],
+      signaling: ['ws://localhost:4444/', 'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'],
     })
 
     this.provider.on('peers', (params: any) => {
