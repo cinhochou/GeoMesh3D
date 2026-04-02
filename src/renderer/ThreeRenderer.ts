@@ -39,6 +39,19 @@ type RenderObjectUserData = THREE.Object3D['userData'] & {
 type LabelSpriteUserData = THREE.Object3D['userData'] & {
   text?: string
 }
+
+type AxisArrowUserData = THREE.Object3D['userData'] & {
+  __baseLength?: number
+  __baseHeadLength?: number
+  __baseHeadWidth?: number
+}
+
+type AxisLabelUserData = THREE.Object3D['userData'] & {
+  __axisDir?: THREE.Vector3
+  __axisLength?: number
+  __axisLabelOffset?: number
+  __axisYOffset?: number
+}
 // 为新版 Three.js 补上旧版的 getInverse 方法，防止 AR.js 崩溃
 const matrix4Prototype = THREE.Matrix4.prototype as Matrix4WithLegacyGetInverse
 if (typeof matrix4Prototype.getInverse !== 'function') {
@@ -74,6 +87,15 @@ export class ThreeRenderer {
   private static readonly RAY_COLOR = 0x7fc8ff
   private static readonly RAY_HEAD_LENGTH = 0.7
   private static readonly RAY_HEAD_RADIUS = 0.22
+  /** 让与地面共面的轴线轻微抬高，避免和 GridHelper 深度竞争 */
+  private static readonly AXIS_LIFT_Y = 0.02
+  /** AR 模式下点大小缩放系数（相对当前尺寸） */
+  private static readonly AR_POINT_SCALE_FACTOR = 2 / 3
+  private static readonly AXIS_ARROW_BASE_LENGTH = 0.8
+  private static readonly AXIS_ARROW_BASE_HEAD_LENGTH = 0.5
+  private static readonly AXIS_ARROW_BASE_HEAD_WIDTH = 0.3
+  private static readonly AXIS_ARROW_MIN_SCALE_FACTOR = 0.6
+  private static readonly AXIS_ARROW_MAX_SCALE_FACTOR = 3.2
 
   scene: THREE.Scene
   /** 承载所有几何物体的分组，便于在 AR 模式下整体缩放 */
@@ -99,6 +121,8 @@ export class ThreeRenderer {
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
   private axisGridGroup: THREE.Group
+  private axisArrows: THREE.ArrowHelper[] = []
+  private axisLabels: THREE.Sprite[] = []
   private axisGridSize = 10
   private pointTexture: THREE.CanvasTexture | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
@@ -218,6 +242,14 @@ export class ThreeRenderer {
     return sprite.userData as LabelSpriteUserData
   }
 
+  private getAxisArrowUserData(arrow: THREE.ArrowHelper): AxisArrowUserData {
+    return arrow.userData as AxisArrowUserData
+  }
+
+  private getAxisLabelUserData(label: THREE.Sprite): AxisLabelUserData {
+    return label.userData as AxisLabelUserData
+  }
+
   /** AR 下让网格平面中心尽量贴近 marker 中心，便于把整个坐标系“坐”在标记上 */
   private updateARWorldPlacement() {
     this.world.position.set(0, 0, 0)
@@ -276,7 +308,7 @@ export class ThreeRenderer {
   private getPointSpriteScale() {
     const h = this.renderer.domElement.clientHeight || 1
     const baseScale = ThreeRenderer.POINT_PIXEL / h / this.worldScale
-    if (this.isARMode) return baseScale
+    if (this.isARMode) return baseScale * ThreeRenderer.AR_POINT_SCALE_FACTOR
 
     const distance = this.camera.position.distanceTo(this.controls.target)
     const safeDistance = Math.max(distance, 0.001)
@@ -363,6 +395,52 @@ export class ThreeRenderer {
     if (this.guidePoint) {
       this.guidePoint.scale.set(spriteScale, spriteScale, 1)
     }
+
+    this.updateAxisArrowScales()
+  }
+
+  /** 让坐标轴箭头在透视相机下保持接近恒定屏幕尺寸 */
+  private updateAxisArrowScales() {
+    if (this.axisArrows.length === 0) return
+
+    let factor = 1
+    if (!this.isARMode) {
+      const distance = this.camera.position.distanceTo(this.controls.target)
+      const safeDistance = Math.max(distance, 0.001)
+      factor = safeDistance / ThreeRenderer.POINT_SCALE_REFERENCE_DISTANCE
+      factor = Math.min(
+        ThreeRenderer.AXIS_ARROW_MAX_SCALE_FACTOR,
+        Math.max(ThreeRenderer.AXIS_ARROW_MIN_SCALE_FACTOR, factor),
+      )
+    }
+
+    this.axisArrows.forEach((arrow) => {
+      const data = this.getAxisArrowUserData(arrow)
+      const baseLength = data.__baseLength ?? ThreeRenderer.AXIS_ARROW_BASE_LENGTH
+      const baseHeadLength = data.__baseHeadLength ?? ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH
+      const baseHeadWidth = data.__baseHeadWidth ?? ThreeRenderer.AXIS_ARROW_BASE_HEAD_WIDTH
+      arrow.setLength(baseLength * factor, baseHeadLength * factor, baseHeadWidth * factor)
+    })
+
+    this.axisLabels.forEach((label) => {
+      const data = this.getAxisLabelUserData(label)
+      const dir = data.__axisDir
+      const axisLength = data.__axisLength
+      const labelOffset = data.__axisLabelOffset
+      const yOffset = data.__axisYOffset ?? 0
+      if (!dir || axisLength === undefined || labelOffset === undefined) return
+
+      const extra =
+        (ThreeRenderer.AXIS_ARROW_BASE_LENGTH + ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH * 0.35) *
+        Math.max(0, factor - 1)
+      const labelPos = dir.clone().multiplyScalar(axisLength + labelOffset + extra)
+      if (Math.abs(dir.y) < 1e-6) {
+        labelPos.y = yOffset
+      } else {
+        labelPos.y += yOffset
+      }
+      label.position.copy(labelPos)
+    })
   }
 
   /**
@@ -988,21 +1066,65 @@ export class ThreeRenderer {
 
   /** 简单轴：箭头 + 反向线 + 与轴同色的文字标签 */
   private addSimpleAxis(dir: THREE.Vector3, color: number, length: number, label: string) {
-    // 正方向箭头
-    const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(0, 0, 0), length, color, 0.5, 0.3)
+    const isGroundAxis = dir.y === 0
+    const axisYOffset = isGroundAxis ? ThreeRenderer.AXIS_LIFT_Y : 0
+    const axisMaterial = new THREE.LineBasicMaterial({ color, depthTest: false, depthWrite: false })
+
+    // 正/负方向共用同一条轴线材质，保证颜色深度一致
+    const axisPoints = [
+      dir.clone().multiplyScalar(-length).setY(axisYOffset),
+      new THREE.Vector3(0, axisYOffset, 0),
+      new THREE.Vector3(0, axisYOffset, 0),
+      dir.clone().multiplyScalar(length).setY(axisYOffset),
+    ]
+    const axisGeometry = new THREE.BufferGeometry().setFromPoints(axisPoints)
+    const axisLine = new THREE.LineSegments(axisGeometry, axisMaterial)
+    axisLine.renderOrder = 20
+    this.axisGridGroup.add(axisLine)
+
+    // 正方向箭头样式与 Y 轴保持一致
+    const arrow = new THREE.ArrowHelper(
+      dir,
+      dir.clone().multiplyScalar(length).setY(axisYOffset),
+      ThreeRenderer.AXIS_ARROW_BASE_LENGTH,
+      color,
+      ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH,
+      ThreeRenderer.AXIS_ARROW_BASE_HEAD_WIDTH,
+    )
+    const arrowUserData = this.getAxisArrowUserData(arrow)
+    arrowUserData.__baseLength = ThreeRenderer.AXIS_ARROW_BASE_LENGTH
+    arrowUserData.__baseHeadLength = ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH
+    arrowUserData.__baseHeadWidth = ThreeRenderer.AXIS_ARROW_BASE_HEAD_WIDTH
+    arrow.renderOrder = 21
+    arrow.traverse((obj) => {
+      const material = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
+      if (Array.isArray(material)) {
+        material.forEach((m) => {
+          m.depthTest = false
+          m.depthWrite = false
+        })
+      } else if (material) {
+        material.depthTest = false
+        material.depthWrite = false
+      }
+    })
     this.axisGridGroup.add(arrow)
+    this.axisArrows.push(arrow)
 
-    // 反方向轴线
-    const negPoints = [new THREE.Vector3(0, 0, 0), dir.clone().multiplyScalar(-length)]
-    const negGeo = new THREE.BufferGeometry().setFromPoints(negPoints)
-    const negLine = new THREE.Line(negGeo, new THREE.LineBasicMaterial({ color }))
-    this.axisGridGroup.add(negLine)
-
-    // 与轴同色的文字标签，位置远离轴端（距离 0.5 单位），于Y轴分开显示
-    const labelPos = dir.clone().multiplyScalar(length + 0.5)
+    // 与轴同色的文字标签，位置远离轴端（距离 1.2 单位），于Y轴分开显示
+    const labelPos = dir
+      .clone()
+      .multiplyScalar(length + 1.2)
+      .setY(axisYOffset)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
+    const labelUserData = this.getAxisLabelUserData(textSprite)
+    labelUserData.__axisDir = dir.clone()
+    labelUserData.__axisLength = length
+    labelUserData.__axisLabelOffset = 1.2
+    labelUserData.__axisYOffset = axisYOffset
     this.axisGridGroup.add(textSprite)
+    this.axisLabels.push(textSprite)
   }
 
   /** Y 轴专用：主轴 + 箭头 + 白色刻度线 + 绿色 "Y" 标签 */
@@ -1022,12 +1144,17 @@ export class ThreeRenderer {
     const arrow = new THREE.ArrowHelper(
       dir,
       dir.clone().multiplyScalar(length),
-      0.8,
+      ThreeRenderer.AXIS_ARROW_BASE_LENGTH,
       color,
-      0.5,
-      0.3,
+      ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH,
+      ThreeRenderer.AXIS_ARROW_BASE_HEAD_WIDTH,
     )
+    const arrowUserData = this.getAxisArrowUserData(arrow)
+    arrowUserData.__baseLength = ThreeRenderer.AXIS_ARROW_BASE_LENGTH
+    arrowUserData.__baseHeadLength = ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH
+    arrowUserData.__baseHeadWidth = ThreeRenderer.AXIS_ARROW_BASE_HEAD_WIDTH
     this.axisGridGroup.add(arrow)
+    this.axisArrows.push(arrow)
 
     // 白色刻度线（每1单位一条短横线）
     // 合并到一个 LineSegments，避免每条刻度都产生单独的 draw call。
@@ -1037,14 +1164,7 @@ export class ThreeRenderer {
 
       const tickStart = dir.clone().multiplyScalar(i)
       const tickEnd = tickStart.clone().add(new THREE.Vector3(0.4, 0, 0)) // 向 X 方向偏移
-      tickVertices.push(
-        tickStart.x,
-        tickStart.y,
-        tickStart.z,
-        tickEnd.x,
-        tickEnd.y,
-        tickEnd.z,
-      )
+      tickVertices.push(tickStart.x, tickStart.y, tickStart.z, tickEnd.x, tickEnd.y, tickEnd.z)
     }
     if (tickVertices.length > 0) {
       const tickGeo = new THREE.BufferGeometry()
@@ -1057,10 +1177,16 @@ export class ThreeRenderer {
     }
 
     // 绿色 "Y" 标签，远离轴端
-    const labelPos = dir.clone().multiplyScalar(length + 1)
+    const labelPos = dir.clone().multiplyScalar(length + 1.2)
     const textSprite = this.makeColoredTextSprite(label, color)
     textSprite.position.copy(labelPos)
+    const labelUserData = this.getAxisLabelUserData(textSprite)
+    labelUserData.__axisDir = dir.clone()
+    labelUserData.__axisLength = length
+    labelUserData.__axisLabelOffset = 1.2
+    labelUserData.__axisYOffset = 0
     this.axisGridGroup.add(textSprite)
+    this.axisLabels.push(textSprite)
   }
 
   private getDefaultCameraPositionForAxisSize(size: number): THREE.Vector3 {
@@ -1087,6 +1213,8 @@ export class ThreeRenderer {
   setAxisGridSize(size: number) {
     this.axisGridSize = size
     this.updateRendererPixelRatio()
+    this.axisArrows = []
+    this.axisLabels = []
 
     // 清空旧的坐标轴与网格
     while (this.axisGridGroup.children.length > 0) {
@@ -1114,9 +1242,11 @@ export class ThreeRenderer {
     this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridSize))
     if (this.isARMode) {
       this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridSize))
+      this.updateAxisArrowScales()
       return
     }
     this.refreshScreenSpaceScales()
+    this.updateAxisArrowScales()
   }
 
   private drawNameLabel(
