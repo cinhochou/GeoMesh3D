@@ -3,9 +3,46 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
+
+type Matrix4WithLegacyGetInverse = THREE.Matrix4 & {
+  getInverse?: (m: THREE.Matrix4) => THREE.Matrix4
+}
+
+type ARToolkitSourceLike = {
+  domElement?: HTMLVideoElement
+  ready?: boolean
+  init: (onReady: () => void) => void
+  onResizeElement?: () => void
+  onResize?: () => void
+  copyElementSizeTo?: (el: HTMLElement) => void
+  copySizeTo?: (el: HTMLElement) => void
+}
+
+type ARToolkitContextLike = {
+  init: (onReady: () => void) => void
+  getProjectionMatrix: () => THREE.Matrix4
+  update: (sourceElement: HTMLElement) => void
+}
+
+type RenderObjectType = 'point' | 'line' | 'ray' | 'axisLabel'
+
+type RenderObjectUserData = THREE.Object3D['userData'] & {
+  type?: RenderObjectType
+  geoId?: string
+  __labelSprite?: THREE.Sprite
+  __labelAnchor?: THREE.Vector3
+  __labelOffsetX?: number
+  __labelOffsetY?: number
+  __arrowHead?: THREE.Mesh
+}
+
+type LabelSpriteUserData = THREE.Object3D['userData'] & {
+  text?: string
+}
 // 为新版 Three.js 补上旧版的 getInverse 方法，防止 AR.js 崩溃
-if (typeof (THREE.Matrix4.prototype as any).getInverse !== 'function') {
-  ;(THREE.Matrix4.prototype as any).getInverse = function (m: THREE.Matrix4) {
+const matrix4Prototype = THREE.Matrix4.prototype as Matrix4WithLegacyGetInverse
+if (typeof matrix4Prototype.getInverse !== 'function') {
+  matrix4Prototype.getInverse = function (m: THREE.Matrix4) {
     return this.copy(m).invert()
   }
 }
@@ -53,9 +90,9 @@ export class ThreeRenderer {
   private guidePoint: THREE.Sprite | null = null
   private rubberBand?: THREE.Line
 
-  private arToolkitSource: any = null
-  private arToolkitContext: any = null
-  private arMarkerControls: any = null
+  private arToolkitSource: ARToolkitSourceLike | null = null
+  private arToolkitContext: ARToolkitContextLike | null = null
+  private arMarkerControls: object | null = null
   private isARMode = false
   private arAnchorInitialized = false
   private arLastMarkerSeenAt = 0
@@ -173,6 +210,14 @@ export class ThreeRenderer {
     return this.world.worldToLocal(point.clone())
   }
 
+  private getRenderUserData(object: THREE.Object3D): RenderObjectUserData {
+    return object.userData as RenderObjectUserData
+  }
+
+  private getLabelUserData(sprite: THREE.Sprite): LabelSpriteUserData {
+    return sprite.userData as LabelSpriteUserData
+  }
+
   /** AR 下让网格平面中心尽量贴近 marker 中心，便于把整个坐标系“坐”在标记上 */
   private updateARWorldPlacement() {
     this.world.position.set(0, 0, 0)
@@ -201,15 +246,13 @@ export class ThreeRenderer {
     const labelScale = this.getPointLabelScale()
     const lineLabelScale = this.getLineLabelScale()
     this.meshMap.forEach((obj) => {
-      if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
+      const userData = this.getRenderUserData(obj)
+      if ((obj as THREE.Sprite).isSprite && userData.type === 'point') {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        const label = userData.__labelSprite
         if (label) label.scale.set(labelScale, labelScale, 1)
-      } else if (
-        (obj as any).userData?.type === 'line' ||
-        (obj as any).userData?.type === 'ray'
-      ) {
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+      } else if (userData.type === 'line' || userData.type === 'ray') {
+        const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
     })
@@ -306,15 +349,13 @@ export class ThreeRenderer {
     const pointLabelScale = this.getPointLabelScale()
     const lineLabelScale = this.getLineLabelScale()
     this.meshMap.forEach((obj) => {
-      if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'point') {
+      const userData = this.getRenderUserData(obj)
+      if ((obj as THREE.Sprite).isSprite && userData.type === 'point') {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        const label = userData.__labelSprite
         if (label) label.scale.set(pointLabelScale, pointLabelScale, 1)
-      } else if (
-        (obj as any).userData?.type === 'line' ||
-        (obj as any).userData?.type === 'ray'
-      ) {
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+      } else if (userData.type === 'line' || userData.type === 'ray') {
+        const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
     })
@@ -399,19 +440,20 @@ export class ThreeRenderer {
   /** 删除已从场景移除的点/线对应的 Mesh 与标签 */
   private cleanupMissingMeshes(scene: GeoScene) {
     this.meshMap.forEach((obj, id) => {
-      const type = (obj as any).userData?.type
+      const userData = this.getRenderUserData(obj)
+      const type = userData.type
       if (type === 'point' && !scene.points.has(id)) {
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        const label = userData.__labelSprite
         if (label) this.world.remove(label)
         this.world.remove(obj)
         this.meshMap.delete(id)
       } else if (type === 'line' && !scene.lines.has(id)) {
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        const label = userData.__labelSprite
         if (label) this.world.remove(label)
         this.world.remove(obj)
         this.meshMap.delete(id)
       } else if (type === 'ray' && !scene.rays.has(id)) {
-        const label = (obj as any).userData?.__labelSprite as THREE.Sprite | undefined
+        const label = userData.__labelSprite
         if (label) this.world.remove(label)
         this.world.remove(obj)
         this.meshMap.delete(id)
@@ -458,7 +500,10 @@ export class ThreeRenderer {
     // ===== 退出 AR =====
     if (this.arToolkitSource) {
       if (this.arToolkitSource.domElement) {
-        this.arToolkitSource.domElement.srcObject?.getTracks().forEach((t: any) => t.stop())
+        const srcObject = this.arToolkitSource.domElement.srcObject
+        if (srcObject instanceof MediaStream) {
+          srcObject.getTracks().forEach((t: MediaStreamTrack) => t.stop())
+        }
         this.arToolkitSource.domElement.remove()
       }
       this.arToolkitSource = null
@@ -514,8 +559,10 @@ export class ThreeRenderer {
     //@ts-expect-error THREEx
     // source
     this.arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' })
-    this.arToolkitSource.init(() => {
-      const video = this.arToolkitSource.domElement as HTMLVideoElement
+    const source = this.arToolkitSource
+    if (!source) return
+    source.init(() => {
+      const video = source.domElement as HTMLVideoElement
       if (!video) return
 
       //  AR.js 会把video插到body里，必须移走
@@ -538,8 +585,10 @@ export class ThreeRenderer {
       detectionMode: 'mono',
     })
 
-    this.arToolkitContext.init(() => {
-      this.arCamera.projectionMatrix.copy(this.arToolkitContext.getProjectionMatrix())
+    const context = this.arToolkitContext
+    if (!context) return
+    context.init(() => {
+      this.arCamera.projectionMatrix.copy(context.getProjectionMatrix())
       // Three.js r150+ 需要同步 projectionMatrixInverse，否则 Raycaster 在 AR 模式下会算出错误射线
       this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
       this.arCamera.matrix.identity()
@@ -581,7 +630,9 @@ export class ThreeRenderer {
     if (this.isARMode) {
       if (!this.arToolkitContext || this.arToolkitSource?.ready === false) return
 
-      this.arToolkitContext.update(this.arToolkitSource.domElement)
+      const sourceElement = this.arToolkitSource?.domElement
+      if (!sourceElement) return
+      this.arToolkitContext.update(sourceElement)
       this.arCamera.updateMatrixWorld(true)
       this.syncARAnchorFromMarker()
       this.scene.visible = this.arMarkerRoot.visible || this.shouldRenderPersistentARWorld()
@@ -680,9 +731,10 @@ export class ThreeRenderer {
       // 点名称标签
       const labelColor = isSelected ? 0x43f260 : 0xffffff
       const labelKey = '__labelSprite'
-      const existingLabel = (sprite.userData as any)[labelKey] as THREE.Sprite | undefined
-      ;(sprite.userData as any).__labelOffsetX = ThreeRenderer.POINT_LABEL_OFFSET_X
-      ;(sprite.userData as any).__labelOffsetY = ThreeRenderer.POINT_LABEL_OFFSET_Y
+      const spriteUserData = this.getRenderUserData(sprite)
+      const existingLabel = spriteUserData[labelKey] as THREE.Sprite | undefined
+      spriteUserData.__labelOffsetX = ThreeRenderer.POINT_LABEL_OFFSET_X
+      spriteUserData.__labelOffsetY = ThreeRenderer.POINT_LABEL_OFFSET_Y
       if (!p.nameVisible) {
         if (existingLabel) existingLabel.visible = false
         return
@@ -697,8 +749,8 @@ export class ThreeRenderer {
         nameSprite.renderOrder = 10
         const scale = this.getPointLabelScale()
         nameSprite.scale.set(scale, scale, 1)
-        ;(nameSprite as any).userData = { text: p.name ?? '' }
-        ;(sprite.userData as any)[labelKey] = nameSprite
+        this.getLabelUserData(nameSprite).text = p.name ?? ''
+        spriteUserData[labelKey] = nameSprite
         this.world.add(nameSprite)
       } else {
         existingLabel.visible = true
@@ -707,9 +759,9 @@ export class ThreeRenderer {
           ThreeRenderer.POINT_LABEL_CENTER_Y,
         )
         existingLabel.position.copy(this.getSmartLabelPosition(sprite.position))
-        const labelText = (existingLabel as any).userData?.text ?? ''
+        const labelText = this.getLabelUserData(existingLabel).text ?? ''
         if (labelText !== (p.name ?? '')) {
-          ;(existingLabel as any).userData = { text: p.name ?? '' }
+          this.getLabelUserData(existingLabel).text = p.name ?? ''
           const material = existingLabel.material as THREE.SpriteMaterial
           const newSprite = this.makePointLabelSprite(p.name ?? '', labelColor)
           material.map = (newSprite.material as THREE.SpriteMaterial).map
@@ -826,10 +878,11 @@ export class ThreeRenderer {
     color: number,
   ) {
     const labelKey = '__labelSprite'
-    const existingLabel = (object.userData as any)[labelKey] as THREE.Sprite | undefined
-    ;(object.userData as any).__labelAnchor = anchor.clone()
-    ;(object.userData as any).__labelOffsetX = 0
-    ;(object.userData as any).__labelOffsetY = ThreeRenderer.LINE_LABEL_OFFSET_Y
+    const objectUserData = this.getRenderUserData(object)
+    const existingLabel = objectUserData[labelKey] as THREE.Sprite | undefined
+    objectUserData.__labelAnchor = anchor.clone()
+    objectUserData.__labelOffsetX = 0
+    objectUserData.__labelOffsetY = ThreeRenderer.LINE_LABEL_OFFSET_Y
     if (!visible) {
       if (existingLabel) existingLabel.visible = false
       return
@@ -843,8 +896,8 @@ export class ThreeRenderer {
       nameSprite.renderOrder = 10
       const scale = this.getLineLabelScale()
       nameSprite.scale.set(scale, scale, 1)
-      ;(nameSprite as any).userData = { text }
-      ;(object.userData as any)[labelKey] = nameSprite
+      this.getLabelUserData(nameSprite).text = text
+      objectUserData[labelKey] = nameSprite
       this.world.add(nameSprite)
       return
     }
@@ -854,9 +907,9 @@ export class ThreeRenderer {
     existingLabel.position.copy(
       this.getScreenOffsetPosition(anchor, 0, ThreeRenderer.LINE_LABEL_OFFSET_Y),
     )
-    const labelText = (existingLabel as any).userData?.text ?? ''
+    const labelText = this.getLabelUserData(existingLabel).text ?? ''
     if (labelText !== text) {
-      ;(existingLabel as any).userData = { text }
+      this.getLabelUserData(existingLabel).text = text
       const material = existingLabel.material as THREE.SpriteMaterial
       const newSprite = this.makeLineLabelSprite(text, color)
       material.map = (newSprite.material as THREE.SpriteMaterial).map
@@ -881,12 +934,12 @@ export class ThreeRenderer {
     const material = new THREE.MeshBasicMaterial({ color: ThreeRenderer.RAY_COLOR })
     const arrowHead = new THREE.Mesh(geometry, material)
     arrowHead.rotation.x = Math.PI / 2
-    ;(ray.userData as any).__arrowHead = arrowHead
+    this.getRenderUserData(ray).__arrowHead = arrowHead
     ray.add(arrowHead)
   }
 
   private updateRayArrowHead(ray: THREE.Line, rayData: Ray3, isSelected: boolean) {
-    const arrowHead = (ray.userData as any).__arrowHead as THREE.Mesh | undefined
+    const arrowHead = this.getRenderUserData(ray).__arrowHead
     if (!arrowHead) return
 
     arrowHead.visible = rayData.visible
@@ -1214,19 +1267,17 @@ export class ThreeRenderer {
   /** 每帧根据当前相机姿态刷新标签的屏幕空间偏移，保证 AR 下不漂移、不遮挡主体 */
   private updateScreenSpaceLabels() {
     this.meshMap.forEach((obj) => {
-      const label = (obj.userData as any)?.__labelSprite as THREE.Sprite | undefined
+      const userData = this.getRenderUserData(obj)
+      const label = userData.__labelSprite
       if (!label || !label.visible) return
 
-      const offsetX = Number((obj.userData as any)?.__labelOffsetX ?? 0)
-      const offsetY = Number((obj.userData as any)?.__labelOffsetY ?? 0)
+      const offsetX = Number(userData.__labelOffsetX ?? 0)
+      const offsetY = Number(userData.__labelOffsetY ?? 0)
 
-      if ((obj.userData as any)?.type === 'point') {
+      if (userData.type === 'point') {
         label.position.copy(this.getScreenOffsetPosition(obj.position, offsetX, offsetY))
-      } else if (
-        (obj.userData as any)?.type === 'line' ||
-        (obj.userData as any)?.type === 'ray'
-      ) {
-        const anchor = ((obj.userData as any)?.__labelAnchor as THREE.Vector3 | undefined)?.clone()
+      } else if (userData.type === 'line' || userData.type === 'ray') {
+        const anchor = userData.__labelAnchor?.clone()
         if (!anchor) return
         label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
       }

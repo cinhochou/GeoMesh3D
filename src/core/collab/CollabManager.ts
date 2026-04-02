@@ -19,6 +19,40 @@ type LocalSceneSnapshot = {
   rays: Ray3[]
 }
 
+type PointSyncData = {
+  x: number
+  y: number
+  z: number
+  name: string
+  nameVisible: boolean
+  userLocked: boolean
+}
+
+type LineSyncData = {
+  p1Id: string
+  p2Id: string
+  name: string
+  nameVisible: boolean
+  visible: boolean
+  userLocked: boolean
+  lengthLocked: boolean
+  lockedLength: number
+}
+
+type RaySyncData = {
+  p1Id: string
+  p2Id: string
+  name: string
+  nameVisible: boolean
+  visible: boolean
+  displayLength: number
+  userLocked: boolean
+}
+
+type PeersEventPayload = {
+  webrtcPeers?: unknown[]
+}
+
 type SignalingConnLike = {
   connected: boolean
   connecting: boolean
@@ -26,15 +60,19 @@ type SignalingConnLike = {
   off: (event: 'connect' | 'disconnect', listener: () => void) => void
 }
 
+type WebrtcProviderWithSignaling = WebrtcProvider & {
+  signalingConns?: SignalingConnLike[]
+}
+
 export class CollabManager {
   private ydoc: Y.Doc
   private provider: WebrtcProvider | null = null
-  private yPoints: Y.Map<any>
-  private yLines: Y.Map<any>
-  private yRays: Y.Map<any>
-  private pointsObserver: ((event: Y.YMapEvent<any>) => void) | null = null
-  private linesObserver: ((event: Y.YMapEvent<any>) => void) | null = null
-  private raysObserver: ((event: Y.YMapEvent<any>) => void) | null = null
+  private yPoints: Y.Map<PointSyncData>
+  private yLines: Y.Map<LineSyncData>
+  private yRays: Y.Map<RaySyncData>
+  private pointsObserver: ((event: Y.YMapEvent<PointSyncData>) => void) | null = null
+  private linesObserver: ((event: Y.YMapEvent<LineSyncData>) => void) | null = null
+  private raysObserver: ((event: Y.YMapEvent<RaySyncData>) => void) | null = null
 
   private roomName: string | null = null
   private connecting = false
@@ -83,7 +121,7 @@ export class CollabManager {
       signaling: ['ws://localhost:4444/', 'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'],
     })
 
-    this.provider.on('peers', (params: any) => {
+    this.provider.on('peers', (params: PeersEventPayload) => {
       const count = params.webrtcPeers ? params.webrtcPeers.length + 1 : 1
       this.onPeersUpdate(count)
     })
@@ -130,7 +168,7 @@ export class CollabManager {
   }
 
   private getSignalingConnections(provider: WebrtcProvider): SignalingConnLike[] {
-    return ((provider as any).signalingConns ?? []) as SignalingConnLike[]
+    return (provider as WebrtcProviderWithSignaling).signalingConns ?? []
   }
 
   private hasConnectedSignaling(provider: WebrtcProvider) {
