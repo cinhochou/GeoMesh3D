@@ -26,28 +26,33 @@ export enum EditorMode {
   CreatePlane,
 }
 
-let idCounter = 0
-const genId = (prefix: string) => `${prefix}_${idCounter++}`
-let nameCounter = 0
 const genIndexedAlphabetName = (index: number, baseCharCode: number) => {
   const letter = String.fromCharCode(baseCharCode + (index % 26))
   const suffix = Math.floor(index / 26)
   return suffix === 0 ? letter : `${letter}${suffix}`
 }
 
-const genPointName = () => {
-  // A-Z, A1-Z1, A2-Z2, ...
-  return genIndexedAlphabetName(nameCounter++, 65)
+const genId = (prefix: string) => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}_${crypto.randomUUID()}`
+  }
+
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
 }
-let lineNameCounter = 0
-const genLineName = () => {
-  // a-z, a1-z1, a2-z2, ...
-  return genIndexedAlphabetName(lineNameCounter++, 97)
-}
-let rayNameCounter = 0
-const genRayName = () => {
-  const current = rayNameCounter++
-  return current === 0 ? 'r' : `r${current}`
+
+const genNextAvailableName = (
+  existingNames: Iterable<string>,
+  baseCharCode: number,
+  formatter?: (index: number) => string,
+) => {
+  const usedNames = new Set(existingNames)
+  let index = 0
+
+  while (true) {
+    const candidate = formatter ? formatter(index) : genIndexedAlphabetName(index, baseCharCode)
+    if (!usedNames.has(candidate)) return candidate
+    index += 1
+  }
 }
 
 export class Editor {
@@ -223,7 +228,16 @@ export class Editor {
   }
 
   createPoint(position: Vec3) {
-    const p = new Point3(genId('p'), genPointName(), position, false, true)
+    const p = new Point3(
+      genId('p'),
+      genNextAvailableName(
+        [...this.scene.points.values()].map((point) => point.name),
+        65,
+      ),
+      position,
+      false,
+      true,
+    )
     const cmd = new AddElementCommand(this.scene, p, 'point')
     this.executeCommand(cmd)
     return p
@@ -516,10 +530,30 @@ export class Editor {
 
       if (!exists) {
         if (type === 'line') {
-          const line = new Line3(genId('l'), genLineName(), p1!, p2!, true)
+          const line = new Line3(
+            genId('l'),
+            genNextAvailableName(
+              [...this.scene.lines.values()].map((line) => line.name),
+              97,
+            ),
+            p1!,
+            p2!,
+            true,
+          )
           this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
         } else {
-          const ray = new Ray3(genId('r'), genRayName(), p1!, p2!, true, true)
+          const ray = new Ray3(
+            genId('r'),
+            genNextAvailableName(
+              [...this.scene.rays.values()].map((ray) => ray.name),
+              0,
+              (index) => (index === 0 ? 'r' : `r${index}`),
+            ),
+            p1!,
+            p2!,
+            true,
+            true,
+          )
           this.executeCommand(new AddElementCommand(this.scene, ray, 'ray'))
         }
       } else {

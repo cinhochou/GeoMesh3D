@@ -1,6 +1,6 @@
 // src/core/collab/CollabManager.ts
 import * as Y from 'yjs'
-import { WebrtcProvider } from 'y-webrtc'
+import { WebsocketProvider } from 'y-websocket'
 import { Scene } from '../scene/Scene'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
@@ -49,24 +49,16 @@ type RaySyncData = {
   userLocked: boolean
 }
 
-type PeersEventPayload = {
-  webrtcPeers?: unknown[]
-}
-
-type SignalingConnLike = {
-  connected: boolean
-  connecting: boolean
-  on: (event: 'connect' | 'disconnect', listener: () => void) => void
-  off: (event: 'connect' | 'disconnect', listener: () => void) => void
-}
-
-type WebrtcProviderWithSignaling = WebrtcProvider & {
-  signalingConns?: SignalingConnLike[]
+type ProviderStatusEvent = {
+  status: 'connecting' | 'connected' | 'disconnected'
 }
 
 export class CollabManager {
+  // 本地 websocket 服务不可用时，回退到这个公网协作地址。
+  private static readonly FALLBACK_SERVER_URL = 'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev'
+
   private ydoc: Y.Doc
-  private provider: WebrtcProvider | null = null
+  private provider: WebsocketProvider | null = null
   private yPoints: Y.Map<PointSyncData>
   private yLines: Y.Map<LineSyncData>
   private yRays: Y.Map<RaySyncData>
@@ -80,7 +72,8 @@ export class CollabManager {
 
   private syncTimer: number | null = null
   private syncPending = false
-  private signalingCleanup: Array<() => void> = []
+  private providerCleanup: Array<() => void> = []
+  private readonly serverUrls: string[]
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -90,7 +83,29 @@ export class CollabManager {
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
     this.yRays = this.ydoc.getMap('rays')
+    this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
+  }
+
+  private static normalizeServerUrl(url: string) {
+    // y-websocket 只接受 ws / wss，这里顺手把 http / https 也规范成对应协议。
+    return url.replace(/^https:\/\//i, 'wss://').replace(/^http:\/\//i, 'ws://').replace(/\/+$/, '')
+  }
+
+  private static resolveServerUrls() {
+    const configuredUrl = import.meta.env.VITE_COLLAB_WS_URL?.trim()
+    // 连接优先级：
+    // 1. 优先使用环境变量里显式配置的地址
+    // 2. 否则使用当前站点主机上的本地/默认 websocket 服务
+    // 3. 最后回退到公网备用地址
+    const candidates = configuredUrl
+      ? [configuredUrl]
+      : [
+          `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname || 'localhost'}:1234`,
+        ]
+
+    candidates.push(CollabManager.FALLBACK_SERVER_URL)
+    return [...new Set(candidates.map((url) => CollabManager.normalizeServerUrl(url)))]
   }
 
   getStatus(): CollabStatus {
@@ -102,46 +117,54 @@ export class CollabManager {
   }
 
   async joinRoom(roomName: string) {
-    if (!roomName.trim()) throw new Error('roomName is empty')
+    const normalizedRoomName = roomName.trim()
+    if (!normalizedRoomName) throw new Error('roomName is empty')
 
     const localSnapshot = this.captureLocalSnapshot()
     this.leaveRoom()
     this.resetDoc()
     this.clearLocalSceneForJoin()
 
-    this.roomName = roomName
+    this.roomName = normalizedRoomName
     this.connecting = true
     this.connected = false
     this.emitStatus()
 
-    console.log(`joining room: ${roomName}`)
-
-    //npx y-webrtc-signaling命令部署本地信令服务器，公网部署地址：'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'
-    this.provider = new WebrtcProvider(roomName, this.ydoc, {
-      signaling: ['ws://localhost:4444/', 'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev/'],
-    })
-
-    this.provider.on('peers', (params: PeersEventPayload) => {
-      const count = params.webrtcPeers ? params.webrtcPeers.length + 1 : 1
-      this.onPeersUpdate(count)
-    })
-
-    const provider = this.provider
+    // 按顺序尝试每个候选 websocket 地址，只要有一个成功完成同步就停止继续回退。
     const timeoutMs = 10_000
+    let lastError: unknown = null
 
-    try {
-      this.bindSignalingStatus(provider)
-      await this.waitForInitialRoomState(provider, roomName, timeoutMs)
-      this.reconcileInitialScene(localSnapshot)
-    } catch (err) {
-      this.leaveRoom()
-      this.restoreLocalSnapshot(localSnapshot)
-      throw err
+    for (const serverUrl of this.serverUrls) {
+      console.log(`joining room: ${normalizedRoomName} via ${serverUrl}`)
+      this.provider = new WebsocketProvider(serverUrl, normalizedRoomName, this.ydoc)
+
+      try {
+        const provider = this.provider
+        this.bindProviderStatus(provider)
+        await this.waitForInitialRoomState(provider, normalizedRoomName, timeoutMs)
+        this.reconcileInitialScene(localSnapshot)
+        return
+      } catch (err) {
+        lastError = err
+        // 当前地址连接失败后，先完整释放 provider，再尝试下一个备用地址。
+        this.clearProviderBindings()
+        this.provider.disconnect()
+        this.provider.destroy()
+        this.provider = null
+        this.connected = false
+        this.connecting = true
+        this.emitStatus()
+        console.warn(`collab room: ${normalizedRoomName}, failed to connect via ${serverUrl}`, err)
+      }
     }
+
+    this.leaveRoom()
+    this.restoreLocalSnapshot(localSnapshot)
+    throw lastError instanceof Error ? lastError : new Error('all collaboration servers failed')
   }
 
   leaveRoom() {
-    this.clearSignalingBindings()
+    this.clearProviderBindings()
 
     if (this.provider) {
       console.log('disconnecting collaboration provider...')
@@ -167,45 +190,52 @@ export class CollabManager {
     this.onStatusUpdate(this.getStatus())
   }
 
-  private getSignalingConnections(provider: WebrtcProvider): SignalingConnLike[] {
-    return (provider as WebrtcProviderWithSignaling).signalingConns ?? []
+  private emitPeerCount(provider: WebsocketProvider | null = this.provider) {
+    const count = provider ? Math.max(provider.awareness.getStates().size, 1) : 1
+    this.onPeersUpdate(count)
   }
 
-  private hasConnectedSignaling(provider: WebrtcProvider) {
-    return this.getSignalingConnections(provider).some((conn) => conn.connected)
-  }
-
-  private updateConnectionStateFromProvider(provider: WebrtcProvider) {
-    const hasConnectedSignaling = this.hasConnectedSignaling(provider)
-    this.connected = hasConnectedSignaling
-    this.connecting = this.roomName !== null && !hasConnectedSignaling
+  private updateConnectionStateFromProvider(provider: WebsocketProvider) {
+    const isRoomOpen = this.roomName !== null
+    this.connected = provider.wsconnected && provider.synced
+    this.connecting =
+      isRoomOpen && (provider.wsconnecting || (provider.wsconnected && !provider.synced))
     this.emitStatus()
   }
 
-  private clearSignalingBindings() {
-    this.signalingCleanup.forEach((cleanup) => cleanup())
-    this.signalingCleanup = []
+  private clearProviderBindings() {
+    this.providerCleanup.forEach((cleanup) => cleanup())
+    this.providerCleanup = []
   }
 
-  private bindSignalingStatus(provider: WebrtcProvider) {
-    this.clearSignalingBindings()
+  private bindProviderStatus(provider: WebsocketProvider) {
+    this.clearProviderBindings()
 
-    const syncStatus = () => {
+    const syncProviderState = () => {
       this.updateConnectionStateFromProvider(provider)
+      this.emitPeerCount(provider)
     }
 
-    this.getSignalingConnections(provider).forEach((conn) => {
-      const handleConnect = () => syncStatus()
-      const handleDisconnect = () => syncStatus()
-      conn.on('connect', handleConnect)
-      conn.on('disconnect', handleDisconnect)
-      this.signalingCleanup.push(() => {
-        conn.off('connect', handleConnect)
-        conn.off('disconnect', handleDisconnect)
-      })
+    const handleStatus = () => {
+      syncProviderState()
+    }
+    const handleSync = () => {
+      syncProviderState()
+    }
+    const handleAwarenessChange = () => {
+      this.emitPeerCount(provider)
+    }
+
+    provider.on('status', handleStatus)
+    provider.on('sync', handleSync)
+    provider.awareness.on('change', handleAwarenessChange)
+    this.providerCleanup.push(() => {
+      provider.off('status', handleStatus)
+      provider.off('sync', handleSync)
+      provider.awareness.off('change', handleAwarenessChange)
     })
 
-    syncStatus()
+    syncProviderState()
   }
 
   private captureLocalSnapshot(): LocalSceneSnapshot {
@@ -254,15 +284,20 @@ export class CollabManager {
     this.syncNow()
   }
 
-  private waitForInitialRoomState(provider: WebrtcProvider, roomName: string, timeoutMs: number) {
-    const settleMs = 600
+  private waitForInitialRoomState(
+    provider: WebsocketProvider,
+    roomName: string,
+    timeoutMs: number,
+  ) {
+    const settleMs = 150
 
     return new Promise<void>((resolve, reject) => {
       let done = false
       let settleTimer: number | null = null
 
       const cleanup = () => {
-        provider.off('synced', handleSynced)
+        provider.off('sync', handleSync)
+        provider.off('status', handleStatus)
         window.clearTimeout(timeoutTimer)
         if (settleTimer !== null) window.clearTimeout(settleTimer)
       }
@@ -282,7 +317,7 @@ export class CollabManager {
       }
 
       const scheduleSettle = () => {
-        if (settleTimer !== null) return
+        if (settleTimer !== null || !provider.wsconnected || !provider.synced) return
         settleTimer = window.setTimeout(() => {
           finish()
         }, settleMs)
@@ -292,24 +327,33 @@ export class CollabManager {
         fail(new Error(`connect timeout after ${timeoutMs}ms`))
       }, timeoutMs)
 
-      const handleSynced = ({ synced }: { synced: boolean }) => {
-        if (synced) finish()
-      }
-
-      provider.on('synced', handleSynced)
-      console.log(`collab room: ${roomName}, waiting for signaling server connection...`)
-
-      const waitForSignal = () => {
-        if (done) return
-        if (this.hasConnectedSignaling(provider)) {
-          console.log(`collab room: ${roomName}, signaling server connected`)
-          scheduleSettle()
-          return
+      const handleStatus = ({ status }: ProviderStatusEvent) => {
+        if (status === 'connected') {
+          console.log(`collab room: ${roomName}, y-websocket connected`)
         }
-        window.setTimeout(waitForSignal, 100)
+        this.updateConnectionStateFromProvider(provider)
+        scheduleSettle()
       }
 
-      waitForSignal()
+      const handleSync = (isSynced: boolean) => {
+        if (isSynced) {
+          console.log(`collab room: ${roomName}, initial room sync completed`)
+          scheduleSettle()
+        }
+      }
+
+      provider.on('status', handleStatus)
+      provider.on('sync', handleSync)
+      console.log(`collab room: ${roomName}, waiting for y-websocket server...`)
+
+      handleStatus({
+        status: provider.wsconnecting
+          ? 'connecting'
+          : provider.wsconnected
+            ? 'connected'
+            : 'disconnected',
+      })
+      handleSync(provider.synced)
     })
   }
 

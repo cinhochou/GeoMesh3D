@@ -298,7 +298,7 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
     } catch (err) {
       console.error(err)
       isCollabJoinDialogVisible.value = false
-      showToast('⚠️ 协作连接失败（请检查 signaling 服务）', 'global')
+      showToast('⚠️ 协作连接失败（请检查 websocket 服务）', 'global')
     }
     return
   }

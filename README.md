@@ -35,6 +35,21 @@ npm install
 npm run dev
 ```
 
+### Start Collaboration Server
+
+```sh
+npm run collab-server
+```
+
+The collaboration layer now uses `y-websocket` instead of `y-webrtc` signaling.
+
+- Default server address: `ws://localhost:1234`
+- Fallback server address: `wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev`
+- Default persistence directory: `./collab-data`
+- Client override: set `VITE_COLLAB_WS_URL`
+- Server override in PowerShell: `$env:HOST='0.0.0.0'; $env:PORT='1234'; npm run collab-server`
+- Persistence override in PowerShell: `$env:COLLAB_DATA_DIR='D:\\collab-data'; npm run collab-server`
+
 ### Type-Check, Compile and Minify for Production
 
 ```sh
