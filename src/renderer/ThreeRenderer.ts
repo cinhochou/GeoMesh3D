@@ -121,9 +121,12 @@ export class ThreeRenderer {
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
   private axisGridGroup: THREE.Group
+  private gridHelper: THREE.GridHelper | null = null
   private axisArrows: THREE.ArrowHelper[] = []
   private axisLabels: THREE.Sprite[] = []
   private axisGridSize = 10
+  private isGridVisible = true
+  private coordinateSystemVisible = true
   private pointTexture: THREE.CanvasTexture | null = null
   /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
   private static readonly AR_SCENE_SCALE = 0.2
@@ -1111,6 +1114,33 @@ export class ThreeRenderer {
     this.axisGridGroup.add(arrow)
     this.axisArrows.push(arrow)
 
+    // X/Z 轴刻度线：每 1 单位一条短竖线（与 Y 轴一致为白色）
+    if (isGroundAxis) {
+      const tickVertices: number[] = []
+      const tickLength = 0.2
+      const isXAxis = Math.abs(dir.x) > 0.5
+      const tickOffset = isXAxis
+        ? new THREE.Vector3(0, 0, tickLength)
+        : new THREE.Vector3(tickLength, 0, 0)
+      for (let i = -length; i <= length; i++) {
+        if (i === 0) continue
+
+        const base = dir.clone().multiplyScalar(i).setY(axisYOffset)
+        const end = base.clone().add(tickOffset)
+        tickVertices.push(base.x, base.y, base.z, end.x, end.y, end.z)
+      }
+      if (tickVertices.length > 0) {
+        const tickGeo = new THREE.BufferGeometry()
+        tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickVertices, 3))
+        const tickLine = new THREE.LineSegments(
+          tickGeo,
+          new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false }),
+        )
+        tickLine.renderOrder = 20
+        this.axisGridGroup.add(tickLine)
+      }
+    }
+
     // 与轴同色的文字标签，位置远离轴端（距离 1.2 单位），于Y轴分开显示
     const labelPos = dir
       .clone()
@@ -1163,7 +1193,7 @@ export class ThreeRenderer {
       if (i === 0) continue
 
       const tickStart = dir.clone().multiplyScalar(i)
-      const tickEnd = tickStart.clone().add(new THREE.Vector3(0.4, 0, 0)) // 向 X 方向偏移
+      const tickEnd = tickStart.clone().add(new THREE.Vector3(0.2, 0, 0)) // 向 X 方向偏移
       tickVertices.push(tickStart.x, tickStart.y, tickStart.z, tickEnd.x, tickEnd.y, tickEnd.z)
     }
     if (tickVertices.length > 0) {
@@ -1210,6 +1240,26 @@ export class ThreeRenderer {
     return this.axisGridSize
   }
 
+  isAxisGridVisible() {
+    return this.isGridVisible
+  }
+
+  setAxisGridVisible(visible: boolean) {
+    this.isGridVisible = visible
+    if (this.gridHelper) {
+      this.gridHelper.visible = visible
+    }
+  }
+
+  isCoordinateSystemVisible() {
+    return this.coordinateSystemVisible
+  }
+
+  setCoordinateSystemVisible(visible: boolean) {
+    this.coordinateSystemVisible = visible
+    this.axisGridGroup.visible = visible
+  }
+
   setAxisGridSize(size: number) {
     this.axisGridSize = size
     this.updateRendererPixelRatio()
@@ -1237,8 +1287,9 @@ export class ThreeRenderer {
     // 分割数 = 2 * size（保持每格 1 单位）
     const gridSize = size * 2
     const divisions = gridSize
-    const gridHelper = new THREE.GridHelper(gridSize, divisions)
-    this.axisGridGroup.add(gridHelper)
+    this.gridHelper = new THREE.GridHelper(gridSize, divisions)
+    this.gridHelper.visible = this.isGridVisible
+    this.axisGridGroup.add(this.gridHelper)
     this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridSize))
     if (this.isARMode) {
       this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridSize))

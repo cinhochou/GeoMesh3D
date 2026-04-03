@@ -25,7 +25,10 @@ const collabManager = ref<CollabManager | null>(null)
 const collabStatus = ref<CollabStatus>({ room: null, connecting: false, connected: false })
 const isARMode = ref(false)
 const lastModeBeforeAR = ref<EditorMode | null>(null)
+const lastModeBeforeCoordinateOff = ref<EditorMode | null>(null)
 const axisGridSize = ref(10)
+const isGridVisible = ref(true)
+const isCoordinateSystemVisible = ref(true)
 const fps = ref(0)
 let lastFpsTime = performance.now()
 let frameCount = 0
@@ -110,6 +113,8 @@ onMounted(() => {
 
   renderer = new ThreeRenderer(viewportRef.value!)
   axisGridSize.value = renderer.getAxisGridSize()
+  isGridVisible.value = renderer.isAxisGridVisible()
+  isCoordinateSystemVisible.value = renderer.isCoordinateSystemVisible()
   interaction = new Interaction(editor, renderer)
   interaction.bind(renderer.renderer.domElement)
   interaction.syncControlLockState()
@@ -214,11 +219,42 @@ const handleRedo = () => {
 }
 
 const handleAxisGridSizeChange = () => {
+  if (!isCoordinateSystemVisible.value) return
   renderer.setAxisGridSize(axisGridSize.value)
 }
 
 const handleResetView = () => {
   renderer.resetView()
+}
+
+const handleToggleGridVisible = () => {
+  if (!isCoordinateSystemVisible.value) return
+  isGridVisible.value = !isGridVisible.value
+  renderer.setAxisGridVisible(isGridVisible.value)
+}
+
+const handleToggleCoordinateSystem = (enabled: boolean) => {
+  interaction.clearPreview()
+
+  if (!enabled) {
+    lastModeBeforeCoordinateOff.value = editor.mode
+    editor.setMode(EditorMode.Select)
+  } else if (!isARMode.value && lastModeBeforeCoordinateOff.value !== null) {
+    editor.setMode(lastModeBeforeCoordinateOff.value)
+  }
+
+  if (enabled) {
+    lastModeBeforeCoordinateOff.value = null
+  }
+
+  isCoordinateSystemVisible.value = enabled
+  renderer.setCoordinateSystemVisible(enabled)
+
+  if (enabled) {
+    // 恢复“正常显示”：坐标轴与网格都显示
+    isGridVisible.value = true
+    renderer.setAxisGridVisible(true)
+  }
 }
 
 const handleToggleAR = async (enabled: boolean) => {
@@ -313,6 +349,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     <Toolbar
       :current-mode="editor.mode"
       :is-snapping-enabled="editor.isSnappingEnabled"
+      :is-coordinate-system-visible="isCoordinateSystemVisible"
       :peer-count="peerCount"
       :is-ar-mode="isARMode"
       :collab-status="collabStatus"
@@ -323,6 +360,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @undo="handleUndo"
       @redo="handleRedo"
       @toggle-snapping="editor.toggleSnapping()"
+      @toggle-coordinate-system="handleToggleCoordinateSystem"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"
     />
@@ -340,11 +378,20 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         </Transition>
         <div class="fps-indicator">FPS: {{ fps }}</div>
         <div v-if="!isARMode" class="viewport-controls">
+          <button
+            type="button"
+            class="axis-control grid-toggle-control"
+            @click="handleToggleGridVisible"
+            :disabled="!isCoordinateSystemVisible"
+          >
+            {{ isGridVisible ? '网格隐藏' : '网格开启' }}
+          </button>
           <button type="button" class="axis-control" @click="handleResetView">复位</button>
           <select
             v-model.number="axisGridSize"
             class="axis-control"
             @change="handleAxisGridSizeChange"
+            :disabled="!isCoordinateSystemVisible"
           >
             <option :value="10">10</option>
             <option :value="20">20</option>
@@ -417,7 +464,25 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 }
 
 button.axis-control {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   cursor: pointer;
+}
+
+button.grid-toggle-control {
+  width: 72px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+button.grid-toggle-control:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 select.axis-control option {

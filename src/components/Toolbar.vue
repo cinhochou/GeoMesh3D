@@ -11,6 +11,7 @@ defineOptions({
 const props = defineProps<{
   currentMode: EditorMode
   isSnappingEnabled: boolean
+  isCoordinateSystemVisible: boolean
   peerCount: number
   isArMode: boolean
   collabStatus: CollabStatus
@@ -21,6 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'mode-change', mode: EditorMode): void
   (e: 'toggle-snapping'): void
+  (e: 'toggle-coordinate-system', isOpen: boolean): void
   (e: 'toggle-ar', isOpen: boolean): void
   (e: 'toggle-collab', data: { open: boolean; room: string }): void
   (e: 'clear-all'): void
@@ -33,6 +35,8 @@ const isAROpen = ref(false)
 const isDeleteMenuOpen = ref(false)
 const isLineMenuOpen = ref(false)
 const isArLocked = computed(() => props.isArMode)
+const isCoordinateSystemOff = computed(() => !props.isCoordinateSystemVisible)
+const isEditingLocked = computed(() => isArLocked.value || isCoordinateSystemOff.value)
 const isCollabOpen = computed(() => props.collabStatus.connected)
 const isCollabConnecting = computed(() => props.collabStatus.connecting)
 const deleteMenuRef = ref<HTMLElement | null>(null)
@@ -63,6 +67,7 @@ watch(
 )
 
 const setMode = (mode: EditorMode) => {
+  if (isEditingLocked.value && mode !== EditorMode.Select) return
   isDeleteMenuOpen.value = false
   isLineMenuOpen.value = false
   emit('mode-change', mode)
@@ -85,7 +90,7 @@ const toggleAR = () => {
 }
 
 const toggleDeleteMenu = () => {
-  if (isArLocked.value) return
+  if (isEditingLocked.value) return
   isLineMenuOpen.value = false
   isDeleteMenuOpen.value = !isDeleteMenuOpen.value
 }
@@ -102,7 +107,7 @@ const updateDeleteMenuPosition = () => {
 }
 
 const toggleLineMenu = () => {
-  if (isArLocked.value) return
+  if (isEditingLocked.value) return
   isDeleteMenuOpen.value = false
   isLineMenuOpen.value = !isLineMenuOpen.value
 }
@@ -123,8 +128,13 @@ const selectDeleteMode = () => {
 }
 
 const requestClearAll = () => {
+  if (isEditingLocked.value) return
   isDeleteMenuOpen.value = false
   emit('clear-all')
+}
+
+const toggleCoordinateSystem = () => {
+  emit('toggle-coordinate-system', !props.isCoordinateSystemVisible)
 }
 
 const selectCreateLineMode = () => {
@@ -166,6 +176,15 @@ watch(isLineMenuOpen, async (isOpen) => {
   updateLineMenuPosition()
 })
 
+watch(
+  () => props.isCoordinateSystemVisible,
+  (visible) => {
+    if (visible) return
+    isDeleteMenuOpen.value = false
+    isLineMenuOpen.value = false
+  },
+)
+
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside)
   window.addEventListener('resize', updateDeleteMenuPosition)
@@ -198,7 +217,7 @@ onUnmounted(() => {
         class="menu-trigger"
         :class="{ 'is-active': currentMode === EditorMode.Delete, 'is-open': isDeleteMenuOpen }"
         @click="toggleDeleteMenu"
-        :disabled="isArLocked"
+        :disabled="isEditingLocked"
       >
         <span>删除</span>
         <span class="menu-caret">▾</span>
@@ -208,7 +227,7 @@ onUnmounted(() => {
     <button
       :class="{ 'is-active': currentMode === EditorMode.CreatePoint }"
       @click="setMode(EditorMode.CreatePoint)"
-      :disabled="isArLocked"
+      :disabled="isEditingLocked"
     >
       点
     </button>
@@ -223,7 +242,7 @@ onUnmounted(() => {
           'is-open': isLineMenuOpen,
         }"
         @click="toggleLineMenu"
-        :disabled="isArLocked"
+        :disabled="isEditingLocked"
       >
         <span>线</span>
         <span class="menu-caret">▾</span>
@@ -235,9 +254,13 @@ onUnmounted(() => {
     <button
       :class="{ active: isSnappingEnabled }"
       @click="emit('toggle-snapping')"
-      :disabled="isArLocked"
+      :disabled="isEditingLocked"
     >
       吸附: {{ isSnappingEnabled ? '开启' : '关闭' }}
+    </button>
+
+    <button :class="{ active: isCoordinateSystemVisible }" @click="toggleCoordinateSystem">
+      {{ isCoordinateSystemVisible ? '坐标系开' : '坐标系关' }}
     </button>
 
     <div class="divider"></div>
@@ -267,8 +290,12 @@ onUnmounted(() => {
 
     <div class="toolbar-spacer"></div>
 
-    <button class="history-button" @click="emit('undo')" :disabled="!canUndo">撤销</button>
-    <button class="history-button" @click="emit('redo')" :disabled="!canRedo">重做</button>
+    <button class="history-button" @click="emit('undo')" :disabled="isEditingLocked || !canUndo">
+      撤销
+    </button>
+    <button class="history-button" @click="emit('redo')" :disabled="isEditingLocked || !canRedo">
+      重做
+    </button>
   </div>
 
   <Teleport to="body">
