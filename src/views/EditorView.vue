@@ -132,7 +132,7 @@ onMounted(() => {
   const originalExecute = editor.executeCommand.bind(editor)
   editor.executeCommand = (cmd) => {
     originalExecute(cmd)
-    collabManager.value?.syncAction() // 每次操作后同步
+    collabManager.value?.syncAction()
   }
 
   const originalUndo = editor.undo.bind(editor)
@@ -158,7 +158,7 @@ onMounted(() => {
     }
     scene.constraints.forEach((c) => c.solve())
     if (interaction.shouldSyncLiveScene()) {
-      collabManager.value?.syncAction()
+      collabManager.value?.syncLivePreview(interaction.getLiveSyncPointIds())
     }
     renderer.sync(scene, interaction.rubberBandData)
     renderer.render()

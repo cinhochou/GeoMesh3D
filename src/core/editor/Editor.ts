@@ -89,11 +89,15 @@ export class Editor {
   }
 
   isLineLocked(line: Line3 | null | undefined) {
-    return Boolean(line && line.userLocked)
+    return Boolean(
+      line && (line.userLocked || (this.isPointCoordinateLocked(line.p1) && this.isPointCoordinateLocked(line.p2))),
+    )
   }
 
   isRayLocked(ray: Ray3 | null | undefined) {
-    return Boolean(ray && ray.userLocked)
+    return Boolean(
+      ray && (ray.userLocked || (this.isPointCoordinateLocked(ray.p1) && this.isPointCoordinateLocked(ray.p2))),
+    )
   }
 
   isLineGeometryLocked(line: Line3 | null | undefined) {
@@ -157,20 +161,50 @@ export class Editor {
   setLineLockState(lineId: string, locked: boolean) {
     const line = this.scene.lines.get(lineId)
     if (!line) return
-    if (line.userLocked === locked) return
+    const endpointTransforms = !locked
+      ? [line.p1, line.p2]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (line.userLocked === locked && endpointTransforms.length === 0) return
 
     this.executeCommand(
-      new SyncLockStateCommand([], [{ line, before: line.userLocked, after: locked }], []),
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [{ line, before: line.userLocked, after: locked }],
+        [],
+      ),
     )
   }
 
   setRayLockState(rayId: string, locked: boolean) {
     const ray = this.scene.rays.get(rayId)
     if (!ray) return
-    if (ray.userLocked === locked) return
+    const endpointTransforms = !locked
+      ? [ray.p1, ray.p2]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (ray.userLocked === locked && endpointTransforms.length === 0) return
 
     this.executeCommand(
-      new SyncLockStateCommand([], [], [{ ray, before: ray.userLocked, after: locked }]),
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [{ ray, before: ray.userLocked, after: locked }],
+      ),
     )
   }
 

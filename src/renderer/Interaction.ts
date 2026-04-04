@@ -1,8 +1,10 @@
 ﻿// src/renderer/Interaction.ts
 import * as THREE from 'three'
 import { Editor, EditorMode } from '../core/editor/Editor'
+import { Scene } from '../core/scene/Scene'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Point3 } from '../core/geometry/Point3'
+import type { Ray3 } from '../core/geometry/Ray3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { ThreeRenderer } from './ThreeRenderer'
 
@@ -293,6 +295,24 @@ export class Interaction {
     )
   }
 
+  private canDragRayAroundOrigin(ray: Ray3) {
+    return (
+      ray.p1.id === Scene.ORIGIN_ID &&
+      ray.p1.locked &&
+      !ray.userLocked &&
+      !this.editor.isPointCoordinateLocked(ray.p2)
+    )
+  }
+
+  private getRayDragReferencePoint(ray: Ray3) {
+    const end = ray.getDisplayEndPoint()
+    return new Vec3(
+      (ray.p1.position.x + end.x) / 2,
+      (ray.p1.position.y + end.y) / 2,
+      (ray.p1.position.z + end.z) / 2,
+    )
+  }
+
   private handleSelectionDragMove(isAltPressed: boolean) {
     const selection = this.editor.scene.selection
 
@@ -376,16 +396,13 @@ export class Interaction {
 
     if (this.draggingRayId) {
       const ray = this.editor.scene.rays.get(this.draggingRayId)
-      if (!ray || this.editor.isRayGeometryLocked(ray)) return
+      if (!ray) return
 
-      const end = ray.getDisplayEndPoint()
-      const mid = new Vec3(
-        (ray.p1.position.x + end.x) / 2,
-        (ray.p1.position.y + end.y) / 2,
-        (ray.p1.position.z + end.z) / 2,
-      )
+      const canRotateAroundOrigin = this.canDragRayAroundOrigin(ray)
+      if (!canRotateAroundOrigin && this.editor.isRayGeometryLocked(ray)) return
+
       this.handleDrag(
-        mid,
+        this.getRayDragReferencePoint(ray),
         (delta) => {
           const toMove = new Set<string>()
           selection.lines.forEach((lid) => {
@@ -397,14 +414,25 @@ export class Interaction {
           })
           selection.rays.forEach((rid) => {
             const selectedRay = this.editor.scene.rays.get(rid)
-            if (selectedRay && !this.editor.isRayGeometryLocked(selectedRay)) {
+            if (!selectedRay) return
+
+            if (this.canDragRayAroundOrigin(selectedRay)) {
+              toMove.add(selectedRay.p2.id)
+              return
+            }
+
+            if (!this.editor.isRayGeometryLocked(selectedRay)) {
               toMove.add(selectedRay.p1.id)
               toMove.add(selectedRay.p2.id)
             }
           })
           selection.points.forEach((id) => toMove.add(id))
-          toMove.add(ray.p1.id)
-          toMove.add(ray.p2.id)
+          if (canRotateAroundOrigin) {
+            toMove.add(ray.p2.id)
+          } else {
+            toMove.add(ray.p1.id)
+            toMove.add(ray.p2.id)
+          }
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -479,17 +507,11 @@ export class Interaction {
           this.editor.scene.selection.selectRay(geoId, true)
           const ray = this.editor.scene.rays.get(geoId)
           if (ray) {
-            if (this.editor.isRayGeometryLocked(ray)) {
+            if (this.editor.isRayGeometryLocked(ray) && !this.canDragRayAroundOrigin(ray)) {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingRayId = geoId
-              const end = ray.getDisplayEndPoint()
-              const mid = new Vec3(
-                (ray.p1.position.x + end.x) / 2,
-                (ray.p1.position.y + end.y) / 2,
-                (ray.p1.position.z + end.z) / 2,
-              )
-              this.startDrag(mid)
+              this.startDrag(this.getRayDragReferencePoint(ray))
             }
           }
         }
@@ -725,19 +747,13 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       const ray = this.editor.scene.rays.get(geoId)
-      if (!ray || this.editor.isRayGeometryLocked(ray)) {
+      if (!ray || (this.editor.isRayGeometryLocked(ray) && !this.canDragRayAroundOrigin(ray))) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
       }
       this.draggingRayId = geoId
-      const end = ray.getDisplayEndPoint()
-      const mid = new Vec3(
-        (ray.p1.position.x + end.x) / 2,
-        (ray.p1.position.y + end.y) / 2,
-        (ray.p1.position.z + end.z) / 2,
-      )
-      this.startDrag(mid)
+      this.startDrag(this.getRayDragReferencePoint(ray))
     }
   }
 
@@ -1071,5 +1087,9 @@ export class Interaction {
       this.draggingRayId !== null ||
       performance.now() < this.liveSyncUntil
     )
+  }
+
+  getLiveSyncPointIds() {
+    return [...this.dragStartPositions.keys()]
   }
 }

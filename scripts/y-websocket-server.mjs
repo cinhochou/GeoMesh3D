@@ -1,6 +1,3 @@
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import path from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Y from 'yjs'
 import * as syncProtocol from 'y-protocols/sync'
@@ -11,12 +8,9 @@ import * as decoding from 'lib0/decoding'
 const messageSync = 0
 const messageAwareness = 1
 const messageQueryAwareness = 3
-const persistDebounceMs = Number.parseInt(process.env.PERSIST_DEBOUNCE_MS ?? '250', 10)
 
 const host = process.env.HOST ?? '0.0.0.0'
 const port = Number.parseInt(process.env.PORT ?? '1234', 10)
-const dataDir = path.resolve(process.cwd(), process.env.COLLAB_DATA_DIR ?? 'collab-data')
-mkdirSync(dataDir, { recursive: true })
 
 /**
  * @typedef {import('ws').WebSocket & { clientIds: Set<number> }} RoomClient
@@ -28,8 +22,6 @@ mkdirSync(dataDir, { recursive: true })
  *   doc: Y.Doc
  *   awareness: awarenessProtocol.Awareness
  *   clients: Set<RoomClient>
- *   filePath: string
- *   persistTimer: NodeJS.Timeout | null
  *   closed: boolean
  * }} RoomState
  */
@@ -42,16 +34,6 @@ const toUint8Array = (data) => {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   }
   return new Uint8Array(data)
-}
-
-const getRoomFilePath = (roomName) => {
-  const hash = createHash('sha1').update(roomName).digest('hex').slice(0, 12)
-  const safeLabel = roomName
-    .replace(/[^a-zA-Z0-9-_]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 48)
-  const fileName = `${safeLabel || 'room'}-${hash}.bin`
-  return path.join(dataDir, fileName)
 }
 
 const broadcast = (room, payload, exclude = null) => {
@@ -68,64 +50,10 @@ const encodeMessage = (messageType, writePayload) => {
   return encoding.toUint8Array(encoder)
 }
 
-const persistRoomSnapshot = (room) => {
-  if (room.persistTimer) {
-    clearTimeout(room.persistTimer)
-    room.persistTimer = null
-  }
-
-  const snapshot = Y.encodeStateAsUpdate(room.doc)
-  const tempPath = `${room.filePath}.tmp`
-  writeFileSync(tempPath, Buffer.from(snapshot))
-  renameSync(tempPath, room.filePath)
-}
-
-const schedulePersist = (room) => {
-  if (room.closed) return
-
-  if (room.persistTimer) {
-    clearTimeout(room.persistTimer)
-  }
-
-  room.persistTimer = setTimeout(() => {
-    room.persistTimer = null
-    try {
-      persistRoomSnapshot(room)
-    } catch (error) {
-      console.error(`[y-websocket] failed to persist room "${room.name}"`, error)
-    }
-  }, persistDebounceMs)
-}
-
-const loadPersistedRoomState = (room) => {
-  if (!existsSync(room.filePath)) return
-
-  try {
-    const snapshot = readFileSync(room.filePath)
-    if (snapshot.byteLength > 0) {
-      Y.applyUpdate(room.doc, new Uint8Array(snapshot))
-      console.log(`[y-websocket] restored room "${room.name}" from ${path.basename(room.filePath)}`)
-    }
-  } catch (error) {
-    console.error(`[y-websocket] failed to restore room "${room.name}"`, error)
-  }
-}
-
 const closeRoom = (room) => {
   if (room.closed) return
 
-  if (room.persistTimer) {
-    clearTimeout(room.persistTimer)
-    room.persistTimer = null
-  }
-
   room.closed = true
-
-  try {
-    persistRoomSnapshot(room)
-  } catch (error) {
-    console.error(`[y-websocket] failed to flush room "${room.name}" on close`, error)
-  }
 
   rooms.delete(room.name)
   room.awareness.destroy()
@@ -145,19 +73,14 @@ const getRoom = (roomName) => {
     doc,
     awareness,
     clients: new Set(),
-    filePath: getRoomFilePath(roomName),
-    persistTimer: null,
     closed: false,
   }
-
-  loadPersistedRoomState(room)
 
   doc.on('update', (update, origin) => {
     const payload = encodeMessage(messageSync, (encoder) => {
       syncProtocol.writeUpdate(encoder, update)
     })
     broadcast(room, payload, origin)
-    schedulePersist(room)
   })
 
   rooms.set(roomName, room)
@@ -291,7 +214,6 @@ server.on('connection', (socket, request) => {
 
 server.on('listening', () => {
   console.log(`[y-websocket] listening on ws://${host}:${port}`)
-  console.log(`[y-websocket] persistence dir: ${dataDir}`)
 })
 
 const shutdown = () => {

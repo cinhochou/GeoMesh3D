@@ -54,8 +54,9 @@ type ProviderStatusEvent = {
 }
 
 export class CollabManager {
+  private static readonly LIVE_SYNC_THROTTLE_MS = 33
   // 本地 websocket 服务不可用时，回退到这个公网协作地址。
-  private static readonly FALLBACK_SERVER_URL = 'wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev'
+  private static readonly FALLBACK_SERVER_URL = 'wss://kraig-scarabaeiform-zealously.ngrok-free.dev'
 
   private ydoc: Y.Doc
   private provider: WebsocketProvider | null = null
@@ -72,8 +73,16 @@ export class CollabManager {
 
   private syncTimer: number | null = null
   private syncPending = false
+  private liveSyncTimer: number | null = null
+  private liveSyncPending = false
   private providerCleanup: Array<() => void> = []
   private readonly serverUrls: string[]
+  private readonly dirtyPointIds = new Set<string>()
+  private readonly dirtyLineIds = new Set<string>()
+  private readonly dirtyRayIds = new Set<string>()
+  private readonly deletedPointIds = new Set<string>()
+  private readonly deletedLineIds = new Set<string>()
+  private readonly deletedRayIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -88,8 +97,11 @@ export class CollabManager {
   }
 
   private static normalizeServerUrl(url: string) {
-    // y-websocket 只接受 ws / wss，这里顺手把 http / https 也规范成对应协议。
-    return url.replace(/^https:\/\//i, 'wss://').replace(/^http:\/\//i, 'ws://').replace(/\/+$/, '')
+    // y-websocket 只接受 ws / wss，这里把 http / https 也规范成对应协议。
+    return url
+      .replace(/^https:\/\//i, 'wss://')
+      .replace(/^http:\/\//i, 'ws://')
+      .replace(/\/+$/, '')
   }
 
   private static resolveServerUrls() {
@@ -131,7 +143,7 @@ export class CollabManager {
     this.emitStatus()
 
     // 按顺序尝试每个候选 websocket 地址，只要有一个成功完成同步就停止继续回退。
-    const timeoutMs = 10_000
+    const timeoutMs = 3_000
     let lastError: unknown = null
 
     for (const serverUrl of this.serverUrls) {
@@ -178,7 +190,13 @@ export class CollabManager {
       window.clearTimeout(this.syncTimer)
       this.syncTimer = null
     }
+    if (this.liveSyncTimer) {
+      window.clearTimeout(this.liveSyncTimer)
+      this.liveSyncTimer = null
+    }
     this.syncPending = false
+    this.liveSyncPending = false
+    this.clearDirtyState()
 
     this.roomName = null
     this.connecting = false
@@ -210,6 +228,7 @@ export class CollabManager {
 
   private bindProviderStatus(provider: WebsocketProvider) {
     this.clearProviderBindings()
+    provider.awareness.setLocalStateField('online', true)
 
     const syncProviderState = () => {
       this.updateConnectionStateFromProvider(provider)
@@ -260,6 +279,81 @@ export class CollabManager {
     snapshot.points.forEach((point) => this.scene.addPoint(point))
     snapshot.lines.forEach((line) => this.scene.addLine(line))
     snapshot.rays.forEach((ray) => this.scene.addRay(ray))
+  }
+
+  private clearDirtyState() {
+    this.dirtyPointIds.clear()
+    this.dirtyLineIds.clear()
+    this.dirtyRayIds.clear()
+    this.deletedPointIds.clear()
+    this.deletedLineIds.clear()
+    this.deletedRayIds.clear()
+  }
+
+  private markPointDirty(id: string) {
+    this.deletedPointIds.delete(id)
+    this.dirtyPointIds.add(id)
+  }
+
+  private markLineDirty(id: string) {
+    this.deletedLineIds.delete(id)
+    this.dirtyLineIds.add(id)
+  }
+
+  private markRayDirty(id: string) {
+    this.deletedRayIds.delete(id)
+    this.dirtyRayIds.add(id)
+  }
+
+  private markPointDeleted(id: string) {
+    this.dirtyPointIds.delete(id)
+    this.deletedPointIds.add(id)
+  }
+
+  private markLineDeleted(id: string) {
+    this.dirtyLineIds.delete(id)
+    this.deletedLineIds.add(id)
+  }
+
+  private markRayDeleted(id: string) {
+    this.dirtyRayIds.delete(id)
+    this.deletedRayIds.add(id)
+  }
+
+  private markLinkedGeometryDirtyForPoint(pointId: string) {
+    this.scene.lines.forEach((line, id) => {
+      if (line.p1.id === pointId || line.p2.id === pointId) this.markLineDirty(id)
+    })
+    this.scene.rays.forEach((ray, id) => {
+      if (ray.p1.id === pointId || ray.p2.id === pointId) this.markRayDirty(id)
+    })
+  }
+
+  markSceneDirty() {
+    this.scene.points.forEach((point, id) => {
+      if (!point.locked) this.markPointDirty(id)
+    })
+    this.scene.lines.forEach((_, id) => this.markLineDirty(id))
+    this.scene.rays.forEach((_, id) => this.markRayDirty(id))
+
+    for (const id of [...this.yPoints.keys()]) {
+      if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
+    }
+    for (const id of [...this.yLines.keys()]) {
+      if (!this.scene.lines.has(id)) this.markLineDeleted(id)
+    }
+    for (const id of [...this.yRays.keys()]) {
+      if (!this.scene.rays.has(id)) this.markRayDeleted(id)
+    }
+  }
+
+  markPreviewPointsDirty(pointIds: Iterable<string>) {
+    for (const id of pointIds) {
+      const point = this.scene.points.get(id)
+      if (!point || point.locked) continue
+      this.markPointDirty(id)
+      this.markLinkedGeometryDirtyForPoint(id)
+    }
   }
 
   private roomHasSharedGeometry() {
@@ -515,6 +609,7 @@ export class CollabManager {
   syncAction() {
     if (!this.provider || !this.connected) return
 
+    this.markSceneDirty()
     this.syncPending = true
     if (this.syncTimer) return
 
@@ -526,25 +621,66 @@ export class CollabManager {
     }, 50)
   }
 
+  syncLivePreview(pointIds: Iterable<string>) {
+    if (!this.provider || !this.connected) return
+
+    this.markPreviewPointsDirty(pointIds)
+    this.liveSyncPending = true
+    if (this.liveSyncTimer) return
+
+    this.liveSyncTimer = window.setTimeout(() => {
+      this.liveSyncTimer = null
+      if (!this.liveSyncPending) return
+      this.liveSyncPending = false
+      this.syncDirtyNow()
+    }, CollabManager.LIVE_SYNC_THROTTLE_MS)
+  }
+
   private syncNow() {
     if (!this.provider || !this.connected) return
 
+    this.markSceneDirty()
+    this.syncDirtyNow()
+  }
+
+  private syncDirtyNow() {
+    if (!this.provider || !this.connected) return
+
+    const pointIds = [...this.dirtyPointIds]
+    const lineIds = [...this.dirtyLineIds]
+    const rayIds = [...this.dirtyRayIds]
+    const deletedPointIds = [...this.deletedPointIds]
+    const deletedLineIds = [...this.deletedLineIds]
+    const deletedRayIds = [...this.deletedRayIds]
+
+    if (
+      pointIds.length === 0 &&
+      lineIds.length === 0 &&
+      rayIds.length === 0 &&
+      deletedPointIds.length === 0 &&
+      deletedLineIds.length === 0 &&
+      deletedRayIds.length === 0
+    ) {
+      return
+    }
+
     this.ydoc.transact(() => {
-      const pointIds = new Set(this.scene.points.keys())
-      const lineIds = new Set(this.scene.lines.keys())
-      const rayIds = new Set(this.scene.rays.keys())
+      deletedPointIds.forEach((id) => {
+        if (id !== Scene.ORIGIN_ID) this.yPoints.delete(id)
+      })
+      deletedLineIds.forEach((id) => {
+        this.yLines.delete(id)
+      })
+      deletedRayIds.forEach((id) => {
+        this.yRays.delete(id)
+      })
 
-      for (const id of [...this.yPoints.keys()]) {
-        if (!pointIds.has(id)) this.yPoints.delete(id)
-      }
-      for (const id of [...this.yLines.keys()]) {
-        if (!lineIds.has(id)) this.yLines.delete(id)
-      }
-      for (const id of [...this.yRays.keys()]) {
-        if (!rayIds.has(id)) this.yRays.delete(id)
-      }
-
-      this.scene.points.forEach((p, id) => {
+      pointIds.forEach((id) => {
+        const p = this.scene.points.get(id)
+        if (!p) {
+          if (id !== Scene.ORIGIN_ID) this.yPoints.delete(id)
+          return
+        }
         const next = {
           x: p.position.x,
           y: p.position.y,
@@ -567,7 +703,12 @@ export class CollabManager {
         }
       })
 
-      this.scene.lines.forEach((l, id) => {
+      lineIds.forEach((id) => {
+        const l = this.scene.lines.get(id)
+        if (!l) {
+          this.yLines.delete(id)
+          return
+        }
         const next = {
           p1Id: l.p1.id,
           p2Id: l.p2.id,
@@ -594,7 +735,12 @@ export class CollabManager {
         }
       })
 
-      this.scene.rays.forEach((ray, id) => {
+      rayIds.forEach((id) => {
+        const ray = this.scene.rays.get(id)
+        if (!ray) {
+          this.yRays.delete(id)
+          return
+        }
         const next = {
           p1Id: ray.p1.id,
           p2Id: ray.p2.id,
@@ -619,5 +765,12 @@ export class CollabManager {
         }
       })
     })
+
+    pointIds.forEach((id) => this.dirtyPointIds.delete(id))
+    lineIds.forEach((id) => this.dirtyLineIds.delete(id))
+    rayIds.forEach((id) => this.dirtyRayIds.delete(id))
+    deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
+    deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
+    deletedRayIds.forEach((id) => this.deletedRayIds.delete(id))
   }
 }

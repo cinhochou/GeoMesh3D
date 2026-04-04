@@ -790,7 +790,7 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>
-            点{{ p!.name ?? '' }}，ID: {{ p!.id }}
+            点{{ p!.name ?? '' }}
             <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
           </div>
           <div>
@@ -1103,7 +1103,7 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>
-            线{{ l!.name ?? '' }}，ID: {{ l!.id }}
+            线{{ l!.name ?? '' }}
             <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
           </div>
           <div>
@@ -1402,7 +1402,7 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>
-            射线{{ r!.name ?? '' }}，ID: {{ r!.id }}
+            射线{{ r!.name ?? '' }}
             <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
           </div>
           <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
@@ -1464,7 +1464,7 @@ onUnmounted(() => {
           >
             <div>
               点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
-              {{ p!.position.z.toFixed(2) }}），ID: {{ p!.id }}
+              {{ p!.position.z.toFixed(2) }}）
               <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
             </div>
           </div>
@@ -1500,7 +1500,7 @@ onUnmounted(() => {
             @click="selectLineFromContent(l!.id)"
           >
             <div>
-              线段{{ l!.name ?? '' }}，ID: {{ l!.id }}
+              线段{{ l!.name ?? '' }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
             </div>
             <div>
@@ -1546,7 +1546,7 @@ onUnmounted(() => {
             @click="selectRayFromContent(r!.id)"
           >
             <div>
-              射线{{ r!.name ?? '' }}，ID: {{ r!.id }}
+              射线{{ r!.name ?? '' }}
               <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
             </div>
             <div>
