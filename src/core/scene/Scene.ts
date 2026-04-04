@@ -1,6 +1,7 @@
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { StraightLine3 } from '../geometry/StraightLine3'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 import { DistanceConstraint } from '../constraints/DistanceConstraint'
@@ -9,6 +10,7 @@ export class Scene {
   static readonly ORIGIN_ID = 'origin'
   points = new Map<string, Point3>()
   lines = new Map<string, Line3>()
+  straightLines = new Map<string, StraightLine3>()
   rays = new Map<string, Ray3>()
   selection = new Selection()
   constraints: DistanceConstraint[] = []
@@ -25,6 +27,10 @@ export class Scene {
 
   addLine(l: Line3) {
     this.lines.set(l.id, l)
+  }
+
+  addStraightLine(line: StraightLine3) {
+    this.straightLines.set(line.id, line)
   }
 
   addRay(ray: Ray3) {

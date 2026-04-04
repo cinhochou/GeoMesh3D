@@ -4,13 +4,14 @@ import { Scene } from '../scene/Scene'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { StraightLine3 } from '../geometry/StraightLine3'
 
-export type ElementType = 'point' | 'line' | 'ray'
+export type ElementType = 'point' | 'line' | 'straightLine' | 'ray'
 
 export class AddElementCommand implements Command {
   constructor(
     private scene: Scene,
-    private element: Point3 | Line3 | Ray3,
+    private element: Point3 | Line3 | StraightLine3 | Ray3,
     private type: ElementType,
   ) {}
 
@@ -20,6 +21,8 @@ export class AddElementCommand implements Command {
       this.scene.addPoint(this.element as Point3)
     } else if (this.type === 'line') {
       this.scene.addLine(this.element as Line3)
+    } else if (this.type === 'straightLine') {
+      this.scene.addStraightLine(this.element as StraightLine3)
     } else {
       this.scene.addRay(this.element as Ray3)
     }
@@ -33,6 +36,9 @@ export class AddElementCommand implements Command {
     } else if (this.type === 'line') {
       this.scene.lines.delete(this.element.id)
       this.scene.selection.lines.delete(this.element.id)
+    } else if (this.type === 'straightLine') {
+      this.scene.straightLines.delete(this.element.id)
+      this.scene.selection.straightLines.delete(this.element.id)
     } else {
       this.scene.rays.delete(this.element.id)
       this.scene.selection.rays.delete(this.element.id)

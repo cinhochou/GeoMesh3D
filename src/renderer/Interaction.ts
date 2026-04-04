@@ -5,6 +5,7 @@ import { Scene } from '../core/scene/Scene'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Ray3 } from '../core/geometry/Ray3'
+import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { ThreeRenderer } from './ThreeRenderer'
 
@@ -20,6 +21,7 @@ export class Interaction {
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
   draggingLineId: string | null = null
+  draggingStraightLineId: string | null = null
   draggingRayId: string | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
   private dragPlane: THREE.Plane | null = null
@@ -124,6 +126,7 @@ export class Interaction {
     if (
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
+      this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
       this.mobileCreatePointerId !== null
     ) {
@@ -159,6 +162,7 @@ export class Interaction {
     this.commitDragHistory()
     this.draggingPointId = null
     this.draggingLineId = null
+    this.draggingStraightLineId = null
     this.draggingRayId = null
     this.endDrag()
     if (hadDragPreview) {
@@ -207,7 +211,10 @@ export class Interaction {
     this.raycaster.params.Line = { threshold: lineThreshold }
     const lineHits = this.raycaster.intersectObjects(
       [...this.renderer.meshMap.values()].filter(
-        (obj) => obj.userData?.type === 'line' || obj.userData?.type === 'ray',
+        (obj) =>
+          obj.userData?.type === 'line' ||
+          obj.userData?.type === 'straightLine' ||
+          obj.userData?.type === 'ray',
       ),
     )
     this.raycaster.params.Line = { threshold: previousThreshold }
@@ -216,7 +223,7 @@ export class Interaction {
 
   private getProtectedEndpointHit(
     linearId: string,
-    type: 'line' | 'ray',
+    type: 'line' | 'straightLine' | 'ray',
     clientX: number,
     clientY: number,
     radiusPx: number,
@@ -224,6 +231,8 @@ export class Interaction {
     const linear =
       type === 'line'
         ? this.editor.scene.lines.get(linearId)
+        : type === 'straightLine'
+          ? this.editor.scene.straightLines.get(linearId)
         : this.editor.scene.rays.get(linearId)
     if (!linear) return null
 
@@ -304,6 +313,15 @@ export class Interaction {
     )
   }
 
+  private canDragStraightLineAroundOrigin(line: StraightLine3) {
+    return (
+      line.p1.id === Scene.ORIGIN_ID &&
+      line.p1.locked &&
+      !line.userLocked &&
+      !this.editor.isPointCoordinateLocked(line.p2)
+    )
+  }
+
   private getRayDragReferencePoint(ray: Ray3) {
     const end = ray.getDisplayEndPoint()
     return new Vec3(
@@ -311,6 +329,10 @@ export class Interaction {
       (ray.p1.position.y + end.y) / 2,
       (ray.p1.position.z + end.z) / 2,
     )
+  }
+
+  private getStraightLineDragReferencePoint(line: StraightLine3) {
+    return line.getMidPoint()
   }
 
   private handleSelectionDragMove(isAltPressed: boolean) {
@@ -337,6 +359,13 @@ export class Interaction {
             if (ray && !this.editor.isRayGeometryLocked(ray)) {
               toMove.add(ray.p1.id)
               toMove.add(ray.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const line = this.editor.scene.straightLines.get(sid)
+            if (line && !this.editor.isStraightLineGeometryLocked(line)) {
+              toMove.add(line.p1.id)
+              toMove.add(line.p2.id)
             }
           })
           toMove.add(this.draggingPointId!)
@@ -384,9 +413,66 @@ export class Interaction {
               toMove.add(ray.p2.id)
             }
           })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
           toMove.add(line.p2.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingStraightLineId) {
+      const line = this.editor.scene.straightLines.get(this.draggingStraightLineId)
+      if (!line) return
+      const canRotateAroundOrigin = this.canDragStraightLineAroundOrigin(line)
+      if (!canRotateAroundOrigin && this.editor.isStraightLineGeometryLocked(line)) return
+
+      this.handleDrag(
+        this.getStraightLineDragReferencePoint(line),
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (!straightLine) return
+            if (this.canDragStraightLineAroundOrigin(straightLine)) {
+              toMove.add(straightLine.p2.id)
+              return
+            }
+            if (!this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          if (canRotateAroundOrigin) {
+            toMove.add(line.p2.id)
+          } else {
+            toMove.add(line.p1.id)
+            toMove.add(line.p2.id)
+          }
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -451,7 +537,11 @@ export class Interaction {
 
     if (
       this.renderer.isARActive() &&
-      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay)
+      (
+        this.editor.mode === EditorMode.CreateLine ||
+        this.editor.mode === EditorMode.CreateStraightLine ||
+        this.editor.mode === EditorMode.CreateRay
+      )
     ) {
       return
     }
@@ -471,6 +561,8 @@ export class Interaction {
           this.editor.deletePoint(geoId)
         } else if (type === 'line') {
           this.editor.deleteLine(geoId)
+        } else if (type === 'straightLine') {
+          this.editor.deleteStraightLine(geoId)
         } else if (type === 'ray') {
           this.editor.deleteRay(geoId)
         }
@@ -503,6 +595,20 @@ export class Interaction {
               this.startDrag(referencePoint)
             }
           }
+        } else if (type === 'straightLine') {
+          this.editor.scene.selection.selectStraightLine(geoId, true)
+          const line = this.editor.scene.straightLines.get(geoId)
+          if (line) {
+            if (
+              this.editor.isStraightLineGeometryLocked(line) &&
+              !this.canDragStraightLineAroundOrigin(line)
+            ) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingStraightLineId = geoId
+              this.startDrag(this.getStraightLineDragReferencePoint(line))
+            }
+          }
         } else if (type === 'ray') {
           this.editor.scene.selection.selectRay(geoId, true)
           const ray = this.editor.scene.rays.get(geoId)
@@ -517,6 +623,8 @@ export class Interaction {
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
         this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      } else if (this.editor.mode === EditorMode.CreateStraightLine && type === 'point') {
+        this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
       } else if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
         this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
       }
@@ -536,7 +644,11 @@ export class Interaction {
 
     if (
       this.renderer.isARActive() &&
-      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay)
+      (
+        this.editor.mode === EditorMode.CreateLine ||
+        this.editor.mode === EditorMode.CreateStraightLine ||
+        this.editor.mode === EditorMode.CreateRay
+      )
     ) {
       this.rubberBandData = null
       return
@@ -552,7 +664,11 @@ export class Interaction {
 
     // 橡皮筋逻辑
     if (
-      (this.editor.mode === EditorMode.CreateLine || this.editor.mode === EditorMode.CreateRay) &&
+      (
+        this.editor.mode === EditorMode.CreateLine ||
+        this.editor.mode === EditorMode.CreateStraightLine ||
+        this.editor.mode === EditorMode.CreateRay
+      ) &&
       this.editor.selectedPoints.length === 1
     ) {
       const startPoint = this.editor.selectedPoints[0]
@@ -644,31 +760,40 @@ export class Interaction {
 
     const { geoId, type } = hit.userData
 
-      if (this.editor.mode === EditorMode.Delete) {
-        e.preventDefault()
-        e.stopPropagation()
-        if (type === 'point') this.editor.deletePoint(geoId)
-        else if (type === 'line') this.editor.deleteLine(geoId)
-        else if (type === 'ray') this.editor.deleteRay(geoId)
-        this.resetMobileInteractionState()
-        return
-      }
-
-      if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
+    if (this.editor.mode === EditorMode.Delete) {
       e.preventDefault()
       e.stopPropagation()
-        this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
-        this.resetMobileInteractionState()
-        return
-      }
+      if (type === 'point') this.editor.deletePoint(geoId)
+      else if (type === 'line') this.editor.deleteLine(geoId)
+      else if (type === 'straightLine') this.editor.deleteStraightLine(geoId)
+      else if (type === 'ray') this.editor.deleteRay(geoId)
+      this.resetMobileInteractionState()
+      return
+    }
 
-      if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
+    if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
+      e.preventDefault()
+      e.stopPropagation()
+      this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateStraightLine && type === 'point') {
+      e.preventDefault()
+      e.stopPropagation()
+      this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
         e.preventDefault()
         e.stopPropagation()
         this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
         this.resetMobileInteractionState()
         return
-      }
+    }
 
     if (this.editor.mode !== EditorMode.Select) {
       this.resetMobileInteractionState()
@@ -727,6 +852,37 @@ export class Interaction {
       }
       this.draggingLineId = geoId
       this.startDrag(this.getLineDragReferencePoint(line))
+      return
+    }
+
+    if (type === 'straightLine') {
+      const alreadySelected = this.editor.scene.selection.straightLines.has(geoId)
+      this.editor.scene.selection.selectStraightLine(geoId, true)
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const line = this.editor.scene.straightLines.get(geoId)
+      if (
+        !line ||
+        (this.editor.isStraightLineGeometryLocked(line) &&
+          !this.canDragStraightLineAroundOrigin(line))
+      ) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingStraightLineId = geoId
+      this.startDrag(this.getStraightLineDragReferencePoint(line))
       return
     }
 
@@ -791,7 +947,13 @@ export class Interaction {
 
     this.updateMobileMoveThreshold(e.clientX, e.clientY)
 
-    if (!this.draggingPointId && !this.draggingLineId && !this.draggingRayId) return
+    if (
+      !this.draggingPointId &&
+      !this.draggingLineId &&
+      !this.draggingStraightLineId &&
+      !this.draggingRayId
+    )
+      return
 
     e.preventDefault()
     e.stopPropagation()
@@ -836,6 +998,7 @@ export class Interaction {
     const hadDrag =
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
+      this.draggingStraightLineId !== null ||
       this.draggingRayId !== null
 
     if (hadDrag) {
@@ -885,7 +1048,10 @@ export class Interaction {
 
       // 如果没点中点，再看有没有点中“线”
       const lineHit = hits.find(
-        (h) => h.object.userData.type === 'line' || h.object.userData.type === 'ray',
+        (h) =>
+          h.object.userData.type === 'line' ||
+          h.object.userData.type === 'straightLine' ||
+          h.object.userData.type === 'ray',
       )
       if (lineHit) return lineHit.object
 
@@ -1084,6 +1250,7 @@ export class Interaction {
     return (
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
+      this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
       performance.now() < this.liveSyncUntil
     )

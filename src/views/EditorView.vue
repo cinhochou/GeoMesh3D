@@ -85,6 +85,8 @@ const modeName = computed(() => {
       return '创建点'
     case EditorMode.CreateLine:
       return '创建线段'
+    case EditorMode.CreateStraightLine:
+      return '创建直线'
     case EditorMode.CreateRay:
       return '创建射线'
     default:
@@ -98,6 +100,8 @@ const modeHint = computed(() => {
       return '单击场景中的几何元素对象以删除~'
     case EditorMode.CreateLine:
       return '点击场景中的两个不同的点以创建线段~'
+    case EditorMode.CreateStraightLine:
+      return '点击场景中的两个不同的点以创建直线~'
     case EditorMode.CreateRay:
       return '点击场景中的两个不同的点以创建射线~'
     default:
@@ -175,6 +179,7 @@ watch(
   [
     () => scene.selection.points.size,
     () => scene.selection.lines.size,
+    () => scene.selection.straightLines.size,
     () => scene.selection.rays.size,
     () => editor.mode,
     isARMode,

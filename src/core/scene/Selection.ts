@@ -2,11 +2,13 @@
 export class Selection {
   points = new Set<string>()
   lines = new Set<string>()
+  straightLines = new Set<string>()
   rays = new Set<string>()
 
   clear() {
     this.points.clear()
     this.lines.clear()
+    this.straightLines.clear()
     this.rays.clear()
   }
 
@@ -20,12 +22,22 @@ export class Selection {
     this.lines.add(id)
   }
 
+  selectStraightLine(id: string, additive = false) {
+    if (!additive) this.clear()
+    this.straightLines.add(id)
+  }
+
   selectRay(id: string, additive = false) {
     if (!additive) this.clear()
     this.rays.add(id)
   }
 
   isEmpty() {
-    return this.points.size === 0 && this.lines.size === 0 && this.rays.size === 0
+    return (
+      this.points.size === 0 &&
+      this.lines.size === 0 &&
+      this.straightLines.size === 0 &&
+      this.rays.size === 0
+    )
   }
 }

@@ -6,14 +6,17 @@ import { AddElementCommand } from './AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { StraightLine3 } from '../geometry/StraightLine3'
 import { Vec3 } from '../geometry/Vec3'
 import { TransformPointsCommand } from './TransformPointsCommand'
 import { UpdatePointCommand } from './UpdatePointCommand'
 import { UpdateLineCommand } from './UpdateLineCommand'
 import { UpdateRayCommand } from './UpdateRayCommand'
+import { UpdateStraightLineCommand } from './UpdateStraightLineCommand'
 import { DeletePointCommand } from './DeletePointCommand'
 import { DeleteLineCommand } from './DeleteLineCommand'
 import { DeleteRayCommand } from './DeleteRayCommand'
+import { DeleteStraightLineCommand } from './DeleteStraightLineCommand'
 import { ClearSceneCommand } from './ClearSceneCommand'
 import { SyncLockStateCommand } from './SyncLockStateCommand'
 
@@ -22,6 +25,7 @@ export enum EditorMode {
   Delete,
   CreatePoint,
   CreateLine,
+  CreateStraightLine,
   CreateRay,
   CreatePlane,
 }
@@ -78,6 +82,11 @@ export class Editor {
       if (ray.p1.id === pointId || ray.p2.id === pointId) return true
     }
 
+    for (const line of this.scene.straightLines.values()) {
+      if (!line.userLocked) continue
+      if (line.p1.id === pointId || line.p2.id === pointId) return true
+    }
+
     return false
   }
 
@@ -100,6 +109,14 @@ export class Editor {
     )
   }
 
+  isStraightLineLocked(line: StraightLine3 | null | undefined) {
+    return Boolean(
+      line &&
+        (line.userLocked ||
+          (this.isPointCoordinateLocked(line.p1) && this.isPointCoordinateLocked(line.p2))),
+    )
+  }
+
   isLineGeometryLocked(line: Line3 | null | undefined) {
     return Boolean(
       line && (line.userLocked || this.isPointCoordinateLocked(line.p1) || this.isPointCoordinateLocked(line.p2)),
@@ -112,6 +129,15 @@ export class Editor {
     )
   }
 
+  isStraightLineGeometryLocked(line: StraightLine3 | null | undefined) {
+    return Boolean(
+      line &&
+        (line.userLocked ||
+          this.isPointCoordinateLocked(line.p1) ||
+          this.isPointCoordinateLocked(line.p2)),
+    )
+  }
+
   setPointLockState(pointId: string, locked: boolean) {
     const point = this.scene.points.get(pointId)
     if (!point || point.locked) return
@@ -121,6 +147,9 @@ export class Editor {
     )
     const relatedRays = [...this.scene.rays.values()].filter(
       (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
+    )
+    const relatedStraightLines = [...this.scene.straightLines.values()].filter(
+      (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
 
     const pointTransforms = [
@@ -151,11 +180,28 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
-    if (pointTransforms.length === 0 && lineTransforms.length === 0 && rayTransforms.length === 0) {
+    const straightLineTransforms = locked
+      ? []
+      : relatedStraightLines
+          .map((line) => ({
+            line,
+            before: line.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
+    if (
+      pointTransforms.length === 0 &&
+      lineTransforms.length === 0 &&
+      straightLineTransforms.length === 0 &&
+      rayTransforms.length === 0
+    ) {
       return
     }
 
-    this.executeCommand(new SyncLockStateCommand(pointTransforms, lineTransforms, rayTransforms))
+    this.executeCommand(
+      new SyncLockStateCommand(pointTransforms, lineTransforms, straightLineTransforms, rayTransforms),
+    )
   }
 
   setLineLockState(lineId: string, locked: boolean) {
@@ -177,6 +223,33 @@ export class Editor {
     this.executeCommand(
       new SyncLockStateCommand(
         endpointTransforms,
+        [{ line, before: line.userLocked, after: locked }],
+        [],
+        [],
+      ),
+    )
+  }
+
+  setStraightLineLockState(lineId: string, locked: boolean) {
+    const line = this.scene.straightLines.get(lineId)
+    if (!line) return
+    const endpointTransforms = !locked
+      ? [line.p1, line.p2]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (line.userLocked === locked && endpointTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
         [{ line, before: line.userLocked, after: locked }],
         [],
       ),
@@ -202,6 +275,7 @@ export class Editor {
     this.executeCommand(
       new SyncLockStateCommand(
         endpointTransforms,
+        [],
         [],
         [{ ray, before: ray.userLocked, after: locked }],
       ),
@@ -231,8 +305,13 @@ export class Editor {
     const relatedRays = [...this.scene.rays.values()].filter(
       (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
     )
+    const relatedStraightLines = [...this.scene.straightLines.values()].filter(
+      (line) => line.p1.id === pointId || line.p2.id === pointId,
+    )
 
-    this.executeCommand(new DeletePointCommand(this.scene, point, relatedLines, relatedRays))
+    this.executeCommand(
+      new DeletePointCommand(this.scene, point, relatedLines, relatedStraightLines, relatedRays),
+    )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
 
@@ -248,16 +327,29 @@ export class Editor {
     this.executeCommand(new DeleteRayCommand(this.scene, ray))
   }
 
+  deleteStraightLine(lineId: string) {
+    const line = this.scene.straightLines.get(lineId)
+    if (!line) return
+    this.executeCommand(new DeleteStraightLineCommand(this.scene, line))
+  }
+
   clearAll() {
     const points = [...this.scene.points.values()].filter((point) => !point.locked)
     const lines = [...this.scene.lines.values()]
+    const straightLines = [...this.scene.straightLines.values()]
     const rays = [...this.scene.rays.values()]
     const constraints = [...this.scene.constraints]
 
-    if (points.length === 0 && lines.length === 0 && rays.length === 0 && constraints.length === 0)
+    if (
+      points.length === 0 &&
+      lines.length === 0 &&
+      straightLines.length === 0 &&
+      rays.length === 0 &&
+      constraints.length === 0
+    )
       return
 
-    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, rays, constraints))
+    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, straightLines, rays, constraints))
     this.selectedPoints = []
   }
 
@@ -534,9 +626,65 @@ export class Editor {
     )
   }
 
+  updateStraightLine(
+    lineId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      visible?: boolean
+      displayLength?: number
+      userLocked?: boolean
+    },
+  ) {
+    const line = this.scene.straightLines.get(lineId)
+    if (!line) return
+
+    const nextName = patch.name ?? line.name
+    const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextVisible = patch.visible ?? line.visible
+    const nextDisplayLength = StraightLine3.normalizeDisplayLength(
+      patch.displayLength ?? line.displayLength,
+    )
+    const nextUserLocked = patch.userLocked ?? line.userLocked
+    if (
+      nextName === line.name &&
+      nextNameVisible === line.nameVisible &&
+      nextVisible === line.visible &&
+      nextDisplayLength === line.displayLength &&
+      nextUserLocked === line.userLocked
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateStraightLineCommand(
+        line,
+        {
+          name: line.name,
+          nameVisible: line.nameVisible,
+          visible: line.visible,
+          displayLength: line.displayLength,
+          userLocked: line.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          visible: nextVisible,
+          displayLength: nextDisplayLength,
+          userLocked: nextUserLocked,
+        },
+      ),
+    )
+  }
+
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
     this.tryCreateLinearWith(point, 'line')
+  }
+
+  tryCreateStraightLineWith(point: Point3) {
+    if (this.mode !== EditorMode.CreateStraightLine) return
+    this.tryCreateLinearWith(point, 'straightLine')
   }
 
   tryCreateRayWith(point: Point3) {
@@ -544,7 +692,7 @@ export class Editor {
     this.tryCreateLinearWith(point, 'ray')
   }
 
-  tryCreateLinearWith(point: Point3, type: 'line' | 'ray') {
+  tryCreateLinearWith(point: Point3, type: 'line' | 'straightLine' | 'ray') {
     this.scene.selection.selectPoint(point.id, true)
 
     if (!this.selectedPoints.includes(point)) {
@@ -560,6 +708,12 @@ export class Editor {
                 (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
                 (l.p1.id === p2!.id && l.p2.id === p1!.id),
             )
+          : type === 'straightLine'
+            ? [...this.scene.straightLines.values()].some(
+                (l) =>
+                  (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
+                  (l.p1.id === p2!.id && l.p2.id === p1!.id),
+              )
           : [...this.scene.rays.values()].some((ray) => ray.p1.id === p1!.id && ray.p2.id === p2!.id)
 
       if (!exists) {
@@ -575,6 +729,20 @@ export class Editor {
             true,
           )
           this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+        } else if (type === 'straightLine') {
+          const line = new StraightLine3(
+            genId('sl'),
+            genNextAvailableName(
+              [...this.scene.straightLines.values()].map((line) => line.name),
+              0,
+              (index) => (index === 0 ? 'm' : `m${index}`),
+            ),
+            p1!,
+            p2!,
+            true,
+            true,
+          )
+          this.executeCommand(new AddElementCommand(this.scene, line, 'straightLine'))
         } else {
           const ray = new Ray3(
             genId('r'),
@@ -594,7 +762,12 @@ export class Editor {
         window.dispatchEvent(
           new CustomEvent('toast', {
             detail: {
-              msg: type === 'line' ? '线段已存在，创建线段失败' : '射线已存在，创建射线失败',
+              msg:
+                type === 'line'
+                  ? '线段已存在，创建线段失败'
+                  : type === 'straightLine'
+                    ? '直线已存在，创建直线失败'
+                    : '射线已存在，创建射线失败',
               scope: 'viewport',
             },
           }),

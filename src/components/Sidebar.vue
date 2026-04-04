@@ -7,6 +7,7 @@ import { Vec3 } from '../core/geometry/Vec3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Ray3 } from '../core/geometry/Ray3'
+import type { StraightLine3 } from '../core/geometry/StraightLine3'
 
 const props = defineProps<{
   scene: Scene
@@ -29,6 +30,12 @@ const selectedLines = computed(() => {
     .map((id) => props.scene.lines.get(id))
     .filter((line): line is Line3 => line !== undefined)
 })
+const selectedStraightLines = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.straightLines]
+    .map((id) => props.scene.straightLines.get(id))
+    .filter((line): line is StraightLine3 => line !== undefined)
+})
 const selectedRays = computed(() => {
   void commandRevision.value
   return [...props.scene.selection.rays]
@@ -43,14 +50,19 @@ const linesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.lines.values()]
 })
+const straightLinesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.straightLines.values()]
+})
 const raysInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.rays.values()]
 })
 
-const editing = ref<{ type: 'point' | 'line' | 'ray'; id: string } | null>(null)
+const editing = ref<{ type: 'point' | 'line' | 'straightLine' | 'ray'; id: string } | null>(null)
 const isCompactLineEditor = ref(false)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
+const expandedStraightLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
 const isPointCoordinateLocked = (point: Point3 | undefined) =>
   Boolean(point && props.editor.isPointCoordinateLocked(point))
@@ -58,6 +70,13 @@ const isLineEndpointCoordinateLocked = (line: Line3 | undefined, point: Point3 |
   Boolean(line && point && (props.editor.isLineLocked(line) || isPointCoordinateLocked(point)))
 const isRayEndpointCoordinateLocked = (ray: Ray3 | undefined, point: Point3 | undefined) =>
   Boolean(ray && point && (props.editor.isRayLocked(ray) || isPointCoordinateLocked(point)))
+const isStraightLineEndpointCoordinateLocked = (
+  line: StraightLine3 | undefined,
+  point: Point3 | undefined,
+) =>
+  Boolean(
+    line && point && (props.editor.isStraightLineLocked(line) || isPointCoordinateLocked(point)),
+  )
 const isLineConstraintLocked = (line: Line3 | undefined) =>
   Boolean(
     line &&
@@ -92,26 +111,45 @@ const editRay = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editStraightLine = reactive({
+  name: '',
+  nameVisible: true,
+  visible: true,
+  userLocked: false,
+  displayLength: '',
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
+let straightLineCoordCollapseTimer: number | null = null
 let rayCoordCollapseTimer: number | null = null
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
+const selectedStraightLineIds = computed(() =>
+  selectedStraightLines.value.map((l) => l?.id).filter(Boolean),
+)
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
 const totalContentCount = computed(
-  () => pointsInScene.value.length + linesInScene.value.length + raysInScene.value.length,
+  () =>
+    pointsInScene.value.length +
+    linesInScene.value.length +
+    straightLinesInScene.value.length +
+    raysInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
 const collapsedContentGroups = reactive({
   point: false,
   line: false,
+  straightLine: false,
   ray: false,
 })
-const contentGroupLabels: Record<'point' | 'line' | 'ray', string> = {
+const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray', string> = {
   point: '点',
   line: '线段',
+  straightLine: '直线',
   ray: '射线',
 }
 const hasAutoCollapsedContentGroups = ref(false)
@@ -119,10 +157,11 @@ const hasAutoCollapsedContentGroups = ref(false)
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   collapsedContentGroups.point = collapsed
   collapsedContentGroups.line = collapsed
+  collapsedContentGroups.straightLine = collapsed
   collapsedContentGroups.ray = collapsed
 }
 
-const toggleContentGroup = (type: 'point' | 'line' | 'ray') => {
+const toggleContentGroup = (type: 'point' | 'line' | 'straightLine' | 'ray') => {
   if (!canCollapseContentGroups.value) return
   collapsedContentGroups[type] = !collapsedContentGroups[type]
 }
@@ -138,6 +177,7 @@ const emitToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 const selectPointFromContent = (id: string) => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectPoint(id)
 }
@@ -145,13 +185,23 @@ const selectPointFromContent = (id: string) => {
 const selectLineFromContent = (id: string) => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectLine(id)
+}
+
+const selectStraightLineFromContent = (id: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectStraightLine(id)
 }
 
 const selectRayFromContent = (id: string) => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectRay(id)
 }
@@ -159,6 +209,7 @@ const selectRayFromContent = (id: string) => {
 const clearContentSelection = () => {
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.clear()
 }
@@ -173,11 +224,12 @@ const updateCompactLineEditorMode = () => {
   isCompactLineEditor.value = touchLike || mobileUA
 }
 
-watch([selectedPointIds, selectedLineIds, selectedRayIds], () => {
+watch([selectedPointIds, selectedLineIds, selectedStraightLineIds, selectedRayIds], () => {
   if (!editing.value) return
   const { type, id } = editing.value
   if (type === 'point' && !selectedPointIds.value.includes(id)) editing.value = null
   if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
+  if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
   if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
 })
 
@@ -283,6 +335,32 @@ const handleRayCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
     rayCoordCollapseTimer = null
   }, 0)
 }
+const handleStraightLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  if (straightLineCoordCollapseTimer !== null) {
+    window.clearTimeout(straightLineCoordCollapseTimer)
+    straightLineCoordCollapseTimer = null
+  }
+  expandedStraightLineEditorPoint.value = which
+  setCoordFocus(`straightLine.${which}.${axis}`, true)
+}
+const handleStraightLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editStraightLine[which][axis] = normalizeCoord(editStraightLine[which][axis])
+  setCoordFocus(`straightLine.${which}.${axis}`, false)
+  applyEditStraightLine()
+  if (straightLineCoordCollapseTimer !== null) {
+    window.clearTimeout(straightLineCoordCollapseTimer)
+  }
+  straightLineCoordCollapseTimer = window.setTimeout(() => {
+    const stillFocused =
+      focusedCoord[`straightLine.${which}.x`] ||
+      focusedCoord[`straightLine.${which}.y`] ||
+      focusedCoord[`straightLine.${which}.z`]
+    if (!stillFocused && expandedStraightLineEditorPoint.value === which) {
+      expandedStraightLineEditorPoint.value = null
+    }
+    straightLineCoordCollapseTimer = null
+  }, 0)
+}
 const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`point.${axis}`, direction)
   if (nextValue === null) return
@@ -323,11 +401,28 @@ const keepRayCoordExpanded = (which: 'p1' | 'p2') => {
   }
   expandedRayEditorPoint.value = which
 }
+const keepStraightLineCoordExpanded = (which: 'p1' | 'p2') => {
+  if (straightLineCoordCollapseTimer !== null) {
+    window.clearTimeout(straightLineCoordCollapseTimer)
+    straightLineCoordCollapseTimer = null
+  }
+  expandedStraightLineEditorPoint.value = which
+}
 const nudgeRayCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`ray.${which}.${axis}`, direction)
   if (nextValue === null) return
   editRay[which][axis] = nextValue
   applyEditRay()
+}
+const nudgeStraightLineCoord = (
+  which: 'p1' | 'p2',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`straightLine.${which}.${axis}`, direction)
+  if (nextValue === null) return
+  editStraightLine[which][axis] = nextValue
+  applyEditStraightLine()
 }
 const handleRayDisplayLengthFocus = () => {
   setCoordFocus('ray.displayLength', true)
@@ -342,6 +437,20 @@ const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
   if (nextValue === null) return
   editRay.displayLength = nextValue
   applyEditRay()
+}
+const handleStraightLineDisplayLengthFocus = () => {
+  setCoordFocus('straightLine.displayLength', true)
+}
+const handleStraightLineDisplayLengthBlur = () => {
+  editStraightLine.displayLength = normalizeDisplayLength(editStraightLine.displayLength)
+  setCoordFocus('straightLine.displayLength', false)
+  applyEditStraightLine()
+}
+const nudgeStraightLineDisplayLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('straightLine.displayLength', direction)
+  if (nextValue === null) return
+  editStraightLine.displayLength = nextValue
+  applyEditStraightLine()
 }
 
 const startEditPoint = (p: Point3 | undefined) => {
@@ -376,10 +485,29 @@ const startEditLine = (l: Line3 | undefined) => {
   editLine.p2.y = toFixed2(l.p2.position.y)
   editLine.p2.z = toFixed2(l.p2.position.z)
 }
+const startEditStraightLine = (l: StraightLine3 | undefined) => {
+  if (!l) return
+  editing.value = { type: 'straightLine', id: l.id }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editStraightLine.name = l.name ?? ''
+  editStraightLine.nameVisible = l.nameVisible !== false
+  editStraightLine.visible = l.visible !== false
+  editStraightLine.userLocked = props.editor.isStraightLineLocked(l)
+  editStraightLine.displayLength = toFixed2(l.displayLength)
+  editStraightLine.p1.x = toFixed2(l.p1.position.x)
+  editStraightLine.p1.y = toFixed2(l.p1.position.y)
+  editStraightLine.p1.z = toFixed2(l.p1.position.z)
+  editStraightLine.p2.x = toFixed2(l.p2.position.x)
+  editStraightLine.p2.y = toFixed2(l.p2.position.y)
+  editStraightLine.p2.z = toFixed2(l.p2.position.z)
+}
 const startEditRay = (r: Ray3 | undefined) => {
   if (!r) return
   editing.value = { type: 'ray', id: r.id }
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   editRay.name = r.name ?? ''
   editRay.nameVisible = r.nameVisible !== false
@@ -518,8 +646,40 @@ const applyEditRay = () => {
   applyPointPosition(ray.p1.id, editRay.p1.x, editRay.p1.y, editRay.p1.z)
   applyPointPosition(ray.p2.id, editRay.p2.x, editRay.p2.y, editRay.p2.z)
 }
+const applyEditStraightLine = () => {
+  if (!editing.value || editing.value.type !== 'straightLine') return
+  const line = props.scene.straightLines.get(editing.value.id)
+  if (!line) return
+  const previousUserLocked = props.editor.isStraightLineLocked(line)
+  const displayLength = Number(editStraightLine.displayLength)
+  props.editor.updateStraightLine(editing.value.id, {
+    name: editStraightLine.name,
+    nameVisible: editStraightLine.nameVisible,
+    visible: editStraightLine.visible,
+    displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
+  })
+  if (editStraightLine.userLocked !== previousUserLocked) {
+    props.editor.setStraightLineLockState(editing.value.id, editStraightLine.userLocked)
+  }
+  const updatedLine = props.scene.straightLines.get(editing.value.id)
+  if (!updatedLine || props.editor.isStraightLineLocked(updatedLine)) return
+  applyPointPosition(
+    line.p1.id,
+    editStraightLine.p1.x,
+    editStraightLine.p1.y,
+    editStraightLine.p1.z,
+  )
+  applyPointPosition(
+    line.p2.id,
+    editStraightLine.p2.x,
+    editStraightLine.p2.y,
+    editStraightLine.p2.z,
+  )
+}
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
+const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
+const getStraightLineDisplayPoints = (line: StraightLine3) => line.getDisplayPoints()
 
 const handleGlobalClick = (e: MouseEvent) => {
   if (!editing.value) return
@@ -531,6 +691,7 @@ const handleGlobalClick = (e: MouseEvent) => {
   if (target.closest('.viewport')) return
   editing.value = null
   expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
 }
 
@@ -604,6 +765,40 @@ watch(
 
 watch(
   () => {
+    if (!editing.value || editing.value.type !== 'straightLine') return null
+    const l = props.scene.straightLines.get(editing.value.id)
+    if (!l) return null
+    return {
+      name: l.name ?? '',
+      nameVisible: l.nameVisible !== false,
+      visible: l.visible !== false,
+      userLocked: props.editor.isStraightLineLocked(l),
+      displayLength: l.displayLength,
+      p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
+      p2: { x: l.p2.position.x, y: l.p2.position.y, z: l.p2.position.z },
+    }
+  },
+  (newLine) => {
+    if (!newLine) return
+    editStraightLine.name = newLine.name
+    editStraightLine.nameVisible = newLine.nameVisible
+    editStraightLine.visible = newLine.visible
+    editStraightLine.userLocked = newLine.userLocked
+    if (!focusedCoord['straightLine.displayLength']) {
+      editStraightLine.displayLength = toFixed2(newLine.displayLength)
+    }
+    if (!focusedCoord['straightLine.p1.x']) editStraightLine.p1.x = toFixed2(newLine.p1.x)
+    if (!focusedCoord['straightLine.p1.y']) editStraightLine.p1.y = toFixed2(newLine.p1.y)
+    if (!focusedCoord['straightLine.p1.z']) editStraightLine.p1.z = toFixed2(newLine.p1.z)
+    if (!focusedCoord['straightLine.p2.x']) editStraightLine.p2.x = toFixed2(newLine.p2.x)
+    if (!focusedCoord['straightLine.p2.y']) editStraightLine.p2.y = toFixed2(newLine.p2.y)
+    if (!focusedCoord['straightLine.p2.z']) editStraightLine.p2.z = toFixed2(newLine.p2.z)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
     if (!editing.value || editing.value.type !== 'ray') return null
     const r = props.scene.rays.get(editing.value.id)
     if (!r) return null
@@ -644,6 +839,9 @@ onUnmounted(() => {
   if (lineCoordCollapseTimer !== null) {
     window.clearTimeout(lineCoordCollapseTimer)
   }
+  if (straightLineCoordCollapseTimer !== null) {
+    window.clearTimeout(straightLineCoordCollapseTimer)
+  }
   if (rayCoordCollapseTimer !== null) {
     window.clearTimeout(rayCoordCollapseTimer)
   }
@@ -660,14 +858,22 @@ onUnmounted(() => {
     <h3>选中</h3>
     <div
       class="hint"
-      v-if="selectedPoints.length > 0 || selectedLines.length > 0 || selectedRays.length > 0"
+      v-if="
+        selectedPoints.length > 0 ||
+        selectedLines.length > 0 ||
+        selectedStraightLines.length > 0 ||
+        selectedRays.length > 0
+      "
     >
       双击标签以编辑几何元素~
     </div>
     <div class="box selected-box">
       <div
         v-if="
-          selectedPoints.length === 0 && selectedLines.length === 0 && selectedRays.length === 0
+          selectedPoints.length === 0 &&
+          selectedLines.length === 0 &&
+          selectedStraightLines.length === 0 &&
+          selectedRays.length === 0
         "
       >
         无
@@ -1103,7 +1309,7 @@ onUnmounted(() => {
         </div>
         <div v-else>
           <div>
-            线{{ l!.name ?? '' }}
+            线段{{ l!.name ?? '' }}
             <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
           </div>
           <div>
@@ -1117,6 +1323,341 @@ onUnmounted(() => {
           <div>
             点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
             {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-for="sl in selectedStraightLines"
+        :key="sl!.id"
+        class="selectedStraightLine-info"
+        @dblclick="startEditStraightLine(sl)"
+      >
+        <div v-if="editing?.type === 'straightLine' && editing?.id === sl!.id" class="edit-grid">
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editStraightLine.name" @input="applyEditStraightLine" />
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                v-model="editStraightLine.visible"
+                @change="applyEditStraightLine"
+              />
+              直线显示
+            </label>
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                v-model="editStraightLine.nameVisible"
+                @change="applyEditStraightLine"
+              />
+              名称显示
+            </label>
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                v-model="editStraightLine.userLocked"
+                @change="applyEditStraightLine"
+              />
+              锁定
+            </label>
+          </div>
+          <div class="name-row">
+            <label>显示长度</label>
+            <div class="coord-input">
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeStraightLineDisplayLength('down')"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.displayLength', el)"
+                v-model="editStraightLine.displayLength"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineDisplayLengthFocus"
+                @blur="handleStraightLineDisplayLengthBlur"
+                step="1"
+                min="2"
+              />
+              <button type="button" class="step-btn" @click="nudgeStraightLineDisplayLength('up')">
+                +
+              </button>
+            </div>
+          </div>
+          <div
+            class="line-editor-grid"
+            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+          >
+            <div class="line-editor-head"></div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                点{{ sl!.p1.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">点A</span>
+              <span v-if="isPointCoordinateLocked(sl!.p1)" class="lock-badge">🔒</span>
+            </div>
+            <div class="line-editor-head">
+              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                点{{ sl!.p2.name ?? '' }}(x,y,z)
+              </span>
+              <span v-else class="line-editor-title-short">点B</span>
+              <span v-if="isPointCoordinateLocked(sl!.p2)" class="lock-badge">🔒</span>
+            </div>
+
+            <div class="line-axis-label">x</div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'x', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p1.x', el)"
+                v-model="editStraightLine.p1.x"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p1', 'x')"
+                @blur="handleStraightLineCoordBlur('p1', 'x')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'x', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'x', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p2.x', el)"
+                v-model="editStraightLine.p2.x"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p2', 'x')"
+                @blur="handleStraightLineCoordBlur('p2', 'x')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'x', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">y</div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'y', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p1.y', el)"
+                v-model="editStraightLine.p1.y"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p1', 'y')"
+                @blur="handleStraightLineCoordBlur('p1', 'y')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'y', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'y', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p2.y', el)"
+                v-model="editStraightLine.p2.y"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p2', 'y')"
+                @blur="handleStraightLineCoordBlur('p2', 'y')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'y', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                +
+              </button>
+            </div>
+
+            <div class="line-axis-label">z</div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'z', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p1.z', el)"
+                v-model="editStraightLine.p1.z"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p1', 'z')"
+                @blur="handleStraightLineCoordBlur('p1', 'z')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                @click="nudgeStraightLineCoord('p1', 'z', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+              >
+                +
+              </button>
+            </div>
+            <div
+              class="coord-input"
+              :class="{
+                'line-point-collapsed':
+                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+              }"
+            >
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'z', 'down')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('straightLine.p2.z', el)"
+                v-model="editStraightLine.p2.z"
+                @input="applyEditStraightLine"
+                @focus="handleStraightLineCoordFocus('p2', 'z')"
+                @blur="handleStraightLineCoordBlur('p2', 'z')"
+                step="0.5"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                @click="nudgeStraightLineCoord('p2', 'z', 'up')"
+                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
+        <div v-else>
+          <div>
+            直线{{ sl!.name ?? '' }}
+            <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+          </div>
+          <div>显示长度：{{ sl!.displayLength.toFixed(2) }}</div>
+          <div>
+            点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
+            {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
+          </div>
+          <div>
+            点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
+            {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
+          </div>
+          <div>
+            方向向量（{{ getStraightLineDirection(sl!).x.toFixed(2) }},
+            {{ getStraightLineDirection(sl!).y.toFixed(2) }},
+            {{ getStraightLineDirection(sl!).z.toFixed(2) }}）
+          </div>
+          <div>
+            显示起点（{{ getStraightLineDisplayPoints(sl!).start.x.toFixed(2) }},
+            {{ getStraightLineDisplayPoints(sl!).start.y.toFixed(2) }},
+            {{ getStraightLineDisplayPoints(sl!).start.z.toFixed(2) }}）
+          </div>
+          <div>
+            显示终点（{{ getStraightLineDisplayPoints(sl!).end.x.toFixed(2) }},
+            {{ getStraightLineDisplayPoints(sl!).end.y.toFixed(2) }},
+            {{ getStraightLineDisplayPoints(sl!).end.z.toFixed(2) }}）
           </div>
         </div>
       </div>
@@ -1429,7 +1970,12 @@ onUnmounted(() => {
     <h3>内容</h3>
     <div class="box content-box" @click.self="clearContentSelection">
       <div
-        v-if="pointsInScene.length === 0 && linesInScene.length === 0 && raysInScene.length === 0"
+        v-if="
+          pointsInScene.length === 0 &&
+          linesInScene.length === 0 &&
+          straightLinesInScene.length === 0 &&
+          raysInScene.length === 0
+        "
       >
         无
       </div>
@@ -1516,6 +2062,50 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      <div v-if="straightLinesInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.straightLine"
+          @click="toggleContentGroup('straightLine')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.straightLine ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
+          <span class="content-group-count">{{ straightLinesInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
+          <span class="content-group-count">{{ straightLinesInScene.length }}</span>
+        </div>
+        <div
+          v-show="!collapsedContentGroups.straightLine || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="sl in straightLinesInScene"
+            :key="sl!.id"
+            class="straight-line-info selectable-geo"
+            :class="{ 'is-selected': selectedStraightLineIds.includes(sl!.id) }"
+            @click="selectStraightLineFromContent(sl!.id)"
+          >
+            <div>
+              直线{{ sl!.name ?? '' }}
+              <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+            </div>
+            <div>
+              点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
+              {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
+              {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
+            </div>
+          </div>
+        </div>
+      </div>
       <div v-if="raysInScene.length > 0" class="content-group">
         <button
           v-if="canCollapseContentGroups"
@@ -1597,8 +2187,10 @@ hr {
 .selectedPoint-info,
 .point-info,
 .selectedLine-info,
+.selectedStraightLine-info,
 .selectedRay-info,
 .line-info,
+.straight-line-info,
 .ray-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
@@ -1608,8 +2200,13 @@ hr {
 }
 .selectedLine-info,
 .line-info {
-  background-color: rgba(158, 106, 28, 0.28);
-  border-left-color: #ffb347;
+  background-color: rgba(124, 122, 34, 0.24);
+  border-left-color: #d7d05a;
+}
+.selectedStraightLine-info,
+.straight-line-info {
+  background-color: rgba(176, 118, 66, 0.22);
+  border-left-color: #ff9460;
 }
 .selectedRay-info,
 .ray-info {

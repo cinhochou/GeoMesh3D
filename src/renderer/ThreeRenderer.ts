@@ -24,7 +24,7 @@ type ARToolkitContextLike = {
   update: (sourceElement: HTMLElement) => void
 }
 
-type RenderObjectType = 'point' | 'line' | 'ray' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -84,7 +84,8 @@ export class ThreeRenderer {
   private static readonly POINT_LABEL_CENTER_Y = 0.32
   private static readonly LINE_LABEL_CENTER_X = 0.5
   private static readonly LINE_LABEL_CENTER_Y = 0.3
-  private static readonly RAY_COLOR = 0x7fc8ff
+  private static readonly LINEAR_COLOR = 0xffffff
+  private static readonly LINEAR_WIDTH = 2
   private static readonly RAY_HEAD_LENGTH = 0.7
   private static readonly RAY_HEAD_RADIUS = 0.22
   /** 让与地面共面的轴线轻微抬高，避免和 GridHelper 深度竞争 */
@@ -289,6 +290,9 @@ export class ThreeRenderer {
       } else if (userData.type === 'line' || userData.type === 'ray') {
         const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
+      } else if (userData.type === 'straightLine') {
+        const label = userData.__labelSprite
+        if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
     })
     this.axisGridGroup.children.forEach((obj) => {
@@ -389,7 +393,11 @@ export class ThreeRenderer {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
         const label = userData.__labelSprite
         if (label) label.scale.set(pointLabelScale, pointLabelScale, 1)
-      } else if (userData.type === 'line' || userData.type === 'ray') {
+      } else if (
+        userData.type === 'line' ||
+        userData.type === 'straightLine' ||
+        userData.type === 'ray'
+      ) {
         const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
@@ -466,6 +474,7 @@ export class ThreeRenderer {
     this.cleanupMissingMeshes(geoScene)
     this.syncPoints(geoScene)
     this.syncLines(geoScene)
+    this.syncStraightLines(geoScene)
     this.syncRays(geoScene)
     this.updateRubberBand(previewData) // 处理虚线
   }
@@ -529,6 +538,11 @@ export class ThreeRenderer {
         this.world.remove(obj)
         this.meshMap.delete(id)
       } else if (type === 'line' && !scene.lines.has(id)) {
+        const label = userData.__labelSprite
+        if (label) this.world.remove(label)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
+      } else if (type === 'straightLine' && !scene.straightLines.has(id)) {
         const label = userData.__labelSprite
         if (label) this.world.remove(label)
         this.world.remove(obj)
@@ -871,7 +885,10 @@ export class ThreeRenderer {
       if (!line) {
         // 首次创建
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({ color: 0xffffff })
+        const mat = new THREE.LineBasicMaterial({
+          color: ThreeRenderer.LINEAR_COLOR,
+          linewidth: ThreeRenderer.LINEAR_WIDTH,
+        })
         line = new THREE.Line(geo, mat)
         line.userData = { geoId: id, type: 'line' }
         this.world.add(line)
@@ -892,7 +909,9 @@ export class ThreeRenderer {
 
       // 选中高亮逻辑
       const isSelected = scene.selection.lines.has(id)
-      ;(line.material as THREE.LineBasicMaterial).color.set(isSelected ? 0x43f260 : 0xffffff)
+      ;(line.material as THREE.LineBasicMaterial).color.set(
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
 
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
       this.syncLinearLabel(
@@ -900,7 +919,7 @@ export class ThreeRenderer {
         lineData.name ?? '',
         lineData.nameVisible && lineData.visible !== false,
         mid,
-        isSelected ? 0x43f260 : 0xffffff,
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -914,13 +933,11 @@ export class ThreeRenderer {
 
       if (!ray) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineDashedMaterial({
-          color: ThreeRenderer.RAY_COLOR,
-          dashSize: 0.6,
-          gapSize: 0.28,
+        const mat = new THREE.LineBasicMaterial({
+          color: ThreeRenderer.LINEAR_COLOR,
+          linewidth: ThreeRenderer.LINEAR_WIDTH,
         })
         ray = new THREE.Line(geo, mat)
-        ray.computeLineDistances()
         ray.userData = { geoId: id, type: 'ray' }
         this.attachRayArrowHead(ray)
         this.world.add(ray)
@@ -930,13 +947,12 @@ export class ThreeRenderer {
         ray.geometry.attributes.position!.needsUpdate = true
         ray.geometry.computeBoundingBox()
         ray.geometry.computeBoundingSphere()
-        ray.computeLineDistances()
       }
 
       ray.visible = rayData.visible
       const isSelected = scene.selection.rays.has(id)
-      ;(ray.material as THREE.LineDashedMaterial).color.set(
-        isSelected ? 0x43f260 : ThreeRenderer.RAY_COLOR,
+      ;(ray.material as THREE.LineBasicMaterial).color.set(
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
 
       this.updateRayArrowHead(ray, rayData, isSelected)
@@ -946,7 +962,56 @@ export class ThreeRenderer {
         rayData.name ?? '',
         rayData.nameVisible && rayData.visible,
         mid,
-        isSelected ? 0x43f260 : ThreeRenderer.RAY_COLOR,
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+    })
+  }
+
+  private syncStraightLines(scene: GeoScene) {
+    scene.straightLines.forEach((lineData, id) => {
+      let line = this.meshMap.get(id) as THREE.Line | undefined
+      const display = lineData.getDisplayPoints()
+      const start = display.start
+      const end = display.end
+      const points = [
+        new THREE.Vector3(start.x, start.y, start.z),
+        new THREE.Vector3(end.x, end.y, end.z),
+      ]
+
+      if (!line) {
+        const geo = new THREE.BufferGeometry().setFromPoints(points)
+        const mat = new THREE.LineBasicMaterial({
+          color: ThreeRenderer.LINEAR_COLOR,
+          linewidth: ThreeRenderer.LINEAR_WIDTH,
+        })
+        line = new THREE.Line(geo, mat)
+        line.userData = { geoId: id, type: 'straightLine' }
+        this.world.add(line)
+        this.meshMap.set(id, line)
+      } else {
+        line.geometry.setFromPoints(points)
+        line.geometry.attributes.position!.needsUpdate = true
+        line.geometry.computeBoundingBox()
+        line.geometry.computeBoundingSphere()
+      }
+
+      line.visible = lineData.visible
+      const isSelected = scene.selection.straightLines.has(id)
+      ;(line.material as THREE.LineBasicMaterial).color.set(
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+
+      const mid = new THREE.Vector3(
+        (lineData.p1.position.x + lineData.p2.position.x) / 2,
+        (lineData.p1.position.y + lineData.p2.position.y) / 2,
+        (lineData.p1.position.z + lineData.p2.position.z) / 2,
+      )
+      this.syncLinearLabel(
+        line,
+        lineData.name ?? '',
+        lineData.nameVisible && lineData.visible,
+        mid,
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -1012,7 +1077,7 @@ export class ThreeRenderer {
       ThreeRenderer.RAY_HEAD_LENGTH,
       16,
     )
-    const material = new THREE.MeshBasicMaterial({ color: ThreeRenderer.RAY_COLOR })
+    const material = new THREE.MeshBasicMaterial({ color: ThreeRenderer.LINEAR_COLOR })
     const arrowHead = new THREE.Mesh(geometry, material)
     arrowHead.rotation.x = Math.PI / 2
     this.getRenderUserData(ray).__arrowHead = arrowHead
@@ -1025,7 +1090,7 @@ export class ThreeRenderer {
 
     arrowHead.visible = rayData.visible
     ;(arrowHead.material as THREE.MeshBasicMaterial).color.set(
-      isSelected ? 0x43f260 : ThreeRenderer.RAY_COLOR,
+      isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
     )
 
     const start = new THREE.Vector3(
@@ -1457,7 +1522,11 @@ export class ThreeRenderer {
 
       if (userData.type === 'point') {
         label.position.copy(this.getScreenOffsetPosition(obj.position, offsetX, offsetY))
-      } else if (userData.type === 'line' || userData.type === 'ray') {
+      } else if (
+        userData.type === 'line' ||
+        userData.type === 'straightLine' ||
+        userData.type === 'ray'
+      ) {
         const anchor = userData.__labelAnchor?.clone()
         if (!anchor) return
         label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))

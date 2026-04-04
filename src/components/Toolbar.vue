@@ -141,6 +141,10 @@ const selectCreateLineMode = () => {
   setMode(EditorMode.CreateLine)
 }
 
+const selectCreateStraightLineMode = () => {
+  setMode(EditorMode.CreateStraightLine)
+}
+
 const selectCreateRayMode = () => {
   setMode(EditorMode.CreateRay)
 }
@@ -238,7 +242,9 @@ onUnmounted(() => {
         class="menu-trigger"
         :class="{
           'is-active':
-            currentMode === EditorMode.CreateLine || currentMode === EditorMode.CreateRay,
+            currentMode === EditorMode.CreateLine ||
+            currentMode === EditorMode.CreateStraightLine ||
+            currentMode === EditorMode.CreateRay,
           'is-open': isLineMenuOpen,
         }"
         @click="toggleLineMenu"
@@ -319,6 +325,13 @@ onUnmounted(() => {
         @click="selectCreateLineMode"
       >
         线段
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateStraightLine }"
+        @click="selectCreateStraightLineMode"
+      >
+        直线
       </button>
       <button
         class="menu-item"

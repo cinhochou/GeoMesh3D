@@ -5,6 +5,7 @@ import { Scene } from '../scene/Scene'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { StraightLine3 } from '../geometry/StraightLine3'
 import { Vec3 } from '../geometry/Vec3'
 
 export type CollabStatus = {
@@ -16,6 +17,7 @@ export type CollabStatus = {
 type LocalSceneSnapshot = {
   points: Point3[]
   lines: Line3[]
+  straightLines: StraightLine3[]
   rays: Ray3[]
 }
 
@@ -49,6 +51,16 @@ type RaySyncData = {
   userLocked: boolean
 }
 
+type StraightLineSyncData = {
+  p1Id: string
+  p2Id: string
+  name: string
+  nameVisible: boolean
+  visible: boolean
+  displayLength: number
+  userLocked: boolean
+}
+
 type ProviderStatusEvent = {
   status: 'connecting' | 'connected' | 'disconnected'
 }
@@ -62,9 +74,11 @@ export class CollabManager {
   private provider: WebsocketProvider | null = null
   private yPoints: Y.Map<PointSyncData>
   private yLines: Y.Map<LineSyncData>
+  private yStraightLines: Y.Map<StraightLineSyncData>
   private yRays: Y.Map<RaySyncData>
   private pointsObserver: ((event: Y.YMapEvent<PointSyncData>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSyncData>) => void) | null = null
+  private straightLinesObserver: ((event: Y.YMapEvent<StraightLineSyncData>) => void) | null = null
   private raysObserver: ((event: Y.YMapEvent<RaySyncData>) => void) | null = null
 
   private roomName: string | null = null
@@ -79,9 +93,11 @@ export class CollabManager {
   private readonly serverUrls: string[]
   private readonly dirtyPointIds = new Set<string>()
   private readonly dirtyLineIds = new Set<string>()
+  private readonly dirtyStraightLineIds = new Set<string>()
   private readonly dirtyRayIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
+  private readonly deletedStraightLineIds = new Set<string>()
   private readonly deletedRayIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
@@ -91,6 +107,7 @@ export class CollabManager {
     this.ydoc = new Y.Doc()
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
+    this.yStraightLines = this.ydoc.getMap('straightLines')
     this.yRays = this.ydoc.getMap('rays')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
@@ -261,12 +278,14 @@ export class CollabManager {
     return {
       points: [...this.scene.points.values()].filter((point) => !point.locked),
       lines: [...this.scene.lines.values()],
+      straightLines: [...this.scene.straightLines.values()],
       rays: [...this.scene.rays.values()],
     }
   }
 
   private clearLocalSceneForJoin() {
     this.scene.lines.clear()
+    this.scene.straightLines.clear()
     this.scene.rays.clear()
     this.scene.points.forEach((point, id) => {
       if (!point.locked) this.scene.points.delete(id)
@@ -278,15 +297,18 @@ export class CollabManager {
   private restoreLocalSnapshot(snapshot: LocalSceneSnapshot) {
     snapshot.points.forEach((point) => this.scene.addPoint(point))
     snapshot.lines.forEach((line) => this.scene.addLine(line))
+    snapshot.straightLines.forEach((line) => this.scene.addStraightLine(line))
     snapshot.rays.forEach((ray) => this.scene.addRay(ray))
   }
 
   private clearDirtyState() {
     this.dirtyPointIds.clear()
     this.dirtyLineIds.clear()
+    this.dirtyStraightLineIds.clear()
     this.dirtyRayIds.clear()
     this.deletedPointIds.clear()
     this.deletedLineIds.clear()
+    this.deletedStraightLineIds.clear()
     this.deletedRayIds.clear()
   }
 
@@ -305,6 +327,11 @@ export class CollabManager {
     this.dirtyRayIds.add(id)
   }
 
+  private markStraightLineDirty(id: string) {
+    this.deletedStraightLineIds.delete(id)
+    this.dirtyStraightLineIds.add(id)
+  }
+
   private markPointDeleted(id: string) {
     this.dirtyPointIds.delete(id)
     this.deletedPointIds.add(id)
@@ -320,12 +347,20 @@ export class CollabManager {
     this.deletedRayIds.add(id)
   }
 
+  private markStraightLineDeleted(id: string) {
+    this.dirtyStraightLineIds.delete(id)
+    this.deletedStraightLineIds.add(id)
+  }
+
   private markLinkedGeometryDirtyForPoint(pointId: string) {
     this.scene.lines.forEach((line, id) => {
       if (line.p1.id === pointId || line.p2.id === pointId) this.markLineDirty(id)
     })
     this.scene.rays.forEach((ray, id) => {
       if (ray.p1.id === pointId || ray.p2.id === pointId) this.markRayDirty(id)
+    })
+    this.scene.straightLines.forEach((line, id) => {
+      if (line.p1.id === pointId || line.p2.id === pointId) this.markStraightLineDirty(id)
     })
   }
 
@@ -334,6 +369,7 @@ export class CollabManager {
       if (!point.locked) this.markPointDirty(id)
     })
     this.scene.lines.forEach((_, id) => this.markLineDirty(id))
+    this.scene.straightLines.forEach((_, id) => this.markStraightLineDirty(id))
     this.scene.rays.forEach((_, id) => this.markRayDirty(id))
 
     for (const id of [...this.yPoints.keys()]) {
@@ -341,6 +377,9 @@ export class CollabManager {
     }
     for (const id of [...this.yLines.keys()]) {
       if (!this.scene.lines.has(id)) this.markLineDeleted(id)
+    }
+    for (const id of [...this.yStraightLines.keys()]) {
+      if (!this.scene.straightLines.has(id)) this.markStraightLineDeleted(id)
     }
     for (const id of [...this.yRays.keys()]) {
       if (!this.scene.rays.has(id)) this.markRayDeleted(id)
@@ -360,6 +399,7 @@ export class CollabManager {
     return (
       [...this.yPoints.keys()].some((id) => id !== Scene.ORIGIN_ID) ||
       this.yLines.size > 0 ||
+      this.yStraightLines.size > 0 ||
       this.yRays.size > 0
     )
   }
@@ -369,6 +409,7 @@ export class CollabManager {
     if (
       localSnapshot.points.length === 0 &&
       localSnapshot.lines.length === 0 &&
+      localSnapshot.straightLines.length === 0 &&
       localSnapshot.rays.length === 0
     ) {
       return
@@ -454,11 +495,13 @@ export class CollabManager {
   private resetDoc() {
     if (this.pointsObserver) this.yPoints.unobserve(this.pointsObserver)
     if (this.linesObserver) this.yLines.unobserve(this.linesObserver)
+    if (this.straightLinesObserver) this.yStraightLines.unobserve(this.straightLinesObserver)
     if (this.raysObserver) this.yRays.unobserve(this.raysObserver)
 
     this.ydoc = new Y.Doc()
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
+    this.yStraightLines = this.ydoc.getMap('straightLines')
     this.yRays = this.ydoc.getMap('rays')
     this.setupObservers()
   }
@@ -501,6 +544,12 @@ export class CollabManager {
             if (ray.p1.id === id || ray.p2.id === id) {
               this.scene.rays.delete(rayId)
               this.scene.selection.rays.delete(rayId)
+            }
+          })
+          this.scene.straightLines.forEach((line, lineId) => {
+            if (line.p1.id === id || line.p2.id === id) {
+              this.scene.straightLines.delete(lineId)
+              this.scene.selection.straightLines.delete(lineId)
             }
           })
           this.scene.points.delete(id)
@@ -561,6 +610,51 @@ export class CollabManager {
       })
     }
     this.yLines.observe(this.linesObserver)
+
+    this.straightLinesObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'add' || change.action === 'update') {
+          const data = this.yStraightLines.get(id)
+          if (!data) return
+          const p1 = this.scene.points.get(data.p1Id)
+          const p2 = this.scene.points.get(data.p2Id)
+          if (!p1 || !p2) return
+
+          const line = this.scene.straightLines.get(id)
+          if (line) {
+            line.name = data.name ?? line.name
+            line.nameVisible = data.nameVisible ?? line.nameVisible
+            line.visible = data.visible ?? line.visible
+            line.userLocked = data.userLocked ?? line.userLocked
+            line.displayLength =
+              typeof data.displayLength === 'number'
+                ? StraightLine3.normalizeDisplayLength(data.displayLength)
+                : line.displayLength
+            line.p1 = p1
+            line.p2 = p2
+          } else {
+            this.scene.addStraightLine(
+              new StraightLine3(
+                id,
+                data.name ?? '',
+                p1,
+                p2,
+                data.nameVisible ?? true,
+                data.visible ?? true,
+                StraightLine3.normalizeDisplayLength(
+                  data.displayLength ?? StraightLine3.DEFAULT_DISPLAY_LENGTH,
+                ),
+                data.userLocked ?? false,
+              ),
+            )
+          }
+        } else if (change.action === 'delete') {
+          this.scene.straightLines.delete(id)
+          this.scene.selection.straightLines.delete(id)
+        }
+      })
+    }
+    this.yStraightLines.observe(this.straightLinesObserver)
 
     this.raysObserver = (event) => {
       event.changes.keys.forEach((change, id) => {
@@ -648,17 +742,21 @@ export class CollabManager {
 
     const pointIds = [...this.dirtyPointIds]
     const lineIds = [...this.dirtyLineIds]
+    const straightLineIds = [...this.dirtyStraightLineIds]
     const rayIds = [...this.dirtyRayIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
+    const deletedStraightLineIds = [...this.deletedStraightLineIds]
     const deletedRayIds = [...this.deletedRayIds]
 
     if (
       pointIds.length === 0 &&
       lineIds.length === 0 &&
+      straightLineIds.length === 0 &&
       rayIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
+      deletedStraightLineIds.length === 0 &&
       deletedRayIds.length === 0
     ) {
       return
@@ -670,6 +768,9 @@ export class CollabManager {
       })
       deletedLineIds.forEach((id) => {
         this.yLines.delete(id)
+      })
+      deletedStraightLineIds.forEach((id) => {
+        this.yStraightLines.delete(id)
       })
       deletedRayIds.forEach((id) => {
         this.yRays.delete(id)
@@ -735,6 +836,36 @@ export class CollabManager {
         }
       })
 
+      straightLineIds.forEach((id) => {
+        const line = this.scene.straightLines.get(id)
+        if (!line) {
+          this.yStraightLines.delete(id)
+          return
+        }
+        const next = {
+          p1Id: line.p1.id,
+          p2Id: line.p2.id,
+          name: line.name,
+          nameVisible: line.nameVisible,
+          visible: line.visible,
+          displayLength: line.displayLength,
+          userLocked: line.userLocked,
+        }
+        const prev = this.yStraightLines.get(id)
+        if (
+          !prev ||
+          prev.p1Id !== next.p1Id ||
+          prev.p2Id !== next.p2Id ||
+          prev.name !== next.name ||
+          prev.nameVisible !== next.nameVisible ||
+          prev.visible !== next.visible ||
+          prev.displayLength !== next.displayLength ||
+          prev.userLocked !== next.userLocked
+        ) {
+          this.yStraightLines.set(id, next)
+        }
+      })
+
       rayIds.forEach((id) => {
         const ray = this.scene.rays.get(id)
         if (!ray) {
@@ -768,9 +899,11 @@ export class CollabManager {
 
     pointIds.forEach((id) => this.dirtyPointIds.delete(id))
     lineIds.forEach((id) => this.dirtyLineIds.delete(id))
+    straightLineIds.forEach((id) => this.dirtyStraightLineIds.delete(id))
     rayIds.forEach((id) => this.dirtyRayIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
+    deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
     deletedRayIds.forEach((id) => this.deletedRayIds.delete(id))
   }
 }
