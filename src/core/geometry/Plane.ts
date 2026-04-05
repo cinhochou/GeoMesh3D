@@ -15,6 +15,9 @@ export class PlanarFace {
   nameVisible: boolean
   visible: boolean
   userLocked: boolean
+  areaLocked: boolean
+  lockedArea: number
+  edgeLengthLocks: Array<number | null>
   boundaryPointIds: string[]
   memberPointIds: string[]
   boundaryLineIds: string[]
@@ -30,6 +33,9 @@ export class PlanarFace {
     visible: boolean = true,
     userLocked: boolean = false,
     supportPointIds: string[] = [],
+    areaLocked: boolean = false,
+    lockedArea: number = 0,
+    edgeLengthLocks: Array<number | null> = [],
   ) {
     this.id = id
     this.name = name
@@ -40,6 +46,17 @@ export class PlanarFace {
     this.visible = visible
     this.userLocked = userLocked
     this.supportPointIds = [...new Set(supportPointIds)]
+    this.areaLocked = areaLocked
+    this.lockedArea = lockedArea
+    this.edgeLengthLocks = [...edgeLengthLocks]
+    if (this.edgeLengthLocks.length < this.boundaryPointIds.length) {
+      this.edgeLengthLocks = [
+        ...this.edgeLengthLocks,
+        ...Array.from({ length: this.boundaryPointIds.length - this.edgeLengthLocks.length }, () => null),
+      ]
+    } else if (this.edgeLengthLocks.length > this.boundaryPointIds.length) {
+      this.edgeLengthLocks = this.edgeLengthLocks.slice(0, this.boundaryPointIds.length)
+    }
   }
 
   getBoundaryPoints(points: Map<string, Point3>) {
@@ -77,7 +94,20 @@ export class PlanarFace {
     const boundaryPoints = this.getBoundaryPoints(points)
     const plane = computePlaneBasis(boundaryPoints.map((point) => point.position))
     if (!plane) return
-    this.boundaryPointIds = ensureCounterClockwise(this.boundaryPointIds, points, plane)
+    const nextBoundaryIds = ensureCounterClockwise(this.boundaryPointIds, points, plane)
+    if (
+      nextBoundaryIds.length === this.boundaryPointIds.length &&
+      nextBoundaryIds.some((id, index) => id !== this.boundaryPointIds[index])
+    ) {
+      this.edgeLengthLocks = [...this.edgeLengthLocks].reverse()
+    }
+    this.boundaryPointIds = nextBoundaryIds
+    if (this.edgeLengthLocks.length < this.boundaryPointIds.length) {
+      this.edgeLengthLocks = [
+        ...this.edgeLengthLocks,
+        ...Array.from({ length: this.boundaryPointIds.length - this.edgeLengthLocks.length }, () => null),
+      ]
+    }
     if (this.supportPointIds.length < 3) {
       this.supportPointIds = computeSupportPointIds(this.getMemberPoints(points))
     }
@@ -88,6 +118,23 @@ export class PlanarFace {
     const plane = computePlaneBasis(boundaryPoints.map((point) => point.position))
     if (!plane) return 0
     return polygonArea2D(boundaryPoints.map((point) => projectPoint2D(point.position, plane)))
+  }
+
+  getEdgeLength(points: Map<string, Point3>, edgeIndex: number) {
+    const boundaryPoints = this.getBoundaryPoints(points)
+    if (boundaryPoints.length < 2) return 0
+    const current = boundaryPoints[edgeIndex]
+    const next = boundaryPoints[(edgeIndex + 1) % boundaryPoints.length]
+    if (!current || !next) return 0
+    return Math.hypot(
+      next.position.x - current.position.x,
+      next.position.y - current.position.y,
+      next.position.z - current.position.z,
+    )
+  }
+
+  getLockedEdgeLength(edgeIndex: number) {
+    return this.edgeLengthLocks[edgeIndex] ?? null
   }
 
   getCentroid(points: Map<string, Point3>) {

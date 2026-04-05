@@ -139,6 +139,8 @@ const editFace = reactive({
   nameVisible: true,
   visible: true,
   userLocked: false,
+  areaLocked: false,
+  edgeLengths: [] as string[],
 })
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
@@ -297,6 +299,10 @@ const normalizeCoord = (value: string) => {
 const normalizeDisplayLength = (value: string) => {
   const n = Number(value)
   return Number.isFinite(n) ? Math.max(1, n).toFixed(2) : value
+}
+const normalizeFaceEdgeLength = (value: string) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0.01, n).toFixed(2) : value
 }
 const setCoordInputRef = (key: string, el: unknown) => {
   if (el instanceof HTMLInputElement) {
@@ -489,6 +495,24 @@ const nudgeStraightLineDisplayLength = (direction: 'up' | 'down') => {
   editStraightLine.displayLength = nextValue
   applyEditStraightLine()
 }
+const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
+  setCoordFocus(`face.edge.${edgeIndex}`, true)
+}
+const handleFaceEdgeLengthBlur = (faceId: string, edgeIndex: number) => {
+  editFace.edgeLengths[edgeIndex] = normalizeFaceEdgeLength(editFace.edgeLengths[edgeIndex] ?? '')
+  setCoordFocus(`face.edge.${edgeIndex}`, false)
+  applyFaceEdgeLength(faceId, edgeIndex)
+}
+const nudgeFaceEdgeLength = (faceId: string, edgeIndex: number, direction: 'up' | 'down') => {
+  const current = Number(editFace.edgeLengths[edgeIndex])
+  const next = Number.isFinite(current)
+    ? direction === 'up'
+      ? Math.max(1, Math.floor(current) + 1)
+      : Math.max(1, Math.ceil(current) - 1)
+    : 1
+  editFace.edgeLengths[edgeIndex] = String(next)
+  applyFaceEdgeLength(faceId, edgeIndex)
+}
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
@@ -568,6 +592,10 @@ const startEditFace = (face: PlanarFace | undefined) => {
   editFace.nameVisible = face.nameVisible !== false
   editFace.visible = face.visible !== false
   editFace.userLocked = props.editor.isFaceLocked(face)
+  editFace.areaLocked = face.areaLocked === true
+  editFace.edgeLengths = face
+    .getBoundaryPoints(props.scene.points)
+    .map((_, index) => toFixed2(face.getEdgeLength(props.scene.points, index)))
 }
 
 const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string) => {
@@ -736,6 +764,9 @@ const applyEditFace = () => {
   if (editFace.userLocked !== props.editor.isFaceLocked(face)) {
     props.editor.setFaceLockState(editing.value.id, editFace.userLocked)
   }
+  if (editFace.areaLocked !== face.areaLocked) {
+    props.editor.setFaceAreaLockState(editing.value.id, editFace.areaLocked)
+  }
 }
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
@@ -749,6 +780,31 @@ const getFaceMemberPointNames = (face: PlanarFace) =>
     .getMemberPoints(props.scene.points)
     .map((point) => point.name)
     .join(', ')
+const getFaceEdgeLabel = (face: PlanarFace, edgeIndex: number) => {
+  const points = getFaceBoundaryPoints(face)
+  const current = points[edgeIndex]
+  const next = points[(edgeIndex + 1) % points.length]
+  if (!current || !next) return `边 ${edgeIndex + 1}`
+  return `${current.name}-${next.name}`
+}
+const getFaceEdgeTargets = (faceId: string) => {
+  const face = props.scene.faces.get(faceId)
+  return editFace.edgeLengths.map((value, index) => {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return Math.max(0.01, parsed)
+    return face ? face.getEdgeLength(props.scene.points, index) : null
+  })
+}
+const applyFaceEdgeLength = (faceId: string, edgeIndex: number) => {
+  const nextLength = Number(editFace.edgeLengths[edgeIndex])
+  if (!Number.isFinite(nextLength)) return
+  props.editor.updateFaceBoundaryEdgeLength(
+    faceId,
+    edgeIndex,
+    nextLength,
+    getFaceEdgeTargets(faceId),
+  )
+}
 
 const handleGlobalClick = (e: MouseEvent) => {
   if (!editing.value) return
@@ -908,6 +964,10 @@ watch(
       nameVisible: face.nameVisible !== false,
       visible: face.visible !== false,
       userLocked: props.editor.isFaceLocked(face),
+      areaLocked: face.areaLocked === true,
+      edgeLengths: face
+        .getBoundaryPoints(props.scene.points)
+        .map((_, index) => toFixed2(face.getEdgeLength(props.scene.points, index))),
     }
   },
   (nextFace) => {
@@ -916,6 +976,15 @@ watch(
     editFace.nameVisible = nextFace.nameVisible
     editFace.visible = nextFace.visible
     editFace.userLocked = nextFace.userLocked
+    editFace.areaLocked = nextFace.areaLocked
+    nextFace.edgeLengths.forEach((length, index) => {
+      if (!focusedCoord[`face.edge.${index}`]) {
+        editFace.edgeLengths[index] = length
+      }
+    })
+    if (editFace.edgeLengths.length > nextFace.edgeLengths.length) {
+      editFace.edgeLengths = editFace.edgeLengths.slice(0, nextFace.edgeLengths.length)
+    }
   },
   { immediate: true },
 )
@@ -2081,6 +2150,49 @@ onUnmounted(() => {
               <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
               锁定
             </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editFace.areaLocked" @change="applyEditFace" />
+              面积锁定
+            </label>
+          </div>
+          <div class="face-metric-row">面积：{{ getFaceArea(face!).toFixed(2) }}</div>
+          <div class="face-edge-grid">
+            <div
+              v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
+              :key="`${face!.id}-edge-${edgeIndex}`"
+              class="face-edge-row axis-field"
+            >
+              <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  :disabled="editFace.areaLocked"
+                  @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="1"
+                  :value="editFace.edgeLengths[edgeIndex]"
+                  :disabled="editFace.areaLocked"
+                  :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
+                  @input="editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value"
+                  @focus="handleFaceEdgeLengthFocus(edgeIndex)"
+                  @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  :disabled="editFace.areaLocked"
+                  @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'up')"
+                >
+                  +
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div v-else>
@@ -2088,7 +2200,10 @@ onUnmounted(() => {
             面{{ face!.name ?? '' }}
             <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
           </div>
-          <div>面积：{{ getFaceArea(face!).toFixed(2) }}</div>
+          <div>
+            面积：{{ getFaceArea(face!).toFixed(2) }}
+            <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
+          </div>
           <div>
             质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
             {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
@@ -2555,6 +2670,13 @@ hr {
 }
 .edit-grid input[type='number'] {
   width: 48px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.edit-grid input[type='number']::-webkit-outer-spin-button,
+.edit-grid input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .coord-input {
   display: inline-flex;
@@ -2701,6 +2823,31 @@ hr {
   border: 1px solid rgba(255, 179, 71, 0.42);
   vertical-align: middle;
 }
+.face-metric-row {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  color: #f3f3f3;
+}
+.face-edge-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+  align-items: start;
+}
+.face-edge-row {
+  min-width: 0;
+}
+.face-edge-row label {
+  color: #d9d0ff !important;
+  font-size: 11px;
+}
+.face-edge-row .coord-input {
+  width: 100%;
+}
+.face-edge-row .coord-input input[type='number'] {
+  width: 100%;
+}
 
 @media (max-width: 1024px) and (orientation: landscape) {
   .sidebar {
@@ -2762,6 +2909,10 @@ hr {
 
   .line-editor-grid {
     gap: 4px 6px;
+  }
+
+  .face-edge-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2882,6 +3033,14 @@ hr {
 
   .compact-axis {
     grid-column: 1 / -1;
+  }
+
+  .face-edge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .face-edge-row {
+    grid-template-columns: 22px minmax(0, 1fr);
   }
 }
 

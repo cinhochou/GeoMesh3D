@@ -223,6 +223,17 @@ type FaceDraft = {
   }>
 }
 
+const toWorldPoint = (
+  plane: NonNullable<ReturnType<typeof computePlaneBasis>>,
+  x: number,
+  y: number,
+) =>
+  new Vec3(
+    plane.origin.x + plane.uAxis.x * x + plane.vAxis.x * y,
+    plane.origin.y + plane.uAxis.y * x + plane.vAxis.y * y,
+    plane.origin.z + plane.uAxis.z * x + plane.vAxis.z * y,
+  )
+
 const genNextAvailableName = (
   existingNames: Iterable<string>,
   baseCharCode: number,
@@ -573,6 +584,39 @@ export class Editor {
     )
   }
 
+  setFaceAreaLockState(faceId: string, locked: boolean) {
+    const face = this.scene.faces.get(faceId)
+    if (!face) return
+    const nextLockedArea = locked ? face.getArea(this.scene.points) : face.lockedArea
+    if (face.areaLocked === locked && (!locked || Math.abs(face.lockedArea - nextLockedArea) <= 1e-6)) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateFaceCommand(
+        face,
+        {
+          name: face.name,
+          nameVisible: face.nameVisible,
+          visible: face.visible,
+          userLocked: face.userLocked,
+          areaLocked: face.areaLocked,
+          lockedArea: face.lockedArea,
+          edgeLengthLocks: [...face.edgeLengthLocks],
+        },
+        {
+          name: face.name,
+          nameVisible: face.nameVisible,
+          visible: face.visible,
+          userLocked: face.userLocked,
+          areaLocked: locked,
+          lockedArea: nextLockedArea,
+          edgeLengthLocks: [...face.edgeLengthLocks],
+        },
+      ),
+    )
+  }
+
   get canUndo() {
     return this.historyIndex >= 0
   }
@@ -843,6 +887,15 @@ export class Editor {
       }
     }
 
+    const resolvedEndpoints = this.resolveConstrainedPointPositions(
+      [
+        { id: line.p1.id, position: nextP1Position.clone() },
+        { id: line.p2.id, position: nextP2Position.clone() },
+      ].filter(({ id }, index, items) => items.findIndex((item) => item.id === id) === index),
+    )
+    nextP1Position = resolvedEndpoints.get(line.p1.id) ?? nextP1Position
+    nextP2Position = resolvedEndpoints.get(line.p2.id) ?? nextP2Position
+
     if (
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
@@ -994,6 +1047,9 @@ export class Editor {
       nameVisible?: boolean
       visible?: boolean
       userLocked?: boolean
+      areaLocked?: boolean
+      lockedArea?: number
+      edgeLengthLocks?: Array<number | null>
     },
   ) {
     const face = this.scene.faces.get(faceId)
@@ -1003,11 +1059,17 @@ export class Editor {
     const nextNameVisible = patch.nameVisible ?? face.nameVisible
     const nextVisible = patch.visible ?? face.visible
     const nextUserLocked = patch.userLocked ?? face.userLocked
+    const nextAreaLocked = patch.areaLocked ?? face.areaLocked
+    const nextLockedArea = patch.lockedArea ?? face.lockedArea
+    const nextEdgeLengthLocks = patch.edgeLengthLocks ?? face.edgeLengthLocks
     if (
       nextName === face.name &&
       nextNameVisible === face.nameVisible &&
       nextVisible === face.visible &&
-      nextUserLocked === face.userLocked
+      nextUserLocked === face.userLocked &&
+      nextAreaLocked === face.areaLocked &&
+      nextLockedArea === face.lockedArea &&
+      JSON.stringify(nextEdgeLengthLocks) === JSON.stringify(face.edgeLengthLocks)
     ) {
       return
     }
@@ -1020,12 +1082,18 @@ export class Editor {
           nameVisible: face.nameVisible,
           visible: face.visible,
           userLocked: face.userLocked,
+          areaLocked: face.areaLocked,
+          lockedArea: face.lockedArea,
+          edgeLengthLocks: [...face.edgeLengthLocks],
         },
         {
           name: nextName,
           nameVisible: nextNameVisible,
           visible: nextVisible,
           userLocked: nextUserLocked,
+          areaLocked: nextAreaLocked,
+          lockedArea: nextLockedArea,
+          edgeLengthLocks: [...nextEdgeLengthLocks],
         },
       ),
     )
@@ -1073,6 +1141,9 @@ export class Editor {
       true,
       false,
       draft.supportPointIds,
+      false,
+      0,
+      [],
     )
 
     face.normalize(this.scene.points)
@@ -1448,6 +1519,85 @@ export class Editor {
           const position = nextPositions.get(pointId) ?? point.position
           nextPositions.set(pointId, projectPointToPlane(position, plane))
         })
+
+        if (!face.areaLocked || face.lockedArea <= PLANAR_EPSILON) return
+
+        const boundaryPoints = face.getBoundaryPoints(this.scene.points)
+        if (boundaryPoints.length < 3) return
+        const projectedBoundary = boundaryPoints.map((point) =>
+          projectPoint2D(nextPositions.get(point.id) ?? point.position, plane),
+        )
+        const currentArea =
+          Math.abs(
+            projectedBoundary.reduce((sum, point, index, arr) => {
+              const next = arr[(index + 1) % arr.length]!
+              return sum + point.x * next.y - next.x * point.y
+            }, 0),
+          ) * 0.5
+        if (currentArea <= PLANAR_EPSILON) return
+
+        const movableBoundaryIds = new Set(
+          boundaryPoints
+            .filter((point) => !this.isPointCoordinateLocked(point))
+            .map((point) => point.id),
+        )
+        if (movableBoundaryIds.size === 0) return
+
+        const centroid2D = projectedBoundary.reduce(
+          (acc, point) => ({
+            x: acc.x + point.x / projectedBoundary.length,
+            y: acc.y + point.y / projectedBoundary.length,
+          }),
+          { x: 0, y: 0 },
+        )
+
+        const computeAreaForScale = (scale: number) =>
+          Math.abs(
+            boundaryPoints.reduce((sum, point, index, points) => {
+              const current = projectedBoundary[index]!
+              const nextBase = projectedBoundary[(index + 1) % points.length]!
+              const currentScaled = movableBoundaryIds.has(point.id)
+                ? {
+                    x: centroid2D.x + (current.x - centroid2D.x) * scale,
+                    y: centroid2D.y + (current.y - centroid2D.y) * scale,
+                  }
+                : current
+              const nextPoint = points[(index + 1) % points.length]!
+              const nextScaled = movableBoundaryIds.has(nextPoint.id)
+                ? {
+                    x: centroid2D.x + (nextBase.x - centroid2D.x) * scale,
+                    y: centroid2D.y + (nextBase.y - centroid2D.y) * scale,
+                  }
+                : nextBase
+              return sum + currentScaled.x * nextScaled.y - nextScaled.x * currentScaled.y
+            }, 0),
+          ) * 0.5
+
+        let low = 0
+        let high = Math.max(1, Math.sqrt(face.lockedArea / currentArea) * 2)
+        while (computeAreaForScale(high) < face.lockedArea && high < 1024) {
+          high *= 2
+        }
+        for (let i = 0; i < 24; i += 1) {
+          const mid = (low + high) * 0.5
+          if (computeAreaForScale(mid) < face.lockedArea) low = mid
+          else high = mid
+        }
+        const scale = (low + high) * 0.5
+
+        face.memberPointIds.forEach((pointId) => {
+          const point = this.scene.points.get(pointId)
+          if (!point || this.isPointCoordinateLocked(point)) return
+          const current = projectPoint2D(nextPositions.get(pointId) ?? point.position, plane)
+          nextPositions.set(
+            pointId,
+            toWorldPoint(
+              plane,
+              centroid2D.x + (current.x - centroid2D.x) * scale,
+              centroid2D.y + (current.y - centroid2D.y) * scale,
+            ),
+          )
+        })
       })
     }
 
@@ -1504,6 +1654,182 @@ export class Editor {
     })
 
     return resolved
+  }
+
+  updateFaceBoundaryEdgeLength(
+    faceId: string,
+    edgeIndex: number,
+    nextLength: number,
+    edgeTargets?: Array<number | null>,
+  ) {
+    const face = this.scene.faces.get(faceId)
+    if (!face || face.areaLocked) return
+
+    const normalizedLength = Line3.normalizeLockedLength(nextLength)
+    const boundaryPoints = face.getBoundaryPoints(this.scene.points)
+    if (boundaryPoints.length < 3) return
+
+    const plane =
+      computePlaneBasis(face.getSupportPoints(this.scene.points).map((point) => point.position)) ??
+      computePlaneBasis(boundaryPoints.map((point) => point.position))
+    if (!plane) return
+
+    const projectedBoundary = boundaryPoints.map((point) =>
+      projectPoint2D(projectPointToPlane(point.position, plane), plane),
+    )
+    const targetLengths = boundaryPoints.map((_, index) => {
+      if (index === edgeIndex) return normalizedLength
+      const target = edgeTargets?.[index]
+      return typeof target === 'number' && Number.isFinite(target)
+        ? Line3.normalizeLockedLength(target)
+        : face.getEdgeLength(this.scene.points, index)
+    })
+
+    const startIndex = edgeIndex
+    const endIndex = (edgeIndex + 1) % boundaryPoints.length
+    const startPoint = boundaryPoints[startIndex]
+    const endPoint = boundaryPoints[endIndex]
+    if (!startPoint || !endPoint) return
+
+    const startLocked = this.isPointCoordinateLocked(startPoint)
+    const endLocked = this.isPointCoordinateLocked(endPoint)
+    if (startLocked && endLocked) return
+
+    const start2D = projectedBoundary[startIndex]!
+    const end2D = projectedBoundary[endIndex]!
+    let dirX = end2D.x - start2D.x
+    let dirY = end2D.y - start2D.y
+    let dirLength = Math.hypot(dirX, dirY)
+    if (dirLength <= 1e-6) {
+      dirX = 1
+      dirY = 0
+      dirLength = 1
+    }
+    dirX /= dirLength
+    dirY /= dirLength
+
+    const nextStart2D = { ...start2D }
+    const nextEnd2D = { ...end2D }
+    if (startLocked) {
+      nextEnd2D.x = start2D.x + dirX * normalizedLength
+      nextEnd2D.y = start2D.y + dirY * normalizedLength
+    } else if (endLocked) {
+      nextStart2D.x = end2D.x - dirX * normalizedLength
+      nextStart2D.y = end2D.y - dirY * normalizedLength
+    } else {
+      const midX = (start2D.x + end2D.x) * 0.5
+      const midY = (start2D.y + end2D.y) * 0.5
+      const half = normalizedLength * 0.5
+      nextStart2D.x = midX - dirX * half
+      nextStart2D.y = midY - dirY * half
+      nextEnd2D.x = midX + dirX * half
+      nextEnd2D.y = midY + dirY * half
+    }
+
+    const chainIndices = [endIndex]
+    let cursor = endIndex
+    while (cursor !== startIndex) {
+      cursor = (cursor + 1) % boundaryPoints.length
+      chainIndices.push(cursor)
+    }
+
+    const chainPoints = chainIndices.map((index) => ({ ...projectedBoundary[index]! }))
+    const chainLengths = chainIndices.slice(0, -1).map((index) => targetLengths[index]!)
+    const fixedPositions = new Map<number, { x: number; y: number }>()
+    chainPoints[0] = { ...nextEnd2D }
+    chainPoints[chainPoints.length - 1] = { ...nextStart2D }
+    fixedPositions.set(0, { ...nextEnd2D })
+    fixedPositions.set(chainPoints.length - 1, { ...nextStart2D })
+    chainIndices.forEach((boundaryIndex, chainIndex) => {
+      if (chainIndex === 0 || chainIndex === chainPoints.length - 1) return
+      const point = boundaryPoints[boundaryIndex]
+      if (!point || !this.isPointCoordinateLocked(point)) return
+      fixedPositions.set(chainIndex, { ...projectedBoundary[boundaryIndex]! })
+    })
+
+    for (let iteration = 0; iteration < 64; iteration += 1) {
+      fixedPositions.forEach((fixed, index) => {
+        chainPoints[index] = { ...fixed }
+      })
+
+      for (let i = 0; i < chainPoints.length - 1; i += 1) {
+        const p1 = chainPoints[i]!
+        const p2 = chainPoints[i + 1]!
+        const target = chainLengths[i]!
+        let dx = p2.x - p1.x
+        let dy = p2.y - p1.y
+        let distance = Math.hypot(dx, dy)
+        if (distance <= 1e-6) {
+          dx = 1
+          dy = 0
+          distance = 1
+        }
+        const ux = dx / distance
+        const uy = dy / distance
+        const p1Fixed = fixedPositions.has(i)
+        const p2Fixed = fixedPositions.has(i + 1)
+
+        if (p1Fixed && p2Fixed) continue
+        if (p1Fixed) {
+          p2.x = p1.x + ux * target
+          p2.y = p1.y + uy * target
+          continue
+        }
+        if (p2Fixed) {
+          p1.x = p2.x - ux * target
+          p1.y = p2.y - uy * target
+          continue
+        }
+
+        const midX = (p1.x + p2.x) * 0.5
+        const midY = (p1.y + p2.y) * 0.5
+        const half = target * 0.5
+        p1.x = midX - ux * half
+        p1.y = midY - uy * half
+        p2.x = midX + ux * half
+        p2.y = midY + uy * half
+      }
+    }
+
+    const solvedBoundary2D = projectedBoundary.map((point) => ({ ...point }))
+    chainIndices.forEach((boundaryIndex, chainIndex) => {
+      solvedBoundary2D[boundaryIndex] = { ...chainPoints[chainIndex]! }
+    })
+    solvedBoundary2D[startIndex] = { ...nextStart2D }
+    solvedBoundary2D[endIndex] = { ...nextEnd2D }
+
+    const tolerance = 1e-2
+    const lengthsSatisfied = targetLengths.every((target, index) => {
+      if (!Number.isFinite(target)) return true
+      const current = solvedBoundary2D[index]!
+      const next = solvedBoundary2D[(index + 1) % solvedBoundary2D.length]!
+      return Math.abs(Math.hypot(next.x - current.x, next.y - current.y) - target) <= tolerance
+    })
+    if (!lengthsSatisfied) return
+
+    const updates: Array<{ id: string; position: Vec3 }> = []
+    face.memberPointIds.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point || this.isPointCoordinateLocked(point)) return
+
+      const boundaryIndex = face.boundaryPointIds.indexOf(pointId)
+      if (boundaryIndex >= 0) {
+        const projected = solvedBoundary2D[boundaryIndex]!
+        updates.push({
+          id: pointId,
+          position: toWorldPoint(plane, projected.x, projected.y),
+        })
+        return
+      }
+
+      const projected = projectPoint2D(projectPointToPlane(point.position, plane), plane)
+      updates.push({
+        id: pointId,
+        position: toWorldPoint(plane, projected.x, projected.y),
+      })
+    })
+
+    this.setPointsPositions(updates)
   }
 
   executeCommand(cmd: Command) {

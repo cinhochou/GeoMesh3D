@@ -6,6 +6,9 @@ type FaceState = {
   nameVisible: boolean
   visible: boolean
   userLocked: boolean
+  areaLocked: boolean
+  lockedArea: number
+  edgeLengthLocks: Array<number | null>
 }
 
 export class UpdateFaceCommand implements Command {
@@ -20,6 +23,9 @@ export class UpdateFaceCommand implements Command {
     this.face.nameVisible = this.after.nameVisible
     this.face.visible = this.after.visible
     this.face.userLocked = this.after.userLocked
+    this.face.areaLocked = this.after.areaLocked
+    this.face.lockedArea = this.after.lockedArea
+    this.face.edgeLengthLocks = [...this.after.edgeLengthLocks]
   }
 
   undo() {
@@ -27,5 +33,8 @@ export class UpdateFaceCommand implements Command {
     this.face.nameVisible = this.before.nameVisible
     this.face.visible = this.before.visible
     this.face.userLocked = this.before.userLocked
+    this.face.areaLocked = this.before.areaLocked
+    this.face.lockedArea = this.before.lockedArea
+    this.face.edgeLengthLocks = [...this.before.edgeLengthLocks]
   }
 }

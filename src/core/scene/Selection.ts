@@ -19,9 +19,17 @@ export class Selection {
     this.points.add(id)
   }
 
+  deselectPoint(id: string) {
+    this.points.delete(id)
+  }
+
   selectLine(id: string, additive = false) {
     if (!additive) this.clear()
     this.lines.add(id)
+  }
+
+  deselectLine(id: string) {
+    this.lines.delete(id)
   }
 
   selectStraightLine(id: string, additive = false) {
@@ -29,14 +37,26 @@ export class Selection {
     this.straightLines.add(id)
   }
 
+  deselectStraightLine(id: string) {
+    this.straightLines.delete(id)
+  }
+
   selectRay(id: string, additive = false) {
     if (!additive) this.clear()
     this.rays.add(id)
   }
 
+  deselectRay(id: string) {
+    this.rays.delete(id)
+  }
+
   selectFace(id: string, additive = false) {
     if (!additive) this.clear()
     this.faces.add(id)
+  }
+
+  deselectFace(id: string) {
+    this.faces.delete(id)
   }
 
   isEmpty() {

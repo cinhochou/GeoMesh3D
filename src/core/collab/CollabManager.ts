@@ -68,6 +68,9 @@ type FaceSyncData = {
   nameVisible: boolean
   visible: boolean
   userLocked: boolean
+  areaLocked: boolean
+  lockedArea: number
+  edgeLengthLocks: Array<number | null>
   boundaryPointIds: string[]
   memberPointIds: string[]
   boundaryLineIds: string[]
@@ -762,6 +765,9 @@ export class CollabManager {
             face.nameVisible = data.nameVisible ?? face.nameVisible
             face.visible = data.visible ?? face.visible
             face.userLocked = data.userLocked ?? face.userLocked
+            face.areaLocked = data.areaLocked ?? face.areaLocked
+            face.lockedArea = data.lockedArea ?? face.lockedArea
+            face.edgeLengthLocks = [...(data.edgeLengthLocks ?? face.edgeLengthLocks)]
             face.boundaryPointIds = [...data.boundaryPointIds]
             face.memberPointIds = [...data.memberPointIds]
             face.boundaryLineIds = [...data.boundaryLineIds]
@@ -779,6 +785,9 @@ export class CollabManager {
                 data.visible ?? true,
                 data.userLocked ?? false,
                 [...data.supportPointIds],
+                data.areaLocked ?? false,
+                data.lockedArea ?? 0,
+                [...(data.edgeLengthLocks ?? [])],
               ),
             )
           }
@@ -1004,6 +1013,9 @@ export class CollabManager {
           nameVisible: face.nameVisible,
           visible: face.visible,
           userLocked: face.userLocked,
+          areaLocked: face.areaLocked,
+          lockedArea: face.lockedArea,
+          edgeLengthLocks: [...face.edgeLengthLocks],
           boundaryPointIds: [...face.boundaryPointIds],
           memberPointIds: [...face.memberPointIds],
           boundaryLineIds: [...face.boundaryLineIds],
@@ -1019,7 +1031,10 @@ export class CollabManager {
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
           prev.visible !== next.visible ||
-          prev.userLocked !== next.userLocked
+          prev.userLocked !== next.userLocked ||
+          prev.areaLocked !== next.areaLocked ||
+          prev.lockedArea !== next.lockedArea ||
+          JSON.stringify(prev.edgeLengthLocks) !== JSON.stringify(next.edgeLengthLocks)
         ) {
           this.yFaces.set(id, next)
         }

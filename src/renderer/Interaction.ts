@@ -41,6 +41,9 @@ export class Interaction {
   private mobileInteractionMoved = false
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
+  private pendingToggleSelection:
+    | { type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'; geoId: string }
+    | null = null
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
 
@@ -113,6 +116,15 @@ export class Interaction {
     this.mobileInteractionPointerId = null
     this.mobileInteractionMoved = false
     this.mobileInteractionStartedOnEmpty = false
+    this.pendingToggleSelection = null
+  }
+
+  private deselectGeometry(type: 'point' | 'line' | 'straightLine' | 'ray' | 'face', geoId: string) {
+    if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
+    else if (type === 'line') this.editor.scene.selection.deselectLine(geoId)
+    else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
+    else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
+    else if (type === 'face') this.editor.scene.selection.deselectFace(geoId)
   }
 
   private isTouchPreferredDevice() {
@@ -167,6 +179,7 @@ export class Interaction {
     this.draggingStraightLineId = null
     this.draggingRayId = null
     this.draggingFaceId = null
+    this.pendingToggleSelection = null
     this.endDrag()
     if (hadDragPreview) {
       this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
@@ -638,8 +651,9 @@ export class Interaction {
       if (this.editor.mode === EditorMode.Select) {
         this.renderer.renderer.domElement.style.cursor = 'grabbing'
         if (type === 'point') {
+          const alreadySelected = this.editor.scene.selection.points.has(geoId)
           this.draggingPointId = geoId
-          // 关键点：传入 true，实现点击即多选，不再清空之前的
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectPoint(geoId, true)
           const p = this.editor.scene.points.get(geoId)
           if (p) {
@@ -650,7 +664,8 @@ export class Interaction {
             }
           }
         } else if (type === 'line') {
-          // 关键点：传入 true，多选线
+          const alreadySelected = this.editor.scene.selection.lines.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectLine(geoId, true)
           const l = this.editor.scene.lines.get(geoId)
           if (l) {
@@ -663,6 +678,8 @@ export class Interaction {
             }
           }
         } else if (type === 'straightLine') {
+          const alreadySelected = this.editor.scene.selection.straightLines.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectStraightLine(geoId, true)
           const line = this.editor.scene.straightLines.get(geoId)
           if (line) {
@@ -677,6 +694,8 @@ export class Interaction {
             }
           }
         } else if (type === 'ray') {
+          const alreadySelected = this.editor.scene.selection.rays.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectRay(geoId, true)
           const ray = this.editor.scene.rays.get(geoId)
           if (ray) {
@@ -688,6 +707,8 @@ export class Interaction {
             }
           }
         } else if (type === 'face') {
+          const alreadySelected = this.editor.scene.selection.faces.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectFace(geoId, true)
           const face = this.editor.scene.faces.get(geoId)
           const referencePoint = this.getFaceDragReferencePoint(geoId)
@@ -781,6 +802,22 @@ export class Interaction {
 
   onMouseUp = () => {
     if (this.shouldIgnoreMouseEvent()) return
+    if (this.pendingToggleSelection && this.dragStartPositions.size === 0) {
+      this.deselectGeometry(this.pendingToggleSelection.type, this.pendingToggleSelection.geoId)
+      this.draggingPointId = null
+      this.draggingLineId = null
+      this.draggingStraightLineId = null
+      this.draggingRayId = null
+      this.draggingFaceId = null
+      this.pendingToggleSelection = null
+      this.endDrag()
+      this.syncControlLockState()
+      this.renderer.renderer.domElement.style.cursor = 'default'
+      if (this.editor.mode !== EditorMode.CreatePoint) {
+        this.renderer.hideAxisGuides()
+      }
+      return
+    }
     this.finishDragInteraction()
   }
 
@@ -904,6 +941,7 @@ export class Interaction {
     if (type === 'point') {
       const alreadySelected = this.editor.scene.selection.points.has(geoId)
       this.editor.scene.selection.selectPoint(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -932,6 +970,7 @@ export class Interaction {
     if (type === 'line') {
       const alreadySelected = this.editor.scene.selection.lines.has(geoId)
       this.editor.scene.selection.selectLine(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -959,6 +998,7 @@ export class Interaction {
     if (type === 'straightLine') {
       const alreadySelected = this.editor.scene.selection.straightLines.has(geoId)
       this.editor.scene.selection.selectStraightLine(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -990,6 +1030,7 @@ export class Interaction {
     if (type === 'ray') {
       const alreadySelected = this.editor.scene.selection.rays.has(geoId)
       this.editor.scene.selection.selectRay(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -1017,6 +1058,7 @@ export class Interaction {
     if (type === 'face') {
       const alreadySelected = this.editor.scene.selection.faces.has(geoId)
       this.editor.scene.selection.selectFace(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -1136,7 +1178,19 @@ export class Interaction {
       e.preventDefault()
       e.stopPropagation()
       ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
-      this.finishDragInteraction()
+      if (this.pendingToggleSelection && !this.mobileInteractionMoved && this.dragStartPositions.size === 0) {
+        this.deselectGeometry(this.pendingToggleSelection.type, this.pendingToggleSelection.geoId)
+        this.draggingPointId = null
+        this.draggingLineId = null
+        this.draggingStraightLineId = null
+        this.draggingRayId = null
+        this.draggingFaceId = null
+        this.pendingToggleSelection = null
+        this.endDrag()
+        this.syncControlLockState()
+      } else {
+        this.finishDragInteraction()
+      }
     } else if (
       this.editor.mode === EditorMode.Select &&
       this.mobileInteractionStartedOnEmpty &&
