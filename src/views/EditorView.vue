@@ -89,6 +89,8 @@ const modeName = computed(() => {
       return '创建直线'
     case EditorMode.CreateRay:
       return '创建射线'
+    case EditorMode.CreatePlane:
+      return '创建面'
     default:
       return ''
   }
@@ -104,6 +106,8 @@ const modeHint = computed(() => {
       return '点击场景中的两个不同的点以创建直线~'
     case EditorMode.CreateRay:
       return '点击场景中的两个不同的点以创建射线~'
+    case EditorMode.CreatePlane:
+      return '先选择多个点或闭合线段，再点击空白处确认创建面~'
     default:
       return ''
   }
@@ -164,7 +168,7 @@ onMounted(() => {
     if (interaction.shouldSyncLiveScene()) {
       collabManager.value?.syncLivePreview(interaction.getLiveSyncPointIds())
     }
-    renderer.sync(scene, interaction.rubberBandData)
+    renderer.sync(scene, interaction.rubberBandData, interaction.getFacePreviewData())
     renderer.render()
     requestAnimationFrame(loop)
   }
@@ -181,6 +185,7 @@ watch(
     () => scene.selection.lines.size,
     () => scene.selection.straightLines.size,
     () => scene.selection.rays.size,
+    () => scene.selection.faces.size,
     () => editor.mode,
     isARMode,
   ],

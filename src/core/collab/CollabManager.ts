@@ -6,6 +6,7 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { StraightLine3 } from '../geometry/StraightLine3'
+import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
 
 export type CollabStatus = {
@@ -19,6 +20,7 @@ type LocalSceneSnapshot = {
   lines: Line3[]
   straightLines: StraightLine3[]
   rays: Ray3[]
+  faces: PlanarFace[]
 }
 
 type PointSyncData = {
@@ -61,6 +63,17 @@ type StraightLineSyncData = {
   userLocked: boolean
 }
 
+type FaceSyncData = {
+  name: string
+  nameVisible: boolean
+  visible: boolean
+  userLocked: boolean
+  boundaryPointIds: string[]
+  memberPointIds: string[]
+  boundaryLineIds: string[]
+  supportPointIds: string[]
+}
+
 type ProviderStatusEvent = {
   status: 'connecting' | 'connected' | 'disconnected'
 }
@@ -76,10 +89,12 @@ export class CollabManager {
   private yLines: Y.Map<LineSyncData>
   private yStraightLines: Y.Map<StraightLineSyncData>
   private yRays: Y.Map<RaySyncData>
+  private yFaces: Y.Map<FaceSyncData>
   private pointsObserver: ((event: Y.YMapEvent<PointSyncData>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSyncData>) => void) | null = null
   private straightLinesObserver: ((event: Y.YMapEvent<StraightLineSyncData>) => void) | null = null
   private raysObserver: ((event: Y.YMapEvent<RaySyncData>) => void) | null = null
+  private facesObserver: ((event: Y.YMapEvent<FaceSyncData>) => void) | null = null
 
   private roomName: string | null = null
   private connecting = false
@@ -95,10 +110,12 @@ export class CollabManager {
   private readonly dirtyLineIds = new Set<string>()
   private readonly dirtyStraightLineIds = new Set<string>()
   private readonly dirtyRayIds = new Set<string>()
+  private readonly dirtyFaceIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
   private readonly deletedRayIds = new Set<string>()
+  private readonly deletedFaceIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -109,6 +126,7 @@ export class CollabManager {
     this.yLines = this.ydoc.getMap('lines')
     this.yStraightLines = this.ydoc.getMap('straightLines')
     this.yRays = this.ydoc.getMap('rays')
+    this.yFaces = this.ydoc.getMap('faces')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
   }
@@ -280,6 +298,7 @@ export class CollabManager {
       lines: [...this.scene.lines.values()],
       straightLines: [...this.scene.straightLines.values()],
       rays: [...this.scene.rays.values()],
+      faces: [...this.scene.faces.values()],
     }
   }
 
@@ -287,6 +306,7 @@ export class CollabManager {
     this.scene.lines.clear()
     this.scene.straightLines.clear()
     this.scene.rays.clear()
+    this.scene.faces.clear()
     this.scene.points.forEach((point, id) => {
       if (!point.locked) this.scene.points.delete(id)
     })
@@ -299,6 +319,7 @@ export class CollabManager {
     snapshot.lines.forEach((line) => this.scene.addLine(line))
     snapshot.straightLines.forEach((line) => this.scene.addStraightLine(line))
     snapshot.rays.forEach((ray) => this.scene.addRay(ray))
+    snapshot.faces.forEach((face) => this.scene.addFace(face))
   }
 
   private clearDirtyState() {
@@ -306,10 +327,12 @@ export class CollabManager {
     this.dirtyLineIds.clear()
     this.dirtyStraightLineIds.clear()
     this.dirtyRayIds.clear()
+    this.dirtyFaceIds.clear()
     this.deletedPointIds.clear()
     this.deletedLineIds.clear()
     this.deletedStraightLineIds.clear()
     this.deletedRayIds.clear()
+    this.deletedFaceIds.clear()
   }
 
   private markPointDirty(id: string) {
@@ -332,6 +355,11 @@ export class CollabManager {
     this.dirtyStraightLineIds.add(id)
   }
 
+  private markFaceDirty(id: string) {
+    this.deletedFaceIds.delete(id)
+    this.dirtyFaceIds.add(id)
+  }
+
   private markPointDeleted(id: string) {
     this.dirtyPointIds.delete(id)
     this.deletedPointIds.add(id)
@@ -352,6 +380,11 @@ export class CollabManager {
     this.deletedStraightLineIds.add(id)
   }
 
+  private markFaceDeleted(id: string) {
+    this.dirtyFaceIds.delete(id)
+    this.deletedFaceIds.add(id)
+  }
+
   private markLinkedGeometryDirtyForPoint(pointId: string) {
     this.scene.lines.forEach((line, id) => {
       if (line.p1.id === pointId || line.p2.id === pointId) this.markLineDirty(id)
@@ -362,6 +395,9 @@ export class CollabManager {
     this.scene.straightLines.forEach((line, id) => {
       if (line.p1.id === pointId || line.p2.id === pointId) this.markStraightLineDirty(id)
     })
+    this.scene.faces.forEach((face, id) => {
+      if (face.includesPoint(pointId)) this.markFaceDirty(id)
+    })
   }
 
   markSceneDirty() {
@@ -371,6 +407,7 @@ export class CollabManager {
     this.scene.lines.forEach((_, id) => this.markLineDirty(id))
     this.scene.straightLines.forEach((_, id) => this.markStraightLineDirty(id))
     this.scene.rays.forEach((_, id) => this.markRayDirty(id))
+    this.scene.faces.forEach((_, id) => this.markFaceDirty(id))
 
     for (const id of [...this.yPoints.keys()]) {
       if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
@@ -383,6 +420,9 @@ export class CollabManager {
     }
     for (const id of [...this.yRays.keys()]) {
       if (!this.scene.rays.has(id)) this.markRayDeleted(id)
+    }
+    for (const id of [...this.yFaces.keys()]) {
+      if (!this.scene.faces.has(id)) this.markFaceDeleted(id)
     }
   }
 
@@ -400,7 +440,8 @@ export class CollabManager {
       [...this.yPoints.keys()].some((id) => id !== Scene.ORIGIN_ID) ||
       this.yLines.size > 0 ||
       this.yStraightLines.size > 0 ||
-      this.yRays.size > 0
+      this.yRays.size > 0 ||
+      this.yFaces.size > 0
     )
   }
 
@@ -410,7 +451,8 @@ export class CollabManager {
       localSnapshot.points.length === 0 &&
       localSnapshot.lines.length === 0 &&
       localSnapshot.straightLines.length === 0 &&
-      localSnapshot.rays.length === 0
+      localSnapshot.rays.length === 0 &&
+      localSnapshot.faces.length === 0
     ) {
       return
     }
@@ -497,12 +539,14 @@ export class CollabManager {
     if (this.linesObserver) this.yLines.unobserve(this.linesObserver)
     if (this.straightLinesObserver) this.yStraightLines.unobserve(this.straightLinesObserver)
     if (this.raysObserver) this.yRays.unobserve(this.raysObserver)
+    if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
 
     this.ydoc = new Y.Doc()
     this.yPoints = this.ydoc.getMap('points')
     this.yLines = this.ydoc.getMap('lines')
     this.yStraightLines = this.ydoc.getMap('straightLines')
     this.yRays = this.ydoc.getMap('rays')
+    this.yFaces = this.ydoc.getMap('faces')
     this.setupObservers()
   }
 
@@ -535,6 +579,11 @@ export class CollabManager {
         } else if (change.action === 'delete') {
           if (id === Scene.ORIGIN_ID) return
 
+          this.scene.faces.forEach((face, faceId) => {
+            if (face.includesPoint(id)) {
+              this.scene.removeFace(faceId)
+            }
+          })
           this.scene.lines.forEach((line, lineId) => {
             if (line.p1.id === id || line.p2.id === id) {
               this.scene.lines.delete(lineId)
@@ -698,6 +747,47 @@ export class CollabManager {
       })
     }
     this.yRays.observe(this.raysObserver)
+
+    this.facesObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'add' || change.action === 'update') {
+          const data = this.yFaces.get(id)
+          if (!data) return
+          const allPointIds = [...new Set([...data.boundaryPointIds, ...data.memberPointIds])]
+          if (allPointIds.some((pointId) => !this.scene.points.has(pointId))) return
+
+          const face = this.scene.faces.get(id)
+          if (face) {
+            face.name = data.name ?? face.name
+            face.nameVisible = data.nameVisible ?? face.nameVisible
+            face.visible = data.visible ?? face.visible
+            face.userLocked = data.userLocked ?? face.userLocked
+            face.boundaryPointIds = [...data.boundaryPointIds]
+            face.memberPointIds = [...data.memberPointIds]
+            face.boundaryLineIds = [...data.boundaryLineIds]
+            face.supportPointIds = [...data.supportPointIds]
+            face.normalize(this.scene.points)
+          } else {
+            this.scene.addFace(
+              new PlanarFace(
+                id,
+                data.name ?? '',
+                [...data.boundaryPointIds],
+                [...data.memberPointIds],
+                [...data.boundaryLineIds],
+                data.nameVisible ?? true,
+                data.visible ?? true,
+                data.userLocked ?? false,
+                [...data.supportPointIds],
+              ),
+            )
+          }
+        } else if (change.action === 'delete') {
+          this.scene.removeFace(id)
+        }
+      })
+    }
+    this.yFaces.observe(this.facesObserver)
   }
 
   syncAction() {
@@ -744,20 +834,24 @@ export class CollabManager {
     const lineIds = [...this.dirtyLineIds]
     const straightLineIds = [...this.dirtyStraightLineIds]
     const rayIds = [...this.dirtyRayIds]
+    const faceIds = [...this.dirtyFaceIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
     const deletedRayIds = [...this.deletedRayIds]
+    const deletedFaceIds = [...this.deletedFaceIds]
 
     if (
       pointIds.length === 0 &&
       lineIds.length === 0 &&
       straightLineIds.length === 0 &&
       rayIds.length === 0 &&
+      faceIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
-      deletedRayIds.length === 0
+      deletedRayIds.length === 0 &&
+      deletedFaceIds.length === 0
     ) {
       return
     }
@@ -774,6 +868,9 @@ export class CollabManager {
       })
       deletedRayIds.forEach((id) => {
         this.yRays.delete(id)
+      })
+      deletedFaceIds.forEach((id) => {
+        this.yFaces.delete(id)
       })
 
       pointIds.forEach((id) => {
@@ -895,15 +992,49 @@ export class CollabManager {
           this.yRays.set(id, next)
         }
       })
+
+      faceIds.forEach((id) => {
+        const face = this.scene.faces.get(id)
+        if (!face) {
+          this.yFaces.delete(id)
+          return
+        }
+        const next = {
+          name: face.name,
+          nameVisible: face.nameVisible,
+          visible: face.visible,
+          userLocked: face.userLocked,
+          boundaryPointIds: [...face.boundaryPointIds],
+          memberPointIds: [...face.memberPointIds],
+          boundaryLineIds: [...face.boundaryLineIds],
+          supportPointIds: [...face.supportPointIds],
+        }
+        const prev = this.yFaces.get(id)
+        if (
+          !prev ||
+          JSON.stringify(prev.boundaryPointIds) !== JSON.stringify(next.boundaryPointIds) ||
+          JSON.stringify(prev.memberPointIds) !== JSON.stringify(next.memberPointIds) ||
+          JSON.stringify(prev.boundaryLineIds) !== JSON.stringify(next.boundaryLineIds) ||
+          JSON.stringify(prev.supportPointIds) !== JSON.stringify(next.supportPointIds) ||
+          prev.name !== next.name ||
+          prev.nameVisible !== next.nameVisible ||
+          prev.visible !== next.visible ||
+          prev.userLocked !== next.userLocked
+        ) {
+          this.yFaces.set(id, next)
+        }
+      })
     })
 
     pointIds.forEach((id) => this.dirtyPointIds.delete(id))
     lineIds.forEach((id) => this.dirtyLineIds.delete(id))
     straightLineIds.forEach((id) => this.dirtyStraightLineIds.delete(id))
     rayIds.forEach((id) => this.dirtyRayIds.delete(id))
+    faceIds.forEach((id) => this.dirtyFaceIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
     deletedRayIds.forEach((id) => this.deletedRayIds.delete(id))
+    deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))
   }
 }

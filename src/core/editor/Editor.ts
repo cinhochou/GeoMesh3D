@@ -7,16 +7,29 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { StraightLine3 } from '../geometry/StraightLine3'
+import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
+import {
+  buildConvexHull,
+  computePlaneBasis,
+  computeSupportPointIds,
+  orderedLoopFromLines,
+  PLANAR_EPSILON,
+  projectPoint2D,
+  projectPointToPlane,
+  signedDistanceToPlane,
+} from '../geometry/PlanarUtils'
 import { TransformPointsCommand } from './TransformPointsCommand'
 import { UpdatePointCommand } from './UpdatePointCommand'
 import { UpdateLineCommand } from './UpdateLineCommand'
 import { UpdateRayCommand } from './UpdateRayCommand'
 import { UpdateStraightLineCommand } from './UpdateStraightLineCommand'
+import { UpdateFaceCommand } from './UpdateFaceCommand'
 import { DeletePointCommand } from './DeletePointCommand'
 import { DeleteLineCommand } from './DeleteLineCommand'
 import { DeleteRayCommand } from './DeleteRayCommand'
 import { DeleteStraightLineCommand } from './DeleteStraightLineCommand'
+import { DeleteFaceCommand } from './DeleteFaceCommand'
 import { ClearSceneCommand } from './ClearSceneCommand'
 import { SyncLockStateCommand } from './SyncLockStateCommand'
 
@@ -28,6 +41,16 @@ export enum EditorMode {
   CreateStraightLine,
   CreateRay,
   CreatePlane,
+}
+
+export type FacePreviewData = {
+  boundary: Vec3[]
+  adjustedPoints: Array<{
+    id: string
+    from: Vec3
+    to: Vec3
+  }>
+  notices: string[]
 }
 
 const genIndexedAlphabetName = (index: number, baseCharCode: number) => {
@@ -42,6 +65,162 @@ const genId = (prefix: string) => {
   }
 
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+const emitToast = (msg: string) => {
+  window.dispatchEvent(
+    new CustomEvent('toast', {
+      detail: {
+        msg,
+        scope: 'viewport',
+      },
+    }),
+  )
+}
+
+const getBoundsDiagonal = (points: Point3[]) => {
+  if (points.length === 0) return 0
+  let minX = points[0]!.position.x
+  let minY = points[0]!.position.y
+  let minZ = points[0]!.position.z
+  let maxX = minX
+  let maxY = minY
+  let maxZ = minZ
+  points.forEach((point) => {
+    minX = Math.min(minX, point.position.x)
+    minY = Math.min(minY, point.position.y)
+    minZ = Math.min(minZ, point.position.z)
+    maxX = Math.max(maxX, point.position.x)
+    maxY = Math.max(maxY, point.position.y)
+    maxZ = Math.max(maxZ, point.position.z)
+  })
+  return Math.hypot(maxX - minX, maxY - minY, maxZ - minZ)
+}
+
+const autoOptimizeFacePoints = (editor: Editor, points: Point3[]) => {
+  const plane = computePlaneBasis(points.map((point) => point.position))
+  if (!plane)
+    return {
+      adjusted: 0,
+      messages: [] as string[],
+      positionOverrides: new Map<string, Vec3>(),
+      adjustedPoints: [] as Array<{ id: string; from: Vec3; to: Vec3 }>,
+    }
+
+  const diagonal = getBoundsDiagonal(points)
+  const planarTolerance = Math.max(0.02, diagonal * 0.015)
+  const autoProjectTolerance = Math.max(0.18, diagonal * 0.08)
+  const updates: Array<{ id: string; position: Vec3 }> = []
+  const positionOverrides = new Map<string, Vec3>()
+  const adjustedPoints: Array<{ id: string; from: Vec3; to: Vec3 }> = []
+  let blockedLockedPoint = false
+  let farOffPoint = false
+
+  points.forEach((point) => {
+    const distance = Math.abs(signedDistanceToPlane(point.position, plane))
+    if (distance <= planarTolerance) return
+
+    if (distance > autoProjectTolerance) {
+      farOffPoint = true
+      return
+    }
+
+    if (editor.isPointCoordinateLocked(point)) {
+      blockedLockedPoint = true
+      return
+    }
+
+    const projected = projectPointToPlane(point.position, plane)
+    updates.push({
+      id: point.id,
+      position: projected,
+    })
+    positionOverrides.set(point.id, projected)
+    adjustedPoints.push({
+      id: point.id,
+      from: point.position.clone(),
+      to: projected.clone(),
+    })
+  })
+
+  const messages: string[] = []
+  if (updates.length > 0) {
+    editor.setPointsPositions(updates)
+    messages.push(`已自动将 ${updates.length} 个点投影到同一平面`)
+  }
+  if (blockedLockedPoint) {
+    messages.push('部分锁定点偏离平面，未自动调整')
+  }
+  if (farOffPoint) {
+    messages.push('部分点偏离过大，已按当前主要平面尽量创建')
+  }
+
+  return {
+    adjusted: updates.length,
+    messages,
+    positionOverrides,
+    adjustedPoints,
+  }
+}
+
+const getFacesByPointId = (editor: Editor, pointId: string) =>
+  [...editor.scene.faces.values()].filter((face) => face.includesPoint(pointId))
+
+const getFacesByLineId = (editor: Editor, lineId: string) =>
+  [...editor.scene.faces.values()].filter((face) => face.boundaryLineIds.includes(lineId))
+
+const buildFaceUnlockCascade = (editor: Editor, faces: PlanarFace[]) => {
+  const pointTransforms = new Map<string, { point: Point3; before: boolean; after: boolean }>()
+  const lineTransforms = new Map<string, { line: Line3; before: boolean; after: boolean }>()
+  const faceTransforms = new Map<string, { face: PlanarFace; before: boolean; after: boolean }>()
+
+  faces.forEach((face) => {
+    faceTransforms.set(face.id, {
+      face,
+      before: face.userLocked,
+      after: false,
+    })
+
+    face.memberPointIds.forEach((pointId) => {
+      const point = editor.scene.points.get(pointId)
+      if (!point || point.locked) return
+      pointTransforms.set(pointId, {
+        point,
+        before: point.userLocked,
+        after: false,
+      })
+    })
+
+    face.boundaryLineIds.forEach((lineId) => {
+      const line = editor.scene.lines.get(lineId)
+      if (!line) return
+      lineTransforms.set(lineId, {
+        line,
+        before: line.userLocked,
+        after: false,
+      })
+    })
+  })
+
+  return {
+    pointTransforms: [...pointTransforms.values()].filter((transform) => transform.before !== transform.after),
+    lineTransforms: [...lineTransforms.values()].filter((transform) => transform.before !== transform.after),
+    faceTransforms: [...faceTransforms.values()].filter((transform) => transform.before !== transform.after),
+  }
+}
+
+type FaceDraft = {
+  boundaryPointIds: string[]
+  memberPointIds: string[]
+  boundaryLineIds: string[]
+  supportPointIds: string[]
+  positionOverrides: Map<string, Vec3>
+  notices: string[]
+  adjustedPoints: Array<{
+    id: string
+    from: Vec3
+    to: Vec3
+  }>
 }
 
 const genNextAvailableName = (
@@ -138,6 +317,27 @@ export class Editor {
     )
   }
 
+  isFaceLocked(face: PlanarFace | null | undefined) {
+    return Boolean(
+      face &&
+        (face.userLocked ||
+          face
+            .getMemberPoints(this.scene.points)
+            .every((point) => this.isPointCoordinateLocked(point))),
+    )
+  }
+
+  isFaceGeometryLocked(face: PlanarFace | null | undefined) {
+    return Boolean(
+      face &&
+        (face.userLocked ||
+          face
+            .getMemberPoints(this.scene.points)
+            .some((point) => this.isPointCoordinateLocked(point))),
+    )
+  }
+
+
   setPointLockState(pointId: string, locked: boolean) {
     const point = this.scene.points.get(pointId)
     if (!point || point.locked) return
@@ -151,6 +351,29 @@ export class Editor {
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
+    const relatedFaces = getFacesByPointId(this, pointId)
+
+    if (!locked && relatedFaces.length > 0) {
+      const faceCascade = buildFaceUnlockCascade(this, relatedFaces)
+      if (
+        faceCascade.pointTransforms.length === 0 &&
+        faceCascade.lineTransforms.length === 0 &&
+        faceCascade.faceTransforms.length === 0
+      ) {
+        return
+      }
+
+      this.executeCommand(
+        new SyncLockStateCommand(
+          faceCascade.pointTransforms,
+          faceCascade.lineTransforms,
+          [],
+          [],
+          faceCascade.faceTransforms,
+        ),
+      )
+      return
+    }
 
     const pointTransforms = [
       {
@@ -207,6 +430,29 @@ export class Editor {
   setLineLockState(lineId: string, locked: boolean) {
     const line = this.scene.lines.get(lineId)
     if (!line) return
+    const relatedFaces = getFacesByLineId(this, lineId)
+    if (!locked && relatedFaces.length > 0) {
+      const faceCascade = buildFaceUnlockCascade(this, relatedFaces)
+      if (
+        faceCascade.pointTransforms.length === 0 &&
+        faceCascade.lineTransforms.length === 0 &&
+        faceCascade.faceTransforms.length === 0
+      ) {
+        return
+      }
+
+      this.executeCommand(
+        new SyncLockStateCommand(
+          faceCascade.pointTransforms,
+          faceCascade.lineTransforms,
+          [],
+          [],
+          faceCascade.faceTransforms,
+        ),
+      )
+      return
+    }
+
     const endpointTransforms = !locked
       ? [line.p1, line.p2]
           .filter((point) => !point.locked)
@@ -224,6 +470,7 @@ export class Editor {
       new SyncLockStateCommand(
         endpointTransforms,
         [{ line, before: line.userLocked, after: locked }],
+        [],
         [],
         [],
       ),
@@ -252,6 +499,7 @@ export class Editor {
         [],
         [{ line, before: line.userLocked, after: locked }],
         [],
+        [],
       ),
     )
   }
@@ -278,7 +526,50 @@ export class Editor {
         [],
         [],
         [{ ray, before: ray.userLocked, after: locked }],
+        [],
       ),
+    )
+  }
+
+  setFaceLockState(faceId: string, locked: boolean) {
+    const face = this.scene.faces.get(faceId)
+    if (!face) return
+
+    const pointTransforms = face.memberPointIds
+      .map((pointId) => this.scene.points.get(pointId))
+      .filter((point): point is Point3 => point !== undefined && !point.locked)
+      .map((point) => ({
+        point,
+        before: point.userLocked,
+        after: locked,
+      }))
+      .filter((transform) => transform.before !== transform.after)
+
+    const lineTransforms = face.boundaryLineIds
+      .map((lineId) => this.scene.lines.get(lineId))
+      .filter((line): line is Line3 => line !== undefined)
+      .map((line) => ({
+        line,
+        before: line.userLocked,
+        after: locked,
+      }))
+      .filter((transform) => transform.before !== transform.after)
+
+    const faceTransforms =
+      face.userLocked === locked
+        ? []
+        : [
+            {
+              face,
+              before: face.userLocked,
+              after: locked,
+            },
+          ]
+
+    if (pointTransforms.length === 0 && lineTransforms.length === 0 && faceTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(pointTransforms, lineTransforms, [], [], faceTransforms),
     )
   }
 
@@ -308,9 +599,17 @@ export class Editor {
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
+    const relatedFaces = [...this.scene.faces.values()].filter((face) => face.includesPoint(pointId))
 
     this.executeCommand(
-      new DeletePointCommand(this.scene, point, relatedLines, relatedStraightLines, relatedRays),
+      new DeletePointCommand(
+        this.scene,
+        point,
+        relatedLines,
+        relatedStraightLines,
+        relatedRays,
+        relatedFaces,
+      ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
@@ -333,23 +632,33 @@ export class Editor {
     this.executeCommand(new DeleteStraightLineCommand(this.scene, line))
   }
 
+  deleteFace(faceId: string) {
+    const face = this.scene.faces.get(faceId)
+    if (!face) return
+    this.executeCommand(new DeleteFaceCommand(this.scene, face))
+  }
+
   clearAll() {
     const points = [...this.scene.points.values()].filter((point) => !point.locked)
     const lines = [...this.scene.lines.values()]
     const straightLines = [...this.scene.straightLines.values()]
     const rays = [...this.scene.rays.values()]
-    const constraints = [...this.scene.constraints]
+    const faces = [...this.scene.faces.values()]
+    const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
 
     if (
       points.length === 0 &&
       lines.length === 0 &&
       straightLines.length === 0 &&
       rays.length === 0 &&
+      faces.length === 0 &&
       constraints.length === 0
     )
       return
 
-    this.executeCommand(new ClearSceneCommand(this.scene, points, lines, straightLines, rays, constraints))
+    this.executeCommand(
+      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, faces, constraints),
+    )
     this.selectedPoints = []
   }
 
@@ -402,25 +711,18 @@ export class Editor {
   }
 
   setPointsPositions(updates: Array<{ id: string; position: Vec3 }>) {
-    const transforms = updates
-      .map(({ id, position }) => {
+    const resolvedPositions = this.resolveConstrainedPointPositions(
+      updates.map(({ id, position }) => ({ id, position: position.clone() })),
+    )
+    const transforms = [...resolvedPositions.entries()]
+      .map(([id, position]) => {
         const point = this.scene.points.get(id)
         if (!point || this.isPointCoordinateLocked(point)) return null
-
         const before = point.position.clone()
-        if (before.x === position.x && before.y === position.y && before.z === position.z) {
-          return null
-        }
-
-        return {
-          point,
-          before,
-          after: position.clone(),
-        }
+        if (before.x === position.x && before.y === position.y && before.z === position.z) return null
+        return { point, before, after: position.clone() }
       })
-      .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
-      )
+      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {
@@ -433,21 +735,29 @@ export class Editor {
   }
 
   applyPointTransformHistory(transforms: Array<{ id: string; before: Vec3; after: Vec3 }>) {
-    const commandTransforms = transforms
-      .map(({ id, before, after }) => {
+    const resolvedPositions = this.resolveConstrainedPointPositions(
+      transforms.map(({ id, after }) => ({ id, position: after.clone() })),
+    )
+    const commandTransforms = [...resolvedPositions.entries()]
+      .map(([id, position]) => {
+        const original = transforms.find((item) => item.id === id)
         const point = this.scene.points.get(id)
-        if (!point || this.isPointCoordinateLocked(point)) return null
-        if (before.x === after.x && before.y === after.y && before.z === after.z) return null
+        if (!point || !original || this.isPointCoordinateLocked(point)) return null
+        if (
+          original.before.x === position.x &&
+          original.before.y === position.y &&
+          original.before.z === position.z
+        ) {
+          return null
+        }
 
         return {
           point,
-          before: before.clone(),
-          after: after.clone(),
+          before: original.before.clone(),
+          after: position.clone(),
         }
       })
-      .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
-      )
+      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
 
     if (commandTransforms.length === 0) return
     if (commandTransforms.length === 1) {
@@ -677,6 +987,50 @@ export class Editor {
     )
   }
 
+  updateFace(
+    faceId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      visible?: boolean
+      userLocked?: boolean
+    },
+  ) {
+    const face = this.scene.faces.get(faceId)
+    if (!face) return
+
+    const nextName = patch.name ?? face.name
+    const nextNameVisible = patch.nameVisible ?? face.nameVisible
+    const nextVisible = patch.visible ?? face.visible
+    const nextUserLocked = patch.userLocked ?? face.userLocked
+    if (
+      nextName === face.name &&
+      nextNameVisible === face.nameVisible &&
+      nextVisible === face.visible &&
+      nextUserLocked === face.userLocked
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateFaceCommand(
+        face,
+        {
+          name: face.name,
+          nameVisible: face.nameVisible,
+          visible: face.visible,
+          userLocked: face.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          visible: nextVisible,
+          userLocked: nextUserLocked,
+        },
+      ),
+    )
+  }
+
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
     this.tryCreateLinearWith(point, 'line')
@@ -690,6 +1044,70 @@ export class Editor {
   tryCreateRayWith(point: Point3) {
     if (this.mode !== EditorMode.CreateRay) return
     this.tryCreateLinearWith(point, 'ray')
+  }
+
+  tryCreateFaceFromSelection() {
+    if (this.mode !== EditorMode.CreatePlane) return
+
+    const selectedPoints = [...this.scene.selection.points]
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+    const selectedLines = [...this.scene.selection.lines]
+      .map((id) => this.scene.lines.get(id))
+      .filter((line): line is Line3 => line !== undefined)
+
+    const draft = this.buildFaceDraftFromSelection(selectedPoints, selectedLines)
+    if (!draft) return
+
+    const face = new PlanarFace(
+      genId('f'),
+      genNextAvailableName(
+        [...this.scene.faces.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'F' : `F${index}`),
+      ),
+      draft.boundaryPointIds,
+      draft.memberPointIds,
+      draft.boundaryLineIds,
+      true,
+      true,
+      false,
+      draft.supportPointIds,
+    )
+
+    face.normalize(this.scene.points)
+    this.executeCommand(new AddElementCommand(this.scene, face, 'face'))
+    this.scene.selection.clear()
+    this.scene.selection.selectFace(face.id)
+  }
+
+  getFacePreviewFromSelection(): FacePreviewData | null {
+    if (this.mode !== EditorMode.CreatePlane) return null
+
+    const selectedPoints = [...this.scene.selection.points]
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+    const selectedLines = [...this.scene.selection.lines]
+      .map((id) => this.scene.lines.get(id))
+      .filter((line): line is Line3 => line !== undefined)
+    const draft = this.buildFaceDraftFromSelection(selectedPoints, selectedLines, false, false)
+    if (!draft) return null
+
+    const boundary = draft.boundaryPointIds
+      .map((id) => draft.positionOverrides.get(id) ?? this.scene.points.get(id)?.position)
+      .filter((point): point is Vec3 => point !== undefined)
+      .map((point) => point.clone())
+    if (boundary.length < 3) return null
+
+    return {
+      boundary,
+      adjustedPoints: draft.adjustedPoints.map((item) => ({
+        id: item.id,
+        from: item.from.clone(),
+        to: item.to.clone(),
+      })),
+      notices: [...draft.notices],
+    }
   }
 
   tryCreateLinearWith(point: Point3, type: 'line' | 'straightLine' | 'ray') {
@@ -779,6 +1197,157 @@ export class Editor {
     }
   }
 
+  buildFaceDraftFromSelection(
+    points: Point3[],
+    lines: Line3[],
+    applyAutoAdjustments: boolean = true,
+    notify: boolean = true,
+  ): FaceDraft | null {
+    const pointMap = new Map(points.map((point) => [point.id, point]))
+    lines.forEach((line) => {
+      pointMap.set(line.p1.id, line.p1)
+      pointMap.set(line.p2.id, line.p2)
+    })
+    const uniquePoints = [...pointMap.values()]
+    if (uniquePoints.length === 0) {
+      return null
+    }
+    if (uniquePoints.length < 3) {
+      if (notify) emitToast('创建面至少需要 3 个点，或一个由线段组成的闭环')
+      return null
+    }
+
+    const optimization = autoOptimizeFacePoints(this, uniquePoints)
+    const positionOverrides = applyAutoAdjustments ? new Map<string, Vec3>() : optimization.positionOverrides
+    if (notify && applyAutoAdjustments && optimization.messages.length > 0) {
+      emitToast(optimization.messages.join('；'))
+    }
+
+    const getPointPosition = (point: Point3) => positionOverrides.get(point.id) ?? point.position
+    const allPositions = uniquePoints.map((point) => getPointPosition(point))
+    const primaryPlane = computePlaneBasis(allPositions)
+    if (!primaryPlane) {
+      if (notify) emitToast('选中的点过于接近共线，无法创建稳定的面')
+      return null
+    }
+
+    let boundaryPointIds: string[] = []
+    const notices = [...optimization.messages]
+    if (lines.length > 0) {
+      const loopIds = orderedLoopFromLines(lines)
+      if (loopIds && loopIds.length >= 3) {
+        boundaryPointIds = loopIds
+      } else {
+        const hull = buildConvexHull(
+          uniquePoints.map((point) => ({
+            id: point.id,
+            ...projectPoint2D(getPointPosition(point), primaryPlane),
+          })),
+        )
+        boundaryPointIds = hull.map((point) => point.id)
+        notices.push('所选线段未形成闭环，已按外轮廓自动建面')
+        if (notify && applyAutoAdjustments) {
+          emitToast('所选线段未形成闭环，已按外轮廓自动建面')
+        }
+      }
+    } else {
+      const hull = buildConvexHull(
+        uniquePoints.map((point) => ({
+          id: point.id,
+          ...projectPoint2D(getPointPosition(point), primaryPlane),
+        })),
+      )
+      boundaryPointIds = hull.map((point) => point.id)
+      if (boundaryPointIds.length < 3) {
+        if (notify) emitToast('选中的点无法形成有效面积')
+        return null
+      }
+    }
+
+    const boundaryPoints = boundaryPointIds
+      .map((id) => pointMap.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+    const plane = computePlaneBasis(boundaryPoints.map((point) => getPointPosition(point)))
+    if (!plane) {
+      if (notify) emitToast('面的边界点共线，无法创建面')
+      return null
+    }
+
+    const optimizedBoundaryIds = buildConvexHull(
+      boundaryPoints.map((point) => ({
+        id: point.id,
+        ...projectPoint2D(getPointPosition(point), plane),
+      })),
+    ).map((point) => point.id)
+    if (optimizedBoundaryIds.length >= 3) {
+      const boundaryChanged =
+        optimizedBoundaryIds.length !== boundaryPointIds.length ||
+        optimizedBoundaryIds.some((id) => !boundaryPointIds.includes(id))
+      boundaryPointIds = optimizedBoundaryIds
+      if (boundaryChanged) {
+        notices.push('已自动优化面的边界轮廓')
+        if (notify && applyAutoAdjustments) {
+          emitToast('已自动优化面的边界轮廓')
+        }
+      }
+    }
+
+    const signedArea = boundaryPointIds.reduce((sum, id, index, ids) => {
+      const point = pointMap.get(id)
+      const nextPoint = pointMap.get(ids[(index + 1) % ids.length]!)
+      if (!point || !nextPoint) return sum
+      const current2D = projectPoint2D(getPointPosition(point), plane)
+      const next2D = projectPoint2D(getPointPosition(nextPoint), plane)
+      return sum + current2D.x * next2D.y - next2D.x * current2D.y
+    }, 0)
+    if (signedArea < 0) {
+      boundaryPointIds = [...boundaryPointIds].reverse()
+    }
+    const areaPoints = boundaryPointIds
+      .map((id) => pointMap.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+    const area = areaPoints
+      .map((point) => projectPoint2D(getPointPosition(point), plane))
+      .reduce((sum, point, index, arr) => {
+        const next = arr[(index + 1) % arr.length]!
+        return sum + point.x * next.y - next.x * point.y
+      }, 0)
+    if (Math.abs(area) * 0.5 <= PLANAR_EPSILON) {
+      if (notify) emitToast('面的面积过小，无法创建')
+      return null
+    }
+
+    const memberPointIds = [...new Set([...boundaryPointIds, ...uniquePoints.map((point) => point.id)])]
+    const supportPointIds = computeSupportPointIds(
+      memberPointIds
+        .map((id) => pointMap.get(id))
+        .filter((point): point is Point3 => point !== undefined),
+    )
+    if (supportPointIds.length < 3) {
+      if (notify) emitToast('无法为该面建立稳定的平面约束')
+      return null
+    }
+
+    const duplicate = [...this.scene.faces.values()].some((face) => {
+      if (face.boundaryPointIds.length !== boundaryPointIds.length) return false
+      return face.boundaryPointIds.every((id) => boundaryPointIds.includes(id))
+    })
+    if (duplicate) {
+      if (notify) emitToast('相同边界的面已存在')
+      return null
+    }
+
+    return {
+      boundaryPointIds,
+      memberPointIds,
+      boundaryLineIds: lines.map((line) => line.id),
+      supportPointIds,
+      positionOverrides,
+      notices,
+      adjustedPoints: optimization.adjustedPoints,
+    }
+  }
+
   getLockedTranslationGroup(pointIds: string[]) {
     const group = new Set(pointIds)
     const queue = [...pointIds]
@@ -801,20 +1370,25 @@ export class Editor {
   }
 
   translatePointGroup(pointIds: string[], delta: Vec3) {
-    const transforms = pointIds
-      .map((id) => {
+    const resolvedPositions = this.resolveConstrainedPointPositions(
+      pointIds.map((id) => {
+        const point = this.scene.points.get(id)
+        return {
+          id,
+          position: point ? point.position.add(delta) : new Vec3(),
+        }
+      }),
+    )
+    const transforms = [...resolvedPositions.entries()]
+      .map(([id, position]) => {
         const point = this.scene.points.get(id)
         if (!point || this.isPointCoordinateLocked(point)) return null
 
         const before = point.position.clone()
-        const after = before.add(delta)
-        if (before.x === after.x && before.y === after.y && before.z === after.z) return null
-
-        return { point, before, after }
+        if (before.x === position.x && before.y === position.y && before.z === position.z) return null
+        return { point, before, after: position.clone() }
       })
-      .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null,
-      )
+      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {
@@ -824,6 +1398,60 @@ export class Editor {
     }
 
     this.executeCommand(new TransformPointsCommand(transforms))
+  }
+
+  resolveConstrainedPointPositions(updates: Array<{ id: string; position: Vec3 }>) {
+    const nextPositions = new Map<string, Vec3>()
+
+    updates.forEach(({ id, position }) => {
+      const point = this.scene.points.get(id)
+      if (!point || this.isPointCoordinateLocked(point)) return
+      nextPositions.set(id, position.clone())
+    })
+
+    const faceIds = new Set<string>()
+    this.scene.faces.forEach((face) => {
+      if (face.memberPointIds.some((id) => nextPositions.has(id))) {
+        face.memberPointIds.forEach((id) => {
+          const point = this.scene.points.get(id)
+          if (!point || this.isPointCoordinateLocked(point)) return
+          if (!nextPositions.has(id)) nextPositions.set(id, point.position.clone())
+        })
+        faceIds.add(face.id)
+      }
+    })
+
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      for (const [id, position] of [...nextPositions.entries()]) {
+        nextPositions.set(id, this.resolveLockedLinePointPosition(id, position, nextPositions))
+      }
+
+      faceIds.forEach((faceId) => {
+        const face = this.scene.faces.get(faceId)
+        if (!face) return
+        const supportPoints: Vec3[] = face
+          .getSupportPoints(this.scene.points)
+          .map((point) => nextPositions.get(point.id) ?? point.position)
+        const plane =
+          computePlaneBasis(supportPoints) ??
+          computePlaneBasis(
+            face
+              .getBoundaryPoints(this.scene.points)
+              .map((point) => nextPositions.get(point.id) ?? point.position),
+          )
+        if (!plane) return
+
+        face.memberPointIds.forEach((pointId) => {
+          if (face.supportPointIds.includes(pointId)) return
+          const point = this.scene.points.get(pointId)
+          if (!point || this.isPointCoordinateLocked(point)) return
+          const position = nextPositions.get(pointId) ?? point.position
+          nextPositions.set(pointId, projectPointToPlane(position, plane))
+        })
+      })
+    }
+
+    return nextPositions
   }
 
   resolveLockedLinePointPosition(

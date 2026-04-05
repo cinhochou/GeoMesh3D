@@ -8,6 +8,7 @@ import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
+import type { PlanarFace } from '../core/geometry/Plane'
 
 const props = defineProps<{
   scene: Scene
@@ -42,6 +43,12 @@ const selectedRays = computed(() => {
     .map((id) => props.scene.rays.get(id))
     .filter((ray): ray is Ray3 => ray !== undefined)
 })
+const selectedFaces = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.faces]
+    .map((id) => props.scene.faces.get(id))
+    .filter((face): face is PlanarFace => face !== undefined)
+})
 const pointsInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.points.values()]
@@ -58,8 +65,15 @@ const raysInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.rays.values()]
 })
+const facesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.faces.values()]
+})
 
-const editing = ref<{ type: 'point' | 'line' | 'straightLine' | 'ray'; id: string } | null>(null)
+const editing = ref<{
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+  id: string
+} | null>(null)
 const isCompactLineEditor = ref(false)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedStraightLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -120,6 +134,12 @@ const editStraightLine = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editFace = reactive({
+  name: '',
+  nameVisible: true,
+  visible: true,
+  userLocked: false,
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
@@ -132,12 +152,14 @@ const selectedStraightLineIds = computed(() =>
   selectedStraightLines.value.map((l) => l?.id).filter(Boolean),
 )
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
+const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).filter(Boolean))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
     linesInScene.value.length +
     straightLinesInScene.value.length +
-    raysInScene.value.length,
+    raysInScene.value.length +
+    facesInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
 const collapsedContentGroups = reactive({
@@ -145,12 +167,14 @@ const collapsedContentGroups = reactive({
   line: false,
   straightLine: false,
   ray: false,
+  face: false,
 })
-const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray', string> = {
+const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray' | 'face', string> = {
   point: '点',
   line: '线段',
   straightLine: '直线',
   ray: '射线',
+  face: '面',
 }
 const hasAutoCollapsedContentGroups = ref(false)
 
@@ -159,9 +183,10 @@ const setContentGroupsCollapsed = (collapsed: boolean) => {
   collapsedContentGroups.line = collapsed
   collapsedContentGroups.straightLine = collapsed
   collapsedContentGroups.ray = collapsed
+  collapsedContentGroups.face = collapsed
 }
 
-const toggleContentGroup = (type: 'point' | 'line' | 'straightLine' | 'ray') => {
+const toggleContentGroup = (type: 'point' | 'line' | 'straightLine' | 'ray' | 'face') => {
   if (!canCollapseContentGroups.value) return
   collapsedContentGroups[type] = !collapsedContentGroups[type]
 }
@@ -206,6 +231,14 @@ const selectRayFromContent = (id: string) => {
   props.scene.selection.selectRay(id)
 }
 
+const selectFaceFromContent = (id: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectFace(id)
+}
+
 const clearContentSelection = () => {
   editing.value = null
   expandedLineEditorPoint.value = null
@@ -224,14 +257,18 @@ const updateCompactLineEditorMode = () => {
   isCompactLineEditor.value = touchLike || mobileUA
 }
 
-watch([selectedPointIds, selectedLineIds, selectedStraightLineIds, selectedRayIds], () => {
-  if (!editing.value) return
-  const { type, id } = editing.value
-  if (type === 'point' && !selectedPointIds.value.includes(id)) editing.value = null
-  if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
-  if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
-  if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
-})
+watch(
+  [selectedPointIds, selectedLineIds, selectedStraightLineIds, selectedRayIds, selectedFaceIds],
+  () => {
+    if (!editing.value) return
+    const { type, id } = editing.value
+    if (type === 'point' && !selectedPointIds.value.includes(id)) editing.value = null
+    if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
+    if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
+    if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
+    if (type === 'face' && !selectedFaceIds.value.includes(id)) editing.value = null
+  },
+)
 
 watch(
   totalContentCount,
@@ -521,6 +558,17 @@ const startEditRay = (r: Ray3 | undefined) => {
   editRay.p2.y = toFixed2(r.p2.position.y)
   editRay.p2.z = toFixed2(r.p2.position.z)
 }
+const startEditFace = (face: PlanarFace | undefined) => {
+  if (!face) return
+  editing.value = { type: 'face', id: face.id }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editFace.name = face.name ?? ''
+  editFace.nameVisible = face.nameVisible !== false
+  editFace.visible = face.visible !== false
+  editFace.userLocked = props.editor.isFaceLocked(face)
+}
 
 const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string) => {
   const x = Number(xStr)
@@ -676,10 +724,31 @@ const applyEditStraightLine = () => {
     editStraightLine.p2.z,
   )
 }
+const applyEditFace = () => {
+  if (!editing.value || editing.value.type !== 'face') return
+  const face = props.scene.faces.get(editing.value.id)
+  if (!face) return
+  props.editor.updateFace(editing.value.id, {
+    name: editFace.name,
+    nameVisible: editFace.nameVisible,
+    visible: editFace.visible,
+  })
+  if (editFace.userLocked !== props.editor.isFaceLocked(face)) {
+    props.editor.setFaceLockState(editing.value.id, editFace.userLocked)
+  }
+}
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
 const getStraightLineDisplayPoints = (line: StraightLine3) => line.getDisplayPoints()
+const getFaceArea = (face: PlanarFace) => face.getArea(props.scene.points)
+const getFaceCentroid = (face: PlanarFace) => face.getCentroid(props.scene.points)
+const getFaceBoundaryPoints = (face: PlanarFace) => face.getBoundaryPoints(props.scene.points)
+const getFaceMemberPointNames = (face: PlanarFace) =>
+  face
+    .getMemberPoints(props.scene.points)
+    .map((point) => point.name)
+    .join(', ')
 
 const handleGlobalClick = (e: MouseEvent) => {
   if (!editing.value) return
@@ -829,6 +898,28 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'face') return null
+    const face = props.scene.faces.get(editing.value.id)
+    if (!face) return null
+    return {
+      name: face.name ?? '',
+      nameVisible: face.nameVisible !== false,
+      visible: face.visible !== false,
+      userLocked: props.editor.isFaceLocked(face),
+    }
+  },
+  (nextFace) => {
+    if (!nextFace) return
+    editFace.name = nextFace.name
+    editFace.nameVisible = nextFace.nameVisible
+    editFace.visible = nextFace.visible
+    editFace.userLocked = nextFace.userLocked
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   updateCompactLineEditorMode()
   window.addEventListener('resize', updateCompactLineEditorMode)
@@ -862,7 +953,8 @@ onUnmounted(() => {
         selectedPoints.length > 0 ||
         selectedLines.length > 0 ||
         selectedStraightLines.length > 0 ||
-        selectedRays.length > 0
+        selectedRays.length > 0 ||
+        selectedFaces.length > 0
       "
     >
       双击标签以编辑几何元素~
@@ -873,7 +965,8 @@ onUnmounted(() => {
           selectedPoints.length === 0 &&
           selectedLines.length === 0 &&
           selectedStraightLines.length === 0 &&
-          selectedRays.length === 0
+          selectedRays.length === 0 &&
+          selectedFaces.length === 0
         "
       >
         无
@@ -1965,6 +2058,51 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <div
+        v-for="face in selectedFaces"
+        :key="face!.id"
+        class="selectedFace-info"
+        @dblclick="startEditFace(face)"
+      >
+        <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editFace.name" @input="applyEditFace" />
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
+              面显示
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
+              名称显示
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
+              锁定
+            </label>
+          </div>
+        </div>
+        <div v-else>
+          <div>
+            面{{ face!.name ?? '' }}
+            <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+          </div>
+          <div>面积：{{ getFaceArea(face!).toFixed(2) }}</div>
+          <div>
+            质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
+            {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
+          </div>
+          <div>
+            边界点：{{
+              getFaceBoundaryPoints(face!)
+                .map((p) => p.name)
+                .join(' - ')
+            }}
+          </div>
+          <div>共面点：{{ getFaceMemberPointNames(face!) }}</div>
+        </div>
+      </div>
     </div>
     <div class="divider"></div>
     <h3>内容</h3>
@@ -1974,7 +2112,8 @@ onUnmounted(() => {
           pointsInScene.length === 0 &&
           linesInScene.length === 0 &&
           straightLinesInScene.length === 0 &&
-          raysInScene.length === 0
+          raysInScene.length === 0 &&
+          facesInScene.length === 0
         "
       >
         无
@@ -2150,6 +2289,49 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      <div v-if="facesInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.face"
+          @click="toggleContentGroup('face')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.face ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.face }}</span>
+          <span class="content-group-count">{{ facesInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.face }}</span>
+          <span class="content-group-count">{{ facesInScene.length }}</span>
+        </div>
+        <div
+          v-show="!collapsedContentGroups.face || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="face in facesInScene"
+            :key="face!.id"
+            class="face-info selectable-geo"
+            :class="{ 'is-selected': selectedFaceIds.includes(face!.id) }"
+            @click="selectFaceFromContent(face!.id)"
+          >
+            <div>
+              面{{ face!.name ?? '' }}
+              <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+            </div>
+            <div>
+              边界点：{{
+                getFaceBoundaryPoints(face!)
+                  .map((p) => p.name)
+                  .join(' - ')
+              }}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -2189,9 +2371,11 @@ hr {
 .selectedLine-info,
 .selectedStraightLine-info,
 .selectedRay-info,
+.selectedFace-info,
 .line-info,
 .straight-line-info,
-.ray-info {
+.ray-info,
+.face-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
   margin-bottom: 6px;
@@ -2212,6 +2396,11 @@ hr {
 .ray-info {
   background-color: rgba(80, 136, 194, 0.28);
   border-left-color: #7fc8ff;
+}
+.selectedFace-info,
+.face-info {
+  background-color: rgba(122, 108, 207, 0.2);
+  border-left-color: #d9d0ff;
 }
 .selectable-geo {
   cursor: pointer;
@@ -2523,9 +2712,11 @@ hr {
 
   .selectedPoint-info,
   .selectedLine-info,
+  .selectedFace-info,
   .selectedRay-info,
   .point-info,
   .line-info,
+  .face-info,
   .ray-info {
     padding: 6px;
     font-size: 12px;
@@ -2594,9 +2785,11 @@ hr {
 
   .selectedPoint-info,
   .selectedLine-info,
+  .selectedFace-info,
   .selectedRay-info,
   .point-info,
   .line-info,
+  .face-info,
   .ray-info {
     margin-bottom: 4px;
     padding: 5px;

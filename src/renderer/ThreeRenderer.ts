@@ -3,6 +3,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
+import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
+import type { FacePreviewData } from '../core/editor/Editor'
 
 type Matrix4WithLegacyGetInverse = THREE.Matrix4 & {
   getInverse?: (m: THREE.Matrix4) => THREE.Matrix4
@@ -24,7 +26,7 @@ type ARToolkitContextLike = {
   update: (sourceElement: HTMLElement) => void
 }
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -86,6 +88,12 @@ export class ThreeRenderer {
   private static readonly LINE_LABEL_CENTER_Y = 0.3
   private static readonly LINEAR_COLOR = 0xffffff
   private static readonly LINEAR_WIDTH = 2
+  private static readonly FACE_FILL_COLOR = 0x74a4ff
+  private static readonly FACE_SELECTED_COLOR = 0x43f260
+  private static readonly FACE_FILL_OPACITY = 0.22
+  private static readonly FACE_SELECTED_OPACITY = 0.3
+  private static readonly FACE_PREVIEW_COLOR = 0x7fffd4
+  private static readonly FACE_PREVIEW_OPACITY = 0.16
   private static readonly RAY_HEAD_LENGTH = 0.7
   private static readonly RAY_HEAD_RADIUS = 0.22
   /** 让与地面共面的轴线轻微抬高，避免和 GridHelper 深度竞争 */
@@ -112,10 +120,10 @@ export class ThreeRenderer {
   private guideLabel: THREE.Sprite | null = null
   private guidePoint: THREE.Sprite | null = null
   private rubberBand?: THREE.Line
+  private facePreviewGroup: THREE.Group | null = null
 
   private arToolkitSource: ARToolkitSourceLike | null = null
   private arToolkitContext: ARToolkitContextLike | null = null
-  private arMarkerControls: object | null = null
   private isARMode = false
   private arAnchorInitialized = false
   private arLastMarkerSeenAt = 0
@@ -129,8 +137,6 @@ export class ThreeRenderer {
   private isGridVisible = true
   private coordinateSystemVisible = true
   private pointTexture: THREE.CanvasTexture | null = null
-  /** AR 模式下的场景整体缩放比（同时作用于坐标轴、网格与几何体） */
-  private static readonly AR_SCENE_SCALE = 0.2
   private static readonly AR_MARKER_FOLLOW_LERP = 0.35
   private static readonly AR_MARKER_REACQUIRE_LERP = 0.18
   private static readonly AR_MARKER_PERSIST_MS = 1500
@@ -287,10 +293,12 @@ export class ThreeRenderer {
         ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
         const label = userData.__labelSprite
         if (label) label.scale.set(labelScale, labelScale, 1)
-      } else if (userData.type === 'line' || userData.type === 'ray') {
-        const label = userData.__labelSprite
-        if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
-      } else if (userData.type === 'straightLine') {
+      } else if (
+        userData.type === 'line' ||
+        userData.type === 'ray' ||
+        userData.type === 'straightLine' ||
+        userData.type === 'face'
+      ) {
         const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
       }
@@ -345,17 +353,6 @@ export class ThreeRenderer {
     )
   }
 
-  /** 屏幕空间元素大小随缩放距离变化，但不随绕中心旋转的视角角度变化 */
-  private getZoomResponsivePixelScale(basePixel: number) {
-    const h = this.renderer.domElement.clientHeight || 1
-    const baseScale = basePixel / h / this.worldScale
-    if (this.isARMode) return baseScale
-
-    const distance = this.camera.position.distanceTo(this.controls.target)
-    const safeDistance = Math.max(distance, 0.001)
-    return baseScale * (ThreeRenderer.POINT_SCALE_REFERENCE_DISTANCE / safeDistance)
-  }
-
   /** 标签跟随点缩放，但限制最大/最小范围，避免远处标签压过点或近处过大 */
   private getResponsiveLabelScale(basePixel: number, pointScaleMultiplier: number) {
     const h = this.renderer.domElement.clientHeight || 1
@@ -396,7 +393,8 @@ export class ThreeRenderer {
       } else if (
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
-        userData.type === 'ray'
+        userData.type === 'ray' ||
+        userData.type === 'face'
       ) {
         const label = userData.__labelSprite
         if (label) label.scale.set(lineLabelScale, lineLabelScale, 1)
@@ -470,13 +468,19 @@ export class ThreeRenderer {
   }
   /* ---------- Scene → Three ---------- */
 
-  sync(geoScene: GeoScene, previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null) {
+  sync(
+    geoScene: GeoScene,
+    previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null,
+    facePreviewData?: FacePreviewData | null,
+  ) {
     this.cleanupMissingMeshes(geoScene)
     this.syncPoints(geoScene)
     this.syncLines(geoScene)
     this.syncStraightLines(geoScene)
     this.syncRays(geoScene)
+    this.syncFaces(geoScene)
     this.updateRubberBand(previewData) // 处理虚线
+    this.updateFacePreview(facePreviewData)
   }
 
   private resetARAnchor() {
@@ -552,6 +556,11 @@ export class ThreeRenderer {
         if (label) this.world.remove(label)
         this.world.remove(obj)
         this.meshMap.delete(id)
+      } else if (type === 'face' && !scene.faces.has(id)) {
+        const label = userData.__labelSprite
+        if (label) this.world.remove(label)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
       }
     })
   }
@@ -604,7 +613,6 @@ export class ThreeRenderer {
       this.arToolkitSource = null
     }
     this.arToolkitContext = null
-    this.arMarkerControls = null
 
     this.scene.visible = true
     this.camera.visible = true
@@ -695,7 +703,7 @@ export class ThreeRenderer {
 
     //@ts-expect-error THREEx
     // marker 仅作为数学世界锚点的初始化/校准来源
-    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.arMarkerRoot, {
+    new THREEx.ArMarkerControls(this.arToolkitContext, this.arMarkerRoot, {
       type: 'pattern',
       patternUrl: '/arcode/marker89.td',
       changeMatrixMode: 'modelViewMatrix',
@@ -1012,6 +1020,84 @@ export class ThreeRenderer {
         lineData.nameVisible && lineData.visible,
         mid,
         isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+    })
+  }
+
+  private syncFaces(scene: GeoScene) {
+    scene.faces.forEach((faceData, id) => {
+      let faceMesh = this.meshMap.get(id) as THREE.Mesh | undefined
+      const triangulated = triangulateFace(faceData.boundaryPointIds, scene.points)
+      if (!triangulated) return
+
+      if (!faceMesh) {
+        const geometry = new THREE.BufferGeometry()
+        const material = new THREE.MeshBasicMaterial({
+          color: ThreeRenderer.FACE_FILL_COLOR,
+          transparent: true,
+          opacity: ThreeRenderer.FACE_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -1,
+        })
+        faceMesh = new THREE.Mesh(geometry, material)
+        faceMesh.userData = { geoId: id, type: 'face' }
+        const outline = new THREE.LineLoop(
+          new THREE.BufferGeometry(),
+          new THREE.LineBasicMaterial({ color: ThreeRenderer.LINEAR_COLOR }),
+        )
+        outline.userData = { geoId: id, type: 'face' }
+        faceMesh.add(outline)
+        this.world.add(faceMesh)
+        this.meshMap.set(id, faceMesh)
+      }
+
+      const geometry = faceMesh.geometry as THREE.BufferGeometry
+      geometry.setFromPoints(triangulated.positions)
+      geometry.setIndex(triangulated.indices)
+      geometry.computeVertexNormals()
+      geometry.computeBoundingBox()
+      geometry.computeBoundingSphere()
+
+      const outline = faceMesh.children[0] as THREE.LineLoop | undefined
+      if (outline) {
+        outline.geometry.setFromPoints([
+          ...faceData
+            .getBoundaryPoints(scene.points)
+            .map((point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z)),
+        ])
+        outline.geometry.computeBoundingBox()
+        outline.geometry.computeBoundingSphere()
+      }
+
+      faceMesh.visible = faceData.visible !== false
+      if (outline) outline.visible = faceData.visible !== false
+
+      const isSelected = scene.selection.faces.has(id)
+      ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(
+        isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.FACE_FILL_COLOR,
+      )
+      ;(faceMesh.material as THREE.MeshBasicMaterial).opacity = isSelected
+        ? ThreeRenderer.FACE_SELECTED_OPACITY
+        : ThreeRenderer.FACE_FILL_OPACITY
+      if (outline) {
+        ;(outline.material as THREE.LineBasicMaterial).color.set(
+          isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
+        )
+      }
+
+      this.syncLinearLabel(
+        faceMesh,
+        faceData.name ?? '',
+        faceData.nameVisible && faceData.visible !== false,
+        new THREE.Vector3(
+          faceData.getCentroid(scene.points).x,
+          faceData.getCentroid(scene.points).y,
+          faceData.getCentroid(scene.points).z,
+        ),
+        isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -1525,7 +1611,8 @@ export class ThreeRenderer {
       } else if (
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
-        userData.type === 'ray'
+        userData.type === 'ray' ||
+        userData.type === 'face'
       ) {
         const anchor = userData.__labelAnchor?.clone()
         if (!anchor) return
@@ -1680,6 +1767,93 @@ export class ThreeRenderer {
   }
   hideAxisGuides() {
     this.updateGuide(new THREE.Vector3(), false)
+  }
+
+  private updateFacePreview(preview: FacePreviewData | null | undefined) {
+    if (!this.facePreviewGroup) {
+      this.facePreviewGroup = new THREE.Group()
+
+      const fill = new THREE.Mesh(
+        new THREE.BufferGeometry(),
+        new THREE.MeshBasicMaterial({
+          color: ThreeRenderer.FACE_PREVIEW_COLOR,
+          transparent: true,
+          opacity: ThreeRenderer.FACE_PREVIEW_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      )
+      fill.name = 'facePreviewFill'
+      this.facePreviewGroup.add(fill)
+
+      const outline = new THREE.LineLoop(
+        new THREE.BufferGeometry(),
+        new THREE.LineDashedMaterial({
+          color: ThreeRenderer.FACE_PREVIEW_COLOR,
+          dashSize: 0.2,
+          gapSize: 0.1,
+          transparent: true,
+          opacity: 0.9,
+        }),
+      )
+      outline.name = 'facePreviewOutline'
+      this.facePreviewGroup.add(outline)
+
+      const adjustments = new THREE.LineSegments(
+        new THREE.BufferGeometry(),
+        new THREE.LineDashedMaterial({
+          color: 0xffd166,
+          dashSize: 0.12,
+          gapSize: 0.08,
+          transparent: true,
+          opacity: 0.85,
+        }),
+      )
+      adjustments.name = 'facePreviewAdjustments'
+      this.facePreviewGroup.add(adjustments)
+
+      this.world.add(this.facePreviewGroup)
+    }
+
+    this.facePreviewGroup.visible = Boolean(preview && preview.boundary.length >= 3)
+    if (!preview || preview.boundary.length < 3) return
+
+    const fill = this.facePreviewGroup.getObjectByName('facePreviewFill') as THREE.Mesh
+    const outline = this.facePreviewGroup.getObjectByName('facePreviewOutline') as THREE.LineLoop
+    const adjustments = this.facePreviewGroup.getObjectByName(
+      'facePreviewAdjustments',
+    ) as THREE.LineSegments
+
+    const boundary = preview.boundary.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+    const plane = computePlaneBasis(preview.boundary)
+    if (!plane) {
+      this.facePreviewGroup.visible = false
+      return
+    }
+    const triangulated = THREE.ShapeUtils.triangulateShape(
+      preview.boundary.map((point) => {
+        const projected = projectPoint2D(point, plane)
+        return new THREE.Vector2(projected.x, projected.y)
+      }),
+      [],
+    )
+    const fillGeometry = fill.geometry as THREE.BufferGeometry
+    fillGeometry.setFromPoints(boundary)
+    fillGeometry.setIndex(triangulated.flat())
+    fillGeometry.computeVertexNormals()
+    fillGeometry.computeBoundingBox()
+    fillGeometry.computeBoundingSphere()
+
+    outline.geometry.setFromPoints(boundary)
+    outline.computeLineDistances()
+
+    const adjustmentPoints = preview.adjustedPoints.flatMap((item) => [
+      new THREE.Vector3(item.from.x, item.from.y, item.from.z),
+      new THREE.Vector3(item.to.x, item.to.y, item.to.z),
+    ])
+    adjustments.visible = adjustmentPoints.length > 0
+    adjustments.geometry.setFromPoints(adjustmentPoints)
+    adjustments.computeLineDistances()
   }
 
   //处理连接时的橡皮筋虚线

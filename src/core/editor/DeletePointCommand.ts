@@ -4,6 +4,7 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { StraightLine3 } from '../geometry/StraightLine3'
+import { PlanarFace } from '../geometry/Plane'
 
 export class DeletePointCommand implements Command {
   constructor(
@@ -12,6 +13,7 @@ export class DeletePointCommand implements Command {
     private relatedLines: Line3[],
     private relatedStraightLines: StraightLine3[],
     private relatedRays: Ray3[],
+    private relatedFaces: PlanarFace[],
   ) {}
 
   execute() {
@@ -27,6 +29,9 @@ export class DeletePointCommand implements Command {
       this.scene.rays.delete(ray.id)
       this.scene.selection.rays.delete(ray.id)
     })
+    this.relatedFaces.forEach((face) => {
+      this.scene.removeFace(face.id)
+    })
 
     this.scene.points.delete(this.point.id)
     this.scene.selection.points.delete(this.point.id)
@@ -37,5 +42,6 @@ export class DeletePointCommand implements Command {
     this.relatedLines.forEach((line) => this.scene.addLine(line))
     this.relatedStraightLines.forEach((line) => this.scene.addStraightLine(line))
     this.relatedRays.forEach((ray) => this.scene.addRay(ray))
+    this.relatedFaces.forEach((face) => this.scene.addFace(face))
   }
 }

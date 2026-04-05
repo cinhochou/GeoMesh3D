@@ -5,13 +5,14 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { StraightLine3 } from '../geometry/StraightLine3'
+import { PlanarFace } from '../geometry/Plane'
 
-export type ElementType = 'point' | 'line' | 'straightLine' | 'ray'
+export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'face'
 
 export class AddElementCommand implements Command {
   constructor(
     private scene: Scene,
-    private element: Point3 | Line3 | StraightLine3 | Ray3,
+    private element: Point3 | Line3 | StraightLine3 | Ray3 | PlanarFace,
     private type: ElementType,
   ) {}
 
@@ -23,6 +24,8 @@ export class AddElementCommand implements Command {
       this.scene.addLine(this.element as Line3)
     } else if (this.type === 'straightLine') {
       this.scene.addStraightLine(this.element as StraightLine3)
+    } else if (this.type === 'face') {
+      this.scene.addFace(this.element as PlanarFace)
     } else {
       this.scene.addRay(this.element as Ray3)
     }
@@ -39,6 +42,8 @@ export class AddElementCommand implements Command {
     } else if (this.type === 'straightLine') {
       this.scene.straightLines.delete(this.element.id)
       this.scene.selection.straightLines.delete(this.element.id)
+    } else if (this.type === 'face') {
+      this.scene.removeFace(this.element.id)
     } else {
       this.scene.rays.delete(this.element.id)
       this.scene.selection.rays.delete(this.element.id)

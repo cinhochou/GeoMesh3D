@@ -255,6 +255,14 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <button
+      :class="{ 'is-active': currentMode === EditorMode.CreatePlane }"
+      @click="setMode(EditorMode.CreatePlane)"
+      :disabled="isEditingLocked"
+    >
+      面
+    </button>
+
     <div class="divider"></div>
 
     <button

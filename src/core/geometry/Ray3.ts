@@ -2,7 +2,7 @@ import { Point3 } from './Point3'
 import { Vec3 } from './Vec3'
 
 export class Ray3 {
-  static readonly DEFAULT_DISPLAY_LENGTH = 30
+  static readonly DEFAULT_DISPLAY_LENGTH = 20
 
   id: string
   name: string

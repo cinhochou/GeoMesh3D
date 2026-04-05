@@ -1,6 +1,6 @@
 ﻿// src/renderer/Interaction.ts
 import * as THREE from 'three'
-import { Editor, EditorMode } from '../core/editor/Editor'
+import { Editor, EditorMode, type FacePreviewData } from '../core/editor/Editor'
 import { Scene } from '../core/scene/Scene'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Point3 } from '../core/geometry/Point3'
@@ -23,6 +23,7 @@ export class Interaction {
   draggingLineId: string | null = null
   draggingStraightLineId: string | null = null
   draggingRayId: string | null = null
+  draggingFaceId: string | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
@@ -128,6 +129,7 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
+      this.draggingFaceId !== null ||
       this.mobileCreatePointerId !== null
     ) {
       this.renderer.controls.enabled = false
@@ -164,6 +166,7 @@ export class Interaction {
     this.draggingLineId = null
     this.draggingStraightLineId = null
     this.draggingRayId = null
+    this.draggingFaceId = null
     this.endDrag()
     if (hadDragPreview) {
       this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
@@ -271,7 +274,7 @@ export class Interaction {
     if (pointHit) return pointHit
 
     const lineHit = this.pickLinearWithThreshold(Interaction.MOBILE_LINE_PICK_THRESHOLD)
-    if (!lineHit) return null
+    if (!lineHit) return this.pick()
 
     const protectedEndpoint = this.getProtectedEndpointHit(
       lineHit.userData.geoId,
@@ -335,6 +338,20 @@ export class Interaction {
     return line.getMidPoint()
   }
 
+  private getFaceDragReferencePoint(faceId: string) {
+    const face = this.editor.scene.faces.get(faceId)
+    if (!face) return null
+    return face.getCentroid(this.editor.scene.points)
+  }
+
+  private addSelectedFacePoints(toMove: Set<string>) {
+    this.editor.scene.selection.faces.forEach((faceId) => {
+      const face = this.editor.scene.faces.get(faceId)
+      if (!face || this.editor.isFaceGeometryLocked(face)) return
+      face.memberPointIds.forEach((pointId) => toMove.add(pointId))
+    })
+  }
+
   private handleSelectionDragMove(isAltPressed: boolean) {
     const selection = this.editor.scene.selection
 
@@ -368,6 +385,7 @@ export class Interaction {
               toMove.add(line.p2.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           toMove.add(this.draggingPointId!)
           this.previewMovePoints([...toMove], delta)
         },
@@ -420,6 +438,7 @@ export class Interaction {
               toMove.add(straightLine.p2.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
           toMove.add(line.p2.id)
@@ -466,6 +485,7 @@ export class Interaction {
               toMove.add(ray.p2.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           if (canRotateAroundOrigin) {
             toMove.add(line.p2.id)
@@ -512,6 +532,7 @@ export class Interaction {
               toMove.add(selectedRay.p2.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           if (canRotateAroundOrigin) {
             toMove.add(ray.p2.id)
@@ -519,6 +540,49 @@ export class Interaction {
             toMove.add(ray.p1.id)
             toMove.add(ray.p2.id)
           }
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingFaceId) {
+      const face = this.editor.scene.faces.get(this.draggingFaceId)
+      if (!face) return
+      if (this.editor.isFaceGeometryLocked(face)) return
+
+      const referencePoint = this.getFaceDragReferencePoint(this.draggingFaceId)
+      if (!referencePoint) return
+
+      this.handleDrag(
+        referencePoint,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.points.forEach((id) => toMove.add(id))
+          selection.lines.forEach((lid) => {
+            const line = this.editor.scene.lines.get(lid)
+            if (line && !this.editor.isLineGeometryLocked(line)) {
+              toMove.add(line.p1.id)
+              toMove.add(line.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const line = this.editor.scene.straightLines.get(sid)
+            if (line && !this.editor.isStraightLineGeometryLocked(line)) {
+              toMove.add(line.p1.id)
+              toMove.add(line.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          face.memberPointIds.forEach((pointId) => toMove.add(pointId))
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -540,7 +604,8 @@ export class Interaction {
       (
         this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
-        this.editor.mode === EditorMode.CreateRay
+        this.editor.mode === EditorMode.CreateRay ||
+        this.editor.mode === EditorMode.CreatePlane
       )
     ) {
       return
@@ -565,6 +630,8 @@ export class Interaction {
           this.editor.deleteStraightLine(geoId)
         } else if (type === 'ray') {
           this.editor.deleteRay(geoId)
+        } else if (type === 'face') {
+          this.editor.deleteFace(geoId)
         }
         return
       }
@@ -620,6 +687,16 @@ export class Interaction {
               this.startDrag(this.getRayDragReferencePoint(ray))
             }
           }
+        } else if (type === 'face') {
+          this.editor.scene.selection.selectFace(geoId, true)
+          const face = this.editor.scene.faces.get(geoId)
+          const referencePoint = this.getFaceDragReferencePoint(geoId)
+          if (!face || !referencePoint || this.editor.isFaceGeometryLocked(face)) {
+            this.renderer.renderer.domElement.style.cursor = 'default'
+          } else {
+            this.draggingFaceId = geoId
+            this.startDrag(referencePoint)
+          }
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
         this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
@@ -627,9 +704,14 @@ export class Interaction {
         this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
       } else if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
         this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+      } else if (this.editor.mode === EditorMode.CreatePlane && type === 'point') {
+        this.editor.scene.selection.selectPoint(geoId, true)
+      } else if (this.editor.mode === EditorMode.CreatePlane && type === 'line') {
+        this.editor.scene.selection.selectLine(geoId, true)
       }
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
+      else if (this.editor.mode === EditorMode.CreatePlane) this.editor.tryCreateFaceFromSelection()
     }
   }
 
@@ -647,7 +729,8 @@ export class Interaction {
       (
         this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
-        this.editor.mode === EditorMode.CreateRay
+        this.editor.mode === EditorMode.CreateRay ||
+        this.editor.mode === EditorMode.CreatePlane
       )
     ) {
       this.rubberBandData = null
@@ -754,6 +837,13 @@ export class Interaction {
     const hit = this.pickTouchTarget(e.clientX, e.clientY)
 
     if (!hit) {
+      if (this.editor.mode === EditorMode.CreatePlane) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.editor.tryCreateFaceFromSelection()
+        this.resetMobileInteractionState()
+        return
+      }
       this.mobileInteractionStartedOnEmpty = this.editor.mode === EditorMode.Select
       return
     }
@@ -767,6 +857,7 @@ export class Interaction {
       else if (type === 'line') this.editor.deleteLine(geoId)
       else if (type === 'straightLine') this.editor.deleteStraightLine(geoId)
       else if (type === 'ray') this.editor.deleteRay(geoId)
+      else if (type === 'face') this.editor.deleteFace(geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -788,11 +879,21 @@ export class Interaction {
     }
 
     if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
-        e.preventDefault()
-        e.stopPropagation()
-        this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
-        this.resetMobileInteractionState()
-        return
+      e.preventDefault()
+      e.stopPropagation()
+      this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreatePlane) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
+      else if (type === 'line') this.editor.scene.selection.selectLine(geoId, true)
+      else this.editor.tryCreateFaceFromSelection()
+      this.resetMobileInteractionState()
+      return
     }
 
     if (this.editor.mode !== EditorMode.Select) {
@@ -910,6 +1011,34 @@ export class Interaction {
       }
       this.draggingRayId = geoId
       this.startDrag(this.getRayDragReferencePoint(ray))
+      return
+    }
+
+    if (type === 'face') {
+      const alreadySelected = this.editor.scene.selection.faces.has(geoId)
+      this.editor.scene.selection.selectFace(geoId, true)
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      const face = this.editor.scene.faces.get(geoId)
+      const referencePoint = this.getFaceDragReferencePoint(geoId)
+      if (!face || !referencePoint || this.editor.isFaceGeometryLocked(face)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      this.draggingFaceId = geoId
+      this.startDrag(referencePoint)
     }
   }
 
@@ -951,7 +1080,8 @@ export class Interaction {
       !this.draggingPointId &&
       !this.draggingLineId &&
       !this.draggingStraightLineId &&
-      !this.draggingRayId
+      !this.draggingRayId &&
+      !this.draggingFaceId
     )
       return
 
@@ -999,7 +1129,8 @@ export class Interaction {
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
-      this.draggingRayId !== null
+      this.draggingRayId !== null ||
+      this.draggingFaceId !== null
 
     if (hadDrag) {
       e.preventDefault()
@@ -1054,6 +1185,9 @@ export class Interaction {
           h.object.userData.type === 'ray',
       )
       if (lineHit) return lineHit.object
+
+      const faceHit = hits.find((h) => h.object.userData.type === 'face')
+      if (faceHit) return faceHit.object
 
       return hits[0]!.object
     }
@@ -1165,23 +1299,33 @@ export class Interaction {
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
     const expandedPointIds = this.expandLockedLinePreviewPointIds(pointIds)
-    const previewPositions = new Map<string, Vec3>()
-
     expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
       if (!point || this.editor.isPointCoordinateLocked(point)) return
+      if (!this.dragStartPositions.has(id)) this.dragStartPositions.set(id, point.position.clone())
+    })
 
+    const previewPositions = this.editor.resolveConstrainedPointPositions(
+      expandedPointIds
+        .map((id) => {
+          const point = this.editor.scene.points.get(id)
+          const before = this.dragStartPositions.get(id)
+          if (!point || !before || this.editor.isPointCoordinateLocked(point)) return null
+          return {
+            id,
+            position: before.add(delta),
+          }
+        })
+        .filter((item): item is { id: string; position: Vec3 } => item !== null),
+    )
+
+    previewPositions.forEach((position, id) => {
+      const point = this.editor.scene.points.get(id)
+      if (!point || this.editor.isPointCoordinateLocked(point)) return
       if (!this.dragStartPositions.has(id)) {
         this.dragStartPositions.set(id, point.position.clone())
       }
-
-      const previewPosition = this.editor.resolveLockedLinePointPosition(
-        id,
-        this.dragStartPositions.get(id)!.add(delta),
-        previewPositions,
-      )
-      previewPositions.set(id, previewPosition)
-      point.setPosition(previewPosition)
+      point.setPosition(position)
     })
   }
 
@@ -1252,11 +1396,17 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
+      this.draggingFaceId !== null ||
       performance.now() < this.liveSyncUntil
     )
   }
 
   getLiveSyncPointIds() {
     return [...this.dragStartPositions.keys()]
+  }
+
+  getFacePreviewData(): FacePreviewData | null {
+    if (this.editor.mode !== EditorMode.CreatePlane) return null
+    return this.editor.getFacePreviewFromSelection()
   }
 }
