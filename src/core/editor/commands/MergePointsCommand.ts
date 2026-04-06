@@ -1,10 +1,10 @@
-import type { Command } from './Command'
-import { Scene } from '../scene/Scene'
-import { Point3 } from '../geometry/Point3'
-import { Line3 } from '../geometry/Line3'
-import { Ray3 } from '../geometry/Ray3'
-import { StraightLine3 } from '../geometry/StraightLine3'
-import { PlanarFace } from '../geometry/Plane'
+import type { Command } from '../Command'
+import { Scene } from '../../scene/Scene'
+import { Point3 } from '../../geometry/Point3'
+import { Line3 } from '../../geometry/Line3'
+import { Ray3 } from '../../geometry/Ray3'
+import { StraightLine3 } from '../../geometry/StraightLine3'
+import { PlanarFace } from '../../geometry/Plane'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3> = {
   item: T

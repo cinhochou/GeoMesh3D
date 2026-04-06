@@ -1,5 +1,5 @@
-import type { Command } from './Command'
-import { PlanarFace } from '../geometry/Plane'
+import type { Command } from '../Command'
+import { PlanarFace } from '../../geometry/Plane'
 
 type FaceState = {
   name: string

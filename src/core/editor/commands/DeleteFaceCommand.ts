@@ -1,6 +1,6 @@
-import type { Command } from './Command'
-import { Scene } from '../scene/Scene'
-import { PlanarFace } from '../geometry/Plane'
+import type { Command } from '../Command'
+import { Scene } from '../../scene/Scene'
+import { PlanarFace } from '../../geometry/Plane'
 
 export class DeleteFaceCommand implements Command {
   constructor(

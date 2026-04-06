@@ -1,6 +1,6 @@
-import type { Command } from './Command'
-import { Point3 } from '../geometry/Point3'
-import { Vec3 } from '../geometry/Vec3'
+import type { Command } from '../Command'
+import { Point3 } from '../../geometry/Point3'
+import { Vec3 } from '../../geometry/Vec3'
 
 export class TransformCommand implements Command {
   private point: Point3

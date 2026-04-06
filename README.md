@@ -44,7 +44,7 @@ npm run collab-server
 The collaboration layer now uses `y-websocket` instead of `y-webrtc` signaling.
 
 - Default server address: `ws://localhost:1234`
-- Fallback server address: `wss://electrokinetic-shawanna-unstrewn.ngrok-free.dev`
+- Fallback server address: `wss://kraig-scarabaeiform-zealously.ngrok-free.dev`
 - Client override: set `VITE_COLLAB_WS_URL`
 - Server override in PowerShell: `$env:HOST='0.0.0.0'; $env:PORT='1234'; npm run collab-server`
 
@@ -60,18 +60,23 @@ npm run build
 npm run lint
 ```
 
-### Author
+### Authors and Statement
 
 @cinhoChou Guangzhou University
+Contact me: <2974166992@qq.com>
+Unauthorized use for any purpose is prohibited.
 
 ### 目录结构
 
+The project was created on December 25, 2025 at 17:55.
 Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 
 ```
 3D_editor
 ├─ .editorconfig
 ├─ .prettierrc.json
+├─ deploy
+│  └─ y-websocket-server
 ├─ env.d.ts
 ├─ eslint.config.ts
 ├─ idea.txt
@@ -80,41 +85,53 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 ├─ package.json
 ├─ public
 │  ├─ arcode
-│  │  ├─ marker.patt
-│  │  ├─ marker.png
-│  │  └─ marker89.td
+│  │  ├─ marker89.td
+│  │  └─ myTraining.patt
 │  ├─ data
 │  │  └─ camera_para.dat
 │  └─ favicon.ico
 ├─ README.md
+├─ scripts
+│  └─ y-websocket-server.mjs
 ├─ src
 │  ├─ App.vue
-│  ├─ assets
 │  ├─ components
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
-│  │  └─ ToolBar.vue
+│  │  └─ Toolbar.vue
 │  ├─ core
-│  │  ├─ behavior
 │  │  ├─ collab
 │  │  │  └─ CollabManager.ts
 │  │  ├─ constraints
-│  │  │  └─ DistanceConstraint.ts
+│  │  │  ├─ DistanceConstraint.ts
+│  │  │  └─ PlanarFaceConstraint.ts
 │  │  ├─ editor
-│  │  │  ├─ AddElementCommand.ts
-│  │  │  ├─ ClearSceneCommand.ts
 │  │  │  ├─ Command.ts
-│  │  │  ├─ DeleteLineCommand.ts
-│  │  │  ├─ DeletePointCommand.ts
-│  │  │  ├─ Editor.ts
-│  │  │  ├─ TransformCommand.ts
-│  │  │  ├─ TransformPointsCommand.ts
-│  │  │  ├─ UpdateLineCommand.ts
-│  │  │  └─ UpdatePointCommand.ts
+│  │  │  ├─ commands
+│  │  │  │  ├─ AddElementCommand.ts
+│  │  │  │  ├─ ClearSceneCommand.ts
+│  │  │  │  ├─ DeleteFaceCommand.ts
+│  │  │  │  ├─ DeleteLineCommand.ts
+│  │  │  │  ├─ DeletePointCommand.ts
+│  │  │  │  ├─ DeleteRayCommand.ts
+│  │  │  │  ├─ DeleteStraightLineCommand.ts
+│  │  │  │  ├─ MergePointsCommand.ts
+│  │  │  │  ├─ SyncLockStateCommand.ts
+│  │  │  │  ├─ TransformCommand.ts
+│  │  │  │  ├─ TransformPointsCommand.ts
+│  │  │  │  ├─ UpdateFaceCommand.ts
+│  │  │  │  ├─ UpdateLineCommand.ts
+│  │  │  │  ├─ UpdatePointCommand.ts
+│  │  │  │  ├─ UpdateRayCommand.ts
+│  │  │  │  └─ UpdateStraightLineCommand.ts
+│  │  │  └─ Editor.ts
 │  │  ├─ geometry
 │  │  │  ├─ Line3.ts
+│  │  │  ├─ PlanarUtils.ts
 │  │  │  ├─ Plane.ts
 │  │  │  ├─ Point3.ts
+│  │  │  ├─ Ray3.ts
+│  │  │  ├─ StraightLine3.ts
 │  │  │  └─ Vec3.ts
 │  │  └─ scene
 │  │     ├─ Scene.ts
@@ -137,16 +154,14 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ three.min.js
 │  │  │  └─ threex-arbasecontrols.js
 │  │  └─ pdf
-│  │     └─ marker89.pdf
+│  │     ├─ marker89.pdf
+│  │     └─ myTraining_Marker.pdf
 │  ├─ router
 │  │  └─ index.ts
-│  ├─ state
 │  ├─ store
 │  │  ├─ sceneStore.ts
 │  │  └─ uiStore.ts
-│  ├─ styles
 │  ├─ styles.css
-│  ├─ utils
 │  └─ views
 │     └─ EditorView.vue
 ├─ tsconfig.app.json

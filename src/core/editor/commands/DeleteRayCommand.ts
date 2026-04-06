@@ -1,6 +1,6 @@
-import type { Command } from './Command'
-import { Scene } from '../scene/Scene'
-import { Ray3 } from '../geometry/Ray3'
+import type { Command } from '../Command'
+import { Scene } from '../../scene/Scene'
+import { Ray3 } from '../../geometry/Ray3'
 
 export class DeleteRayCommand implements Command {
   constructor(

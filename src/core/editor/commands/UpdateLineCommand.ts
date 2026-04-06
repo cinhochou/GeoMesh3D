@@ -1,6 +1,6 @@
-import type { Command } from './Command'
-import { Line3 } from '../geometry/Line3'
-import { Vec3 } from '../geometry/Vec3'
+import type { Command } from '../Command'
+import { Line3 } from '../../geometry/Line3'
+import { Vec3 } from '../../geometry/Vec3'
 
 type LineState = {
   name: string

@@ -1,5 +1,5 @@
-import type { Command } from './Command'
-import { Point3 } from '../geometry/Point3'
+import type { Command } from '../Command'
+import { Point3 } from '../../geometry/Point3'
 
 type PointState = {
   name: string

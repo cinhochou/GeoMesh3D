@@ -1,6 +1,6 @@
-import type { Command } from './Command'
-import { Scene } from '../scene/Scene'
-import { StraightLine3 } from '../geometry/StraightLine3'
+import type { Command } from '../Command'
+import { Scene } from '../../scene/Scene'
+import { StraightLine3 } from '../../geometry/StraightLine3'
 
 export class DeleteStraightLineCommand implements Command {
   constructor(

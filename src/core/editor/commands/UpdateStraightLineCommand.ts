@@ -1,5 +1,5 @@
-import type { Command } from './Command'
-import { StraightLine3 } from '../geometry/StraightLine3'
+import type { Command } from '../Command'
+import { StraightLine3 } from '../../geometry/StraightLine3'
 
 type StraightLineState = {
   name: string

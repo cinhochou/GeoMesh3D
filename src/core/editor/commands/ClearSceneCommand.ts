@@ -1,10 +1,10 @@
-import type { Command } from './Command'
-import { Point3 } from '../geometry/Point3'
-import { Line3 } from '../geometry/Line3'
-import { Ray3 } from '../geometry/Ray3'
-import { StraightLine3 } from '../geometry/StraightLine3'
-import { PlanarFace } from '../geometry/Plane'
-import { Scene, type SceneConstraint } from '../scene/Scene'
+import type { Command } from '../Command'
+import { Point3 } from '../../geometry/Point3'
+import { Line3 } from '../../geometry/Line3'
+import { Ray3 } from '../../geometry/Ray3'
+import { StraightLine3 } from '../../geometry/StraightLine3'
+import { PlanarFace } from '../../geometry/Plane'
+import { Scene, type SceneConstraint } from '../../scene/Scene'
 
 export class ClearSceneCommand implements Command {
   constructor(

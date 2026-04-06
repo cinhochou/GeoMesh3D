@@ -1,5 +1,5 @@
-import type { Command } from './Command'
-import { Ray3 } from '../geometry/Ray3'
+import type { Command } from '../Command'
+import { Ray3 } from '../../geometry/Ray3'
 
 type RayState = {
   name: string
