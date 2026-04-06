@@ -33,6 +33,7 @@ const emit = defineEmits<{
 const roomName = ref('default-room')
 const isAROpen = ref(false)
 const isDeleteMenuOpen = ref(false)
+const isPointMenuOpen = ref(false)
 const isLineMenuOpen = ref(false)
 const isArLocked = computed(() => props.isArMode)
 const isCoordinateSystemOff = computed(() => !props.isCoordinateSystemVisible)
@@ -42,6 +43,9 @@ const isCollabConnecting = computed(() => props.collabStatus.connecting)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
 const deletePanelRef = ref<HTMLElement | null>(null)
+const pointMenuRef = ref<HTMLElement | null>(null)
+const pointTriggerRef = ref<HTMLElement | null>(null)
+const pointPanelRef = ref<HTMLElement | null>(null)
 const lineMenuRef = ref<HTMLElement | null>(null)
 const lineTriggerRef = ref<HTMLElement | null>(null)
 const linePanelRef = ref<HTMLElement | null>(null)
@@ -49,6 +53,11 @@ const deleteMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '108px',
+})
+const pointMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '132px',
 })
 const lineMenuStyle = ref({
   top: '0px',
@@ -61,6 +70,7 @@ watch(
   (val) => {
     isAROpen.value = val
     if (val) isDeleteMenuOpen.value = false
+    if (val) isPointMenuOpen.value = false
     if (val) isLineMenuOpen.value = false
   },
   { immediate: true },
@@ -69,6 +79,7 @@ watch(
 const setMode = (mode: EditorMode) => {
   if (isEditingLocked.value && mode !== EditorMode.Select) return
   isDeleteMenuOpen.value = false
+  isPointMenuOpen.value = false
   isLineMenuOpen.value = false
   emit('mode-change', mode)
 }
@@ -84,6 +95,7 @@ const toggleCollab = () => {
 
 const toggleAR = () => {
   isDeleteMenuOpen.value = false
+  isPointMenuOpen.value = false
   isLineMenuOpen.value = false
   isAROpen.value = !isAROpen.value
   emit('toggle-ar', isAROpen.value)
@@ -91,6 +103,7 @@ const toggleAR = () => {
 
 const toggleDeleteMenu = () => {
   if (isEditingLocked.value) return
+  isPointMenuOpen.value = false
   isLineMenuOpen.value = false
   isDeleteMenuOpen.value = !isDeleteMenuOpen.value
 }
@@ -106,9 +119,28 @@ const updateDeleteMenuPosition = () => {
   }
 }
 
+const togglePointMenu = () => {
+  if (isEditingLocked.value) return
+  isDeleteMenuOpen.value = false
+  isLineMenuOpen.value = false
+  isPointMenuOpen.value = !isPointMenuOpen.value
+}
+
+const updatePointMenuPosition = () => {
+  const trigger = pointTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  pointMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 132)}px`,
+  }
+}
+
 const toggleLineMenu = () => {
   if (isEditingLocked.value) return
   isDeleteMenuOpen.value = false
+  isPointMenuOpen.value = false
   isLineMenuOpen.value = !isLineMenuOpen.value
 }
 
@@ -137,6 +169,14 @@ const toggleCoordinateSystem = () => {
   emit('toggle-coordinate-system', !props.isCoordinateSystemVisible)
 }
 
+const selectCreateFreePointMode = () => {
+  setMode(EditorMode.CreatePoint)
+}
+
+const selectMergePointMode = () => {
+  setMode(EditorMode.MergePoint)
+}
+
 const selectCreateLineMode = () => {
   setMode(EditorMode.CreateLine)
 }
@@ -153,6 +193,13 @@ const handleClickOutside = (event: MouseEvent) => {
   const target = event.target
   if (!(target instanceof Node)) return
   if (
+    isPointMenuOpen.value &&
+    !pointMenuRef.value?.contains(target) &&
+    !pointPanelRef.value?.contains(target)
+  ) {
+    isPointMenuOpen.value = false
+  }
+  if (
     isDeleteMenuOpen.value &&
     !deleteMenuRef.value?.contains(target) &&
     !deletePanelRef.value?.contains(target)
@@ -167,6 +214,12 @@ const handleClickOutside = (event: MouseEvent) => {
     isLineMenuOpen.value = false
   }
 }
+
+watch(isPointMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updatePointMenuPosition()
+})
 
 watch(isDeleteMenuOpen, async (isOpen) => {
   if (!isOpen) return
@@ -185,6 +238,7 @@ watch(
   (visible) => {
     if (visible) return
     isDeleteMenuOpen.value = false
+    isPointMenuOpen.value = false
     isLineMenuOpen.value = false
   },
 )
@@ -192,16 +246,20 @@ watch(
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside)
   window.addEventListener('resize', updateDeleteMenuPosition)
+  window.addEventListener('resize', updatePointMenuPosition)
   window.addEventListener('resize', updateLineMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
+  document.addEventListener('scroll', updatePointMenuPosition, true)
   document.addEventListener('scroll', updateLineMenuPosition, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleClickOutside)
   window.removeEventListener('resize', updateDeleteMenuPosition)
+  window.removeEventListener('resize', updatePointMenuPosition)
   window.removeEventListener('resize', updateLineMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
+  document.removeEventListener('scroll', updatePointMenuPosition, true)
   document.removeEventListener('scroll', updateLineMenuPosition, true)
 })
 </script>
@@ -228,13 +286,22 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <button
-      :class="{ 'is-active': currentMode === EditorMode.CreatePoint }"
-      @click="setMode(EditorMode.CreatePoint)"
-      :disabled="isEditingLocked"
-    >
-      点
-    </button>
+    <div ref="pointMenuRef" class="menu-wrap">
+      <button
+        ref="pointTriggerRef"
+        class="menu-trigger"
+        :class="{
+          'is-active':
+            currentMode === EditorMode.CreatePoint || currentMode === EditorMode.MergePoint,
+          'is-open': isPointMenuOpen,
+        }"
+        @click="togglePointMenu"
+        :disabled="isEditingLocked"
+      >
+        <span>点</span>
+        <span class="menu-caret">▾</span>
+      </button>
+    </div>
 
     <div ref="lineMenuRef" class="menu-wrap">
       <button
@@ -322,6 +389,25 @@ onUnmounted(() => {
         删除
       </button>
       <button class="menu-item menu-item-danger" @click="requestClearAll">清空</button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="isPointMenuOpen" ref="pointPanelRef" class="menu-panel" :style="pointMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreatePoint }"
+        @click="selectCreateFreePointMode"
+      >
+        自由点
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.MergePoint }"
+        @click="selectMergePointMode"
+      >
+        合并点
+      </button>
     </div>
   </Teleport>
 

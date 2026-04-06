@@ -32,11 +32,13 @@ import { DeleteStraightLineCommand } from './DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './DeleteFaceCommand'
 import { ClearSceneCommand } from './ClearSceneCommand'
 import { SyncLockStateCommand } from './SyncLockStateCommand'
+import { MergePointsCommand } from './MergePointsCommand'
 
 export enum EditorMode {
   Select,
   Delete,
   CreatePoint,
+  MergePoint,
   CreateLine,
   CreateStraightLine,
   CreateRay,
@@ -1102,6 +1104,18 @@ export class Editor {
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
     this.tryCreateLinearWith(point, 'line')
+  }
+
+  mergePoints(keepPointId: string, removePointId: string) {
+    if (keepPointId === removePointId) return
+    const keepPoint = this.scene.points.get(keepPointId)
+    const removePoint = this.scene.points.get(removePointId)
+    if (!keepPoint || !removePoint || removePoint.locked) return
+
+    this.executeCommand(new MergePointsCommand(this.scene, keepPoint, removePoint))
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.scene.selection.selectPoint(keepPointId)
   }
 
   tryCreateStraightLineWith(point: Point3) {

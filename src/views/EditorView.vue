@@ -8,6 +8,7 @@ import Timeline from '../components/TimeLine.vue'
 
 import { Scene } from '../core/scene/Scene'
 import { Editor, EditorMode } from '../core/editor/Editor'
+import type { Point3 } from '../core/geometry/Point3'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager, type CollabStatus } from '../core/collab/CollabManager'
@@ -41,6 +42,8 @@ const toastScope = ref<'global' | 'viewport'>('global')
 let toastTimer: number | null = null
 const isCollabJoinDialogVisible = ref(false)
 const collabJoinDialogMessage = ref('正在加入房间中...')
+const isMergePointDialogVisible = ref(false)
+const mergePointTargetId = ref('')
 
 const handleResize = () => {
   renderer.onResize()
@@ -82,7 +85,9 @@ const modeName = computed(() => {
     case EditorMode.Delete:
       return '删除'
     case EditorMode.CreatePoint:
-      return '创建点'
+      return '创建自由点'
+    case EditorMode.MergePoint:
+      return '合并点'
     case EditorMode.CreateLine:
       return '创建线段'
     case EditorMode.CreateStraightLine:
@@ -108,6 +113,8 @@ const modeHint = computed(() => {
       return '点击场景中的两个不同的点以创建射线~'
     case EditorMode.CreatePlane:
       return '先选择多个点或闭合线段，再点击空白处确认创建面~'
+    case EditorMode.MergePoint:
+      return '先选中两个点，再选择保留哪个点完成合并~'
     default:
       return ''
   }
@@ -196,6 +203,30 @@ watch(
   { flush: 'post' },
 )
 
+watch(
+  [() => editor.mode, () => [...scene.selection.points]],
+  () => {
+    if (editor.mode !== EditorMode.MergePoint) {
+      isMergePointDialogVisible.value = false
+      mergePointTargetId.value = ''
+      return
+    }
+
+    const selectedIds = [...scene.selection.points]
+    if (selectedIds.length !== 2) {
+      isMergePointDialogVisible.value = false
+      mergePointTargetId.value = ''
+      return
+    }
+
+    mergePointTargetId.value = selectedIds.includes(mergePointTargetId.value)
+      ? mergePointTargetId.value
+      : selectedIds[0]!
+    isMergePointDialogVisible.value = true
+  },
+  { flush: 'post' },
+)
+
 // 生命周期钩子，防止页面刷新或销毁后连接残留
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
@@ -210,6 +241,38 @@ function onModeChange(mode: EditorMode) {
   if (isARMode.value && mode !== EditorMode.Select) return
   interaction.clearPreview()
   editor.setMode(mode)
+  isMergePointDialogVisible.value = false
+  mergePointTargetId.value = ''
+}
+
+const mergePointSelection = computed(() =>
+  [...scene.selection.points]
+    .map((id) => scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined),
+)
+
+const mergePointWarning = computed(() => {
+  if (!isMergePointDialogVisible.value) return ''
+  const points = mergePointSelection.value
+  if (points.length !== 2) return ''
+  const inheritedPoint = points.find((point) => point.id !== mergePointTargetId.value)
+  return inheritedPoint ? `注意：该点将继承 ${inheritedPoint.name} 点的约束关系` : ''
+})
+
+const handleConfirmMergePoints = () => {
+  const points = mergePointSelection.value
+  if (points.length !== 2) return
+  const keepPoint = points.find((point) => point.id === mergePointTargetId.value)
+  const removePoint = points.find((point) => point.id !== mergePointTargetId.value)
+  if (!keepPoint || !removePoint) return
+  editor.mergePoints(keepPoint.id, removePoint.id)
+  isMergePointDialogVisible.value = false
+  mergePointTargetId.value = ''
+}
+
+const handleCancelMergePoints = () => {
+  isMergePointDialogVisible.value = false
+  mergePointTargetId.value = ''
 }
 
 const handleClearAll = () => {
@@ -344,6 +407,35 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         <div class="collab-wait-dialog">
           <div class="collab-spinner"></div>
           <div class="collab-wait-text">{{ collabJoinDialogMessage }}</div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="fade-overlay">
+      <div v-if="isMergePointDialogVisible" class="collab-wait-overlay">
+        <div class="merge-point-dialog">
+          <div class="merge-point-title">合并点</div>
+          <div class="merge-point-text">请选择要保留为合并结果的点</div>
+          <label v-for="point in mergePointSelection" :key="point.id" class="merge-point-option">
+            <input v-model="mergePointTargetId" type="radio" :value="point.id" />
+            <span
+              >{{ point.name }}（{{ point.position.x.toFixed(2) }},
+              {{ point.position.y.toFixed(2) }}, {{ point.position.z.toFixed(2) }}）</span
+            >
+          </label>
+          <div class="merge-point-warning">{{ mergePointWarning }}</div>
+          <div class="merge-point-actions">
+            <button type="button" class="merge-point-button" @click="handleCancelMergePoints">
+              取消
+            </button>
+            <button
+              type="button"
+              class="merge-point-button merge-point-button-confirm"
+              @click="handleConfirmMergePoints"
+            >
+              确认
+            </button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -556,6 +648,66 @@ select.axis-control option {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.2px;
+}
+.merge-point-dialog {
+  min-width: 320px;
+  max-width: 420px;
+  padding: 20px 24px;
+  border: 1px solid #ffffff;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.96);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.merge-point-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.merge-point-text {
+  font-size: 13px;
+  color: #d4d4d4;
+}
+
+.merge-point-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+}
+
+.merge-point-warning {
+  color: #ffd75a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.merge-point-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.merge-point-button {
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #2a2a2a;
+  color: #f2f2f2;
+  padding: 6px 14px;
+}
+
+.merge-point-button-confirm {
+  background: #2c5a34;
+  color: #43f260;
+  border-color: #43f260;
 }
 .toast-container-viewport {
   position: absolute;

@@ -127,6 +127,24 @@ export class Interaction {
     else if (type === 'face') this.editor.scene.selection.deselectFace(geoId)
   }
 
+  private toggleCreateSelection(type: 'point' | 'line', geoId: string) {
+    if (type === 'point') {
+      if (this.editor.scene.selection.points.has(geoId)) {
+        this.editor.scene.selection.deselectPoint(geoId)
+        this.editor.selectedPoints = this.editor.selectedPoints.filter((point) => point.id !== geoId)
+        return
+      }
+      this.editor.scene.selection.selectPoint(geoId, true)
+      return
+    }
+
+    if (this.editor.scene.selection.lines.has(geoId)) {
+      this.editor.scene.selection.deselectLine(geoId)
+      return
+    }
+    this.editor.scene.selection.selectLine(geoId, true)
+  }
+
   private isTouchPreferredDevice() {
     return (
       navigator.maxTouchPoints > 0 ||
@@ -720,15 +738,29 @@ export class Interaction {
           }
         }
       } else if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
-        this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+        if (this.editor.scene.selection.points.has(geoId)) {
+          this.toggleCreateSelection('point', geoId)
+        } else {
+          this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+        }
       } else if (this.editor.mode === EditorMode.CreateStraightLine && type === 'point') {
-        this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
+        if (this.editor.scene.selection.points.has(geoId)) {
+          this.toggleCreateSelection('point', geoId)
+        } else {
+          this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
+        }
       } else if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
-        this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+        if (this.editor.scene.selection.points.has(geoId)) {
+          this.toggleCreateSelection('point', geoId)
+        } else {
+          this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+        }
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'point') {
-        this.editor.scene.selection.selectPoint(geoId, true)
+        this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'line') {
-        this.editor.scene.selection.selectLine(geoId, true)
+        this.toggleCreateSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
+        this.toggleCreateSelection('point', geoId)
       }
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
@@ -902,7 +934,11 @@ export class Interaction {
     if (this.editor.mode === EditorMode.CreateLine && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
-      this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      if (this.editor.scene.selection.points.has(geoId)) {
+        this.toggleCreateSelection('point', geoId)
+      } else {
+        this.editor.tryCreateLineWith(this.editor.scene.points.get(geoId)!)
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -910,7 +946,11 @@ export class Interaction {
     if (this.editor.mode === EditorMode.CreateStraightLine && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
-      this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
+      if (this.editor.scene.selection.points.has(geoId)) {
+        this.toggleCreateSelection('point', geoId)
+      } else {
+        this.editor.tryCreateStraightLineWith(this.editor.scene.points.get(geoId)!)
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -918,7 +958,11 @@ export class Interaction {
     if (this.editor.mode === EditorMode.CreateRay && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
-      this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+      if (this.editor.scene.selection.points.has(geoId)) {
+        this.toggleCreateSelection('point', geoId)
+      } else {
+        this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -926,9 +970,17 @@ export class Interaction {
     if (this.editor.mode === EditorMode.CreatePlane) {
       e.preventDefault()
       e.stopPropagation()
-      if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
-      else if (type === 'line') this.editor.scene.selection.selectLine(geoId, true)
+      if (type === 'point') this.toggleCreateSelection('point', geoId)
+      else if (type === 'line') this.toggleCreateSelection('line', geoId)
       else this.editor.tryCreateFaceFromSelection()
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
+      e.preventDefault()
+      e.stopPropagation()
+      this.toggleCreateSelection('point', geoId)
       this.resetMobileInteractionState()
       return
     }
