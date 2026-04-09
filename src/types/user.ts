@@ -1,8 +1,36 @@
-// src/types/user.ts
-import type { components } from './api-service-user'
+import type { components as AuthComponents } from './api-service-auth'
+import type { components as UserComponents } from './api-service-user'
 
-// 创建类型别名
-export type User = components['schemas']['UserDTO']
-export type CreateUserRequest = components['schemas']['CreateUserRequest']
-export type UpdateUserRequest = components['schemas']['UpdateUserRequest']
-export type LoginRequest = components['schemas']['LoginRequest']
+type UserDtoSchema = UserComponents['schemas']['UserDTO']
+type AuthResponseSchema = AuthComponents['schemas']['AuthResponse']
+
+type RequiredFields<T, K extends keyof T> = Required<Pick<T, K>> & Omit<T, K>
+
+export type User = RequiredFields<
+  UserDtoSchema,
+  'id' | 'username' | 'email' | 'role' | 'status' | 'createdAt' | 'updatedAt'
+> & {
+  nickname: UserDtoSchema['nickname'] | null
+  avatarUrl: UserDtoSchema['avatarUrl'] | null
+}
+
+export type CreateUserRequest = UserComponents['schemas']['CreateUserRequest']
+
+export type RegisterRequest = AuthComponents['schemas']['RegisterRequest']
+
+export type UpdateUserRequest = UserComponents['schemas']['UpdateUserRequest']
+
+export type LoginRequest = AuthComponents['schemas']['LoginRequest']
+
+export type ChangePasswordRequest = UserComponents['schemas']['ChangePasswordRequest']
+
+export type ResetPasswordRequest = UserComponents['schemas']['ResetPasswordRequest']
+
+export type CheckEmailRequest = UserComponents['schemas']['EmailCheckRequest']
+
+export type AuthResponse = RequiredFields<
+  AuthResponseSchema,
+  'accessToken' | 'refreshToken' | 'expiresIn'
+> & {
+  user: User
+}

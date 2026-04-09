@@ -15,12 +15,13 @@
     "type-check": "vue-tsc --build",
     "lint": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/",
-    "generate-api": "openapi-typescript http://localhost:8081/v3/api-docs -o src/types/api-service-user.ts",
+    "generate-api:user": "openapi-typescript http://localhost:8081/v3/api-docs -o src/types/api-service-user.ts",
+    "generate-api:auth": "openapi-typescript http://localhost:8082/v3/api-docs -o src/types/api-service-auth.ts",
+    "generate-api": "run-p generate-api:user generate-api:auth",
     "dev:with-api": "npm run generate-api && vite"
   },
   "dependencies": {
     "lib0": "^0.2.117",
-    "openapi": "^1.0.0",
     "three": "^0.182.0",
     "vue": "^3.5.25",
     "vue-router": "^4.6.3",
@@ -41,6 +42,7 @@
     "eslint-plugin-vue": "~10.5.1",
     "jiti": "^2.6.1",
     "npm-run-all2": "^8.0.4",
+    "openapi-typescript": "^7.10.1",
     "prettier": "3.6.2",
     "typescript": "~5.9.0",
     "vite": "^7.2.4",

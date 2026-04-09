@@ -1,35 +1,51 @@
-// src/api/user.ts
 import { apiClient } from './client'
-import type { User, CreateUserRequest, UpdateUserRequest, LoginRequest } from '@/types/user'
+import type {
+  ChangePasswordRequest,
+  CheckEmailRequest,
+  ResetPasswordRequest,
+  UpdateUserRequest,
+  User,
+} from '@/types/user'
+import type { operations as UserOperations } from '@/types/api-service-user'
+
+type GetUserPathId = UserOperations['getUser']['parameters']['path']['id']
+type UpdateUserPathId = UserOperations['updateUser']['parameters']['path']['id']
+type DeleteUserPathId = UserOperations['deleteUser']['parameters']['path']['id']
+type ChangePasswordPathId = UserOperations['changePassword']['parameters']['path']['id']
+type UpdateUserBody = UserOperations['updateUser']['requestBody']['content']['application/json']
+type ChangePasswordBody = UserOperations['changePassword']['requestBody']['content']['application/json']
+type ResetPasswordBody = UserOperations['resetPassword']['requestBody']['content']['application/json']
+type CheckEmailBody = UserOperations['checkEmail']['requestBody']['content']['application/json']
 
 export const userApi = {
-  // 获取用户信息
-  async getUser(id: string): Promise<User> {
+  async getUser(id: GetUserPathId): Promise<User> {
     return apiClient.get<User>(`/user/${id}`)
   },
 
-  // 创建用户
-  async createUser(data: CreateUserRequest): Promise<User> {
-    return apiClient.post<User>('/user', data)
-  },
-
-  // 更新用户
-  async updateUser(id: string, data: UpdateUserRequest): Promise<User> {
+  async updateUser(id: UpdateUserPathId, data: UpdateUserRequest & UpdateUserBody): Promise<User> {
     return apiClient.put<User>(`/user/${id}`, data)
   },
 
-  // 删除用户
-  async deleteUser(id: string): Promise<void> {
+  async deleteUser(id: DeleteUserPathId): Promise<void> {
     return apiClient.delete<void>(`/user/${id}`)
   },
 
-  // 获取所有用户
   async getAllUsers(): Promise<User[]> {
     return apiClient.get<User[]>('/user')
   },
 
-  // 用户登录
-  async login(data: LoginRequest): Promise<User> {
-    return apiClient.post<User>('/user/login', data)
+  async changePassword(
+    id: ChangePasswordPathId,
+    data: ChangePasswordRequest & ChangePasswordBody,
+  ): Promise<void> {
+    return apiClient.put<void>(`/user/${id}/password`, data)
+  },
+
+  async resetPassword(data: ResetPasswordRequest & ResetPasswordBody): Promise<void> {
+    return apiClient.post<void>('/user/reset-password', data)
+  },
+
+  async checkEmail(data: CheckEmailRequest & CheckEmailBody): Promise<boolean> {
+    return apiClient.post<boolean>('/user/check-email', data)
   },
 }
