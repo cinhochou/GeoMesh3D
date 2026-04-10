@@ -1,6 +1,7 @@
 ﻿<!-- src/components/SideBar.vue -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { Scene } from '../core/scene/Scene'
 import { Editor } from '../core/editor/Editor'
 import { Vec3 } from '../core/geometry/Vec3'
@@ -9,13 +10,20 @@ import type { Line3 } from '../core/geometry/Line3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PlanarFace } from '../core/geometry/Plane'
+import { useUiStore } from '@/store/uiStore'
+import { useSceneStore } from '@/store/sceneStore'
 
 const props = defineProps<{
   scene: Scene
   editor: Editor
-  modeName: string
-  modeHint: string
 }>()
+
+const uiStore = useUiStore()
+const sceneStore = useSceneStore()
+const { isCompactLineEditor, contentGroupsCollapsed, hasAutoCollapsedContentGroups } =
+  storeToRefs(uiStore)
+const { modeName, modeHint } = storeToRefs(sceneStore)
+const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
 
 const commandRevision = computed(() => props.editor.historyIndex)
 
@@ -74,7 +82,6 @@ const editing = ref<{
   type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
   id: string
 } | null>(null)
-const isCompactLineEditor = ref(false)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedStraightLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -164,13 +171,6 @@ const totalContentCount = computed(
     facesInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
-const collapsedContentGroups = reactive({
-  point: false,
-  line: false,
-  straightLine: false,
-  ray: false,
-  face: false,
-})
 const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray' | 'face', string> = {
   point: '点',
   line: '线段',
@@ -178,19 +178,13 @@ const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray' | 'fa
   ray: '射线',
   face: '面',
 }
-const hasAutoCollapsedContentGroups = ref(false)
-
 const setContentGroupsCollapsed = (collapsed: boolean) => {
-  collapsedContentGroups.point = collapsed
-  collapsedContentGroups.line = collapsed
-  collapsedContentGroups.straightLine = collapsed
-  collapsedContentGroups.ray = collapsed
-  collapsedContentGroups.face = collapsed
+  uiStore.setContentGroupsCollapsed(collapsed)
 }
 
 const toggleContentGroup = (type: 'point' | 'line' | 'straightLine' | 'ray' | 'face') => {
   if (!canCollapseContentGroups.value) return
-  collapsedContentGroups[type] = !collapsedContentGroups[type]
+  uiStore.toggleContentGroup(type)
 }
 
 const emitToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
@@ -256,7 +250,7 @@ const updateCompactLineEditorMode = () => {
     window.matchMedia('(pointer: coarse)').matches ||
     window.matchMedia('(hover: none)').matches
   const mobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
-  isCompactLineEditor.value = touchLike || mobileUA
+  uiStore.setCompactLineEditor(touchLike || mobileUA)
 }
 
 watch(

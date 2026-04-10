@@ -1,22 +1,19 @@
 ﻿<!-- src/components/ToolBar.vue -->
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { EditorMode } from '../core/editor/Editor'
-import type { CollabStatus } from '../core/collab/CollabManager'
+import { useUiStore } from '@/store/uiStore'
+import { useSceneStore } from '@/store/sceneStore'
+import { useCollabStore } from '@/store/collabStore'
 
 defineOptions({
   name: 'EditorToolbar',
 })
 
 const props = defineProps<{
-  currentMode: EditorMode
-  isSnappingEnabled: boolean
   isCoordinateSystemVisible: boolean
-  peerCount: number
   isArMode: boolean
-  collabStatus: CollabStatus
-  canUndo: boolean
-  canRedo: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,16 +27,21 @@ const emit = defineEmits<{
   (e: 'redo'): void
 }>()
 
-const roomName = ref('default-room')
-const isAROpen = ref(false)
-const isDeleteMenuOpen = ref(false)
-const isPointMenuOpen = ref(false)
-const isLineMenuOpen = ref(false)
+const uiStore = useUiStore()
+const sceneStore = useSceneStore()
+const collabStore = useCollabStore()
+const { isARMode, toolbarMenus } = storeToRefs(uiStore)
+const { currentMode, isSnappingEnabled, canUndo, canRedo } = storeToRefs(sceneStore)
+const { roomName, peerCount, isConnected, isConnecting } = storeToRefs(collabStore)
 const isArLocked = computed(() => props.isArMode)
 const isCoordinateSystemOff = computed(() => !props.isCoordinateSystemVisible)
 const isEditingLocked = computed(() => isArLocked.value || isCoordinateSystemOff.value)
-const isCollabOpen = computed(() => props.collabStatus.connected)
-const isCollabConnecting = computed(() => props.collabStatus.connecting)
+const isCollabOpen = computed(() => isConnected.value)
+const isCollabConnecting = computed(() => isConnecting.value)
+const isAROpen = computed(() => isARMode.value)
+const isDeleteMenuOpen = computed(() => toolbarMenus.value.deleteOpen)
+const isPointMenuOpen = computed(() => toolbarMenus.value.pointOpen)
+const isLineMenuOpen = computed(() => toolbarMenus.value.lineOpen)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
 const deletePanelRef = ref<HTMLElement | null>(null)
@@ -68,19 +70,15 @@ const lineMenuStyle = ref({
 watch(
   () => props.isArMode,
   (val) => {
-    isAROpen.value = val
-    if (val) isDeleteMenuOpen.value = false
-    if (val) isPointMenuOpen.value = false
-    if (val) isLineMenuOpen.value = false
+    uiStore.setARMode(val)
+    if (val) uiStore.closeAllToolbarMenus()
   },
   { immediate: true },
 )
 
 const setMode = (mode: EditorMode) => {
   if (isEditingLocked.value && mode !== EditorMode.Select) return
-  isDeleteMenuOpen.value = false
-  isPointMenuOpen.value = false
-  isLineMenuOpen.value = false
+  uiStore.closeAllToolbarMenus()
   emit('mode-change', mode)
 }
 
@@ -94,18 +92,14 @@ const toggleCollab = () => {
 }
 
 const toggleAR = () => {
-  isDeleteMenuOpen.value = false
-  isPointMenuOpen.value = false
-  isLineMenuOpen.value = false
-  isAROpen.value = !isAROpen.value
-  emit('toggle-ar', isAROpen.value)
+  uiStore.closeAllToolbarMenus()
+  uiStore.setARMode(!isAROpen.value)
+  emit('toggle-ar', isARMode.value)
 }
 
 const toggleDeleteMenu = () => {
   if (isEditingLocked.value) return
-  isPointMenuOpen.value = false
-  isLineMenuOpen.value = false
-  isDeleteMenuOpen.value = !isDeleteMenuOpen.value
+  uiStore.toggleToolbarMenu('deleteOpen')
 }
 
 const updateDeleteMenuPosition = () => {
@@ -121,9 +115,7 @@ const updateDeleteMenuPosition = () => {
 
 const togglePointMenu = () => {
   if (isEditingLocked.value) return
-  isDeleteMenuOpen.value = false
-  isLineMenuOpen.value = false
-  isPointMenuOpen.value = !isPointMenuOpen.value
+  uiStore.toggleToolbarMenu('pointOpen')
 }
 
 const updatePointMenuPosition = () => {
@@ -139,9 +131,7 @@ const updatePointMenuPosition = () => {
 
 const toggleLineMenu = () => {
   if (isEditingLocked.value) return
-  isDeleteMenuOpen.value = false
-  isPointMenuOpen.value = false
-  isLineMenuOpen.value = !isLineMenuOpen.value
+  uiStore.toggleToolbarMenu('lineOpen')
 }
 
 const updateLineMenuPosition = () => {
@@ -161,7 +151,7 @@ const selectDeleteMode = () => {
 
 const requestClearAll = () => {
   if (isEditingLocked.value) return
-  isDeleteMenuOpen.value = false
+  uiStore.setToolbarMenuOpen('deleteOpen', false, { exclusive: false })
   emit('clear-all')
 }
 
@@ -197,21 +187,21 @@ const handleClickOutside = (event: MouseEvent) => {
     !pointMenuRef.value?.contains(target) &&
     !pointPanelRef.value?.contains(target)
   ) {
-    isPointMenuOpen.value = false
+    uiStore.setToolbarMenuOpen('pointOpen', false, { exclusive: false })
   }
   if (
     isDeleteMenuOpen.value &&
     !deleteMenuRef.value?.contains(target) &&
     !deletePanelRef.value?.contains(target)
   ) {
-    isDeleteMenuOpen.value = false
+    uiStore.setToolbarMenuOpen('deleteOpen', false, { exclusive: false })
   }
   if (
     isLineMenuOpen.value &&
     !lineMenuRef.value?.contains(target) &&
     !linePanelRef.value?.contains(target)
   ) {
-    isLineMenuOpen.value = false
+    uiStore.setToolbarMenuOpen('lineOpen', false, { exclusive: false })
   }
 }
 
@@ -237,9 +227,7 @@ watch(
   () => props.isCoordinateSystemVisible,
   (visible) => {
     if (visible) return
-    isDeleteMenuOpen.value = false
-    isPointMenuOpen.value = false
-    isLineMenuOpen.value = false
+    uiStore.closeAllToolbarMenus()
   },
 )
 

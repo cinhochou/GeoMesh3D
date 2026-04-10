@@ -1,0 +1,252 @@
+import { computed, ref } from 'vue'
+import { defineStore } from 'pinia'
+import type { EditorMode } from '@/core/editor/Editor'
+
+export type ToastScope = 'global' | 'viewport'
+
+type ContentGroupKey = 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+
+interface MergePointDialogState {
+  visible: boolean
+  targetId: string
+}
+
+interface ContentGroupCollapseState {
+  point: boolean
+  line: boolean
+  straightLine: boolean
+  ray: boolean
+  face: boolean
+}
+
+const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
+  point: false,
+  line: false,
+  straightLine: false,
+  ray: false,
+  face: false,
+})
+
+export const useUiStore = defineStore('ui', () => {
+  const isTouchDevice = ref(false)
+  const isCompactLineEditor = ref(false)
+
+  const fps = ref(0)
+  const axisGridSize = ref(10)
+  const isGridVisible = ref(true)
+  const isCoordinateSystemVisible = ref(true)
+  const isARMode = ref(false)
+  const lastModeBeforeAR = ref<EditorMode | null>(null)
+  const lastModeBeforeCoordinateOff = ref<EditorMode | null>(null)
+
+  const toastMessage = ref('')
+  const toastVisible = ref(false)
+  const toastScope = ref<ToastScope>('global')
+
+  const mergePointDialog = ref<MergePointDialogState>({
+    visible: false,
+    targetId: '',
+  })
+
+  const toolbarMenus = ref({
+    deleteOpen: false,
+    pointOpen: false,
+    lineOpen: false,
+  })
+
+  const contentGroupsCollapsed = ref<ContentGroupCollapseState>(createContentGroupsCollapsed())
+  const hasAutoCollapsedContentGroups = ref(false)
+
+  const anyToolbarMenuOpen = computed(
+    () =>
+      toolbarMenus.value.deleteOpen ||
+      toolbarMenus.value.pointOpen ||
+      toolbarMenus.value.lineOpen,
+  )
+
+  const openToast = (message: string, scope: ToastScope = 'global') => {
+    toastMessage.value = message
+    toastScope.value = scope
+    toastVisible.value = true
+  }
+
+  const closeToast = () => {
+    toastVisible.value = false
+  }
+
+  const clearToast = () => {
+    toastMessage.value = ''
+    toastScope.value = 'global'
+    toastVisible.value = false
+  }
+
+  const setTouchDevice = (value: boolean) => {
+    isTouchDevice.value = value
+  }
+
+  const setCompactLineEditor = (value: boolean) => {
+    isCompactLineEditor.value = value
+  }
+
+  const setFps = (value: number) => {
+    fps.value = value
+  }
+
+  const setAxisGridSize = (value: number) => {
+    axisGridSize.value = value
+  }
+
+  const setGridVisible = (value: boolean) => {
+    isGridVisible.value = value
+  }
+
+  const toggleGridVisible = () => {
+    isGridVisible.value = !isGridVisible.value
+  }
+
+  const setCoordinateSystemVisible = (value: boolean) => {
+    isCoordinateSystemVisible.value = value
+  }
+
+  const setARMode = (value: boolean) => {
+    isARMode.value = value
+  }
+
+  const setLastModeBeforeAR = (mode: EditorMode | null) => {
+    lastModeBeforeAR.value = mode
+  }
+
+  const setLastModeBeforeCoordinateOff = (mode: EditorMode | null) => {
+    lastModeBeforeCoordinateOff.value = mode
+  }
+
+  const openMergePointDialog = (targetId = '') => {
+    mergePointDialog.value = {
+      visible: true,
+      targetId,
+    }
+  }
+
+  const closeMergePointDialog = () => {
+    mergePointDialog.value = {
+      visible: false,
+      targetId: '',
+    }
+  }
+
+  const setMergePointTargetId = (targetId: string) => {
+    mergePointDialog.value = {
+      ...mergePointDialog.value,
+      targetId,
+    }
+  }
+
+  const closeAllToolbarMenus = () => {
+    toolbarMenus.value = {
+      deleteOpen: false,
+      pointOpen: false,
+      lineOpen: false,
+    }
+  }
+
+  const setToolbarMenuOpen = (
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen',
+    value: boolean,
+    options?: { exclusive?: boolean },
+  ) => {
+    const exclusive = options?.exclusive ?? true
+    if (exclusive && value) {
+      closeAllToolbarMenus()
+    }
+    toolbarMenus.value = {
+      ...toolbarMenus.value,
+      [menu]: value,
+    }
+  }
+
+  const toggleToolbarMenu = (menu: 'deleteOpen' | 'pointOpen' | 'lineOpen') => {
+    const next = !toolbarMenus.value[menu]
+    setToolbarMenuOpen(menu, next, { exclusive: true })
+  }
+
+  const setContentGroupsCollapsed = (collapsed: boolean) => {
+    contentGroupsCollapsed.value = {
+      point: collapsed,
+      line: collapsed,
+      straightLine: collapsed,
+      ray: collapsed,
+      face: collapsed,
+    }
+  }
+
+  const setContentGroupCollapsed = (group: ContentGroupKey, collapsed: boolean) => {
+    contentGroupsCollapsed.value = {
+      ...contentGroupsCollapsed.value,
+      [group]: collapsed,
+    }
+  }
+
+  const toggleContentGroup = (group: ContentGroupKey) => {
+    setContentGroupCollapsed(group, !contentGroupsCollapsed.value[group])
+  }
+
+  const resetUiState = () => {
+    isTouchDevice.value = false
+    isCompactLineEditor.value = false
+    fps.value = 0
+    axisGridSize.value = 10
+    isGridVisible.value = true
+    isCoordinateSystemVisible.value = true
+    isARMode.value = false
+    lastModeBeforeAR.value = null
+    lastModeBeforeCoordinateOff.value = null
+    clearToast()
+    closeMergePointDialog()
+    closeAllToolbarMenus()
+    contentGroupsCollapsed.value = createContentGroupsCollapsed()
+    hasAutoCollapsedContentGroups.value = false
+  }
+
+  return {
+    isTouchDevice,
+    isCompactLineEditor,
+    fps,
+    axisGridSize,
+    isGridVisible,
+    isCoordinateSystemVisible,
+    isARMode,
+    lastModeBeforeAR,
+    lastModeBeforeCoordinateOff,
+    toastMessage,
+    toastVisible,
+    toastScope,
+    mergePointDialog,
+    toolbarMenus,
+    contentGroupsCollapsed,
+    hasAutoCollapsedContentGroups,
+    anyToolbarMenuOpen,
+    openToast,
+    closeToast,
+    clearToast,
+    setTouchDevice,
+    setCompactLineEditor,
+    setFps,
+    setAxisGridSize,
+    setGridVisible,
+    toggleGridVisible,
+    setCoordinateSystemVisible,
+    setARMode,
+    setLastModeBeforeAR,
+    setLastModeBeforeCoordinateOff,
+    openMergePointDialog,
+    closeMergePointDialog,
+    setMergePointTargetId,
+    closeAllToolbarMenus,
+    setToolbarMenuOpen,
+    toggleToolbarMenu,
+    setContentGroupsCollapsed,
+    setContentGroupCollapsed,
+    toggleContentGroup,
+    resetUiState,
+  }
+})
