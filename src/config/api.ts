@@ -1,7 +1,7 @@
 // src/config/api.ts
 const API_CONFIG = {
   development: {
-    baseUrl: 'http://localhost:8080/api',
+    baseUrl: 'http://localhost:9090/api',
     services: {
       user: 'http://localhost:8081/v3/api-docs',
       auth: 'http://localhost:8082/v3/api-docs',
