@@ -705,7 +705,7 @@ export class ThreeRenderer {
     // marker 仅作为数学世界锚点的初始化/校准来源
     new THREEx.ArMarkerControls(this.arToolkitContext, this.arMarkerRoot, {
       type: 'pattern',
-      patternUrl: '/arcode/marker89.td',
+      patternUrl: '/arcode/myTraining.patt',
       changeMatrixMode: 'modelViewMatrix',
       maxDetectionRate: 60,
     })
@@ -1066,7 +1066,9 @@ export class ThreeRenderer {
         outline.geometry.setFromPoints([
           ...faceData
             .getBoundaryPoints(scene.points)
-            .map((point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z)),
+            .map(
+              (point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z),
+            ),
         ])
         outline.geometry.computeBoundingBox()
         outline.geometry.computeBoundingSphere()
