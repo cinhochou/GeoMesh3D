@@ -14,11 +14,13 @@ const routes = [
     path: '/login',
     name: 'login',
     component: LoginView,
+    meta: { guestOnly: true },
   },
   {
     path: '/register',
     name: 'register',
     component: RegisterView,
+    meta: { guestOnly: true },
   },
 ]
 
@@ -37,7 +39,13 @@ router.beforeEach(async (to, from, next) => {
     authInitialized = true
   }
 
-  next()
+  const guestOnly = to.matched.some((record) => record.meta.guestOnly)
+
+  if (guestOnly && authStore.isAuthenticated) {
+    next({ name: 'editor' })
+  } else {
+    next()
+  }
 })
 
 export default router
