@@ -1,275 +1,442 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/store/authStore'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const { error, isLoading } = storeToRefs(authStore)
 
 const identifier = ref('')
 const password = ref('')
-const isLoading = ref(false)
-const errorMessage = ref('')
+const formError = ref('')
+const isRedirecting = ref(false)
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
-const redirect = computed(() => (route.query.redirect as string) || '/')
+const redirect = computed(() => {
+  const value = route.query.redirect
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/'
+})
 
-onMounted(() => {
-  if (authStore.isAuthenticated) {
-    router.replace(redirect.value)
-  }
+watch([identifier, password], () => {
+  formError.value = ''
+  authStore.clearError()
 })
 
 const validateForm = () => {
   if (!identifier.value.trim()) {
-    errorMessage.value = '请输入用户名或邮箱'
+    formError.value = '请输入用户名或邮箱'
     return false
   }
+
   if (!password.value) {
-    errorMessage.value = '请输入密码'
+    formError.value = '请输入密码'
     return false
   }
+
   if (password.value.length < 6) {
-    errorMessage.value = '密码长度不能少于6位'
+    formError.value = '密码长度不能少于 6 位'
     return false
   }
+
   return true
 }
 
 const handleSubmit = async () => {
-  errorMessage.value = ''
+  formError.value = ''
   authStore.clearError()
 
-  if (!validateForm()) {
-    return
-  }
+  if (!validateForm()) return
 
-  isLoading.value = true
   try {
     await authStore.login({
       identifier: identifier.value.trim(),
       password: password.value,
     })
-    router.replace(redirect.value)
-  } catch (error: any) {
-    errorMessage.value = error.message || '登录失败，请检查用户名和密码'
-  } finally {
-    isLoading.value = false
+    isRedirecting.value = true
+    await wait(520)
+    await router.replace(redirect.value)
+  } catch {
+    isRedirecting.value = false
   }
 }
 </script>
 
 <template>
-  <div class="auth-container">
-    <div class="auth-card">
-      <div class="auth-header">
-        <h1 class="auth-title">登录</h1>
-        <p class="auth-subtitle">3D 几何编辑器</p>
+  <div class="auth-page">
+    <Transition name="fade-overlay">
+      <div v-if="isRedirecting" class="collab-wait-overlay">
+        <div class="collab-wait-dialog">
+          <div class="collab-spinner"></div>
+          <div class="collab-wait-text">登录成功！正在进入编辑器...</div>
+        </div>
       </div>
+    </Transition>
 
-      <form @submit.prevent="handleSubmit" class="auth-form">
-        <div class="form-group">
-          <label for="identifier" class="form-label">用户名或邮箱</label>
-          <input
-            id="identifier"
-            v-model="identifier"
-            type="text"
-            class="form-input"
-            placeholder="请输入用户名或邮箱"
-            :disabled="isLoading"
-            autocomplete="username"
-          />
+    <div class="auth-layout">
+      <section class="auth-side">
+        <p class="side-tag">3D Geometry Editor</p>
+        <h1 class="side-title">登录后，编辑体验更完整</h1>
+        <p class="side-text">保存身份、接入协作、继续你的编辑进度...</p>
+
+        <div class="side-panel">
+          <div class="side-panel-label">登录后你可以</div>
+          <div class="side-panel-item">保留自己的用户身份</div>
+          <div class="side-panel-item">解锁后续关键功能</div>
+          <div class="side-panel-item">继续进入已保存的工作区</div>
         </div>
+      </section>
 
-        <div class="form-group">
-          <label for="password" class="form-label">密码</label>
-          <input
-            id="password"
-            v-model="password"
-            type="password"
-            class="form-input"
-            placeholder="请输入密码"
-            :disabled="isLoading"
-            autocomplete="current-password"
-          />
+      <section class="auth-main">
+        <div class="auth-card">
+          <div class="card-badge">欢迎回来</div>
+          <h2 class="card-title">登录</h2>
+          <p class="card-text">输入账号信息以验证你的身份</p>
+
+          <form class="auth-form" @submit.prevent="handleSubmit">
+            <label class="field">
+              <span class="field-label">用户名或邮箱</span>
+              <input
+                v-model="identifier"
+                class="field-input"
+                type="text"
+                placeholder="请输入用户名或邮箱"
+                autocomplete="username"
+                :disabled="isLoading"
+              />
+            </label>
+
+            <label class="field">
+              <span class="field-label">密码</span>
+              <input
+                v-model="password"
+                class="field-input"
+                type="password"
+                placeholder="请输入密码"
+                autocomplete="current-password"
+                :disabled="isLoading"
+              />
+            </label>
+
+            <div v-if="formError || error" class="error-box">
+              {{ formError || error }}
+            </div>
+
+            <button class="submit-button" type="submit" :disabled="isLoading || isRedirecting">
+              {{ isRedirecting ? '正在进入...' : isLoading ? '登录中...' : '登录' }}
+            </button>
+
+            <div class="links">
+              <router-link class="secondary-link" :to="{ name: 'editor' }">
+                先进入编辑器
+              </router-link>
+              <router-link :to="{ name: 'register', query: route.query }" class="primary-link">
+                去注册
+              </router-link>
+            </div>
+          </form>
         </div>
-
-        <div v-if="errorMessage" class="error-message">
-          {{ errorMessage }}
-        </div>
-
-        <button type="submit" class="submit-button" :disabled="isLoading">
-          {{ isLoading ? '登录中...' : '登录' }}
-        </button>
-
-        <div class="auth-footer">
-          <span class="auth-footer-text">还没有账号？</span>
-          <router-link to="/register" class="auth-link">去注册</router-link>
-        </div>
-      </form>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
-.auth-container {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.auth-page {
   min-height: 100vh;
-  background: #111;
-  padding: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(67, 242, 96, 0.08), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.04), transparent 18%),
+    linear-gradient(180deg, #141414 0%, #101010 100%);
+  color: #ddd;
+}
+
+.auth-layout {
+  width: min(1040px, calc(100% - 40px));
+  min-height: 100vh;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 430px);
+  gap: 56px;
+  align-items: center;
+}
+
+.auth-side {
+  padding: 24px 0;
+}
+
+.side-tag {
+  margin: 0 0 18px;
+  color: #43f260;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.side-title {
+  margin: 0 0 16px;
+  max-width: 10ch;
+  color: #fff;
+  font-size: clamp(38px, 4.8vw, 58px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
+
+.side-text {
+  margin: 0 0 28px;
+  max-width: 420px;
+  color: #9f9f9f;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.side-panel {
+  width: min(440px, 100%);
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.side-panel-label {
+  margin-bottom: 10px;
+  color: #8f8f8f;
+  font-size: 12px;
+}
+
+.side-panel-item {
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #e4e4e4;
+  font-size: 14px;
+}
+
+.side-panel-item:first-of-type {
+  border-top: none;
+}
+
+.auth-main {
+  display: flex;
+  justify-content: center;
 }
 
 .auth-card {
   width: 100%;
-  max-width: 400px;
-  padding: 40px 32px;
-  background: #1e1e1e;
-  border: 1px solid #333;
-  border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 34px 32px 30px;
+  border-radius: 22px;
+  border: 1px solid #343434;
+  background: linear-gradient(180deg, #1d1d1d 0%, #171717 100%);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.35);
 }
 
-.auth-header {
-  text-align: center;
-  margin-bottom: 32px;
-}
-
-.auth-title {
-  font-size: 28px;
+.card-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(67, 242, 96, 0.08);
+  color: #7bf58f;
+  font-size: 12px;
   font-weight: 700;
-  color: #fff;
-  margin: 0 0 8px 0;
 }
 
-.auth-subtitle {
+.card-title {
+  margin: 18px 0 8px;
+  color: #fff;
+  font-size: 30px;
+}
+
+.card-text {
+  margin: 0 0 24px;
+  color: #8f8f8f;
   font-size: 14px;
-  color: #888;
-  margin: 0;
 }
 
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 }
 
-.form-group {
+.field {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.form-label {
+.field-label {
+  color: #ececec;
   font-size: 13px;
   font-weight: 600;
-  color: #eee;
 }
 
-.form-input {
-  background: #222;
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid #444;
-  border-radius: 6px;
-  padding: 12px 16px;
-  font-size: 14px;
+  border-radius: 12px;
+  background: #232323;
   color: #fff;
+  padding: 14px 15px;
+  font-size: 14px;
   outline: none;
-  transition: all 0.2s;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
 }
 
-.form-input:focus {
+.field-input::placeholder {
+  color: #676767;
+}
+
+.field-input:focus {
   border-color: #43f260;
-  box-shadow: 0 0 0 2px rgba(67, 242, 96, 0.1);
+  box-shadow: 0 0 0 3px rgba(67, 242, 96, 0.1);
+  background: #262626;
 }
 
-.form-input:disabled {
-  opacity: 0.5;
+.field-input:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
-.form-input::placeholder {
-  color: #666;
-}
-
-.error-message {
-  padding: 12px 16px;
-  background: rgba(255, 59, 48, 0.1);
-  border: 1px solid rgba(255, 59, 48, 0.3);
-  border-radius: 6px;
-  color: #ff3b30;
+.error-box {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 89, 89, 0.25);
+  background: rgba(255, 89, 89, 0.08);
+  color: #ff9c95;
   font-size: 13px;
-  text-align: center;
+  line-height: 1.5;
 }
 
 .submit-button {
-  background: #43f260;
-  color: #000;
   border: none;
-  border-radius: 6px;
-  padding: 14px 24px;
+  border-radius: 12px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #56f86f 0%, #43f260 100%);
+  color: #081408;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
-  transition: all 0.2s;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .submit-button:hover:not(:disabled) {
-  background: #36d150;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(67, 242, 96, 0.3);
-}
-
-.submit-button:active:not(:disabled) {
-  transform: translateY(0);
+  box-shadow: 0 10px 28px rgba(67, 242, 96, 0.18);
 }
 
 .submit-button:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
-.auth-footer {
+.links {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.secondary-link,
+.primary-link {
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.secondary-link {
+  color: #979797;
+}
+
+.secondary-link:hover {
+  color: #fff;
+}
+
+.primary-link {
+  color: #43f260;
+  font-weight: 700;
+}
+
+.collab-wait-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  margin-top: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
 }
 
-.auth-footer-text {
-  font-size: 14px;
-  color: #888;
+.collab-wait-dialog {
+  min-width: 240px;
+  padding: 20px 24px;
+  border: 1px solid #ffffff;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.94);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
-.auth-link {
-  font-size: 14px;
-  color: #43f260;
-  text-decoration: none;
+.collab-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #43f260;
+  border-radius: 50%;
+  animation: collab-spin 0.8s linear infinite;
+}
+
+.collab-wait-text {
+  font-size: 15px;
   font-weight: 600;
-  transition: all 0.2s;
+  letter-spacing: 0.2px;
 }
 
-.auth-link:hover {
-  text-decoration: underline;
+.fade-overlay-enter-active,
+.fade-overlay-leave-active {
+  transition: opacity 0.2s ease;
 }
 
-@media (max-width: 480px) {
-  .auth-card {
-    padding: 32px 24px;
+.fade-overlay-enter-from,
+.fade-overlay-leave-to {
+  opacity: 0;
+}
+
+@keyframes collab-spin {
+  from {
+    transform: rotate(0deg);
   }
 
-  .auth-title {
-    font-size: 24px;
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 920px) {
+  .auth-layout {
+    width: min(560px, calc(100% - 24px));
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 28px 0;
   }
 
-  .form-input {
-    padding: 10px 14px;
-  }
-
-  .submit-button {
-    padding: 12px 20px;
-    font-size: 14px;
+  .side-title {
+    max-width: none;
+    font-size: 40px;
   }
 }
 </style>

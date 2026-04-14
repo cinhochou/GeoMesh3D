@@ -1,4 +1,4 @@
-import { apiClient } from './client'
+import { apiClient, ApiError } from './client'
 import type { AuthResponse, LoginRequest, RegisterRequest, User } from '@/types/user'
 import type { operations as AuthOperations } from '@/types/api-service-auth'
 
@@ -42,8 +42,19 @@ export const authApi = {
   },
 
   async logout(): Promise<void> {
+    const accessToken = apiClient.getAccessToken()
+
     try {
+      if (!accessToken) {
+        return
+      }
+
       await apiClient.post<void>('/auth/logout')
+    } catch (error) {
+      // 对登出来说，401 更接近“服务端已不认当前令牌”，本地仍然应该继续清理。
+      if (!(error instanceof ApiError) || error.status !== 401) {
+        throw error
+      }
     } finally {
       apiClient.clearTokens()
     }

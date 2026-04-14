@@ -25,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
   const status = ref<AuthStatus>('idle')
   const initialized = ref(false)
   const error = ref<string | null>(null)
+  let initializePromise: Promise<User | null> | null = null
 
   const isAuthenticated = computed(() => Boolean(user.value && apiClient.getAccessToken()))
   const isLoading = computed(() => status.value === 'loading')
@@ -45,28 +46,37 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const initialize = async () => {
+    if (initializePromise) return initializePromise
     if (initialized.value) return user.value
 
-    initialized.value = true
-    const accessToken = apiClient.getAccessToken()
-    if (!accessToken) {
-      setAuthenticated(null)
-      return null
-    }
+    initializePromise = (async () => {
+      const accessToken = apiClient.getAccessToken()
+      if (!accessToken) {
+        initialized.value = true
+        setAuthenticated(null)
+        return null
+      }
 
-    status.value = 'loading'
-    clearError()
+      status.value = 'loading'
+      clearError()
 
-    try {
-      const currentUser = await authApi.me()
-      setAuthenticated(currentUser)
-      return currentUser
-    } catch (err) {
-      apiClient.clearTokens()
-      error.value = extractErrorMessage(err)
-      setAuthenticated(null)
-      return null
-    }
+      try {
+        const currentUser = await authApi.me()
+        setAuthenticated(currentUser)
+        initialized.value = true
+        return currentUser
+      } catch (err) {
+        apiClient.clearTokens()
+        error.value = extractErrorMessage(err)
+        setAuthenticated(null)
+        initialized.value = true
+        return null
+      } finally {
+        initializePromise = null
+      }
+    })()
+
+    return initializePromise
   }
 
   const login = async (payload: LoginRequest) => {
@@ -103,8 +113,12 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       await authApi.logout()
+    } catch (err) {
+      // 退出登录以本地清理为准，不让后端异常阻断退出流程。
+      error.value = null
     } finally {
       setAuthenticated(null)
+      status.value = 'idle'
     }
   }
 

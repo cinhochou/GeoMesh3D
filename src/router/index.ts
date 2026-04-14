@@ -1,3 +1,4 @@
+import { defineComponent, h } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import LoginView from '@/views/LoginView.vue'
@@ -22,6 +23,16 @@ const routes = [
     component: RegisterView,
     meta: { guestOnly: true },
   },
+  {
+    path: '/logout',
+    name: 'logout',
+    component: defineComponent(() => () => h('div')),
+    beforeEnter: async () => {
+      const authStore = useAuthStore()
+      await authStore.logout()
+      return { name: 'login' }
+    },
+  },
 ]
 
 const router = createRouter({
@@ -30,6 +41,9 @@ const router = createRouter({
 })
 
 let authInitialized = false
+
+const isSafeRedirectPath = (value: unknown): value is string =>
+  typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
 
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
@@ -42,7 +56,8 @@ router.beforeEach(async (to, from, next) => {
   const guestOnly = to.matched.some((record) => record.meta.guestOnly)
 
   if (guestOnly && authStore.isAuthenticated) {
-    next({ name: 'editor' })
+    const redirect = isSafeRedirectPath(to.query.redirect) ? to.query.redirect : '/'
+    next(redirect)
   } else {
     next()
   }
