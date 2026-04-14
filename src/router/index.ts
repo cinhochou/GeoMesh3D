@@ -53,6 +53,15 @@ router.beforeEach(async (to, from, next) => {
     authInitialized = true
   }
 
+  const isAuthPage = ['login', 'register'].includes(String(to.name ?? ''))
+  if (!isAuthPage && !authStore.isAuthenticated && authStore.hasSwitchSnapshot) {
+    try {
+      await authStore.cancelSwitchUser()
+    } catch {
+      authStore.clearSwitchSnapshot()
+    }
+  }
+
   const guestOnly = to.matched.some((record) => record.meta.guestOnly)
 
   if (guestOnly && authStore.isAuthenticated) {

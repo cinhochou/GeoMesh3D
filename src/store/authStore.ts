@@ -13,6 +13,13 @@ import type {
 } from '@/types/user'
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'error'
+const SWITCH_USER_SNAPSHOT_KEY = 'auth_switch_snapshot'
+
+type SwitchUserSnapshot = {
+  accessToken: string
+  refreshToken: string | null
+  user: User | null
+}
 
 const extractErrorMessage = (error: unknown) => {
   if (error instanceof ApiError) return error.message
@@ -29,6 +36,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(user.value && apiClient.getAccessToken()))
   const isLoading = computed(() => status.value === 'loading')
+  const hasSwitchSnapshot = computed(() => {
+    if (typeof window === 'undefined') return false
+    return Boolean(window.sessionStorage.getItem(SWITCH_USER_SNAPSHOT_KEY))
+  })
 
   const clearError = () => {
     error.value = null
@@ -40,9 +51,32 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const applyAuthResponse = (response: AuthResponse) => {
+    clearSwitchSnapshot()
     setAuthenticated(response.user)
     clearError()
     return response.user
+  }
+
+  const readSwitchSnapshot = (): SwitchUserSnapshot | null => {
+    if (typeof window === 'undefined') return null
+    const raw = window.sessionStorage.getItem(SWITCH_USER_SNAPSHOT_KEY)
+    if (!raw) return null
+    try {
+      return JSON.parse(raw) as SwitchUserSnapshot
+    } catch {
+      window.sessionStorage.removeItem(SWITCH_USER_SNAPSHOT_KEY)
+      return null
+    }
+  }
+
+  const saveSwitchSnapshot = (snapshot: SwitchUserSnapshot) => {
+    if (typeof window === 'undefined') return
+    window.sessionStorage.setItem(SWITCH_USER_SNAPSHOT_KEY, JSON.stringify(snapshot))
+  }
+
+  const clearSwitchSnapshot = () => {
+    if (typeof window === 'undefined') return
+    window.sessionStorage.removeItem(SWITCH_USER_SNAPSHOT_KEY)
   }
 
   const initialize = async () => {
@@ -117,9 +151,52 @@ export const useAuthStore = defineStore('auth', () => {
       // 退出登录以本地清理为准，不让后端异常阻断退出流程。
       error.value = null
     } finally {
+      clearSwitchSnapshot()
       setAuthenticated(null)
       status.value = 'idle'
     }
+  }
+
+  const clearSessionLocal = (options?: { preserveSwitchSnapshot?: boolean }) => {
+    if (!options?.preserveSwitchSnapshot) {
+      clearSwitchSnapshot()
+    }
+    apiClient.clearTokens()
+    clearError()
+    setAuthenticated(null)
+    status.value = 'idle'
+  }
+
+  const beginSwitchUser = () => {
+    const accessToken = apiClient.getAccessToken()
+    if (!accessToken) {
+      clearSessionLocal()
+      return
+    }
+    saveSwitchSnapshot({
+      accessToken,
+      refreshToken: apiClient.getRefreshToken(),
+      user: user.value,
+    })
+    clearSessionLocal({ preserveSwitchSnapshot: true })
+  }
+
+  const cancelSwitchUser = async () => {
+    const snapshot = readSwitchSnapshot()
+    if (!snapshot) return false
+    apiClient.setTokens({
+      accessToken: snapshot.accessToken,
+      refreshToken: snapshot.refreshToken,
+    })
+    if (snapshot.user) {
+      setAuthenticated(snapshot.user)
+      clearError()
+      status.value = 'authenticated'
+    } else {
+      await refreshCurrentUser()
+    }
+    clearSwitchSnapshot()
+    return true
   }
 
   const refreshCurrentUser = async () => {
@@ -199,6 +276,11 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     logout,
+    clearSessionLocal,
+    beginSwitchUser,
+    cancelSwitchUser,
+    hasSwitchSnapshot,
+    clearSwitchSnapshot,
     refreshCurrentUser,
     refreshSession,
     updateProfile,

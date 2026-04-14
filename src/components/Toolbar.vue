@@ -2,10 +2,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
 import { EditorMode } from '../core/editor/Editor'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
+import { useAuthStore } from '@/store/authStore'
 
 defineOptions({
   name: 'EditorToolbar',
@@ -30,9 +32,13 @@ const emit = defineEmits<{
 const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
+const authStore = useAuthStore()
+const router = useRouter()
+const route = useRoute()
 const { isARMode, toolbarMenus } = storeToRefs(uiStore)
 const { currentMode, isSnappingEnabled, canUndo, canRedo } = storeToRefs(sceneStore)
 const { roomName, peerCount, isConnected, isConnecting } = storeToRefs(collabStore)
+const { isAuthenticated, user, isLoading: isAuthLoading } = storeToRefs(authStore)
 const isArLocked = computed(() => props.isArMode)
 const isCoordinateSystemOff = computed(() => !props.isCoordinateSystemVisible)
 const isEditingLocked = computed(() => isArLocked.value || isCoordinateSystemOff.value)
@@ -65,6 +71,22 @@ const lineMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '132px',
+})
+const profileMenuOpen = ref(false)
+const profileTriggerRef = ref<HTMLElement | null>(null)
+const profilePanelRef = ref<HTMLElement | null>(null)
+const profileMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '248px',
+})
+const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
+const displayEmail = computed(() => user.value?.email || '请先登录后查看账号信息')
+const userRoleText = computed(() => user.value?.role || 'GUEST')
+const avatarUrl = computed(() => user.value?.avatarUrl || '')
+const defaultAvatarText = computed(() => {
+  const source = displayName.value.trim()
+  return source ? source.slice(0, 1).toUpperCase() : 'U'
 })
 
 watch(
@@ -179,6 +201,58 @@ const selectCreateRayMode = () => {
   setMode(EditorMode.CreateRay)
 }
 
+const toggleProfileMenu = () => {
+  profileMenuOpen.value = !profileMenuOpen.value
+}
+
+const updateProfileMenuPosition = () => {
+  const trigger = profileTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  profileMenuStyle.value = {
+    top: `${rect.bottom + 8}px`,
+    left: `${Math.max(8, rect.right - 248)}px`,
+    minWidth: '248px',
+  }
+}
+
+const goLogin = async () => {
+  profileMenuOpen.value = false
+  await router.push({
+    name: 'login',
+    query: { redirect: route.fullPath || '/' },
+  })
+}
+
+const goPlaceholderPage = (path: string) => {
+  profileMenuOpen.value = false
+  window.dispatchEvent(
+    new CustomEvent('toast', {
+      detail: { msg: `${path} 页面建设中`, scope: 'global' },
+    }),
+  )
+}
+
+const handleLogout = async () => {
+  profileMenuOpen.value = false
+  await authStore.logout()
+  window.dispatchEvent(
+    new CustomEvent('toast', {
+      detail: { msg: '已退出登录', scope: 'global' },
+    }),
+  )
+  await router.push({ name: 'editor' })
+}
+
+const handleSwitchUser = async () => {
+  profileMenuOpen.value = false
+  authStore.beginSwitchUser()
+  await router.push({
+    name: 'login',
+    query: { switchUser: '1', redirect: route.fullPath || '/' },
+  })
+}
+
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target
   if (!(target instanceof Node)) return
@@ -203,6 +277,13 @@ const handleClickOutside = (event: MouseEvent) => {
   ) {
     uiStore.setToolbarMenuOpen('lineOpen', false, { exclusive: false })
   }
+  if (
+    profileMenuOpen.value &&
+    !profileTriggerRef.value?.contains(target) &&
+    !profilePanelRef.value?.contains(target)
+  ) {
+    profileMenuOpen.value = false
+  }
 }
 
 watch(isPointMenuOpen, async (isOpen) => {
@@ -223,6 +304,12 @@ watch(isLineMenuOpen, async (isOpen) => {
   updateLineMenuPosition()
 })
 
+watch(profileMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updateProfileMenuPosition()
+})
+
 watch(
   () => props.isCoordinateSystemVisible,
   (visible) => {
@@ -236,9 +323,11 @@ onMounted(() => {
   window.addEventListener('resize', updateDeleteMenuPosition)
   window.addEventListener('resize', updatePointMenuPosition)
   window.addEventListener('resize', updateLineMenuPosition)
+  window.addEventListener('resize', updateProfileMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
   document.addEventListener('scroll', updatePointMenuPosition, true)
   document.addEventListener('scroll', updateLineMenuPosition, true)
+  document.addEventListener('scroll', updateProfileMenuPosition, true)
 })
 
 onUnmounted(() => {
@@ -246,9 +335,11 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateDeleteMenuPosition)
   window.removeEventListener('resize', updatePointMenuPosition)
   window.removeEventListener('resize', updateLineMenuPosition)
+  window.removeEventListener('resize', updateProfileMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
   document.removeEventListener('scroll', updatePointMenuPosition, true)
   document.removeEventListener('scroll', updateLineMenuPosition, true)
+  document.removeEventListener('scroll', updateProfileMenuPosition, true)
 })
 </script>
 
@@ -357,14 +448,28 @@ onUnmounted(() => {
       {{ isAROpen ? '退出 AR' : '开启 AR' }}
     </button>
 
-    <div class="toolbar-spacer"></div>
-
+    <div class="divider history-divider"></div>
     <button class="history-button" @click="emit('undo')" :disabled="isEditingLocked || !canUndo">
       撤销
     </button>
     <button class="history-button" @click="emit('redo')" :disabled="isEditingLocked || !canRedo">
       重做
     </button>
+
+    <div class="toolbar-spacer"></div>
+
+    <div
+      ref="profileTriggerRef"
+      class="profile-trigger"
+      :class="{ 'is-open': profileMenuOpen }"
+      @click="toggleProfileMenu"
+    >
+      <div class="avatar-ring">
+        <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="avatar-image" />
+        <div v-else class="avatar-fallback">{{ defaultAvatarText }}</div>
+      </div>
+      <span class="profile-name">{{ displayName }}</span>
+    </div>
   </div>
 
   <Teleport to="body">
@@ -422,6 +527,56 @@ onUnmounted(() => {
       >
         射线
       </button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="profileMenuOpen"
+      ref="profilePanelRef"
+      class="profile-panel"
+      :style="profileMenuStyle"
+    >
+      <template v-if="!isAuthenticated">
+        <div class="profile-panel-title">未登录</div>
+        <div class="profile-panel-subtitle">登录以体验完整功能</div>
+        <button class="profile-link-button profile-link-strong" @click="goLogin">去登录</button>
+      </template>
+      <template v-else>
+        <div class="profile-summary">
+          <div class="avatar-ring profile-panel-avatar">
+            <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="avatar-image" />
+            <div v-else class="avatar-fallback">{{ defaultAvatarText }}</div>
+          </div>
+          <div class="profile-summary-text">
+            <div class="profile-summary-name">{{ displayName }}</div>
+            <div class="profile-summary-email">{{ displayEmail }}</div>
+            <div class="profile-summary-role">{{ userRoleText }}</div>
+          </div>
+        </div>
+
+        <div class="profile-links">
+          <button class="profile-link-button" @click="goPlaceholderPage('Profile')">
+            个人中心
+          </button>
+          <button class="profile-link-button" @click="goPlaceholderPage('项目列表')">
+            项目列表
+          </button>
+        </div>
+
+        <div class="profile-actions">
+          <button class="profile-action-button" @click="handleSwitchUser" :disabled="isAuthLoading">
+            切换用户
+          </button>
+          <button
+            class="profile-action-button profile-action-danger"
+            @click="handleLogout"
+            :disabled="isAuthLoading"
+          >
+            退出登录
+          </button>
+        </div>
+      </template>
     </div>
   </Teleport>
 </template>
@@ -558,6 +713,153 @@ button.is-active {
 
 .history-button {
   min-width: 64px;
+}
+
+.history-divider {
+  margin-left: 4px;
+  margin-right: 2px;
+}
+
+.profile-trigger {
+  height: 36px;
+  border: 1px solid #3f3f3f;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #2a2a2a 0%, #242424 100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px 4px 4px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.profile-trigger:hover,
+.profile-trigger.is-open {
+  border-color: #43f260;
+  box-shadow: 0 0 0 2px rgba(67, 242, 96, 0.12);
+}
+
+.profile-name {
+  max-width: 120px;
+  color: #ececec;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.avatar-ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #4d4d4d;
+  background: #1c1c1c;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-fallback {
+  color: #9cf0ad;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-panel {
+  position: fixed;
+  z-index: 1200;
+  padding: 14px;
+  border: 1px solid #3d3d3d;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #1f1f1f 0%, #191919 100%);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-panel-title {
+  color: #f3f3f3;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.profile-panel-subtitle {
+  color: #a0a0a0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.profile-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-panel-avatar {
+  width: 40px;
+  height: 40px;
+}
+
+.profile-summary-name {
+  color: #f5f5f5;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.profile-summary-email {
+  color: #a6a6a6;
+  font-size: 12px;
+}
+
+.profile-summary-role {
+  margin-top: 2px;
+  color: #78f090;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.profile-links,
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile-link-button,
+.profile-action-button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #3d3d3d;
+  border-radius: 8px;
+  background: #252525;
+  color: #ececec;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.profile-link-button:hover,
+.profile-action-button:hover {
+  background: #2d2d2d;
+}
+
+.profile-link-strong {
+  border-color: rgba(67, 242, 96, 0.45);
+  color: #8df2a0;
+}
+
+.profile-action-danger {
+  border-color: rgba(255, 95, 95, 0.4);
+  color: #ffb0b0;
 }
 
 .toolbar::-webkit-scrollbar {

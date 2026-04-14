@@ -92,6 +92,7 @@ const handleSubmit = async () => {
     isRedirecting.value = false
   }
 }
+
 </script>
 
 <template>

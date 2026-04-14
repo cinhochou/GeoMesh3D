@@ -62,10 +62,20 @@ const handleSubmit = async () => {
     isRedirecting.value = false
   }
 }
+
+const handleBack = async () => {
+  const restored = await authStore.cancelSwitchUser()
+  if (restored) {
+    await router.replace(redirect.value)
+    return
+  }
+  await router.replace({ name: 'editor' })
+}
 </script>
 
 <template>
   <div class="auth-page">
+    <button type="button" class="back-link" @click="handleBack">&lt;返回</button>
     <Transition name="fade-overlay">
       <div v-if="isRedirecting" class="collab-wait-overlay">
         <div class="collab-wait-dialog">
@@ -79,12 +89,12 @@ const handleSubmit = async () => {
       <section class="auth-side">
         <p class="side-tag">3D Geometry Editor</p>
         <h1 class="side-title">登录后，编辑体验更完整</h1>
-        <p class="side-text">保存身份、接入协作、继续你的编辑进度...</p>
+        <p class="side-text">获得身份、接入协作、AR体验、继续你的编辑进度...</p>
 
         <div class="side-panel">
           <div class="side-panel-label">登录后你可以</div>
-          <div class="side-panel-item">保留自己的用户身份</div>
-          <div class="side-panel-item">解锁后续关键功能</div>
+          <div class="side-panel-item">获得用户身份</div>
+          <div class="side-panel-item">解锁关键功能</div>
           <div class="side-panel-item">继续进入已保存的工作区</div>
         </div>
       </section>
@@ -145,12 +155,33 @@ const handleSubmit = async () => {
 
 <style scoped>
 .auth-page {
+  position: relative;
   min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(67, 242, 96, 0.08), transparent 22%),
     radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.04), transparent 18%),
     linear-gradient(180deg, #141414 0%, #101010 100%);
   color: #ddd;
+}
+
+.back-link {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 20;
+  border: 1px solid #3f3f3f;
+  border-radius: 999px;
+  background: rgba(24, 24, 24, 0.88);
+  color: #dcdcdc;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.back-link:hover {
+  border-color: #43f260;
+  color: #a6f3b5;
 }
 
 .auth-layout {
