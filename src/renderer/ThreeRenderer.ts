@@ -88,6 +88,7 @@ export class ThreeRenderer {
   private static readonly LINE_LABEL_CENTER_Y = 0.3
   private static readonly LINEAR_COLOR = 0xffffff
   private static readonly LINEAR_WIDTH = 2
+  private static readonly INTERSECTION_POINT_COLOR = 0xffd84a
   private static readonly FACE_FILL_COLOR = 0x74a4ff
   private static readonly FACE_SELECTED_COLOR = 0x43f260
   private static readonly FACE_FILL_OPACITY = 0.22
@@ -202,6 +203,14 @@ export class ThreeRenderer {
     this.controls.maxDistance = 100
 
     this.setAxisGridSize(this.axisGridSize)
+  }
+
+  dispose() {
+    this.controls.dispose()
+    this.renderer.dispose()
+    if (this.renderer.domElement.parentElement === this.container) {
+      this.container.removeChild(this.renderer.domElement)
+    }
   }
 
   /** 当前用于渲染/拾取的相机（AR 模式下为 arCamera） */
@@ -828,7 +837,12 @@ export class ThreeRenderer {
 
       // 选中高亮
       const isSelected = scene.selection.points.has(p.id)
-      const baseColor = p.locked ? 0xffffff : 0xff5555
+      const isIntersectionPoint = Boolean(scene.getIntersectionConstraint(p.id))
+      const baseColor = p.locked
+        ? 0xffffff
+        : isIntersectionPoint
+          ? ThreeRenderer.INTERSECTION_POINT_COLOR
+          : 0xff5555
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
 
       // 点名称标签

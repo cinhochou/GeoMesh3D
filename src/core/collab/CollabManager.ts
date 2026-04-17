@@ -313,7 +313,7 @@ export class CollabManager {
     this.scene.points.forEach((point, id) => {
       if (!point.locked) this.scene.points.delete(id)
     })
-    this.scene.constraints.length = 0
+    this.scene.clearAllConstraints()
     this.scene.selection.clear()
   }
 
@@ -605,6 +605,7 @@ export class CollabManager {
             }
           })
           this.scene.points.delete(id)
+          this.scene.removeIntersectionConstraint(id)
           this.scene.selection.points.delete(id)
         }
       })

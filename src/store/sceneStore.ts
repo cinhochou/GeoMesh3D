@@ -29,6 +29,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建自由点'
     case EditorMode.MergePoint:
       return '合并点'
+    case EditorMode.IntersectionPoint:
+      return '创建交点'
     case EditorMode.CreateLine:
       return '创建线段'
     case EditorMode.CreateStraightLine:
@@ -56,6 +58,8 @@ const getModeHint = (mode: EditorMode) => {
       return '先选择多个点或闭合线段，再点击空白处确认创建面~'
     case EditorMode.MergePoint:
       return '先选中两个点，再选择保留哪个点完成合并~'
+    case EditorMode.IntersectionPoint:
+      return '选中两条线或一条线和一个平面以创建交点~'
     default:
       return ''
   }

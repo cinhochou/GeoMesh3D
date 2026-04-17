@@ -1,15 +1,16 @@
 ﻿<!-- src/views/EditorView.vue -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, reactive, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/TimeLine.vue'
 
-import { Scene } from '../core/scene/Scene'
-import { Editor, EditorMode } from '../core/editor/Editor'
+import { EditorMode } from '../core/editor/Editor'
+import type { Command } from '../core/editor/Command'
 import type { Point3 } from '../core/geometry/Point3'
+import { getEditorSession } from '../core/editor/editorSession'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager } from '../core/collab/CollabManager'
@@ -37,11 +38,11 @@ const {
 } = storeToRefs(uiStore)
 const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
 
-const scene = reactive(new Scene())
-const editor = reactive(new Editor(scene))
+const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = getEditorSession()
 
 let renderer: ThreeRenderer
 let interaction: Interaction
+let animationFrameId: number | null = null
 
 const collabManager = ref<CollabManager | null>(null)
 let lastFpsTime = performance.now()
@@ -109,20 +110,16 @@ onMounted(() => {
     collabStore.setStatus(status)
   }
 
-  // 劫持 Editor 的命令执行，实现自动同步
-  const originalExecute = editor.executeCommand.bind(editor)
-  editor.executeCommand = (cmd) => {
-    originalExecute(cmd)
+  editor.executeCommand = (cmd: Command) => {
+    originalExecuteCommand(cmd)
     collabManager.value?.syncAction()
   }
 
-  const originalUndo = editor.undo.bind(editor)
   editor.undo = () => {
     originalUndo()
     collabManager.value?.syncAction()
   }
 
-  const originalRedo = editor.redo.bind(editor)
   editor.redo = () => {
     originalRedo()
     collabManager.value?.syncAction()
@@ -143,7 +140,7 @@ onMounted(() => {
     }
     renderer.sync(scene, interaction.rubberBandData, interaction.getFacePreviewData())
     renderer.render()
-    requestAnimationFrame(loop)
+    animationFrameId = requestAnimationFrame(loop)
   }
   loop()
 
@@ -217,6 +214,15 @@ onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
   collabManager.value?.leaveRoom()
   collabStore.resetCollabState()
+  if (animationFrameId !== null) {
+    cancelAnimationFrame(animationFrameId)
+    animationFrameId = null
+  }
+  editor.executeCommand = originalExecuteCommand
+  editor.undo = originalUndo
+  editor.redo = originalRedo
+  interaction?.unbind(renderer.renderer.domElement)
+  renderer?.dispose()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('toast', handleToast as EventListener)

@@ -5,6 +5,8 @@ import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarFace } from '../../geometry/Plane'
+import type { SceneConstraint } from '../../scene/Scene'
+import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export class DeletePointCommand implements Command {
   constructor(
@@ -14,6 +16,11 @@ export class DeletePointCommand implements Command {
     private relatedStraightLines: StraightLine3[],
     private relatedRays: Ray3[],
     private relatedFaces: PlanarFace[],
+    private pointConstraint: SceneConstraint | null = null,
+    private dependentIntersectionPoints: Array<{
+      point: Point3
+      constraint: IntersectionPointConstraint
+    }> = [],
   ) {}
 
   execute() {
@@ -32,6 +39,15 @@ export class DeletePointCommand implements Command {
     this.relatedFaces.forEach((face) => {
       this.scene.removeFace(face.id)
     })
+    this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
+      this.scene.removeIntersectionConstraint(constraint.pointId)
+      this.scene.points.delete(point.id)
+      this.scene.selection.points.delete(point.id)
+    })
+
+    if (this.pointConstraint?.pointId) {
+      this.scene.removeIntersectionConstraint(this.pointConstraint.pointId)
+    }
 
     this.scene.points.delete(this.point.id)
     this.scene.selection.points.delete(this.point.id)
@@ -43,5 +59,12 @@ export class DeletePointCommand implements Command {
     this.relatedStraightLines.forEach((line) => this.scene.addStraightLine(line))
     this.relatedRays.forEach((ray) => this.scene.addRay(ray))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))
+    this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
+      this.scene.addPoint(point)
+      this.scene.addIntersectionConstraint(constraint)
+    })
+    if (this.pointConstraint?.pointId) {
+      this.scene.addIntersectionConstraint(this.pointConstraint as SceneConstraint & { pointId: string })
+    }
   }
 }

@@ -10,6 +10,8 @@ import { Selection } from './Selection'
 export type SceneConstraint = {
   solve: () => void
   faceId?: string
+  pointId?: string
+  isEffective?: () => boolean
 }
 
 export class Scene {
@@ -20,8 +22,10 @@ export class Scene {
   rays = new Map<string, Ray3>()
   faces = new Map<string, PlanarFace>()
   selection = new Selection()
+  activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
   faceConstraints = new Map<string, SceneConstraint>()
+  intersectionConstraints = new Map<string, SceneConstraint>()
 
   constructor() {
     // 固定原点：可参与连线/选择，但不可移动
@@ -69,5 +73,46 @@ export class Scene {
 
   addConstraint(c: SceneConstraint) {
     this.constraints.push(c)
+    if (c.faceId) this.faceConstraints.set(c.faceId, c)
+    if (c.pointId) this.intersectionConstraints.set(c.pointId, c)
+  }
+
+  addIntersectionConstraint(c: SceneConstraint & { pointId: string }) {
+    const existing = this.intersectionConstraints.get(c.pointId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+    }
+    this.intersectionConstraints.set(c.pointId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+  }
+
+  removeIntersectionConstraint(pointId: string) {
+    const existing = this.intersectionConstraints.get(pointId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.intersectionConstraints.delete(pointId)
+  }
+
+  getIntersectionConstraint(pointId: string) {
+    const constraint = this.intersectionConstraints.get(pointId)
+    if (!constraint || !constraint.pointId) return null
+    return constraint
+  }
+
+  clearAllConstraints() {
+    this.constraints = []
+    this.faceConstraints.clear()
+    this.intersectionConstraints.clear()
+  }
+
+  rebuildConstraintIndexes() {
+    this.faceConstraints.clear()
+    this.intersectionConstraints.clear()
+    this.constraints.forEach((constraint) => {
+      if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
+      if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
+    })
   }
 }

@@ -189,6 +189,10 @@ const selectMergePointMode = () => {
   setMode(EditorMode.MergePoint)
 }
 
+const selectIntersectionPointMode = () => {
+  setMode(EditorMode.IntersectionPoint)
+}
+
 const selectCreateLineMode = () => {
   setMode(EditorMode.CreateLine)
 }
@@ -371,7 +375,9 @@ onUnmounted(() => {
         class="menu-trigger"
         :class="{
           'is-active':
-            currentMode === EditorMode.CreatePoint || currentMode === EditorMode.MergePoint,
+            currentMode === EditorMode.CreatePoint ||
+            currentMode === EditorMode.MergePoint ||
+            currentMode === EditorMode.IntersectionPoint,
           'is-open': isPointMenuOpen,
         }"
         @click="togglePointMenu"
@@ -500,6 +506,13 @@ onUnmounted(() => {
         @click="selectMergePointMode"
       >
         合并点
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.IntersectionPoint }"
+        @click="selectIntersectionPointMode"
+      >
+        交点
       </button>
     </div>
   </Teleport>

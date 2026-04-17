@@ -23,7 +23,7 @@ export class ClearSceneCommand implements Command {
     this.scene.rays.clear()
     this.scene.faces.clear()
     this.points.forEach((point) => this.scene.points.delete(point.id))
-    this.scene.constraints.length = 0
+    this.scene.clearAllConstraints()
     this.scene.selection.clear()
   }
 
@@ -34,5 +34,6 @@ export class ClearSceneCommand implements Command {
     this.rays.forEach((ray) => this.scene.addRay(ray))
     this.faces.forEach((face) => this.scene.addFace(face))
     this.scene.constraints.push(...this.constraints)
+    this.scene.rebuildConstraintIndexes()
   }
 }

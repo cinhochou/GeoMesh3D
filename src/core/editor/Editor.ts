@@ -33,12 +33,21 @@ import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
 import { ClearSceneCommand } from './commands/ClearSceneCommand'
 import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
 import { MergePointsCommand } from './commands/MergePointsCommand'
+import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
+import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
+import {
+  canCreateIntersectionFromTargets,
+  computeIntersectionPoint,
+  type IntersectionTargetRef,
+  type IntersectionTargetType,
+} from '../geometry/IntersectionPoint3'
 
 export enum EditorMode {
   Select,
   Delete,
   CreatePoint,
   MergePoint,
+  IntersectionPoint,
   CreateLine,
   CreateStraightLine,
   CreateRay,
@@ -205,9 +214,15 @@ const buildFaceUnlockCascade = (editor: Editor, faces: PlanarFace[]) => {
   })
 
   return {
-    pointTransforms: [...pointTransforms.values()].filter((transform) => transform.before !== transform.after),
-    lineTransforms: [...lineTransforms.values()].filter((transform) => transform.before !== transform.after),
-    faceTransforms: [...faceTransforms.values()].filter((transform) => transform.before !== transform.after),
+    pointTransforms: [...pointTransforms.values()].filter(
+      (transform) => transform.before !== transform.after,
+    ),
+    lineTransforms: [...lineTransforms.values()].filter(
+      (transform) => transform.before !== transform.after,
+    ),
+    faceTransforms: [...faceTransforms.values()].filter(
+      (transform) => transform.before !== transform.after,
+    ),
   }
 }
 
@@ -282,22 +297,92 @@ export class Editor {
     return false
   }
 
+  isPointConstrainedByIntersection(pointId: string) {
+    const constraint = this.scene.getIntersectionConstraint(pointId)
+    if (!constraint) return false
+    return constraint.isEffective ? constraint.isEffective() : true
+  }
+
+  getIntersectionConstraint(pointId: string) {
+    const constraint = this.scene.getIntersectionConstraint(pointId)
+    if (!(constraint instanceof IntersectionPointConstraint)) return null
+    return constraint
+  }
+
+  getIntersectionTargetLabel(target: IntersectionTargetRef) {
+    if (target.type === 'line') {
+      const line = this.scene.lines.get(target.id)
+      return line ? `线段${line.name}` : '线段(已删除)'
+    }
+    if (target.type === 'straightLine') {
+      const line = this.scene.straightLines.get(target.id)
+      return line ? `直线${line.name}` : '直线(已删除)'
+    }
+    if (target.type === 'ray') {
+      const ray = this.scene.rays.get(target.id)
+      return ray ? `射线${ray.name}` : '射线(已删除)'
+    }
+    const face = this.scene.faces.get(target.id)
+    return face ? `面${face.name}` : '面(已删除)'
+  }
+
+  getIntersectionSummary(pointId: string) {
+    const constraint = this.getIntersectionConstraint(pointId)
+    if (!constraint) return null
+    return {
+      left: this.getIntersectionTargetLabel(constraint.sourceA),
+      right: this.getIntersectionTargetLabel(constraint.sourceB),
+      valid: constraint.isEffective(),
+    }
+  }
+
+  collectDependentIntersectionPoints(targets: IntersectionTargetRef[]) {
+    const matched = new Map<
+      string,
+      { point: Point3; constraint: IntersectionPointConstraint }
+    >()
+
+    const matchesTarget = (candidate: IntersectionTargetRef, target: IntersectionTargetRef) =>
+      candidate.type === target.type && candidate.id === target.id
+
+    this.scene.intersectionConstraints.forEach((constraint) => {
+      if (!(constraint instanceof IntersectionPointConstraint)) return
+      const dependsOnTarget = targets.some(
+        (target) =>
+          matchesTarget(constraint.sourceA, target) || matchesTarget(constraint.sourceB, target),
+      )
+      if (!dependsOnTarget) return
+
+      const point = this.scene.points.get(constraint.pointId)
+      if (!point) return
+      matched.set(point.id, { point, constraint })
+    })
+
+    return [...matched.values()]
+  }
+
   isPointCoordinateLocked(point: Point3 | null | undefined) {
     return Boolean(
       point &&
-        (point.locked || point.userLocked || this.isPointConstrainedByLockedLinear(point.id)),
+        (point.locked ||
+          point.userLocked ||
+          this.isPointConstrainedByLockedLinear(point.id)),
     )
   }
 
   isLineLocked(line: Line3 | null | undefined) {
     return Boolean(
-      line && (line.userLocked || (this.isPointCoordinateLocked(line.p1) && this.isPointCoordinateLocked(line.p2))),
+      line &&
+        (line.userLocked ||
+          (this.isPointCoordinateLocked(line.p1) && this.isPointCoordinateLocked(line.p2))),
     )
   }
 
   isRayLocked(ray: Ray3 | null | undefined) {
     return Boolean(
-      ray && (ray.userLocked || (this.isPointCoordinateLocked(ray.p1) && this.isPointCoordinateLocked(ray.p2))),
+      ray &&
+        (ray.userLocked ||
+          (this.isPointCoordinateLocked(ray.p1) && this.isPointCoordinateLocked(ray.p2))),
     )
   }
 
@@ -311,13 +396,19 @@ export class Editor {
 
   isLineGeometryLocked(line: Line3 | null | undefined) {
     return Boolean(
-      line && (line.userLocked || this.isPointCoordinateLocked(line.p1) || this.isPointCoordinateLocked(line.p2)),
+      line &&
+        (line.userLocked ||
+          this.isPointCoordinateLocked(line.p1) ||
+          this.isPointCoordinateLocked(line.p2)),
     )
   }
 
   isRayGeometryLocked(ray: Ray3 | null | undefined) {
     return Boolean(
-      ray && (ray.userLocked || this.isPointCoordinateLocked(ray.p1) || this.isPointCoordinateLocked(ray.p2)),
+      ray &&
+        (ray.userLocked ||
+          this.isPointCoordinateLocked(ray.p1) ||
+          this.isPointCoordinateLocked(ray.p2)),
     )
   }
 
@@ -349,7 +440,6 @@ export class Editor {
             .some((point) => this.isPointCoordinateLocked(point))),
     )
   }
-
 
   setPointLockState(pointId: string, locked: boolean) {
     const point = this.scene.points.get(pointId)
@@ -436,7 +526,12 @@ export class Editor {
     }
 
     this.executeCommand(
-      new SyncLockStateCommand(pointTransforms, lineTransforms, straightLineTransforms, rayTransforms),
+      new SyncLockStateCommand(
+        pointTransforms,
+        lineTransforms,
+        straightLineTransforms,
+        rayTransforms,
+      ),
     )
   }
 
@@ -579,7 +674,8 @@ export class Editor {
             },
           ]
 
-    if (pointTransforms.length === 0 && lineTransforms.length === 0 && faceTransforms.length === 0) return
+    if (pointTransforms.length === 0 && lineTransforms.length === 0 && faceTransforms.length === 0)
+      return
 
     this.executeCommand(
       new SyncLockStateCommand(pointTransforms, lineTransforms, [], [], faceTransforms),
@@ -590,7 +686,10 @@ export class Editor {
     const face = this.scene.faces.get(faceId)
     if (!face) return
     const nextLockedArea = locked ? face.getArea(this.scene.points) : face.lockedArea
-    if (face.areaLocked === locked && (!locked || Math.abs(face.lockedArea - nextLockedArea) <= 1e-6)) {
+    if (
+      face.areaLocked === locked &&
+      (!locked || Math.abs(face.lockedArea - nextLockedArea) <= 1e-6)
+    ) {
       return
     }
 
@@ -645,7 +744,16 @@ export class Editor {
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
-    const relatedFaces = [...this.scene.faces.values()].filter((face) => face.includesPoint(pointId))
+    const relatedFaces = [...this.scene.faces.values()].filter((face) =>
+      face.includesPoint(pointId),
+    )
+    const pointConstraint = this.scene.getIntersectionConstraint(pointId)
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      ...relatedLines.map((line) => ({ type: 'line' as const, id: line.id })),
+      ...relatedStraightLines.map((line) => ({ type: 'straightLine' as const, id: line.id })),
+      ...relatedRays.map((ray) => ({ type: 'ray' as const, id: ray.id })),
+      ...relatedFaces.map((face) => ({ type: 'face' as const, id: face.id })),
+    ]).filter(({ point }) => point.id !== pointId)
 
     this.executeCommand(
       new DeletePointCommand(
@@ -655,6 +763,8 @@ export class Editor {
         relatedStraightLines,
         relatedRays,
         relatedFaces,
+        pointConstraint,
+        dependentIntersectionPoints,
       ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
@@ -663,25 +773,39 @@ export class Editor {
   deleteLine(lineId: string) {
     const line = this.scene.lines.get(lineId)
     if (!line) return
-    this.executeCommand(new DeleteLineCommand(this.scene, line))
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'line', id: lineId },
+    ])
+    this.executeCommand(new DeleteLineCommand(this.scene, line, dependentIntersectionPoints))
   }
 
   deleteRay(rayId: string) {
     const ray = this.scene.rays.get(rayId)
     if (!ray) return
-    this.executeCommand(new DeleteRayCommand(this.scene, ray))
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'ray', id: rayId },
+    ])
+    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints))
   }
 
   deleteStraightLine(lineId: string) {
     const line = this.scene.straightLines.get(lineId)
     if (!line) return
-    this.executeCommand(new DeleteStraightLineCommand(this.scene, line))
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'straightLine', id: lineId },
+    ])
+    this.executeCommand(
+      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints),
+    )
   }
 
   deleteFace(faceId: string) {
     const face = this.scene.faces.get(faceId)
     if (!face) return
-    this.executeCommand(new DeleteFaceCommand(this.scene, face))
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'face', id: faceId },
+    ])
+    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints))
   }
 
   clearAll() {
@@ -739,11 +863,7 @@ export class Editor {
 
     const before = point.position.clone()
     const nextPosition = this.resolveLockedLinePointPosition(pointId, position)
-    if (
-      before.x === nextPosition.x &&
-      before.y === nextPosition.y &&
-      before.z === nextPosition.z
-    ) {
+    if (before.x === nextPosition.x && before.y === nextPosition.y && before.z === nextPosition.z) {
       return
     }
 
@@ -765,10 +885,14 @@ export class Editor {
         const point = this.scene.points.get(id)
         if (!point || this.isPointCoordinateLocked(point)) return null
         const before = point.position.clone()
-        if (before.x === position.x && before.y === position.y && before.z === position.z) return null
+        if (before.x === position.x && before.y === position.y && before.z === position.z)
+          return null
         return { point, before, after: position.clone() }
       })
-      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {
@@ -803,7 +927,10 @@ export class Editor {
           after: position.clone(),
         }
       })
-      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
 
     if (commandTransforms.length === 0) return
     if (commandTransforms.length === 1) {
@@ -815,7 +942,10 @@ export class Editor {
     this.executeCommand(new TransformPointsCommand(commandTransforms))
   }
 
-  updatePoint(pointId: string, patch: { name?: string; nameVisible?: boolean; userLocked?: boolean }) {
+  updatePoint(
+    pointId: string,
+    patch: { name?: string; nameVisible?: boolean; userLocked?: boolean },
+  ) {
     const point = this.scene.points.get(pointId)
     if (!point) return
 
@@ -857,7 +987,9 @@ export class Editor {
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextVisible = patch.visible ?? line.visible
     const nextUserLocked = patch.userLocked ?? line.userLocked
-    const nextLengthLocked = nextUserLocked ? line.lengthLocked : (patch.lengthLocked ?? line.lengthLocked)
+    const nextLengthLocked = nextUserLocked
+      ? line.lengthLocked
+      : (patch.lengthLocked ?? line.lengthLocked)
     const nextLockedLength = Line3.normalizeLockedLength(
       nextUserLocked
         ? line.lockedLength
@@ -1101,6 +1233,90 @@ export class Editor {
     )
   }
 
+  getIntersectionSelectionTargets() {
+    const targets: IntersectionTargetRef[] = []
+    this.scene.selection.lines.forEach((id) => targets.push({ type: 'line', id }))
+    this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
+    this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
+    this.scene.selection.faces.forEach((id) => targets.push({ type: 'face', id }))
+    return targets
+  }
+
+  clearIntersectionSelection() {
+    this.scene.selection.points.clear()
+    this.scene.selection.lines.clear()
+    this.scene.selection.straightLines.clear()
+    this.scene.selection.rays.clear()
+    this.scene.selection.faces.clear()
+    this.selectedPoints = []
+  }
+
+  toggleIntersectionSelection(type: IntersectionTargetType, geoId: string) {
+    if (this.mode !== EditorMode.IntersectionPoint) return
+
+    const isSelected =
+      (type === 'line' && this.scene.selection.lines.has(geoId)) ||
+      (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
+      (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
+      (type === 'face' && this.scene.selection.faces.has(geoId))
+
+    if (isSelected) {
+      if (type === 'line') this.scene.selection.deselectLine(geoId)
+      else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
+      else if (type === 'ray') this.scene.selection.deselectRay(geoId)
+      else this.scene.selection.deselectFace(geoId)
+      return
+    }
+
+    if (this.getIntersectionSelectionTargets().length >= 2) {
+      this.clearIntersectionSelection()
+    }
+
+    if (type === 'line') this.scene.selection.selectLine(geoId, true)
+    else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
+    else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
+    else this.scene.selection.selectFace(geoId, true)
+
+    this.tryCreateIntersectionPointFromSelection()
+  }
+
+  tryCreateIntersectionPointFromSelection() {
+    if (this.mode !== EditorMode.IntersectionPoint) return
+
+    const targets = this.getIntersectionSelectionTargets()
+    if (targets.length !== 2) return
+
+    const [a, b] = targets
+    if (!a || !b) return
+
+    if (!canCreateIntersectionFromTargets(a, b)) {
+      emitToast('交点仅支持两条线，或一条线与一个平面')
+      return
+    }
+
+    const position = computeIntersectionPoint(this.scene, a, b)
+    if (!position) {
+      emitToast('所选对象平行，无法创建交点')
+      return
+    }
+
+    const point = new Point3(
+      genId('p'),
+      genNextAvailableName(
+        [...this.scene.points.values()].map((item) => item.name),
+        65,
+      ),
+      position,
+      false,
+      true,
+      false,
+    )
+    const constraint = new IntersectionPointConstraint(this.scene, point.id, a, b)
+    this.executeCommand(new AddIntersectionPointCommand(this.scene, point, constraint))
+    this.clearIntersectionSelection()
+    this.scene.selection.selectPoint(point.id)
+  }
+
   tryCreateLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateLine) return
     this.tryCreateLinearWith(point, 'line')
@@ -1217,7 +1433,9 @@ export class Editor {
                   (l.p1.id === p1!.id && l.p2.id === p2!.id) ||
                   (l.p1.id === p2!.id && l.p2.id === p1!.id),
               )
-          : [...this.scene.rays.values()].some((ray) => ray.p1.id === p1!.id && ray.p2.id === p2!.id)
+            : [...this.scene.rays.values()].some(
+                (ray) => ray.p1.id === p1!.id && ray.p2.id === p2!.id,
+              )
 
       if (!exists) {
         if (type === 'line') {
@@ -1303,7 +1521,9 @@ export class Editor {
     }
 
     const optimization = autoOptimizeFacePoints(this, uniquePoints)
-    const positionOverrides = applyAutoAdjustments ? new Map<string, Vec3>() : optimization.positionOverrides
+    const positionOverrides = applyAutoAdjustments
+      ? new Map<string, Vec3>()
+      : optimization.positionOverrides
     if (notify && applyAutoAdjustments && optimization.messages.length > 0) {
       emitToast(optimization.messages.join('；'))
     }
@@ -1402,7 +1622,9 @@ export class Editor {
       return null
     }
 
-    const memberPointIds = [...new Set([...boundaryPointIds, ...uniquePoints.map((point) => point.id)])]
+    const memberPointIds = [
+      ...new Set([...boundaryPointIds, ...uniquePoints.map((point) => point.id)]),
+    ]
     const supportPointIds = computeSupportPointIds(
       memberPointIds
         .map((id) => pointMap.get(id))
@@ -1470,10 +1692,14 @@ export class Editor {
         if (!point || this.isPointCoordinateLocked(point)) return null
 
         const before = point.position.clone()
-        if (before.x === position.x && before.y === position.y && before.z === position.z) return null
+        if (before.x === position.x && before.y === position.y && before.z === position.z)
+          return null
         return { point, before, after: position.clone() }
       })
-      .filter((transform): transform is { point: Point3; before: Vec3; after: Vec3 } => transform !== null)
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {

@@ -766,6 +766,10 @@ const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
 const getStraightLineDisplayPoints = (line: StraightLine3) => line.getDisplayPoints()
+const getPointIntersectionSummary = (point: Point3 | undefined) =>
+  point ? props.editor.getIntersectionSummary(point.id) : null
+const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
+  getPointIntersectionSummary(point) !== null
 const getFaceArea = (face: PlanarFace) => face.getArea(props.scene.points)
 const getFaceCentroid = (face: PlanarFace) => face.getCentroid(props.scene.points)
 const getFaceBoundaryPoints = (face: PlanarFace) => face.getBoundaryPoints(props.scene.points)
@@ -1050,7 +1054,11 @@ onUnmounted(() => {
               {{ editPoint.nameVisible ? '隐藏' : '显示' }}
             </label>
             <label class="toggle-label">
-              <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" />
+              <input
+                type="checkbox"
+                v-model="editPoint.userLocked"
+                @change="applyEditPoint"
+              />
               锁定
             </label>
           </div>
@@ -1154,10 +1162,16 @@ onUnmounted(() => {
           <div>
             点{{ p!.name ?? '' }}
             <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
+            <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
           </div>
           <div>
             x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
             {{ p!.position.z.toFixed(2) }}
+          </div>
+          <div v-if="getPointIntersectionSummary(p!)">
+            来源：{{ getPointIntersectionSummary(p!)?.left }} ×
+            {{ getPointIntersectionSummary(p!)?.right }}
+            {{ getPointIntersectionSummary(p!)?.valid ? '' : '（约束失效）' }}
           </div>
         </div>
       </div>
@@ -2256,10 +2270,13 @@ onUnmounted(() => {
             :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
             @click="selectPointFromContent(p!.id)"
           >
-            <div>
-              点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
-              {{ p!.position.z.toFixed(2) }}）
+            <div class="point-summary-line">
+              <span class="point-summary-text">
+                点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
+                {{ p!.position.z.toFixed(2) }}）
+              </span>
               <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
+              <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
             </div>
           </div>
         </div>
@@ -2812,10 +2829,24 @@ hr {
   border-radius: 999px;
   font-size: 10px;
   line-height: 1.4;
+  white-space: nowrap;
   color: #ffe2b7;
   background: rgba(255, 179, 71, 0.18);
   border: 1px solid rgba(255, 179, 71, 0.42);
   vertical-align: middle;
+}
+.point-summary-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.point-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .face-metric-row {
   grid-column: 1 / -1;

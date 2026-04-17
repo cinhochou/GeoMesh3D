@@ -7,6 +7,7 @@ import type { Point3 } from '../core/geometry/Point3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import { Vec3 } from '../core/geometry/Vec3'
+import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
 
 export class Interaction {
@@ -32,6 +33,7 @@ export class Interaction {
   private dragReferenceStartMathPos: THREE.Vector3 | null = null
   private dragDepth: number | null = null
   private dragStartPositions = new Map<string, Vec3>()
+  private dragSceneStartPositions: Map<string, Vec3> | null = null
   private mobileCreatePointerId: number | null = null
   private mobileCreatePreviewPos: Vec3 | null = null
   private mobileCreateHadPreviewAtPointerDown = false
@@ -41,9 +43,10 @@ export class Interaction {
   private mobileInteractionMoved = false
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
-  private pendingToggleSelection:
-    | { type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'; geoId: string }
-    | null = null
+  private pendingToggleSelection: {
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    geoId: string
+  } | null = null
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
 
@@ -64,6 +67,17 @@ export class Interaction {
     dom.addEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.addEventListener('pointerup', this.onPointerUp, { capture: true })
     dom.addEventListener('pointercancel', this.onPointerCancel, { capture: true })
+  }
+
+  unbind(dom: HTMLElement) {
+    dom.removeEventListener('mousedown', this.onMouseDown)
+    dom.removeEventListener('mousemove', this.onMouseMove)
+    dom.removeEventListener('mouseup', this.onMouseUp)
+    dom.removeEventListener('mouseleave', this.onMouseLeave)
+    dom.removeEventListener('pointerdown', this.onPointerDown, { capture: true })
+    dom.removeEventListener('pointermove', this.onPointerMove, { capture: true })
+    dom.removeEventListener('pointerup', this.onPointerUp, { capture: true })
+    dom.removeEventListener('pointercancel', this.onPointerCancel, { capture: true })
   }
 
   /** 网格吸附工具函数 */
@@ -119,7 +133,10 @@ export class Interaction {
     this.pendingToggleSelection = null
   }
 
-  private deselectGeometry(type: 'point' | 'line' | 'straightLine' | 'ray' | 'face', geoId: string) {
+  private deselectGeometry(
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    geoId: string,
+  ) {
     if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
     else if (type === 'line') this.editor.scene.selection.deselectLine(geoId)
     else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
@@ -131,7 +148,9 @@ export class Interaction {
     if (type === 'point') {
       if (this.editor.scene.selection.points.has(geoId)) {
         this.editor.scene.selection.deselectPoint(geoId)
-        this.editor.selectedPoints = this.editor.selectedPoints.filter((point) => point.id !== geoId)
+        this.editor.selectedPoints = this.editor.selectedPoints.filter(
+          (point) => point.id !== geoId,
+        )
         return
       }
       this.editor.scene.selection.selectPoint(geoId, true)
@@ -192,6 +211,7 @@ export class Interaction {
   private finishDragInteraction() {
     const hadDragPreview = this.dragStartPositions.size > 0
     this.commitDragHistory()
+    this.editor.scene.activeDraggedPointIds.clear()
     this.draggingPointId = null
     this.draggingLineId = null
     this.draggingStraightLineId = null
@@ -267,7 +287,7 @@ export class Interaction {
         ? this.editor.scene.lines.get(linearId)
         : type === 'straightLine'
           ? this.editor.scene.straightLines.get(linearId)
-        : this.editor.scene.rays.get(linearId)
+          : this.editor.scene.rays.get(linearId)
     if (!linear) return null
 
     const rect = this.getPointerClientRect()
@@ -315,6 +335,28 @@ export class Interaction {
       Interaction.MOBILE_ENDPOINT_PROTECTION_RADIUS_PX,
     )
     return protectedEndpoint ?? lineHit
+  }
+
+  private pickIntersectionTarget() {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const candidates = [...this.renderer.meshMap.values()].filter((obj) => {
+      const type = obj.userData?.type
+      return (
+        type === 'line' || type === 'straightLine' || type === 'ray' || type === 'face'
+      )
+    })
+    const hits = this.raycaster.intersectObjects(candidates)
+    if (hits.length === 0) return null
+
+    const linearHit = hits.find(
+      (hit) =>
+        hit.object.userData.type === 'line' ||
+        hit.object.userData.type === 'straightLine' ||
+        hit.object.userData.type === 'ray',
+    )
+    if (linearHit) return linearHit.object
+
+    return hits[0]!.object
   }
 
   private getLinePivotDragPoint(line: Line3): Point3 | null {
@@ -624,7 +666,8 @@ export class Interaction {
   onMouseDown = (e: MouseEvent) => {
     if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
-    const hit = this.pick()
+    const hit =
+      this.editor.mode === EditorMode.IntersectionPoint ? this.pickIntersectionTarget() : this.pick()
 
     if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
       return
@@ -632,12 +675,11 @@ export class Interaction {
 
     if (
       this.renderer.isARActive() &&
-      (
-        this.editor.mode === EditorMode.CreateLine ||
+      (this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
-        this.editor.mode === EditorMode.CreatePlane
-      )
+        this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
     }
@@ -761,10 +803,13 @@ export class Interaction {
         this.toggleCreateSelection('line', geoId)
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
+      } else if (this.editor.mode === EditorMode.IntersectionPoint && isIntersectionTargetType(type)) {
+        this.editor.toggleIntersectionSelection(type, geoId)
       }
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.CreatePlane) this.editor.tryCreateFaceFromSelection()
+      else if (this.editor.mode === EditorMode.IntersectionPoint) this.editor.clearIntersectionSelection()
     }
   }
 
@@ -779,12 +824,11 @@ export class Interaction {
 
     if (
       this.renderer.isARActive() &&
-      (
-        this.editor.mode === EditorMode.CreateLine ||
+      (this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
-        this.editor.mode === EditorMode.CreatePlane
-      )
+        this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
       return
@@ -800,11 +844,9 @@ export class Interaction {
 
     // 橡皮筋逻辑
     if (
-      (
-        this.editor.mode === EditorMode.CreateLine ||
+      (this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
-        this.editor.mode === EditorMode.CreateRay
-      ) &&
+        this.editor.mode === EditorMode.CreateRay) &&
       this.editor.selectedPoints.length === 1
     ) {
       const startPoint = this.editor.selectedPoints[0]
@@ -903,13 +945,23 @@ export class Interaction {
     this.mobileInteractionStartClient.set(e.clientX, e.clientY)
     this.updatePointerPosition(e.clientX, e.clientY)
 
-    const hit = this.pickTouchTarget(e.clientX, e.clientY)
+    const hit =
+      this.editor.mode === EditorMode.IntersectionPoint
+        ? this.pickIntersectionTarget()
+        : this.pickTouchTarget(e.clientX, e.clientY)
 
     if (!hit) {
       if (this.editor.mode === EditorMode.CreatePlane) {
         e.preventDefault()
         e.stopPropagation()
         this.editor.tryCreateFaceFromSelection()
+        this.resetMobileInteractionState()
+        return
+      }
+      if (this.editor.mode === EditorMode.IntersectionPoint) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.editor.clearIntersectionSelection()
         this.resetMobileInteractionState()
         return
       }
@@ -981,6 +1033,14 @@ export class Interaction {
       e.preventDefault()
       e.stopPropagation()
       this.toggleCreateSelection('point', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.IntersectionPoint && isIntersectionTargetType(type)) {
+      e.preventDefault()
+      e.stopPropagation()
+      this.editor.toggleIntersectionSelection(type, geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -1230,7 +1290,11 @@ export class Interaction {
       e.preventDefault()
       e.stopPropagation()
       ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
-      if (this.pendingToggleSelection && !this.mobileInteractionMoved && this.dragStartPositions.size === 0) {
+      if (
+        this.pendingToggleSelection &&
+        !this.mobileInteractionMoved &&
+        this.dragStartPositions.size === 0
+      ) {
         this.deselectGeometry(this.pendingToggleSelection.type, this.pendingToggleSelection.geoId)
         this.draggingPointId = null
         this.draggingLineId = null
@@ -1273,7 +1337,7 @@ export class Interaction {
     this.syncControlLockState()
   }
 
-  /** 统一的拾取函数，支持点和线 */
+  //统一的拾取函数
   pick(): THREE.Object3D | null {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const hits = this.raycaster.intersectObjects([...this.renderer.meshMap.values()])
@@ -1401,10 +1465,17 @@ export class Interaction {
 
     // 记录拖拽起始的相机距离，用于 AR 模式的固定深度拖拽
     this.dragDepth = this.raycaster.ray.origin.distanceTo(ref)
+
+    if (!this.dragSceneStartPositions) {
+      this.dragSceneStartPositions = new Map(
+        [...this.editor.scene.points.entries()].map(([id, point]) => [id, point.position.clone()]),
+      )
+    }
   }
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
     const expandedPointIds = this.expandLockedLinePreviewPointIds(pointIds)
+    this.editor.scene.activeDraggedPointIds = new Set(expandedPointIds)
     expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
       if (!point || this.editor.isPointCoordinateLocked(point)) return
@@ -1457,9 +1528,13 @@ export class Interaction {
   }
 
   private commitDragHistory() {
-    if (this.dragStartPositions.size === 0) return
+    const startPositions = this.dragSceneStartPositions
+    if (!startPositions && this.dragStartPositions.size === 0) return
 
-    const transforms = [...this.dragStartPositions.entries()]
+    const sourceEntries = startPositions
+      ? [...startPositions.entries()]
+      : [...this.dragStartPositions.entries()]
+    const transforms = sourceEntries
       .map(([id, before]) => {
         const point = this.editor.scene.points.get(id)
         if (!point) return null
@@ -1476,6 +1551,7 @@ export class Interaction {
 
     this.editor.applyPointTransformHistory(transforms)
     this.dragStartPositions.clear()
+    this.dragSceneStartPositions = null
   }
 
   clearPreview() {
@@ -1493,7 +1569,9 @@ export class Interaction {
     this.dragReferenceStartPos = null
     this.dragReferenceStartMathPos = null
     this.dragDepth = null
+    this.editor.scene.activeDraggedPointIds.clear()
     this.dragStartPositions.clear()
+    this.dragSceneStartPositions = null
   }
 
   shouldSyncLiveScene() {
