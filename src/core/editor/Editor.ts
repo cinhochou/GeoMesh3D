@@ -30,11 +30,14 @@ import { DeleteLineCommand } from './commands/DeleteLineCommand'
 import { DeleteRayCommand } from './commands/DeleteRayCommand'
 import { DeleteStraightLineCommand } from './commands/DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
+import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
 import { ClearSceneCommand } from './commands/ClearSceneCommand'
 import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
 import { MergePointsCommand } from './commands/MergePointsCommand'
 import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
+import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
+import { CubeConstraint } from '../constraints/CubeConstraint'
 import {
   canCreateIntersectionFromTargets,
   computeIntersectionPoint,
@@ -52,6 +55,7 @@ export enum EditorMode {
   CreateStraightLine,
   CreateRay,
   CreatePlane,
+  CreateHexahedron,
 }
 
 export type FacePreviewData = {
@@ -359,6 +363,272 @@ export class Editor {
     })
 
     return [...matched.values()]
+  }
+
+  collectDependentCubesByPointId(pointId: string, excludePointIds: string[] = []) {
+    const bundles = new Map<
+      string,
+      {
+        faces: PlanarFace[]
+        dependentPoints: Point3[]
+        constraint: CubeConstraint
+        dependentIntersectionPoints: Array<{
+          point: Point3
+          constraint: IntersectionPointConstraint
+        }>
+      }
+    >()
+
+    this.scene.cubeConstraints.forEach((constraint) => {
+      if (!(constraint instanceof CubeConstraint)) return
+      const allPointIds = [
+        ...constraint.ownerPointIds,
+        ...constraint.dependentLayouts.map((layout) => layout.pointId),
+      ]
+      if (!allPointIds.includes(pointId)) return
+
+      const faces = constraint.faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarFace => face !== undefined)
+      const dependentPoints = constraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((point): point is Point3 => point !== undefined)
+        .filter((point) => !excludePointIds.includes(point.id))
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      bundles.set(constraint.cubeId, {
+        faces,
+        dependentPoints,
+        constraint,
+        dependentIntersectionPoints,
+      })
+    })
+
+    return [...bundles.values()]
+  }
+
+  collectDependentCubesByLineId(lineId: string) {
+    const bundles = new Map<
+      string,
+      {
+        faces: PlanarFace[]
+        dependentPoints: Point3[]
+        constraint: CubeConstraint
+        dependentIntersectionPoints: Array<{
+          point: Point3
+          constraint: IntersectionPointConstraint
+        }>
+      }
+    >()
+
+    this.scene.cubeConstraints.forEach((constraint) => {
+      if (!(constraint instanceof CubeConstraint)) return
+      if (constraint.sourceLineId !== lineId) return
+      const faces = constraint.faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarFace => face !== undefined)
+      const dependentPoints = constraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((point): point is Point3 => point !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      bundles.set(constraint.cubeId, {
+        faces,
+        dependentPoints,
+        constraint,
+        dependentIntersectionPoints,
+      })
+    })
+
+    return [...bundles.values()]
+  }
+
+  getCubeConstraintByFaceId(faceId: string) {
+    const face = this.scene.faces.get(faceId)
+    if (!face?.cubeId) return null
+    const constraint = this.scene.getCubeConstraint(face.cubeId)
+    if (!(constraint instanceof CubeConstraint)) return null
+    return constraint
+  }
+
+  getCubeConstraints() {
+    return [...this.scene.cubeConstraints.values()].filter(
+      (constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint,
+    )
+  }
+
+  selectCubeByFaceId(faceId: string, additive = false) {
+    const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
+    if (!cubeConstraint) {
+      this.scene.selection.selectFace(faceId, additive)
+      return
+    }
+    if (!additive) this.scene.selection.clear()
+    cubeConstraint.faceIds.forEach((id) => this.scene.selection.selectFace(id, true))
+  }
+
+  deselectCubeByFaceId(faceId: string) {
+    const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
+    if (!cubeConstraint) {
+      this.scene.selection.deselectFace(faceId)
+      return
+    }
+    cubeConstraint.faceIds.forEach((id) => this.scene.selection.deselectFace(id))
+  }
+
+  getCubeConstraint(cubeId: string) {
+    const constraint = this.scene.getCubeConstraint(cubeId)
+    return constraint instanceof CubeConstraint ? constraint : null
+  }
+
+  getCubeNameSuffix(cubeId: string) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return ''
+    return constraint.name.replace(/^正六面体/, '')
+  }
+
+  updateCubeName(cubeId: string, suffix: string) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    constraint.name = `正六面体${suffix.trim()}`
+  }
+
+  setCubeLockState(cubeId: string, locked: boolean) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    constraint.ownerPointIds.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.userLocked = locked
+    })
+    constraint.dependentLayouts.forEach(({ pointId }) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.userLocked = locked
+    })
+    constraint.faceIds.forEach((faceId) => {
+      const face = this.scene.faces.get(faceId)
+      if (!face || face.userLocked === locked) return
+      face.userLocked = locked
+    })
+  }
+
+  setCubeEdgeLengthLockState(cubeId: string, locked: boolean) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    constraint.edgeLengthLocked = locked
+    if (!locked) {
+      constraint.lockedEdgeLength = null
+      return
+    }
+    const p1 = this.scene.points.get(constraint.ownerPointIds[0])
+    const p2 = this.scene.points.get(constraint.ownerPointIds[1])
+    if (!p1 || !p2) return
+    constraint.lockedEdgeLength = Math.hypot(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+  }
+
+  updateCubeEdgeLength(cubeId: string, nextLength: number) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    const p1 = this.scene.points.get(constraint.ownerPointIds[0])
+    const p2 = this.scene.points.get(constraint.ownerPointIds[1])
+    if (!p1 || !p2) return
+    const current = new Vec3(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+    const currentLength = Math.hypot(current.x, current.y, current.z)
+    if (currentLength <= 1e-6) return
+    const normalizedLength = Math.max(0.01, nextLength)
+    this.setPointsPositions([
+      {
+        id: p2.id,
+        position: new Vec3(
+          p1.position.x + (current.x / currentLength) * normalizedLength,
+          p1.position.y + (current.y / currentLength) * normalizedLength,
+          p1.position.z + (current.z / currentLength) * normalizedLength,
+        ),
+      },
+    ])
+    if (constraint.edgeLengthLocked) {
+      constraint.lockedEdgeLength = normalizedLength
+    }
+  }
+
+  private getCubeConstraintByPointId(pointId: string) {
+    const point = this.scene.points.get(pointId)
+    if (!point?.cubeId) return null
+    return this.getCubeConstraint(point.cubeId)
+  }
+
+  translateCubeByDelta(cubeId: string, delta: Vec3) {
+    if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    const owners = constraint.ownerPointIds
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+    if (owners.length !== 2) return
+    this.setPointsPositions(
+      owners.map((point) => ({
+        id: point.id,
+        position: point.position.add(delta),
+      })),
+    )
+  }
+
+  setCubeOwnerPointPosition(cubeId: string, pointId: string, position: Vec3) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    const point = this.scene.points.get(pointId)
+    if (!point) return
+    if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
+      this.setPointsPositions([{ id: pointId, position }])
+      return
+    }
+    const otherId =
+      constraint.ownerPointIds[0] === pointId
+        ? constraint.ownerPointIds[1]
+        : constraint.ownerPointIds[0]
+    const otherPoint = this.scene.points.get(otherId)
+    if (!otherPoint) return
+
+    let direction = new Vec3(
+      position.x - otherPoint.position.x,
+      position.y - otherPoint.position.y,
+      position.z - otherPoint.position.z,
+    )
+    let directionLength = Math.hypot(direction.x, direction.y, direction.z)
+    if (directionLength <= 1e-6) {
+      direction = new Vec3(
+        point.position.x - otherPoint.position.x,
+        point.position.y - otherPoint.position.y,
+        point.position.z - otherPoint.position.z,
+      )
+      directionLength = Math.hypot(direction.x, direction.y, direction.z)
+    }
+    if (directionLength <= 1e-6) {
+      direction = new Vec3(1, 0, 0)
+      directionLength = 1
+    }
+
+    this.setPointsPositions([
+      {
+        id: pointId,
+        position: new Vec3(
+          otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
+          otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
+          otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
+        ),
+      },
+    ])
   }
 
   isPointCoordinateLocked(point: Point3 | null | undefined) {
@@ -734,6 +1004,8 @@ export class Editor {
   deletePoint(pointId: string) {
     const point = this.scene.points.get(pointId)
     if (!point || point.locked) return
+    const dependentCubes = this.collectDependentCubesByPointId(pointId, [pointId])
+    const cubeFaceIds = new Set(dependentCubes.flatMap(({ faces }) => faces.map((face) => face.id)))
 
     const relatedLines = [...this.scene.lines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
@@ -744,8 +1016,8 @@ export class Editor {
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
-    const relatedFaces = [...this.scene.faces.values()].filter((face) =>
-      face.includesPoint(pointId),
+    const relatedFaces = [...this.scene.faces.values()].filter(
+      (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
     )
     const pointConstraint = this.scene.getIntersectionConstraint(pointId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
@@ -765,6 +1037,7 @@ export class Editor {
         relatedFaces,
         pointConstraint,
         dependentIntersectionPoints,
+        dependentCubes,
       ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
@@ -776,7 +1049,10 @@ export class Editor {
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'line', id: lineId },
     ])
-    this.executeCommand(new DeleteLineCommand(this.scene, line, dependentIntersectionPoints))
+    const dependentCubes = this.collectDependentCubesByLineId(lineId)
+    this.executeCommand(
+      new DeleteLineCommand(this.scene, line, dependentIntersectionPoints, dependentCubes),
+    )
   }
 
   deleteRay(rayId: string) {
@@ -802,6 +1078,28 @@ export class Editor {
   deleteFace(faceId: string) {
     const face = this.scene.faces.get(faceId)
     if (!face) return
+    const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
+    if (cubeConstraint) {
+      const faces = cubeConstraint.faceIds
+        .map((id) => this.scene.faces.get(id))
+        .filter((item): item is PlanarFace => item !== undefined)
+      const dependentPoints = cubeConstraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((item): item is Point3 => item !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((cubeFace) => ({ type: 'face' as const, id: cubeFace.id })),
+      )
+      this.executeCommand(
+        new DeleteHexahedronCommand(
+          this.scene,
+          faces,
+          dependentPoints,
+          cubeConstraint,
+          dependentIntersectionPoints,
+        ),
+      )
+      return
+    }
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'face', id: faceId },
     ])
@@ -860,6 +1158,23 @@ export class Editor {
   setPointPosition(pointId: string, position: Vec3) {
     const point = this.scene.points.get(pointId)
     if (!point || this.isPointCoordinateLocked(point)) return
+
+    const cubeConstraint = this.getCubeConstraintByPointId(pointId)
+    if (cubeConstraint && point.cubeRole === 'dependent') {
+      this.translateCubeByDelta(
+        cubeConstraint.cubeId,
+        new Vec3(
+          position.x - point.position.x,
+          position.y - point.position.y,
+          position.z - point.position.z,
+        ),
+      )
+      return
+    }
+    if (cubeConstraint && point.cubeRole === 'owner') {
+      this.setCubeOwnerPointPosition(cubeConstraint.cubeId, pointId, position)
+      return
+    }
 
     const before = point.position.clone()
     const nextPosition = this.resolveLockedLinePointPosition(pointId, position)
@@ -1382,6 +1697,173 @@ export class Editor {
     this.scene.selection.selectFace(face.id)
   }
 
+  tryCreateHexahedronFromSelection() {
+    const selectedLines = [...this.scene.selection.lines]
+      .map((id) => this.scene.lines.get(id))
+      .filter((line): line is Line3 => line !== undefined)
+    const selectedPoints = [...this.scene.selection.points]
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+
+    let ownerPoints: [Point3, Point3] | null = null
+    let sourceLineId: string | null = null
+
+    if (selectedLines.length === 1 && selectedPoints.length === 0) {
+      ownerPoints = [selectedLines[0]!.p1, selectedLines[0]!.p2]
+      sourceLineId = selectedLines[0]!.id
+    } else if (selectedLines.length === 0 && selectedPoints.length === 2) {
+      ownerPoints = [selectedPoints[0]!, selectedPoints[1]!]
+    } else {
+      return
+    }
+
+    const [p1, p2] = ownerPoints
+    const edge = new Vec3(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-6) {
+      return
+    }
+
+    const uAxis = new Vec3(edge.x / edgeLength, edge.y / edgeLength, edge.z / edgeLength)
+    const worldAxes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)]
+    const referenceAxis = worldAxes.reduce((best, candidate) => {
+      const bestDot = Math.abs(best.x * uAxis.x + best.y * uAxis.y + best.z * uAxis.z)
+      const candidateDot = Math.abs(
+        candidate.x * uAxis.x + candidate.y * uAxis.y + candidate.z * uAxis.z,
+      )
+      return candidateDot < bestDot ? candidate : best
+    })
+    const projectedReference = new Vec3(
+      referenceAxis.x - uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.y - uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.z - uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+    )
+    const projectedLength = Math.hypot(
+      projectedReference.x,
+      projectedReference.y,
+      projectedReference.z,
+    )
+    if (projectedLength <= 1e-6) {
+      return
+    }
+
+    const vAxis = new Vec3(
+      projectedReference.x / projectedLength,
+      projectedReference.y / projectedLength,
+      projectedReference.z / projectedLength,
+    )
+    const wAxisRaw = new Vec3(
+      uAxis.y * vAxis.z - uAxis.z * vAxis.y,
+      uAxis.z * vAxis.x - uAxis.x * vAxis.z,
+      uAxis.x * vAxis.y - uAxis.y * vAxis.x,
+    )
+    const wAxisLength = Math.hypot(wAxisRaw.x, wAxisRaw.y, wAxisRaw.z)
+    if (wAxisLength <= 1e-6) {
+      return
+    }
+    const wAxis = new Vec3(
+      wAxisRaw.x / wAxisLength,
+      wAxisRaw.y / wAxisLength,
+      wAxisRaw.z / wAxisLength,
+    )
+
+    const usedPointNames = new Set([...this.scene.points.values()].map((point) => point.name))
+    const nextPointName = () => {
+      const name = genNextAvailableName(usedPointNames, 65)
+      usedPointNames.add(name)
+      return name
+    }
+    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
+    const nextFaceName = () => {
+      const name = genNextAvailableName(usedFaceNames, 0, (index) => (index === 0 ? 'F' : `F${index}`))
+      usedFaceNames.add(name)
+      return name
+    }
+
+    const createCubePoint = (x: number, y: number, z: number) => {
+      const point = new Point3(
+        genId('p'),
+        nextPointName(),
+        new Vec3(
+          p1.position.x + (uAxis.x * x + vAxis.x * y + wAxis.x * z) * edgeLength,
+          p1.position.y + (uAxis.y * x + vAxis.y * y + wAxis.y * z) * edgeLength,
+          p1.position.z + (uAxis.z * x + vAxis.z * y + wAxis.z * z) * edgeLength,
+        ),
+      )
+      point.cubeRole = 'dependent'
+      return point
+    }
+
+    const p3 = createCubePoint(0, 1, 0)
+    const p4 = createCubePoint(1, 1, 0)
+    const p5 = createCubePoint(0, 0, 1)
+    const p6 = createCubePoint(1, 0, 1)
+    const p7 = createCubePoint(1, 1, 1)
+    const p8 = createCubePoint(0, 1, 1)
+    const cubeId = genId('cube')
+    const ownerPointIds = [p1.id, p2.id] as [string, string]
+    p1.cubeId = cubeId
+    p2.cubeId = cubeId
+    p1.cubeRole = 'owner'
+    p2.cubeRole = 'owner'
+    const dependentPoints = [p3, p4, p5, p6, p7, p8]
+    dependentPoints.forEach((point) => {
+      point.cubeId = cubeId
+    })
+    const dependentPointIds = dependentPoints.map((point) => point.id)
+    const cubeName = genNextAvailableName(
+      this.getCubeConstraints().map((constraint) => constraint.name),
+      0,
+      (index) => `正六面体${index + 1}`,
+    )
+    const makeFace = (boundaryPointIds: string[]) => {
+      const face = new PlanarFace(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
+      face.fillColor = 0xf4a7a7
+      face.fillOpacity = 0.22
+      face.userLocked = false
+      face.nameVisible = false
+      face.cubeId = cubeId
+      face.cubeOwnerPointIds = [...ownerPointIds]
+      face.cubeDependentPointIds = [...dependentPointIds]
+      return face
+    }
+
+    const faces = [
+      makeFace([p1.id, p2.id, p4.id, p3.id]),
+      makeFace([p5.id, p6.id, p7.id, p8.id]),
+      makeFace([p1.id, p2.id, p6.id, p5.id]),
+      makeFace([p2.id, p4.id, p7.id, p6.id]),
+      makeFace([p4.id, p3.id, p8.id, p7.id]),
+      makeFace([p3.id, p1.id, p5.id, p8.id]),
+    ]
+
+    const constraint = new CubeConstraint(
+      this.scene,
+      cubeId,
+      ownerPointIds,
+      [
+        { pointId: p3.id, x: 0, y: 1, z: 0 },
+        { pointId: p4.id, x: 1, y: 1, z: 0 },
+        { pointId: p5.id, x: 0, y: 0, z: 1 },
+        { pointId: p6.id, x: 1, y: 0, z: 1 },
+        { pointId: p7.id, x: 1, y: 1, z: 1 },
+        { pointId: p8.id, x: 0, y: 1, z: 1 },
+      ],
+      faces.map((face) => face.id),
+      sourceLineId,
+      vAxis.clone(),
+      cubeName,
+    )
+
+    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint))
+    this.scene.selection.clear()
+    this.selectCubeByFaceId(faces[0]!.id)
+  }
+
   getFacePreviewFromSelection(): FacePreviewData | null {
     if (this.mode !== EditorMode.CreatePlane) return null
 
@@ -1734,7 +2216,14 @@ export class Editor {
 
     for (let iteration = 0; iteration < 3; iteration += 1) {
       for (const [id, position] of [...nextPositions.entries()]) {
-        nextPositions.set(id, this.resolveLockedLinePointPosition(id, position, nextPositions))
+        nextPositions.set(
+          id,
+          this.resolveLockedCubeOwnerPointPosition(
+            id,
+            this.resolveLockedLinePointPosition(id, position, nextPositions),
+            nextPositions,
+          ),
+        )
       }
 
       faceIds.forEach((faceId) => {
@@ -1894,6 +2383,53 @@ export class Editor {
     })
 
     return resolved
+  }
+
+  resolveLockedCubeOwnerPointPosition(
+    pointId: string,
+    position: Vec3,
+    positionOverrides?: Map<string, Vec3>,
+  ) {
+    const constraint = this.getCubeConstraintByPointId(pointId)
+    if (!constraint || !constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
+      return position.clone()
+    }
+
+    const point = this.scene.points.get(pointId)
+    if (!point || point.cubeRole !== 'owner') return position.clone()
+    const otherId =
+      constraint.ownerPointIds[0] === pointId
+        ? constraint.ownerPointIds[1]
+        : constraint.ownerPointIds[0]
+    const otherPoint = this.scene.points.get(otherId)
+    if (!otherPoint) return position.clone()
+
+    const anchor = positionOverrides?.get(otherId) ?? otherPoint.position
+    let dx = position.x - anchor.x
+    let dy = position.y - anchor.y
+    let dz = position.z - anchor.z
+    let distance = Math.hypot(dx, dy, dz)
+
+    if (distance <= 1e-6) {
+      const currentPosition = positionOverrides?.get(pointId) ?? point.position
+      dx = currentPosition.x - anchor.x
+      dy = currentPosition.y - anchor.y
+      dz = currentPosition.z - anchor.z
+      distance = Math.hypot(dx, dy, dz)
+    }
+
+    if (distance <= 1e-6) {
+      dx = 1
+      dy = 0
+      dz = 0
+      distance = 1
+    }
+
+    return new Vec3(
+      anchor.x + (dx / distance) * constraint.lockedEdgeLength,
+      anchor.y + (dy / distance) * constraint.lockedEdgeLength,
+      anchor.z + (dz / distance) * constraint.lockedEdgeLength,
+    )
   }
 
   updateFaceBoundaryEdgeLength(

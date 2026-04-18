@@ -48,6 +48,7 @@ const isAROpen = computed(() => isARMode.value)
 const isDeleteMenuOpen = computed(() => toolbarMenus.value.deleteOpen)
 const isPointMenuOpen = computed(() => toolbarMenus.value.pointOpen)
 const isLineMenuOpen = computed(() => toolbarMenus.value.lineOpen)
+const isSolidMenuOpen = computed(() => toolbarMenus.value.solidOpen)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
 const deletePanelRef = ref<HTMLElement | null>(null)
@@ -57,6 +58,9 @@ const pointPanelRef = ref<HTMLElement | null>(null)
 const lineMenuRef = ref<HTMLElement | null>(null)
 const lineTriggerRef = ref<HTMLElement | null>(null)
 const linePanelRef = ref<HTMLElement | null>(null)
+const solidMenuRef = ref<HTMLElement | null>(null)
+const solidTriggerRef = ref<HTMLElement | null>(null)
+const solidPanelRef = ref<HTMLElement | null>(null)
 const deleteMenuStyle = ref({
   top: '0px',
   left: '0px',
@@ -68,6 +72,11 @@ const pointMenuStyle = ref({
   minWidth: '132px',
 })
 const lineMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '132px',
+})
+const solidMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '132px',
@@ -167,6 +176,22 @@ const updateLineMenuPosition = () => {
   }
 }
 
+const toggleSolidMenu = () => {
+  if (isEditingLocked.value) return
+  uiStore.toggleToolbarMenu('solidOpen')
+}
+
+const updateSolidMenuPosition = () => {
+  const trigger = solidTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  solidMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 132)}px`,
+  }
+}
+
 const selectDeleteMode = () => {
   setMode(EditorMode.Delete)
 }
@@ -203,6 +228,11 @@ const selectCreateStraightLineMode = () => {
 
 const selectCreateRayMode = () => {
   setMode(EditorMode.CreateRay)
+}
+
+const createHexahedron = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateHexahedron)
 }
 
 const toggleProfileMenu = () => {
@@ -282,6 +312,13 @@ const handleClickOutside = (event: MouseEvent) => {
     uiStore.setToolbarMenuOpen('lineOpen', false, { exclusive: false })
   }
   if (
+    isSolidMenuOpen.value &&
+    !solidMenuRef.value?.contains(target) &&
+    !solidPanelRef.value?.contains(target)
+  ) {
+    uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  }
+  if (
     profileMenuOpen.value &&
     !profileTriggerRef.value?.contains(target) &&
     !profilePanelRef.value?.contains(target)
@@ -308,6 +345,12 @@ watch(isLineMenuOpen, async (isOpen) => {
   updateLineMenuPosition()
 })
 
+watch(isSolidMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updateSolidMenuPosition()
+})
+
 watch(profileMenuOpen, async (isOpen) => {
   if (!isOpen) return
   await nextTick()
@@ -327,10 +370,12 @@ onMounted(() => {
   window.addEventListener('resize', updateDeleteMenuPosition)
   window.addEventListener('resize', updatePointMenuPosition)
   window.addEventListener('resize', updateLineMenuPosition)
+  window.addEventListener('resize', updateSolidMenuPosition)
   window.addEventListener('resize', updateProfileMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
   document.addEventListener('scroll', updatePointMenuPosition, true)
   document.addEventListener('scroll', updateLineMenuPosition, true)
+  document.addEventListener('scroll', updateSolidMenuPosition, true)
   document.addEventListener('scroll', updateProfileMenuPosition, true)
 })
 
@@ -339,10 +384,12 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateDeleteMenuPosition)
   window.removeEventListener('resize', updatePointMenuPosition)
   window.removeEventListener('resize', updateLineMenuPosition)
+  window.removeEventListener('resize', updateSolidMenuPosition)
   window.removeEventListener('resize', updateProfileMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
   document.removeEventListener('scroll', updatePointMenuPosition, true)
   document.removeEventListener('scroll', updateLineMenuPosition, true)
+  document.removeEventListener('scroll', updateSolidMenuPosition, true)
   document.removeEventListener('scroll', updateProfileMenuPosition, true)
 })
 </script>
@@ -414,6 +461,21 @@ onUnmounted(() => {
     >
       面
     </button>
+
+    <div ref="solidMenuRef" class="menu-wrap">
+      <button
+        ref="solidTriggerRef"
+        class="menu-trigger"
+        :class="{
+          'is-active': currentMode === EditorMode.CreateHexahedron,
+          'is-open': isSolidMenuOpen,
+        }"
+        @click="toggleSolidMenu"
+        :disabled="isEditingLocked"
+      >
+        <span>立体图▾</span>
+      </button>
+    </div>
 
     <div class="divider"></div>
 
@@ -539,6 +601,18 @@ onUnmounted(() => {
         @click="selectCreateRayMode"
       >
         射线
+      </button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="isSolidMenuOpen" ref="solidPanelRef" class="menu-panel" :style="solidMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateHexahedron }"
+        @click="createHexahedron"
+      >
+        正六面体
       </button>
     </div>
   </Teleport>

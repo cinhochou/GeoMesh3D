@@ -11,6 +11,7 @@ export type SceneConstraint = {
   solve: () => void
   faceId?: string
   pointId?: string
+  cubeId?: string
   isEffective?: () => boolean
 }
 
@@ -26,6 +27,7 @@ export class Scene {
   constraints: SceneConstraint[] = []
   faceConstraints = new Map<string, SceneConstraint>()
   intersectionConstraints = new Map<string, SceneConstraint>()
+  cubeConstraints = new Map<string, SceneConstraint>()
 
   constructor() {
     // 固定原点：可参与连线/选择，但不可移动
@@ -75,6 +77,7 @@ export class Scene {
     this.constraints.push(c)
     if (c.faceId) this.faceConstraints.set(c.faceId, c)
     if (c.pointId) this.intersectionConstraints.set(c.pointId, c)
+    if (c.cubeId) this.cubeConstraints.set(c.cubeId, c)
   }
 
   addIntersectionConstraint(c: SceneConstraint & { pointId: string }) {
@@ -95,6 +98,30 @@ export class Scene {
     this.intersectionConstraints.delete(pointId)
   }
 
+  addCubeConstraint(c: SceneConstraint & { cubeId: string }) {
+    const existing = this.cubeConstraints.get(c.cubeId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+    }
+    this.cubeConstraints.set(c.cubeId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+  }
+
+  removeCubeConstraint(cubeId: string) {
+    const existing = this.cubeConstraints.get(cubeId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.cubeConstraints.delete(cubeId)
+  }
+
+  getCubeConstraint(cubeId: string) {
+    const constraint = this.cubeConstraints.get(cubeId)
+    if (!constraint || !constraint.cubeId) return null
+    return constraint
+  }
+
   getIntersectionConstraint(pointId: string) {
     const constraint = this.intersectionConstraints.get(pointId)
     if (!constraint || !constraint.pointId) return null
@@ -105,14 +132,17 @@ export class Scene {
     this.constraints = []
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
+    this.cubeConstraints.clear()
   }
 
   rebuildConstraintIndexes() {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
+    this.cubeConstraints.clear()
     this.constraints.forEach((constraint) => {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
+      if (constraint.cubeId) this.cubeConstraints.set(constraint.cubeId, constraint)
     })
   }
 }

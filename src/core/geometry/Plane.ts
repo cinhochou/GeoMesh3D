@@ -14,6 +14,11 @@ export class PlanarFace {
   name: string
   nameVisible: boolean
   visible: boolean
+  fillColor: number | null = null
+  fillOpacity: number | null = null
+  cubeId: string | null = null
+  cubeOwnerPointIds: string[] = []
+  cubeDependentPointIds: string[] = []
   userLocked: boolean
   areaLocked: boolean
   lockedArea: number

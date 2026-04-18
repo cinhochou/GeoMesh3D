@@ -233,6 +233,7 @@ function onModeChange(mode: EditorMode) {
   if (isARMode.value && mode !== EditorMode.Select) return
   interaction.clearPreview()
   editor.setMode(mode)
+  sceneStore.setCurrentMode(mode)
   uiStore.closeMergePointDialog()
 }
 
@@ -301,8 +302,10 @@ const handleToggleCoordinateSystem = (enabled: boolean) => {
   if (!enabled) {
     uiStore.setLastModeBeforeCoordinateOff(editor.mode)
     editor.setMode(EditorMode.Select)
+    sceneStore.setCurrentMode(EditorMode.Select)
   } else if (!isARMode.value && lastModeBeforeCoordinateOff.value !== null) {
     editor.setMode(lastModeBeforeCoordinateOff.value)
+    sceneStore.setCurrentMode(lastModeBeforeCoordinateOff.value)
   }
 
   if (enabled) {
@@ -324,11 +327,13 @@ const handleToggleAR = async (enabled: boolean) => {
   if (enabled) {
     uiStore.setLastModeBeforeAR(editor.mode)
     editor.setMode(EditorMode.Select)
+    sceneStore.setCurrentMode(EditorMode.Select)
     uiStore.setARMode(true)
   } else {
     uiStore.setARMode(false)
     if (lastModeBeforeAR.value !== null) {
       editor.setMode(lastModeBeforeAR.value)
+      sceneStore.setCurrentMode(lastModeBeforeAR.value)
     }
     uiStore.setLastModeBeforeAR(null)
   }
@@ -339,6 +344,7 @@ const handleToggleAR = async (enabled: boolean) => {
     // rollback if AR 初始化失败
     if (enabled && lastModeBeforeAR.value !== null) {
       editor.setMode(lastModeBeforeAR.value)
+      sceneStore.setCurrentMode(lastModeBeforeAR.value)
     }
     uiStore.setARMode(false)
     console.error(err)

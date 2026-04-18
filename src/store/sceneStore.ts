@@ -39,6 +39,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建射线'
     case EditorMode.CreatePlane:
       return '创建面'
+    case EditorMode.CreateHexahedron:
+      return '创建正六面体'
     default:
       return ''
   }
@@ -47,19 +49,21 @@ const getModeName = (mode: EditorMode) => {
 const getModeHint = (mode: EditorMode) => {
   switch (mode) {
     case EditorMode.Delete:
-      return '单击场景中的几何元素对象以删除~'
+      return '单击场景中的几何对象即可删除。'
     case EditorMode.CreateLine:
-      return '点击场景中的两个不同的点以创建线段~'
+      return '点击场景中的两个不同点以创建线段。'
     case EditorMode.CreateStraightLine:
-      return '点击场景中的两个不同的点以创建直线~'
+      return '点击场景中的两个不同点以创建直线。'
     case EditorMode.CreateRay:
-      return '点击场景中的两个不同的点以创建射线~'
+      return '点击场景中的两个不同点以创建射线。'
     case EditorMode.CreatePlane:
-      return '先选择多个点或闭合线段，再点击空白处确认创建面~'
+      return '先选择多个点或闭合线段，再点击空白处确认创建面。'
     case EditorMode.MergePoint:
-      return '先选中两个点，再选择保留哪个点完成合并~'
+      return '先选中两个点，再选择保留哪个点完成合并。'
     case EditorMode.IntersectionPoint:
-      return '选中两条线或一条线和一个平面以创建交点~'
+      return '选中两个可求交的对象来创建交点。'
+    case EditorMode.CreateHexahedron:
+      return '选中两个点或一条线段以创建正六面体~'
     default:
       return ''
   }

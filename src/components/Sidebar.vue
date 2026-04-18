@@ -77,9 +77,33 @@ const facesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.faces.values()]
 })
+const hexahedronsInScene = computed(() => {
+  void commandRevision.value
+  return props.editor.getCubeConstraints()
+})
+const fullySelectedHexahedronIds = computed(() => {
+  void commandRevision.value
+  return hexahedronsInScene.value
+    .filter((cube) => cube.faceIds.every((faceId) => props.scene.selection.faces.has(faceId)))
+    .map((cube) => cube.cubeId)
+})
+const selectedHexahedrons = computed(() => {
+  void commandRevision.value
+  return fullySelectedHexahedronIds.value
+    .map((cubeId) => props.editor.getCubeConstraint(cubeId))
+    .filter(
+      (constraint): constraint is NonNullable<ReturnType<typeof props.editor.getCubeConstraint>> =>
+        constraint !== null,
+    )
+})
+const selectedEditableFaces = computed(() =>
+  selectedFaces.value.filter(
+    (face) => !face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId),
+  ),
+)
 
 const editing = ref<{
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -104,6 +128,8 @@ const isLineConstraintLocked = (line: Line3 | undefined) =>
       (props.editor.isLineLocked(line) ||
         (isPointCoordinateLocked(line.p1) && isPointCoordinateLocked(line.p2))),
   )
+const hasCubeConstraint = (point: Point3 | undefined) => Boolean(point?.cubeId)
+const isCubeFace = (face: PlanarFace | undefined) => Boolean(face?.cubeId)
 
 const editPoint = reactive({
   name: '',
@@ -149,6 +175,14 @@ const editFace = reactive({
   areaLocked: false,
   edgeLengths: [] as string[],
 })
+const editHexahedron = reactive({
+  nameSuffix: '',
+  edgeLength: '',
+  userLocked: false,
+  edgeLengthLocked: false,
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
@@ -161,28 +195,39 @@ const selectedStraightLineIds = computed(() =>
   selectedStraightLines.value.map((l) => l?.id).filter(Boolean),
 )
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
+const selectedEditableFaceIds = computed(() =>
+  selectedEditableFaces.value.map((f) => f?.id).filter(Boolean),
+)
 const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).filter(Boolean))
+const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
     linesInScene.value.length +
     straightLinesInScene.value.length +
     raysInScene.value.length +
-    facesInScene.value.length,
+    facesInScene.value.length +
+    hexahedronsInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
-const contentGroupLabels: Record<'point' | 'line' | 'straightLine' | 'ray' | 'face', string> = {
+const contentGroupLabels: Record<
+  'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron',
+  string
+> = {
   point: '点',
   line: '线段',
   straightLine: '直线',
   ray: '射线',
   face: '面',
+  hexahedron: '正六面体',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
 }
 
-const toggleContentGroup = (type: 'point' | 'line' | 'straightLine' | 'ray' | 'face') => {
+const toggleContentGroup = (
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron',
+) => {
   if (!canCollapseContentGroups.value) return
   uiStore.toggleContentGroup(type)
 }
@@ -235,6 +280,16 @@ const selectFaceFromContent = (id: string) => {
   props.scene.selection.selectFace(id)
 }
 
+const selectHexahedronFromContent = (cubeId: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  const constraint = props.editor.getCubeConstraint(cubeId)
+  const firstFaceId = constraint?.faceIds[0]
+  if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
+}
+
 const clearContentSelection = () => {
   editing.value = null
   expandedLineEditorPoint.value = null
@@ -254,7 +309,14 @@ const updateCompactLineEditorMode = () => {
 }
 
 watch(
-  [selectedPointIds, selectedLineIds, selectedStraightLineIds, selectedRayIds, selectedFaceIds],
+  [
+    selectedPointIds,
+    selectedLineIds,
+    selectedStraightLineIds,
+    selectedRayIds,
+    selectedEditableFaceIds,
+    selectedHexahedronIds,
+  ],
   () => {
     if (!editing.value) return
     const { type, id } = editing.value
@@ -262,7 +324,8 @@ watch(
     if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
     if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
     if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
-    if (type === 'face' && !selectedFaceIds.value.includes(id)) editing.value = null
+    if (type === 'face' && !selectedEditableFaceIds.value.includes(id)) editing.value = null
+    if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
   },
 )
 
@@ -507,6 +570,40 @@ const nudgeFaceEdgeLength = (faceId: string, edgeIndex: number, direction: 'up' 
   editFace.edgeLengths[edgeIndex] = String(next)
   applyFaceEdgeLength(faceId, edgeIndex)
 }
+const handleHexahedronEdgeLengthFocus = () => {
+  setCoordFocus('hexa.edgeLength', true)
+}
+const handleHexahedronEdgeLengthBlur = () => {
+  editHexahedron.edgeLength = normalizeDisplayLength(editHexahedron.edgeLength)
+  setCoordFocus('hexa.edgeLength', false)
+  applyHexahedronEdgeLength()
+}
+const nudgeHexahedronEdgeLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('hexa.edgeLength', direction)
+  if (nextValue === null) return
+  editHexahedron.edgeLength = nextValue
+  applyHexahedronEdgeLength()
+}
+const isHexahedronEdgeLengthInputDisabled = () =>
+  editHexahedron.userLocked || editHexahedron.edgeLengthLocked
+const handleHexahedronOwnerCoordFocus = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`hexa.${pointKey}.${axis}`, true)
+}
+const handleHexahedronOwnerCoordBlur = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editHexahedron[pointKey][axis] = normalizeCoord(editHexahedron[pointKey][axis])
+  setCoordFocus(`hexa.${pointKey}.${axis}`, false)
+  applyHexahedronOwnerPoint(pointKey)
+}
+const nudgeHexahedronOwnerCoord = (
+  pointKey: 'p1' | 'p2',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`hexa.${pointKey}.${axis}`, direction)
+  if (nextValue === null) return
+  editHexahedron[pointKey][axis] = nextValue
+  applyHexahedronOwnerPoint(pointKey)
+}
 
 const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
@@ -590,6 +687,36 @@ const startEditFace = (face: PlanarFace | undefined) => {
   editFace.edgeLengths = face
     .getBoundaryPoints(props.scene.points)
     .map((_, index) => toFixed2(face.getEdgeLength(props.scene.points, index)))
+}
+const startEditHexahedron = (cubeId: string) => {
+  const constraint = props.editor.getCubeConstraint(cubeId)
+  if (!constraint) return
+  const ownerPoints = constraint.ownerPointIds
+    .map((id) => props.scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined)
+  if (ownerPoints.length < 2) return
+  editing.value = { type: 'hexahedron', id: cubeId }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editHexahedron.nameSuffix = props.editor.getCubeNameSuffix(cubeId)
+  editHexahedron.userLocked = constraint.faceIds.every(
+    (faceId) => props.scene.faces.get(faceId)?.userLocked,
+  )
+  editHexahedron.edgeLengthLocked = constraint.edgeLengthLocked
+  editHexahedron.edgeLength = toFixed2(
+    Math.hypot(
+      ownerPoints[1]!.position.x - ownerPoints[0]!.position.x,
+      ownerPoints[1]!.position.y - ownerPoints[0]!.position.y,
+      ownerPoints[1]!.position.z - ownerPoints[0]!.position.z,
+    ),
+  )
+  editHexahedron.p1.x = toFixed2(ownerPoints[0]!.position.x)
+  editHexahedron.p1.y = toFixed2(ownerPoints[0]!.position.y)
+  editHexahedron.p1.z = toFixed2(ownerPoints[0]!.position.z)
+  editHexahedron.p2.x = toFixed2(ownerPoints[1]!.position.x)
+  editHexahedron.p2.y = toFixed2(ownerPoints[1]!.position.y)
+  editHexahedron.p2.z = toFixed2(ownerPoints[1]!.position.z)
 }
 
 const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string) => {
@@ -762,6 +889,61 @@ const applyEditFace = () => {
     props.editor.setFaceAreaLockState(editing.value.id, editFace.areaLocked)
   }
 }
+const getEditingHexahedronState = () => {
+  if (!editing.value || editing.value.type !== 'hexahedron') return null
+  const constraint = props.editor.getCubeConstraint(editing.value.id)
+  if (!constraint) return null
+  const ownerPoints = getHexahedronOwnerPoints(editing.value.id)
+  if (ownerPoints.length < 2) return null
+  return {
+    cubeId: editing.value.id,
+    constraint,
+    ownerPoints: [ownerPoints[0]!, ownerPoints[1]!] as [Point3, Point3],
+  }
+}
+const applyHexahedronMeta = () => {
+  const state = getEditingHexahedronState()
+  if (!state) return
+  props.editor.updateCubeName(state.cubeId, editHexahedron.nameSuffix)
+  props.editor.setCubeLockState(state.cubeId, editHexahedron.userLocked)
+  props.editor.setCubeEdgeLengthLockState(state.cubeId, editHexahedron.edgeLengthLocked)
+}
+const applyHexahedronEdgeLength = () => {
+  const state = getEditingHexahedronState()
+  if (!state) return
+  const edgeLength = Number(editHexahedron.edgeLength)
+  if (!Number.isFinite(edgeLength)) return
+  props.editor.updateCubeEdgeLength(state.cubeId, edgeLength)
+}
+const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
+  const state = getEditingHexahedronState()
+  if (!state) return
+  const pointIndex = pointKey === 'p1' ? 0 : 1
+  const point = state.ownerPoints[pointIndex]
+  const nextPosition = {
+    x: Number(editHexahedron[pointKey].x),
+    y: Number(editHexahedron[pointKey].y),
+    z: Number(editHexahedron[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  ) {
+    return
+  }
+  if (
+    Math.abs(nextPosition.x - point.position.x) <= 1e-6 &&
+    Math.abs(nextPosition.y - point.position.y) <= 1e-6 &&
+    Math.abs(nextPosition.z - point.position.z) <= 1e-6
+  ) {
+    return
+  }
+  props.editor.setPointPosition(
+    point.id,
+    new Vec3(nextPosition.x, nextPosition.y, nextPosition.z),
+  )
+}
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
@@ -773,6 +955,23 @@ const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
 const getFaceArea = (face: PlanarFace) => face.getArea(props.scene.points)
 const getFaceCentroid = (face: PlanarFace) => face.getCentroid(props.scene.points)
 const getFaceBoundaryPoints = (face: PlanarFace) => face.getBoundaryPoints(props.scene.points)
+const getHexahedronOwnerPoints = (cubeId: string) => {
+  const constraint = props.editor.getCubeConstraint(cubeId)
+  if (!constraint) return [] as Point3[]
+  return constraint.ownerPointIds
+    .map((id) => props.scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined)
+}
+const getHexahedronEdgeLength = (cubeId: string) => {
+  const ownerPoints = getHexahedronOwnerPoints(cubeId)
+  if (ownerPoints.length < 2) return 0
+  return Math.hypot(
+    ownerPoints[1]!.position.x - ownerPoints[0]!.position.x,
+    ownerPoints[1]!.position.y - ownerPoints[0]!.position.y,
+    ownerPoints[1]!.position.z - ownerPoints[0]!.position.z,
+  )
+}
+const getHexahedronVolume = (cubeId: string) => Math.pow(getHexahedronEdgeLength(cubeId), 3)
 const getFaceMemberPointNames = (face: PlanarFace) =>
   face
     .getMemberPoints(props.scene.points)
@@ -987,6 +1186,48 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'hexahedron') return null
+    const constraint = props.editor.getCubeConstraint(editing.value.id)
+    if (!constraint) return null
+    const ownerPoints = getHexahedronOwnerPoints(editing.value.id)
+    if (ownerPoints.length < 2) return null
+    return {
+      nameSuffix: props.editor.getCubeNameSuffix(editing.value.id),
+      userLocked: constraint.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked),
+      edgeLengthLocked: constraint.edgeLengthLocked,
+      edgeLength: getHexahedronEdgeLength(editing.value.id),
+      p1: {
+        x: ownerPoints[0]!.position.x,
+        y: ownerPoints[0]!.position.y,
+        z: ownerPoints[0]!.position.z,
+      },
+      p2: {
+        x: ownerPoints[1]!.position.x,
+        y: ownerPoints[1]!.position.y,
+        z: ownerPoints[1]!.position.z,
+      },
+    }
+  },
+  (nextCube) => {
+    if (!nextCube) return
+    editHexahedron.nameSuffix = nextCube.nameSuffix
+    editHexahedron.userLocked = nextCube.userLocked
+    editHexahedron.edgeLengthLocked = nextCube.edgeLengthLocked
+    if (!focusedCoord['hexa.edgeLength']) {
+      editHexahedron.edgeLength = toFixed2(nextCube.edgeLength)
+    }
+    if (!focusedCoord['hexa.p1.x']) editHexahedron.p1.x = toFixed2(nextCube.p1.x)
+    if (!focusedCoord['hexa.p1.y']) editHexahedron.p1.y = toFixed2(nextCube.p1.y)
+    if (!focusedCoord['hexa.p1.z']) editHexahedron.p1.z = toFixed2(nextCube.p1.z)
+    if (!focusedCoord['hexa.p2.x']) editHexahedron.p2.x = toFixed2(nextCube.p2.x)
+    if (!focusedCoord['hexa.p2.y']) editHexahedron.p2.y = toFixed2(nextCube.p2.y)
+    if (!focusedCoord['hexa.p2.z']) editHexahedron.p2.z = toFixed2(nextCube.p2.z)
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   updateCompactLineEditorMode()
   window.addEventListener('resize', updateCompactLineEditorMode)
@@ -1021,7 +1262,8 @@ onUnmounted(() => {
         selectedLines.length > 0 ||
         selectedStraightLines.length > 0 ||
         selectedRays.length > 0 ||
-        selectedFaces.length > 0
+        selectedEditableFaces.length > 0 ||
+        selectedHexahedrons.length > 0
       "
     >
       双击标签以编辑几何元素~
@@ -1033,7 +1275,8 @@ onUnmounted(() => {
           selectedLines.length === 0 &&
           selectedStraightLines.length === 0 &&
           selectedRays.length === 0 &&
-          selectedFaces.length === 0
+          selectedEditableFaces.length === 0 &&
+          selectedHexahedrons.length === 0
         "
       >
         无
@@ -1054,11 +1297,7 @@ onUnmounted(() => {
               {{ editPoint.nameVisible ? '隐藏' : '显示' }}
             </label>
             <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editPoint.userLocked"
-                @change="applyEditPoint"
-              />
+              <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" />
               锁定
             </label>
           </div>
@@ -1163,6 +1402,7 @@ onUnmounted(() => {
             点{{ p!.name ?? '' }}
             <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
             <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
+            <span v-if="hasCubeConstraint(p!)" class="constraint-badge">六面体约束</span>
           </div>
           <div>
             x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
@@ -2137,7 +2377,189 @@ onUnmounted(() => {
       </div>
 
       <div
-        v-for="face in selectedFaces"
+        v-for="cube in selectedHexahedrons"
+        :key="cube.cubeId"
+        class="selectedFace-info"
+        @dblclick="startEditHexahedron(cube.cubeId)"
+      >
+        <div v-if="editing?.type === 'hexahedron' && editing?.id === cube.cubeId" class="edit-grid">
+          <div class="name-row">
+            <label>名称</label>
+            <input type="text" v-model="editHexahedron.nameSuffix" @input="applyHexahedronMeta" />
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                v-model="editHexahedron.userLocked"
+                @change="applyHexahedronMeta"
+              />
+              锁定
+            </label>
+            <label class="toggle-label">
+              <input
+                type="checkbox"
+                v-model="editHexahedron.edgeLengthLocked"
+                @change="applyHexahedronMeta"
+              />
+              边长锁定
+            </label>
+          </div>
+          <div class="face-metric-row">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+          <div class="length-row">
+            <label>边长</label>
+            <div class="coord-input compact-length-input">
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronEdgeLength('down')"
+                :disabled="isHexahedronEdgeLengthInputDisabled()"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                min="1"
+                step="0.5"
+                :ref="(el) => setCoordInputRef('hexa.edgeLength', el)"
+                v-model="editHexahedron.edgeLength"
+                @input="applyHexahedronEdgeLength"
+                @focus="handleHexahedronEdgeLengthFocus"
+                @blur="handleHexahedronEdgeLengthBlur"
+                :disabled="isHexahedronEdgeLengthInputDisabled()"
+              />
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronEdgeLength('up')"
+                :disabled="isHexahedronEdgeLengthInputDisabled()"
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="face-metric-row">原始点坐标</div>
+          <div
+            class="line-editor-grid"
+            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+          >
+            <div class="line-editor-head"></div>
+            <div class="line-editor-head">
+              {{ getHexahedronOwnerPoints(cube.cubeId)[0]?.name ?? 'A' }}(x,y,z)
+            </div>
+            <div class="line-editor-head">
+              {{ getHexahedronOwnerPoints(cube.cubeId)[1]?.name ?? 'B' }}(x,y,z)
+            </div>
+            <div class="line-axis-label">x</div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'x', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p1.x', el)"
+                v-model="editHexahedron.p1.x"
+                @input="applyHexahedronOwnerPoint('p1')"
+                @focus="handleHexahedronOwnerCoordFocus('p1', 'x')"
+                @blur="handleHexahedronOwnerCoordBlur('p1', 'x')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'x', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+            </div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'x', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p2.x', el)"
+                v-model="editHexahedron.p2.x"
+                @input="applyHexahedronOwnerPoint('p2')"
+                @focus="handleHexahedronOwnerCoordFocus('p2', 'x')"
+                @blur="handleHexahedronOwnerCoordBlur('p2', 'x')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'x', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+            </div>
+            <div class="line-axis-label">y</div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'y', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p1.y', el)"
+                v-model="editHexahedron.p1.y"
+                @input="applyHexahedronOwnerPoint('p1')"
+                @focus="handleHexahedronOwnerCoordFocus('p1', 'y')"
+                @blur="handleHexahedronOwnerCoordBlur('p1', 'y')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'y', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+            </div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'y', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p2.y', el)"
+                v-model="editHexahedron.p2.y"
+                @input="applyHexahedronOwnerPoint('p2')"
+                @focus="handleHexahedronOwnerCoordFocus('p2', 'y')"
+                @blur="handleHexahedronOwnerCoordBlur('p2', 'y')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'y', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+            </div>
+            <div class="line-axis-label">z</div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'z', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p1.z', el)"
+                v-model="editHexahedron.p1.z"
+                @input="applyHexahedronOwnerPoint('p1')"
+                @focus="handleHexahedronOwnerCoordFocus('p1', 'z')"
+                @blur="handleHexahedronOwnerCoordBlur('p1', 'z')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'z', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+            </div>
+            <div class="coord-input">
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'z', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <input
+                type="number"
+                :ref="(el) => setCoordInputRef('hexa.p2.z', el)"
+                v-model="editHexahedron.p2.z"
+                @input="applyHexahedronOwnerPoint('p2')"
+                @focus="handleHexahedronOwnerCoordFocus('p2', 'z')"
+                @blur="handleHexahedronOwnerCoordBlur('p2', 'z')"
+                step="0.5"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              />
+              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'z', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+            </div>
+          </div>
+        </div>
+        <div v-else>
+          <div>
+            {{ cube.name }}
+            <span
+              v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+              class="lock-badge"
+              >🔒</span
+            >
+          </div>
+          <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+          <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+          <div>
+            原始点：{{
+              getHexahedronOwnerPoints(cube.cubeId)
+                .map((point) => point.name)
+                .join(' - ')
+            }}
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-for="face in selectedEditableFaces"
         :key="face!.id"
         class="selectedFace-info"
         @dblclick="startEditFace(face)"
@@ -2187,7 +2609,9 @@ onUnmounted(() => {
                   :value="editFace.edgeLengths[edgeIndex]"
                   :disabled="editFace.areaLocked"
                   :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
-                  @input="editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value"
+                  @input="
+                    editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value
+                  "
                   @focus="handleFaceEdgeLengthFocus(edgeIndex)"
                   @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
                 />
@@ -2207,6 +2631,7 @@ onUnmounted(() => {
           <div>
             面{{ face!.name ?? '' }}
             <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+            <span v-if="isCubeFace(face!)" class="constraint-badge">六面体约束</span>
           </div>
           <div>
             面积：{{ getFaceArea(face!).toFixed(2) }}
@@ -2272,11 +2697,14 @@ onUnmounted(() => {
           >
             <div class="point-summary-line">
               <span class="point-summary-text">
-                点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }}, {{ p!.position.y.toFixed(2) }},
-                {{ p!.position.z.toFixed(2) }}）
+                点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
+                {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
               </span>
               <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
-              <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
+              <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
+                >交点约束</span
+              >
+              <span v-if="hasCubeConstraint(p!)" class="constraint-badge">六面体约束</span>
             </div>
           </div>
         </div>
@@ -2415,6 +2843,55 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      <div v-if="hexahedronsInScene.length > 0" class="content-group">
+        <button
+          v-if="canCollapseContentGroups"
+          type="button"
+          class="content-group-header content-group-toggle"
+          :aria-expanded="!collapsedContentGroups.hexahedron"
+          @click="toggleContentGroup('hexahedron')"
+        >
+          <span class="content-group-toggle-icon">
+            {{ collapsedContentGroups.hexahedron ? '▸' : '▾' }}
+          </span>
+          <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
+          <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
+        </button>
+        <div v-else class="content-group-header content-group-title">
+          <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
+          <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
+        </div>
+        <div
+          v-show="!collapsedContentGroups.hexahedron || !canCollapseContentGroups"
+          class="content-group-body"
+        >
+          <div
+            v-for="cube in hexahedronsInScene"
+            :key="cube.cubeId"
+            class="face-info selectable-geo"
+            :class="{ 'is-selected': selectedHexahedronIds.includes(cube.cubeId) }"
+            @click="selectHexahedronFromContent(cube.cubeId)"
+          >
+            <div>
+              {{ cube.name }}
+              <span
+                v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                class="lock-badge"
+                >🔒</span
+              >
+            </div>
+            <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+            <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+            <div>
+              原始点：{{
+                getHexahedronOwnerPoints(cube.cubeId)
+                  .map((point) => point.name)
+                  .join(' - ')
+              }}
+            </div>
+          </div>
+        </div>
+      </div>
       <div v-if="facesInScene.length > 0" class="content-group">
         <button
           v-if="canCollapseContentGroups"
@@ -2447,6 +2924,7 @@ onUnmounted(() => {
             <div>
               面{{ face!.name ?? '' }}
               <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+              <span v-if="isCubeFace(face!)" class="constraint-badge">六面体约束</span>
             </div>
             <div>
               边界点：{{
@@ -2873,7 +3351,6 @@ hr {
 .face-edge-row .coord-input input[type='number'] {
   width: 100%;
 }
-
 @media (max-width: 1024px) and (orientation: landscape) {
   .sidebar {
     width: clamp(156px, 30vw, 216px);

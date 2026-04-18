@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
+import type { CubeConstraint } from '../core/constraints/CubeConstraint'
 import type { FacePreviewData } from '../core/editor/Editor'
 
 type Matrix4WithLegacyGetInverse = THREE.Matrix4 & {
@@ -89,6 +90,7 @@ export class ThreeRenderer {
   private static readonly LINEAR_COLOR = 0xffffff
   private static readonly LINEAR_WIDTH = 2
   private static readonly INTERSECTION_POINT_COLOR = 0xffd84a
+  private static readonly CUBE_DEPENDENT_POINT_COLOR = 0xcfd3d8
   private static readonly FACE_FILL_COLOR = 0x74a4ff
   private static readonly FACE_SELECTED_COLOR = 0x43f260
   private static readonly FACE_FILL_OPACITY = 0.22
@@ -838,11 +840,14 @@ export class ThreeRenderer {
       // 选中高亮
       const isSelected = scene.selection.points.has(p.id)
       const isIntersectionPoint = Boolean(scene.getIntersectionConstraint(p.id))
+      const isCubeDependentPoint = p.cubeRole === 'dependent'
       const baseColor = p.locked
         ? 0xffffff
         : isIntersectionPoint
           ? ThreeRenderer.INTERSECTION_POINT_COLOR
-          : 0xff5555
+          : isCubeDependentPoint
+            ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
+            : 0xff5555
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
 
       // 点名称标签
@@ -1047,9 +1052,9 @@ export class ThreeRenderer {
       if (!faceMesh) {
         const geometry = new THREE.BufferGeometry()
         const material = new THREE.MeshBasicMaterial({
-          color: ThreeRenderer.FACE_FILL_COLOR,
+          color: faceData.fillColor ?? ThreeRenderer.FACE_FILL_COLOR,
           transparent: true,
-          opacity: ThreeRenderer.FACE_FILL_OPACITY,
+          opacity: faceData.fillOpacity ?? ThreeRenderer.FACE_FILL_OPACITY,
           side: THREE.DoubleSide,
           depthWrite: false,
           polygonOffset: true,
@@ -1060,9 +1065,15 @@ export class ThreeRenderer {
         faceMesh.userData = { geoId: id, type: 'face' }
         const outline = new THREE.LineLoop(
           new THREE.BufferGeometry(),
-          new THREE.LineBasicMaterial({ color: ThreeRenderer.LINEAR_COLOR }),
+          new THREE.LineBasicMaterial({
+            color: ThreeRenderer.LINEAR_COLOR,
+            depthTest: false,
+            transparent: true,
+            opacity: 0.95,
+          }),
         )
         outline.userData = { geoId: id, type: 'face' }
+        outline.renderOrder = 12
         faceMesh.add(outline)
         this.world.add(faceMesh)
         this.meshMap.set(id, faceMesh)
@@ -1092,16 +1103,28 @@ export class ThreeRenderer {
       if (outline) outline.visible = faceData.visible !== false
 
       const isSelected = scene.selection.faces.has(id)
-      ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(
-        isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.FACE_FILL_COLOR,
+      const cubeConstraint = faceData.cubeId
+        ? (scene.getCubeConstraint(faceData.cubeId) as CubeConstraint | null)
+        : null
+      const isCubeFullySelected = Boolean(
+        cubeConstraint &&
+          cubeConstraint.faceIds.length > 0 &&
+          cubeConstraint.faceIds.every((faceId) => scene.selection.faces.has(faceId)),
       )
-      ;(faceMesh.material as THREE.MeshBasicMaterial).opacity = isSelected
-        ? ThreeRenderer.FACE_SELECTED_OPACITY
-        : ThreeRenderer.FACE_FILL_OPACITY
+      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected
+      const baseColor = faceData.fillColor ?? ThreeRenderer.FACE_FILL_COLOR
+      const baseOpacity = faceData.fillOpacity ?? ThreeRenderer.FACE_FILL_OPACITY
+      ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(
+        shouldHighlightFaceFill ? ThreeRenderer.FACE_SELECTED_COLOR : baseColor,
+      )
+      ;(faceMesh.material as THREE.MeshBasicMaterial).opacity = shouldHighlightFaceFill
+        ? Math.max(baseOpacity, ThreeRenderer.FACE_SELECTED_OPACITY)
+        : baseOpacity
       if (outline) {
         ;(outline.material as THREE.LineBasicMaterial).color.set(
           isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
         )
+        ;(outline.material as THREE.LineBasicMaterial).opacity = isSelected ? 1 : 0.95
       }
 
       this.syncLinearLabel(
@@ -1113,7 +1136,7 @@ export class ThreeRenderer {
           faceData.getCentroid(scene.points).y,
           faceData.getCentroid(scene.points).z,
         ),
-        isSelected ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
+        shouldHighlightFaceFill ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }

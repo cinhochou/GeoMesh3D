@@ -7,6 +7,8 @@ export class Point3 {
   position: Vec3
   locked: boolean
   userLocked: boolean
+  cubeId: string | null
+  cubeRole: 'owner' | 'dependent' | null
 
   constructor(
     id: string,
@@ -22,6 +24,8 @@ export class Point3 {
     this.position = position
     this.locked = locked
     this.userLocked = userLocked
+    this.cubeId = null
+    this.cubeRole = null
   }
 
   setPosition(v: Vec3) {

@@ -4,7 +4,7 @@ import type { EditorMode } from '@/core/editor/Editor'
 
 export type ToastScope = 'global' | 'viewport'
 
-type ContentGroupKey = 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+type ContentGroupKey = 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron'
 
 interface MergePointDialogState {
   visible: boolean
@@ -17,6 +17,7 @@ interface ContentGroupCollapseState {
   straightLine: boolean
   ray: boolean
   face: boolean
+  hexahedron: boolean
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
@@ -25,6 +26,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   straightLine: false,
   ray: false,
   face: false,
+  hexahedron: false,
 })
 
 export const useUiStore = defineStore('ui', () => {
@@ -52,6 +54,7 @@ export const useUiStore = defineStore('ui', () => {
     deleteOpen: false,
     pointOpen: false,
     lineOpen: false,
+    solidOpen: false,
   })
 
   const contentGroupsCollapsed = ref<ContentGroupCollapseState>(createContentGroupsCollapsed())
@@ -61,7 +64,8 @@ export const useUiStore = defineStore('ui', () => {
     () =>
       toolbarMenus.value.deleteOpen ||
       toolbarMenus.value.pointOpen ||
-      toolbarMenus.value.lineOpen,
+      toolbarMenus.value.lineOpen ||
+      toolbarMenus.value.solidOpen,
   )
 
   const openToast = (message: string, scope: ToastScope = 'global') => {
@@ -146,11 +150,12 @@ export const useUiStore = defineStore('ui', () => {
       deleteOpen: false,
       pointOpen: false,
       lineOpen: false,
+      solidOpen: false,
     }
   }
 
   const setToolbarMenuOpen = (
-    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen',
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'solidOpen',
     value: boolean,
     options?: { exclusive?: boolean },
   ) => {
@@ -164,7 +169,7 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
-  const toggleToolbarMenu = (menu: 'deleteOpen' | 'pointOpen' | 'lineOpen') => {
+  const toggleToolbarMenu = (menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'solidOpen') => {
     const next = !toolbarMenus.value[menu]
     setToolbarMenuOpen(menu, next, { exclusive: true })
   }
@@ -176,6 +181,7 @@ export const useUiStore = defineStore('ui', () => {
       straightLine: collapsed,
       ray: collapsed,
       face: collapsed,
+      hexahedron: collapsed,
     }
   }
 

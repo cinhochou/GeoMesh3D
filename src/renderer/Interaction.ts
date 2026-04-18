@@ -141,7 +141,7 @@ export class Interaction {
     else if (type === 'line') this.editor.scene.selection.deselectLine(geoId)
     else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
     else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
-    else if (type === 'face') this.editor.scene.selection.deselectFace(geoId)
+    else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
   }
 
   private toggleCreateSelection(type: 'point' | 'line', geoId: string) {
@@ -162,6 +162,11 @@ export class Interaction {
       return
     }
     this.editor.scene.selection.selectLine(geoId, true)
+  }
+
+  private commitCreateHexahedronSelection(type: 'point' | 'line', geoId: string) {
+    this.toggleCreateSelection(type, geoId)
+    this.editor.tryCreateHexahedronFromSelection()
   }
 
   private isTouchPreferredDevice() {
@@ -679,6 +684,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -769,7 +775,7 @@ export class Interaction {
         } else if (type === 'face') {
           const alreadySelected = this.editor.scene.selection.faces.has(geoId)
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
-          this.editor.scene.selection.selectFace(geoId, true)
+          this.editor.selectCubeByFaceId(geoId, true)
           const face = this.editor.scene.faces.get(geoId)
           const referencePoint = this.getFaceDragReferencePoint(geoId)
           if (!face || !referencePoint || this.editor.isFaceGeometryLocked(face)) {
@@ -801,6 +807,10 @@ export class Interaction {
         this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'line') {
         this.toggleCreateSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.CreateHexahedron && type === 'point') {
+        this.commitCreateHexahedronSelection('point', geoId)
+      } else if (this.editor.mode === EditorMode.CreateHexahedron && type === 'line') {
+        this.commitCreateHexahedronSelection('line', geoId)
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.IntersectionPoint && isIntersectionTargetType(type)) {
@@ -809,6 +819,7 @@ export class Interaction {
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.CreatePlane) this.editor.tryCreateFaceFromSelection()
+      else if (this.editor.mode === EditorMode.CreateHexahedron) this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.IntersectionPoint) this.editor.clearIntersectionSelection()
     }
   }
@@ -828,6 +839,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -958,6 +970,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreateHexahedron) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.editor.scene.selection.clear()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -1025,6 +1044,15 @@ export class Interaction {
       if (type === 'point') this.toggleCreateSelection('point', geoId)
       else if (type === 'line') this.toggleCreateSelection('line', geoId)
       else this.editor.tryCreateFaceFromSelection()
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateHexahedron) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') this.commitCreateHexahedronSelection('point', geoId)
+      else if (type === 'line') this.commitCreateHexahedronSelection('line', geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -1169,7 +1197,7 @@ export class Interaction {
 
     if (type === 'face') {
       const alreadySelected = this.editor.scene.selection.faces.has(geoId)
-      this.editor.scene.selection.selectFace(geoId, true)
+      this.editor.selectCubeByFaceId(geoId, true)
       this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
 
       if (!alreadySelected) {
