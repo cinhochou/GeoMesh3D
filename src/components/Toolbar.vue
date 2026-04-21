@@ -235,6 +235,11 @@ const createHexahedron = () => {
   emit('mode-change', EditorMode.CreateHexahedron)
 }
 
+const createTetrahedron = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateTetrahedron)
+}
+
 const toggleProfileMenu = () => {
   profileMenuOpen.value = !profileMenuOpen.value
 }
@@ -467,7 +472,9 @@ onUnmounted(() => {
         ref="solidTriggerRef"
         class="menu-trigger"
         :class="{
-          'is-active': currentMode === EditorMode.CreateHexahedron,
+          'is-active':
+            currentMode === EditorMode.CreateHexahedron ||
+            currentMode === EditorMode.CreateTetrahedron,
           'is-open': isSolidMenuOpen,
         }"
         @click="toggleSolidMenu"
@@ -607,6 +614,13 @@ onUnmounted(() => {
 
   <Teleport to="body">
     <div v-if="isSolidMenuOpen" ref="solidPanelRef" class="menu-panel" :style="solidMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateTetrahedron }"
+        @click="createTetrahedron"
+      >
+        正四面体
+      </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateHexahedron }"

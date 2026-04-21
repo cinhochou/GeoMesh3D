@@ -169,6 +169,11 @@ export class Interaction {
     this.editor.tryCreateHexahedronFromSelection()
   }
 
+  private commitCreateTetrahedronSelection(type: 'point' | 'line', geoId: string) {
+    this.toggleCreateSelection(type, geoId)
+    this.editor.tryCreateTetrahedronFromSelection()
+  }
+
   private isTouchPreferredDevice() {
     return (
       navigator.maxTouchPoints > 0 ||
@@ -685,6 +690,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
+        this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -811,6 +817,10 @@ export class Interaction {
         this.commitCreateHexahedronSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateHexahedron && type === 'line') {
         this.commitCreateHexahedronSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.CreateTetrahedron && type === 'point') {
+        this.commitCreateTetrahedronSelection('point', geoId)
+      } else if (this.editor.mode === EditorMode.CreateTetrahedron && type === 'line') {
+        this.commitCreateTetrahedronSelection('line', geoId)
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.IntersectionPoint && isIntersectionTargetType(type)) {
@@ -819,7 +829,11 @@ export class Interaction {
     } else {
       if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.CreatePlane) this.editor.tryCreateFaceFromSelection()
-      else if (this.editor.mode === EditorMode.CreateHexahedron) this.editor.scene.selection.clear()
+      else if (
+        this.editor.mode === EditorMode.CreateHexahedron ||
+        this.editor.mode === EditorMode.CreateTetrahedron
+      )
+        this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.IntersectionPoint) this.editor.clearIntersectionSelection()
     }
   }
@@ -840,6 +854,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
+        this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -977,6 +992,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreateTetrahedron) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.editor.scene.selection.clear()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -1053,6 +1075,15 @@ export class Interaction {
       e.stopPropagation()
       if (type === 'point') this.commitCreateHexahedronSelection('point', geoId)
       else if (type === 'line') this.commitCreateHexahedronSelection('line', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateTetrahedron) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') this.commitCreateTetrahedronSelection('point', geoId)
+      else if (type === 'line') this.commitCreateTetrahedronSelection('line', geoId)
       this.resetMobileInteractionState()
       return
     }

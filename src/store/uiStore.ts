@@ -4,7 +4,14 @@ import type { EditorMode } from '@/core/editor/Editor'
 
 export type ToastScope = 'global' | 'viewport'
 
-type ContentGroupKey = 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron'
+type ContentGroupKey =
+  | 'point'
+  | 'line'
+  | 'straightLine'
+  | 'ray'
+  | 'face'
+  | 'hexahedron'
+  | 'tetrahedron'
 
 interface MergePointDialogState {
   visible: boolean
@@ -18,6 +25,7 @@ interface ContentGroupCollapseState {
   ray: boolean
   face: boolean
   hexahedron: boolean
+  tetrahedron: boolean
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
@@ -27,6 +35,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   ray: false,
   face: false,
   hexahedron: false,
+  tetrahedron: false,
 })
 
 export const useUiStore = defineStore('ui', () => {
@@ -182,6 +191,7 @@ export const useUiStore = defineStore('ui', () => {
       ray: collapsed,
       face: collapsed,
       hexahedron: collapsed,
+      tetrahedron: collapsed,
     }
   }
 

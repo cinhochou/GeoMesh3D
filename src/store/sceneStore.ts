@@ -41,6 +41,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建面'
     case EditorMode.CreateHexahedron:
       return '创建正六面体'
+    case EditorMode.CreateTetrahedron:
+      return '创建正四面体'
     default:
       return ''
   }
@@ -64,6 +66,8 @@ const getModeHint = (mode: EditorMode) => {
       return '选中两个可求交的对象来创建交点。'
     case EditorMode.CreateHexahedron:
       return '选中两个点或一条线段以创建正六面体~'
+    case EditorMode.CreateTetrahedron:
+      return '选中两个点或一条线段以创建正四面体~'
     default:
       return ''
   }

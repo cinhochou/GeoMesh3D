@@ -75,8 +75,6 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 3D_editor
 ├─ .editorconfig
 ├─ .prettierrc.json
-├─ deploy
-│  └─ y-websocket-server
 ├─ env.d.ts
 ├─ eslint.config.ts
 ├─ idea.txt
@@ -94,23 +92,34 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 ├─ scripts
 │  └─ y-websocket-server.mjs
 ├─ src
+│  ├─ api
+│  │  ├─ auth.ts
+│  │  ├─ client.ts
+│  │  └─ user.ts
 │  ├─ App.vue
 │  ├─ components
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
 │  │  └─ Toolbar.vue
+│  ├─ config
+│  │  └─ api.ts
 │  ├─ core
 │  │  ├─ collab
 │  │  │  └─ CollabManager.ts
 │  │  ├─ constraints
+│  │  │  ├─ CubeConstraint.ts
 │  │  │  ├─ DistanceConstraint.ts
+│  │  │  ├─ IntersectionPointConstraint.ts
 │  │  │  └─ PlanarFaceConstraint.ts
 │  │  ├─ editor
 │  │  │  ├─ Command.ts
 │  │  │  ├─ commands
 │  │  │  │  ├─ AddElementCommand.ts
+│  │  │  │  ├─ AddHexahedronCommand.ts
+│  │  │  │  ├─ AddIntersectionPointCommand.ts
 │  │  │  │  ├─ ClearSceneCommand.ts
 │  │  │  │  ├─ DeleteFaceCommand.ts
+│  │  │  │  ├─ DeleteHexahedronCommand.ts
 │  │  │  │  ├─ DeleteLineCommand.ts
 │  │  │  │  ├─ DeletePointCommand.ts
 │  │  │  │  ├─ DeleteRayCommand.ts
@@ -124,8 +133,10 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  ├─ UpdatePointCommand.ts
 │  │  │  │  ├─ UpdateRayCommand.ts
 │  │  │  │  └─ UpdateStraightLineCommand.ts
-│  │  │  └─ Editor.ts
+│  │  │  ├─ Editor.ts
+│  │  │  └─ editorSession.ts
 │  │  ├─ geometry
+│  │  │  ├─ IntersectionPoint3.ts
 │  │  │  ├─ Line3.ts
 │  │  │  ├─ PlanarUtils.ts
 │  │  │  ├─ Plane.ts
@@ -159,11 +170,20 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  ├─ router
 │  │  └─ index.ts
 │  ├─ store
+│  │  ├─ authStore.ts
+│  │  ├─ collabStore.ts
 │  │  ├─ sceneStore.ts
 │  │  └─ uiStore.ts
 │  ├─ styles.css
+│  ├─ types
+│  │  ├─ api-service-auth.ts
+│  │  ├─ api-service-user.ts
+│  │  ├─ api.ts
+│  │  └─ user.ts
 │  └─ views
-│     └─ EditorView.vue
+│     ├─ EditorView.vue
+│     ├─ LoginView.vue
+│     └─ RegisterView.vue
 ├─ tsconfig.app.json
 ├─ tsconfig.json
 ├─ tsconfig.node.json

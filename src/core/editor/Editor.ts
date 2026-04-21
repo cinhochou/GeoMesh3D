@@ -56,6 +56,7 @@ export enum EditorMode {
   CreateRay,
   CreatePlane,
   CreateHexahedron,
+  CreateTetrahedron,
 }
 
 export type FacePreviewData = {
@@ -268,6 +269,46 @@ const genNextAvailableName = (
     if (!usedNames.has(candidate)) return candidate
     index += 1
   }
+}
+
+const getSolidNamePrefix = (solidType: CubeConstraint['solidType']) =>
+  solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+
+const AXIS_ALIGNMENT_EPSILON = 1e-6
+const SOLID_ALIGNMENT_SNAP_EPSILON = 0.2
+
+const getSharedCoordinateNormal = (a: Vec3, b: Vec3) => {
+  if (Math.abs(a.x - b.x) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(1, 0, 0)
+  if (Math.abs(a.y - b.y) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(0, 1, 0)
+  if (Math.abs(a.z - b.z) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(0, 0, 1)
+  return null
+}
+
+const dotVec3 = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
+
+const normalizeVec3 = (v: Vec3) => {
+  const len = Math.hypot(v.x, v.y, v.z)
+  if (len <= 1e-8) return null
+  return new Vec3(v.x / len, v.y / len, v.z / len)
+}
+
+const crossVec3 = (a: Vec3, b: Vec3) =>
+  new Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+
+const projectPerpendicularVec3 = (vector: Vec3, axis: Vec3) => {
+  const factor = dotVec3(vector, axis)
+  return new Vec3(
+    vector.x - axis.x * factor,
+    vector.y - axis.y * factor,
+    vector.z - axis.z * factor,
+  )
+}
+
+const chooseFallbackAxisVec3 = (axis: Vec3) => {
+  const basis = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)]
+  return basis.reduce((best, candidate) =>
+    Math.abs(dotVec3(candidate, axis)) < Math.abs(dotVec3(best, axis)) ? candidate : best,
+  )
 }
 
 export class Editor {
@@ -486,13 +527,13 @@ export class Editor {
   getCubeNameSuffix(cubeId: string) {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return ''
-    return constraint.name.replace(/^正六面体/, '')
+    return constraint.name.replace(new RegExp(`^${getSolidNamePrefix(constraint.solidType)}`), '')
   }
 
   updateCubeName(cubeId: string, suffix: string) {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return
-    constraint.name = `正六面体${suffix.trim()}`
+    constraint.name = `${getSolidNamePrefix(constraint.solidType)}${suffix.trim()}`
   }
 
   setCubeLockState(cubeId: string, locked: boolean) {
@@ -568,6 +609,226 @@ export class Editor {
     return this.getCubeConstraint(point.cubeId)
   }
 
+  private snapSolidOwnerPosition(
+    constraint: CubeConstraint,
+    position: Vec3,
+    comparePoint: Point3,
+  ) {
+    const currentLength = Math.hypot(
+      comparePoint.position.x - position.x,
+      comparePoint.position.y - position.y,
+      comparePoint.position.z - position.z,
+    )
+    const snapThreshold = Math.max(SOLID_ALIGNMENT_SNAP_EPSILON, currentLength * 0.08)
+    const nextPosition = position.clone()
+
+    ;(['x', 'y', 'z'] as const).forEach((axis) => {
+      if (Math.abs(nextPosition[axis] - comparePoint.position[axis]) <= snapThreshold) {
+        nextPosition[axis] = comparePoint.position[axis]
+      }
+    })
+
+    return nextPosition
+  }
+
+  private rotateCubeByDependentPoint(cubeId: string, pointId: string, position: Vec3) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    const layout = constraint.dependentLayouts.find((item) => item.pointId === pointId)
+    if (!layout) return
+
+    const ownerA = this.scene.points.get(constraint.ownerPointIds[0])
+    const ownerB = this.scene.points.get(constraint.ownerPointIds[1])
+    if (!ownerA || !ownerB) return
+
+    const edge = new Vec3(
+      ownerB.position.x - ownerA.position.x,
+      ownerB.position.y - ownerA.position.y,
+      ownerB.position.z - ownerA.position.z,
+    )
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-8) return
+    const uAxis = normalizeVec3(edge)
+    if (!uAxis) return
+
+    const baseOffset = new Vec3(
+      ownerA.position.x + uAxis.x * layout.x * edgeLength,
+      ownerA.position.y + uAxis.y * layout.x * edgeLength,
+      ownerA.position.z + uAxis.z * layout.x * edgeLength,
+    )
+    const relative = new Vec3(
+      position.x - baseOffset.x,
+      position.y - baseOffset.y,
+      position.z - baseOffset.z,
+    )
+    const projected = projectPerpendicularVec3(relative, uAxis)
+    const projectedDir = normalizeVec3(projected)
+    const yzLength = Math.hypot(layout.y, layout.z)
+    if (!projectedDir || yzLength <= 1e-8) return
+
+    const perpAxis = normalizeVec3(crossVec3(uAxis, projectedDir))
+    if (!perpAxis) return
+
+    const vAxis = new Vec3(
+      (layout.y / yzLength) * projectedDir.x - (layout.z / yzLength) * perpAxis.x,
+      (layout.y / yzLength) * projectedDir.y - (layout.z / yzLength) * perpAxis.y,
+      (layout.y / yzLength) * projectedDir.z - (layout.z / yzLength) * perpAxis.z,
+    )
+    constraint.setAxisHint(vAxis)
+    const axes = constraint.getResolvedAxes()
+    if (!axes) return
+
+    const transforms = constraint.dependentLayouts
+      .map((item) => {
+        const point = this.scene.points.get(item.pointId)
+        if (!point || this.isPointCoordinateLocked(point)) return null
+        const after = constraint.getLayoutPosition(item, axes)
+        if (
+          Math.abs(after.x - point.position.x) <= 1e-6 &&
+          Math.abs(after.y - point.position.y) <= 1e-6 &&
+          Math.abs(after.z - point.position.z) <= 1e-6
+        ) {
+          return null
+        }
+        return {
+          point,
+          before: point.position.clone(),
+          after,
+        }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      const transform = transforms[0]!
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      return
+    }
+    this.executeCommand(new TransformPointsCommand(transforms))
+  }
+
+  private resolveCubeAxesFromPositions(
+    constraint: CubeConstraint,
+    ownerA: Vec3,
+    ownerB: Vec3,
+  ) {
+    const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-8) return null
+
+    const uAxis = normalizeVec3(edge)
+    if (!uAxis) return null
+
+    const hintSource = null
+    const alignmentHint =
+      hintSource && Math.abs(dotVec3(hintSource, uAxis)) <= 1 - AXIS_ALIGNMENT_EPSILON
+        ? crossVec3(hintSource, uAxis)
+        : null
+
+    const projectedHint = projectPerpendicularVec3(
+      alignmentHint ??
+        new Vec3(
+          (constraint as any).vAxisHint?.x ?? 0,
+          (constraint as any).vAxisHint?.y ?? 1,
+          (constraint as any).vAxisHint?.z ?? 0,
+        ),
+      uAxis,
+    )
+    const fallbackProjected = projectPerpendicularVec3(chooseFallbackAxisVec3(uAxis), uAxis)
+    const vAxis = normalizeVec3(projectedHint) ?? normalizeVec3(fallbackProjected)
+    if (!vAxis) return null
+    const wAxis = normalizeVec3(crossVec3(uAxis, vAxis))
+    if (!wAxis) return null
+
+    return {
+      origin: ownerA,
+      edgeLength,
+      uAxis,
+      vAxis,
+      wAxis,
+    }
+  }
+
+  private applyCubeConstraintPositions(positionOverrides: Map<string, Vec3>) {
+    this.getCubeConstraints().forEach((constraint) => {
+      const ownerA = positionOverrides.get(constraint.ownerPointIds[0]) ??
+        this.scene.points.get(constraint.ownerPointIds[0])?.position
+      const ownerB = positionOverrides.get(constraint.ownerPointIds[1]) ??
+        this.scene.points.get(constraint.ownerPointIds[1])?.position
+      if (!ownerA || !ownerB) return
+
+      const draggedDependent = constraint.dependentLayouts.find(
+        ({ pointId }) =>
+          positionOverrides.has(pointId) && this.scene.activeDraggedPointIds.has(pointId),
+      )
+
+      if (draggedDependent) {
+        const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
+        const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+        const uAxis = normalizeVec3(edge)
+        const desired = positionOverrides.get(draggedDependent.pointId)
+        if (desired && uAxis && edgeLength > 1e-8) {
+          const baseOffset = new Vec3(
+            ownerA.x + uAxis.x * draggedDependent.x * edgeLength,
+            ownerA.y + uAxis.y * draggedDependent.x * edgeLength,
+            ownerA.z + uAxis.z * draggedDependent.x * edgeLength,
+          )
+          const relative = new Vec3(
+            desired.x - baseOffset.x,
+            desired.y - baseOffset.y,
+            desired.z - baseOffset.z,
+          )
+          const projected = projectPerpendicularVec3(relative, uAxis)
+          const projectedDir = normalizeVec3(projected)
+          const yzLength = Math.hypot(draggedDependent.y, draggedDependent.z)
+          if (projectedDir && yzLength > 1e-8) {
+            const perpAxis = normalizeVec3(crossVec3(uAxis, projectedDir))
+            if (perpAxis) {
+              constraint.setAxisHint(
+                new Vec3(
+                  (draggedDependent.y / yzLength) * projectedDir.x -
+                    (draggedDependent.z / yzLength) * perpAxis.x,
+                  (draggedDependent.y / yzLength) * projectedDir.y -
+                    (draggedDependent.z / yzLength) * perpAxis.y,
+                  (draggedDependent.y / yzLength) * projectedDir.z -
+                    (draggedDependent.z / yzLength) * perpAxis.z,
+                ),
+              )
+            }
+          }
+        }
+      }
+
+      const axes = this.resolveCubeAxesFromPositions(constraint, ownerA, ownerB)
+      if (!axes) return
+
+      constraint.dependentLayouts.forEach((layout) => {
+        const point = this.scene.points.get(layout.pointId)
+        if (!point || this.isPointCoordinateLocked(point)) return
+        positionOverrides.set(
+          layout.pointId,
+          new Vec3(
+            axes.origin.x +
+              axes.uAxis.x * layout.x * axes.edgeLength +
+              axes.vAxis.x * layout.y * axes.edgeLength +
+              axes.wAxis.x * layout.z * axes.edgeLength,
+            axes.origin.y +
+              axes.uAxis.y * layout.x * axes.edgeLength +
+              axes.vAxis.y * layout.y * axes.edgeLength +
+              axes.wAxis.y * layout.z * axes.edgeLength,
+            axes.origin.z +
+              axes.uAxis.z * layout.x * axes.edgeLength +
+              axes.vAxis.z * layout.y * axes.edgeLength +
+              axes.wAxis.z * layout.z * axes.edgeLength,
+          ),
+        )
+      })
+    })
+  }
+
   translateCubeByDelta(cubeId: string, delta: Vec3) {
     if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
     const constraint = this.getCubeConstraint(cubeId)
@@ -589,21 +850,22 @@ export class Editor {
     if (!constraint) return
     const point = this.scene.points.get(pointId)
     if (!point) return
-    if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
-      this.setPointsPositions([{ id: pointId, position }])
-      return
-    }
     const otherId =
       constraint.ownerPointIds[0] === pointId
         ? constraint.ownerPointIds[1]
         : constraint.ownerPointIds[0]
     const otherPoint = this.scene.points.get(otherId)
     if (!otherPoint) return
+    const snappedPosition = this.snapSolidOwnerPosition(constraint, position, otherPoint)
+    if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
+      this.setPointsPositions([{ id: pointId, position: snappedPosition }])
+      return
+    }
 
     let direction = new Vec3(
-      position.x - otherPoint.position.x,
-      position.y - otherPoint.position.y,
-      position.z - otherPoint.position.z,
+      snappedPosition.x - otherPoint.position.x,
+      snappedPosition.y - otherPoint.position.y,
+      snappedPosition.z - otherPoint.position.z,
     )
     let directionLength = Math.hypot(direction.x, direction.y, direction.z)
     if (directionLength <= 1e-6) {
@@ -1146,6 +1408,93 @@ export class Editor {
     return p
   }
 
+  private getSelectedSolidOwnerPoints() {
+    const selectedLines = [...this.scene.selection.lines]
+      .map((id) => this.scene.lines.get(id))
+      .filter((line): line is Line3 => line !== undefined)
+    const selectedPoints = [...this.scene.selection.points]
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+
+    let ownerPoints: [Point3, Point3] | null = null
+    let sourceLineId: string | null = null
+
+    if (selectedLines.length === 1 && selectedPoints.length === 0) {
+      ownerPoints = [selectedLines[0]!.p1, selectedLines[0]!.p2]
+      sourceLineId = selectedLines[0]!.id
+    } else if (selectedLines.length === 0 && selectedPoints.length === 2) {
+      ownerPoints = [selectedPoints[0]!, selectedPoints[1]!]
+    }
+
+    return { ownerPoints, sourceLineId }
+  }
+
+  private resolveSolidAxes(
+    ownerPoints: [Point3, Point3],
+    solidType: CubeConstraint['solidType'] = 'hexahedron',
+  ) {
+    const [p1, p2] = ownerPoints
+    const edge = new Vec3(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-6) return null
+
+    const uAxis = new Vec3(edge.x / edgeLength, edge.y / edgeLength, edge.z / edgeLength)
+    const worldAxes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)]
+    const sharedNormal =
+      solidType === 'tetrahedron' ? getSharedCoordinateNormal(p1.position, p2.position) : null
+    const referenceAxis =
+      sharedNormal && Math.abs(sharedNormal.x * uAxis.x + sharedNormal.y * uAxis.y + sharedNormal.z * uAxis.z) <= 1 - AXIS_ALIGNMENT_EPSILON
+        ? new Vec3(
+            sharedNormal.y * uAxis.z - sharedNormal.z * uAxis.y,
+            sharedNormal.z * uAxis.x - sharedNormal.x * uAxis.z,
+            sharedNormal.x * uAxis.y - sharedNormal.y * uAxis.x,
+          )
+        : worldAxes.reduce((best, candidate) => {
+            const bestDot = Math.abs(best.x * uAxis.x + best.y * uAxis.y + best.z * uAxis.z)
+            const candidateDot = Math.abs(
+              candidate.x * uAxis.x + candidate.y * uAxis.y + candidate.z * uAxis.z,
+            )
+            return candidateDot < bestDot ? candidate : best
+          })
+    const projectedReference = new Vec3(
+      referenceAxis.x - uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.y - uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.z - uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+    )
+    const projectedLength = Math.hypot(
+      projectedReference.x,
+      projectedReference.y,
+      projectedReference.z,
+    )
+    if (projectedLength <= 1e-6) return null
+
+    const vAxis = new Vec3(
+      projectedReference.x / projectedLength,
+      projectedReference.y / projectedLength,
+      projectedReference.z / projectedLength,
+    )
+    const wAxisRaw = new Vec3(
+      uAxis.y * vAxis.z - uAxis.z * vAxis.y,
+      uAxis.z * vAxis.x - uAxis.x * vAxis.z,
+      uAxis.x * vAxis.y - uAxis.y * vAxis.x,
+    )
+    const wAxisLength = Math.hypot(wAxisRaw.x, wAxisRaw.y, wAxisRaw.z)
+    if (wAxisLength <= 1e-6) return null
+
+    return {
+      p1,
+      p2,
+      edgeLength,
+      uAxis,
+      vAxis,
+      wAxis: new Vec3(wAxisRaw.x / wAxisLength, wAxisRaw.y / wAxisLength, wAxisRaw.z / wAxisLength),
+    }
+  }
+
   movePoint(pointId: string, delta: Vec3) {
     const point = this.scene.points.get(pointId)
     if (!point) return
@@ -1161,14 +1510,7 @@ export class Editor {
 
     const cubeConstraint = this.getCubeConstraintByPointId(pointId)
     if (cubeConstraint && point.cubeRole === 'dependent') {
-      this.translateCubeByDelta(
-        cubeConstraint.cubeId,
-        new Vec3(
-          position.x - point.position.x,
-          position.y - point.position.y,
-          position.z - point.position.z,
-        ),
-      )
+      this.rotateCubeByDependentPoint(cubeConstraint.cubeId, pointId, position)
       return
     }
     if (cubeConstraint && point.cubeRole === 'owner') {
@@ -1698,78 +2040,11 @@ export class Editor {
   }
 
   tryCreateHexahedronFromSelection() {
-    const selectedLines = [...this.scene.selection.lines]
-      .map((id) => this.scene.lines.get(id))
-      .filter((line): line is Line3 => line !== undefined)
-    const selectedPoints = [...this.scene.selection.points]
-      .map((id) => this.scene.points.get(id))
-      .filter((point): point is Point3 => point !== undefined)
-
-    let ownerPoints: [Point3, Point3] | null = null
-    let sourceLineId: string | null = null
-
-    if (selectedLines.length === 1 && selectedPoints.length === 0) {
-      ownerPoints = [selectedLines[0]!.p1, selectedLines[0]!.p2]
-      sourceLineId = selectedLines[0]!.id
-    } else if (selectedLines.length === 0 && selectedPoints.length === 2) {
-      ownerPoints = [selectedPoints[0]!, selectedPoints[1]!]
-    } else {
-      return
-    }
-
-    const [p1, p2] = ownerPoints
-    const edge = new Vec3(
-      p2.position.x - p1.position.x,
-      p2.position.y - p1.position.y,
-      p2.position.z - p1.position.z,
-    )
-    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
-    if (edgeLength <= 1e-6) {
-      return
-    }
-
-    const uAxis = new Vec3(edge.x / edgeLength, edge.y / edgeLength, edge.z / edgeLength)
-    const worldAxes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)]
-    const referenceAxis = worldAxes.reduce((best, candidate) => {
-      const bestDot = Math.abs(best.x * uAxis.x + best.y * uAxis.y + best.z * uAxis.z)
-      const candidateDot = Math.abs(
-        candidate.x * uAxis.x + candidate.y * uAxis.y + candidate.z * uAxis.z,
-      )
-      return candidateDot < bestDot ? candidate : best
-    })
-    const projectedReference = new Vec3(
-      referenceAxis.x - uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
-      referenceAxis.y - uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
-      referenceAxis.z - uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
-    )
-    const projectedLength = Math.hypot(
-      projectedReference.x,
-      projectedReference.y,
-      projectedReference.z,
-    )
-    if (projectedLength <= 1e-6) {
-      return
-    }
-
-    const vAxis = new Vec3(
-      projectedReference.x / projectedLength,
-      projectedReference.y / projectedLength,
-      projectedReference.z / projectedLength,
-    )
-    const wAxisRaw = new Vec3(
-      uAxis.y * vAxis.z - uAxis.z * vAxis.y,
-      uAxis.z * vAxis.x - uAxis.x * vAxis.z,
-      uAxis.x * vAxis.y - uAxis.y * vAxis.x,
-    )
-    const wAxisLength = Math.hypot(wAxisRaw.x, wAxisRaw.y, wAxisRaw.z)
-    if (wAxisLength <= 1e-6) {
-      return
-    }
-    const wAxis = new Vec3(
-      wAxisRaw.x / wAxisLength,
-      wAxisRaw.y / wAxisLength,
-      wAxisRaw.z / wAxisLength,
-    )
+    const { ownerPoints, sourceLineId } = this.getSelectedSolidOwnerPoints()
+    if (!ownerPoints) return
+    const axes = this.resolveSolidAxes(ownerPoints, 'hexahedron')
+    if (!axes) return
+    const { p1, p2, edgeLength, uAxis, vAxis, wAxis } = axes
 
     const usedPointNames = new Set([...this.scene.points.values()].map((point) => point.name))
     const nextPointName = () => {
@@ -1844,6 +2119,7 @@ export class Editor {
     const constraint = new CubeConstraint(
       this.scene,
       cubeId,
+      'hexahedron',
       ownerPointIds,
       [
         { pointId: p3.id, x: 0, y: 1, z: 0 },
@@ -1852,6 +2128,99 @@ export class Editor {
         { pointId: p6.id, x: 1, y: 0, z: 1 },
         { pointId: p7.id, x: 1, y: 1, z: 1 },
         { pointId: p8.id, x: 0, y: 1, z: 1 },
+      ],
+      faces.map((face) => face.id),
+      sourceLineId,
+      vAxis.clone(),
+      cubeName,
+    )
+
+    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint))
+    this.scene.selection.clear()
+    this.selectCubeByFaceId(faces[0]!.id)
+  }
+
+  tryCreateTetrahedronFromSelection() {
+    const { ownerPoints, sourceLineId } = this.getSelectedSolidOwnerPoints()
+    if (!ownerPoints) return
+    const axes = this.resolveSolidAxes(ownerPoints, 'tetrahedron')
+    if (!axes) return
+    const { p1, p2, edgeLength, uAxis, vAxis, wAxis } = axes
+
+    const usedPointNames = new Set([...this.scene.points.values()].map((point) => point.name))
+    const nextPointName = () => {
+      const name = genNextAvailableName(usedPointNames, 65)
+      usedPointNames.add(name)
+      return name
+    }
+    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
+    const nextFaceName = () => {
+      const name = genNextAvailableName(usedFaceNames, 0, (index) => (index === 0 ? 'F' : `F${index}`))
+      usedFaceNames.add(name)
+      return name
+    }
+
+    const createTetraPoint = (x: number, y: number, z: number) => {
+      const point = new Point3(
+        genId('p'),
+        nextPointName(),
+        new Vec3(
+          p1.position.x + (uAxis.x * x + vAxis.x * y + wAxis.x * z) * edgeLength,
+          p1.position.y + (uAxis.y * x + vAxis.y * y + wAxis.y * z) * edgeLength,
+          p1.position.z + (uAxis.z * x + vAxis.z * y + wAxis.z * z) * edgeLength,
+        ),
+      )
+      point.cubeRole = 'dependent'
+      return point
+    }
+
+    const sqrt3 = Math.sqrt(3)
+    const sqrtTwoThirds = Math.sqrt(2 / 3)
+    const p3 = createTetraPoint(0.5, sqrt3 / 2, 0)
+    const p4 = createTetraPoint(0.5, sqrt3 / 6, sqrtTwoThirds)
+    const cubeId = genId('cube')
+    const ownerPointIds = [p1.id, p2.id] as [string, string]
+    p1.cubeId = cubeId
+    p2.cubeId = cubeId
+    p1.cubeRole = 'owner'
+    p2.cubeRole = 'owner'
+    const dependentPoints = [p3, p4]
+    dependentPoints.forEach((point) => {
+      point.cubeId = cubeId
+    })
+    const dependentPointIds = dependentPoints.map((point) => point.id)
+    const cubeName = genNextAvailableName(
+      this.getCubeConstraints().map((constraint) => constraint.name),
+      0,
+      (index) => `正四面体${index + 1}`,
+    )
+    const makeFace = (boundaryPointIds: string[]) => {
+      const face = new PlanarFace(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
+      face.fillColor = 0xf4a7a7
+      face.fillOpacity = 0.22
+      face.userLocked = false
+      face.nameVisible = false
+      face.cubeId = cubeId
+      face.cubeOwnerPointIds = [...ownerPointIds]
+      face.cubeDependentPointIds = [...dependentPointIds]
+      return face
+    }
+
+    const faces = [
+      makeFace([p1.id, p2.id, p3.id]),
+      makeFace([p1.id, p2.id, p4.id]),
+      makeFace([p2.id, p3.id, p4.id]),
+      makeFace([p3.id, p1.id, p4.id]),
+    ]
+
+    const constraint = new CubeConstraint(
+      this.scene,
+      cubeId,
+      'tetrahedron',
+      ownerPointIds,
+      [
+        { pointId: p3.id, x: 0.5, y: sqrt3 / 2, z: 0 },
+        { pointId: p4.id, x: 0.5, y: sqrt3 / 6, z: sqrtTwoThirds },
       ],
       faces.map((face) => face.id),
       sourceLineId,
@@ -2225,6 +2594,8 @@ export class Editor {
           ),
         )
       }
+
+      this.applyCubeConstraintPositions(nextPositions)
 
       faceIds.forEach((faceId) => {
         const face = this.scene.faces.get(faceId)

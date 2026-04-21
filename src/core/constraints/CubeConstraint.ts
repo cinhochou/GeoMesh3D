@@ -39,10 +39,20 @@ const chooseFallbackAxis = (axis: Vec3) => {
   )
 }
 
+const AXIS_ALIGNMENT_EPSILON = 1e-6
+
+const getSharedCoordinateNormal = (a: Vec3, b: Vec3) => {
+  if (Math.abs(a.x - b.x) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(1, 0, 0)
+  if (Math.abs(a.y - b.y) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(0, 1, 0)
+  if (Math.abs(a.z - b.z) <= AXIS_ALIGNMENT_EPSILON) return new Vec3(0, 0, 1)
+  return null
+}
+
 export class CubeConstraint {
   constructor(
     private scene: Scene,
     public readonly cubeId: string,
+    public readonly solidType: 'hexahedron' | 'tetrahedron' = 'hexahedron',
     public readonly ownerPointIds: [string, string],
     public readonly dependentLayouts: CubePointLayout[],
     public readonly faceIds: string[],
@@ -53,7 +63,13 @@ export class CubeConstraint {
     public lockedEdgeLength: number | null = null,
   ) {}
 
-  private resolveAxes() {
+  setAxisHint(nextHint: Vec3) {
+    this.vAxisHint.x = nextHint.x
+    this.vAxisHint.y = nextHint.y
+    this.vAxisHint.z = nextHint.z
+  }
+
+  getResolvedAxes() {
     const p1 = this.scene.points.get(this.ownerPointIds[0])
     const p2 = this.scene.points.get(this.ownerPointIds[1])
     if (!p1 || !p2) return null
@@ -63,7 +79,14 @@ export class CubeConstraint {
     const edgeLength = length(edge)
     if (!uAxis || edgeLength <= 1e-8) return null
 
-    const projectedHint = projectPerpendicular(this.vAxisHint, uAxis)
+    const sharedNormal = null
+    const alignmentHint =
+      sharedNormal &&
+      Math.abs(dot(sharedNormal, uAxis)) <= 1 - AXIS_ALIGNMENT_EPSILON
+        ? cross(sharedNormal, uAxis)
+        : null
+
+    const projectedHint = projectPerpendicular(alignmentHint ?? this.vAxisHint, uAxis)
     const fallbackProjected = projectPerpendicular(chooseFallbackAxis(uAxis), uAxis)
     const vAxis = normalize(projectedHint) ?? normalize(fallbackProjected)
     if (!vAxis) return null
@@ -79,61 +102,35 @@ export class CubeConstraint {
     }
   }
 
-  solve() {
-    const axes = this.resolveAxes()
-    if (!axes) return
-
-    const draggedDependentLayout = this.dependentLayouts.find(({ pointId }) =>
-      this.scene.activeDraggedPointIds.has(pointId),
+  getLayoutPosition(
+    layout: { x: number; y: number; z: number },
+    axes: NonNullable<ReturnType<CubeConstraint['getResolvedAxes']>>,
+  ) {
+    return new Vec3(
+      axes.origin.x +
+        axes.uAxis.x * layout.x * axes.edgeLength +
+        axes.vAxis.x * layout.y * axes.edgeLength +
+        axes.wAxis.x * layout.z * axes.edgeLength,
+      axes.origin.y +
+        axes.uAxis.y * layout.x * axes.edgeLength +
+        axes.vAxis.y * layout.y * axes.edgeLength +
+        axes.wAxis.y * layout.z * axes.edgeLength,
+      axes.origin.z +
+        axes.uAxis.z * layout.x * axes.edgeLength +
+        axes.vAxis.z * layout.y * axes.edgeLength +
+        axes.wAxis.z * layout.z * axes.edgeLength,
     )
-    if (draggedDependentLayout) {
-      const draggedPoint = this.scene.points.get(draggedDependentLayout.pointId)
-      const ownerA = this.scene.points.get(this.ownerPointIds[0])
-      const ownerB = this.scene.points.get(this.ownerPointIds[1])
-      if (draggedPoint && ownerA && ownerB && !ownerA.locked && !ownerB.locked) {
-        const expectedPosition = new Vec3(
-          axes.origin.x +
-            axes.uAxis.x * draggedDependentLayout.x * axes.edgeLength +
-            axes.vAxis.x * draggedDependentLayout.y * axes.edgeLength +
-            axes.wAxis.x * draggedDependentLayout.z * axes.edgeLength,
-          axes.origin.y +
-            axes.uAxis.y * draggedDependentLayout.x * axes.edgeLength +
-            axes.vAxis.y * draggedDependentLayout.y * axes.edgeLength +
-            axes.wAxis.y * draggedDependentLayout.z * axes.edgeLength,
-          axes.origin.z +
-            axes.uAxis.z * draggedDependentLayout.x * axes.edgeLength +
-            axes.vAxis.z * draggedDependentLayout.y * axes.edgeLength +
-            axes.wAxis.z * draggedDependentLayout.z * axes.edgeLength,
-        )
-        const delta = subtract(draggedPoint.position, expectedPosition)
-        if (length(delta) > 1e-8) {
-          ownerA.setPosition(ownerA.position.add(delta))
-          ownerB.setPosition(ownerB.position.add(delta))
-          axes.origin = ownerA.position
-        }
-      }
-    }
+  }
+
+  solve() {
+    const axes = this.getResolvedAxes()
+    if (!axes) return
 
     this.dependentLayouts.forEach(({ pointId, x, y, z }) => {
       const point = this.scene.points.get(pointId)
       if (!point || point.locked) return
 
-      point.setPosition(
-        new Vec3(
-          axes.origin.x +
-            axes.uAxis.x * x * axes.edgeLength +
-            axes.vAxis.x * y * axes.edgeLength +
-            axes.wAxis.x * z * axes.edgeLength,
-          axes.origin.y +
-            axes.uAxis.y * x * axes.edgeLength +
-            axes.vAxis.y * y * axes.edgeLength +
-            axes.wAxis.y * z * axes.edgeLength,
-          axes.origin.z +
-            axes.uAxis.z * x * axes.edgeLength +
-            axes.vAxis.z * y * axes.edgeLength +
-            axes.wAxis.z * z * axes.edgeLength,
-        ),
-      )
+      point.setPosition(this.getLayoutPosition({ x, y, z }, axes))
     })
   }
 }

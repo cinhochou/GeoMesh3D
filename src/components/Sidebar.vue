@@ -219,7 +219,7 @@ const contentGroupLabels: Record<
   straightLine: '直线',
   ray: '射线',
   face: '面',
-  hexahedron: '正六面体',
+  hexahedron: '立体',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
@@ -971,7 +971,22 @@ const getHexahedronEdgeLength = (cubeId: string) => {
     ownerPoints[1]!.position.z - ownerPoints[0]!.position.z,
   )
 }
-const getHexahedronVolume = (cubeId: string) => Math.pow(getHexahedronEdgeLength(cubeId), 3)
+const getSolidDisplayName = (cubeId: string) => {
+  const constraint = props.editor.getCubeConstraint(cubeId)
+  return constraint?.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+}
+const getSolidConstraintBadge = (cubeId: string | null | undefined) => {
+  const constraint = cubeId ? props.editor.getCubeConstraint(cubeId) : null
+  return constraint?.solidType === 'tetrahedron' ? '四面体约束' : '六面体约束'
+}
+const getHexahedronVolume = (cubeId: string) => {
+  const edgeLength = getHexahedronEdgeLength(cubeId)
+  const constraint = props.editor.getCubeConstraint(cubeId)
+  if (constraint?.solidType === 'tetrahedron') {
+    return (Math.sqrt(2) / 12) * Math.pow(edgeLength, 3)
+  }
+  return Math.pow(edgeLength, 3)
+}
 const getFaceMemberPointNames = (face: PlanarFace) =>
   face
     .getMemberPoints(props.scene.points)
@@ -1402,7 +1417,9 @@ onUnmounted(() => {
             点{{ p!.name ?? '' }}
             <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
             <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
-            <span v-if="hasCubeConstraint(p!)" class="constraint-badge">六面体约束</span>
+            <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
+              getSolidConstraintBadge(p!.cubeId)
+            }}</span>
           </div>
           <div>
             x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
@@ -2403,7 +2420,9 @@ onUnmounted(() => {
               边长锁定
             </label>
           </div>
-          <div class="face-metric-row">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+          <div class="face-metric-row">
+            {{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}
+          </div>
           <div class="length-row">
             <label>边长</label>
             <div class="coord-input compact-length-input">
@@ -2546,8 +2565,8 @@ onUnmounted(() => {
               >🔒</span
             >
           </div>
-          <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-          <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+          <div>{{ getSolidDisplayName(cube.cubeId) }}边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+          <div>{{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
           <div>
             原始点：{{
               getHexahedronOwnerPoints(cube.cubeId)
@@ -2631,7 +2650,9 @@ onUnmounted(() => {
           <div>
             面{{ face!.name ?? '' }}
             <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
-            <span v-if="isCubeFace(face!)" class="constraint-badge">六面体约束</span>
+            <span v-if="isCubeFace(face!)" class="constraint-badge">{{
+              getSolidConstraintBadge(face!.cubeId)
+            }}</span>
           </div>
           <div>
             面积：{{ getFaceArea(face!).toFixed(2) }}
@@ -2704,7 +2725,9 @@ onUnmounted(() => {
               <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                 >交点约束</span
               >
-              <span v-if="hasCubeConstraint(p!)" class="constraint-badge">六面体约束</span>
+              <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
+                getSolidConstraintBadge(p!.cubeId)
+              }}</span>
             </div>
           </div>
         </div>
@@ -2880,8 +2903,8 @@ onUnmounted(() => {
                 >🔒</span
               >
             </div>
-            <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-            <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+            <div>{{ getSolidDisplayName(cube.cubeId) }}边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+            <div>{{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
             <div>
               原始点：{{
                 getHexahedronOwnerPoints(cube.cubeId)
@@ -2924,7 +2947,9 @@ onUnmounted(() => {
             <div>
               面{{ face!.name ?? '' }}
               <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
-              <span v-if="isCubeFace(face!)" class="constraint-badge">六面体约束</span>
+              <span v-if="isCubeFace(face!)" class="constraint-badge">{{
+                getSolidConstraintBadge(face!.cubeId)
+              }}</span>
             </div>
             <div>
               边界点：{{
