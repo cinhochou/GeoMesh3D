@@ -14,6 +14,7 @@ import { getEditorSession } from '../core/editor/editorSession'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager } from '../core/collab/CollabManager'
+import SolverSchedulerWorker from '../core/perf/solverScheduler.worker?worker'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
@@ -43,6 +44,11 @@ const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = ge
 let renderer: ThreeRenderer
 let interaction: Interaction
 let animationFrameId: number | null = null
+let solverWorker: Worker | null = null
+let scheduleSolverFlush = () => {}
+let detachSolverListener = () => {}
+let solverFlushRequested = false
+let solverFlushReady = false
 
 const collabManager = ref<CollabManager | null>(null)
 let lastFpsTime = performance.now()
@@ -102,6 +108,21 @@ onMounted(() => {
   sceneStore.syncSceneState(scene)
 
   collabManager.value = new CollabManager(scene)
+  solverWorker = new SolverSchedulerWorker()
+  scheduleSolverFlush = () => {
+    if (solverFlushRequested || !solverWorker) return
+    solverFlushRequested = true
+    solverWorker.postMessage({ type: 'schedule' })
+  }
+  solverWorker.onmessage = (event: MessageEvent<{ type: 'flush' }>) => {
+    if (event.data.type !== 'flush') return
+    solverFlushRequested = false
+    solverFlushReady = true
+  }
+  detachSolverListener = scene.onSolverWork(() => {
+    scheduleSolverFlush()
+  })
+  scheduleSolverFlush()
 
   collabManager.value.onPeersUpdate = (count) => {
     collabStore.setPeerCount(count)
@@ -134,7 +155,13 @@ onMounted(() => {
       frameCount = 0
       lastFpsTime = now
     }
-    scene.constraints.forEach((c) => c.solve())
+    if (solverFlushReady) {
+      solverFlushReady = false
+      scene.solveDirtyConstraints()
+      if (scene.hasPendingConstraintWork()) {
+        scheduleSolverFlush()
+      }
+    }
     if (interaction.shouldSyncLiveScene()) {
       collabManager.value?.syncLivePreview(interaction.getLiveSyncPointIds())
     }
@@ -160,6 +187,7 @@ watch(
     isARMode,
   ],
   () => {
+    scene.markAllRenderDirty()
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
     if (!isTouchDevice.value || !interaction) return
@@ -180,6 +208,7 @@ watch(
     () => scene.faces.size,
   ],
   () => {
+    scene.markAllRenderDirty()
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
   },
@@ -221,6 +250,9 @@ onUnmounted(() => {
   editor.executeCommand = originalExecuteCommand
   editor.undo = originalUndo
   editor.redo = originalRedo
+  detachSolverListener()
+  solverWorker?.terminate()
+  solverWorker = null
   interaction?.unbind(renderer.renderer.domElement)
   renderer?.dispose()
   window.removeEventListener('resize', handleResize)

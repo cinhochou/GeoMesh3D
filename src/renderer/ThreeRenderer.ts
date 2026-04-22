@@ -1,7 +1,7 @@
 ﻿// src/renderer/ThreeRenderer.ts
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Scene as GeoScene } from '../core/scene/Scene'
+import { Scene as GeoScene, type SceneRenderSyncState } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import type { CubeConstraint } from '../core/constraints/CubeConstraint'
@@ -484,12 +484,15 @@ export class ThreeRenderer {
     previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null,
     facePreviewData?: FacePreviewData | null,
   ) {
-    this.cleanupMissingMeshes(geoScene)
-    this.syncPoints(geoScene)
-    this.syncLines(geoScene)
-    this.syncStraightLines(geoScene)
-    this.syncRays(geoScene)
-    this.syncFaces(geoScene)
+    const dirtyState = geoScene.consumeRenderSyncState()
+    if (dirtyState) {
+      this.cleanupMissingMeshes(geoScene)
+      this.syncPoints(geoScene, dirtyState)
+      this.syncLines(geoScene, dirtyState)
+      this.syncStraightLines(geoScene, dirtyState)
+      this.syncRays(geoScene, dirtyState)
+      this.syncFaces(geoScene, dirtyState)
+    }
     this.updateRubberBand(previewData) // 处理虚线
     this.updateFacePreview(facePreviewData)
   }
@@ -803,8 +806,10 @@ export class ThreeRenderer {
     this.refreshScreenSpaceScales()
   }
 
-  private syncPoints(scene: GeoScene) {
-    scene.points.forEach((p) => {
+  private syncPoints(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.pointIds.forEach((pointId) => {
+      const p = scene.points.get(pointId)
+      if (!p) return
       let sprite = this.meshMap.get(p.id) as THREE.Sprite
 
       if (!sprite) {
@@ -902,8 +907,10 @@ export class ThreeRenderer {
     })
   }
 
-  private syncLines(scene: GeoScene) {
-    scene.lines.forEach((lineData, id) => {
+  private syncLines(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.lineIds.forEach((id) => {
+      const lineData = scene.lines.get(id)
+      if (!lineData) return
       let line = this.meshMap.get(id) as THREE.Line
       const p1 = lineData.p1.position
       const p2 = lineData.p2.position
@@ -951,8 +958,10 @@ export class ThreeRenderer {
     })
   }
 
-  private syncRays(scene: GeoScene) {
-    scene.rays.forEach((rayData, id) => {
+  private syncRays(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.rayIds.forEach((id) => {
+      const rayData = scene.rays.get(id)
+      if (!rayData) return
       let ray = this.meshMap.get(id) as THREE.Line | undefined
       const p1 = rayData.p1.position
       const end = rayData.getDisplayEndPoint()
@@ -994,8 +1003,10 @@ export class ThreeRenderer {
     })
   }
 
-  private syncStraightLines(scene: GeoScene) {
-    scene.straightLines.forEach((lineData, id) => {
+  private syncStraightLines(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.straightLineIds.forEach((id) => {
+      const lineData = scene.straightLines.get(id)
+      if (!lineData) return
       let line = this.meshMap.get(id) as THREE.Line | undefined
       const display = lineData.getDisplayPoints()
       const start = display.start
@@ -1043,8 +1054,10 @@ export class ThreeRenderer {
     })
   }
 
-  private syncFaces(scene: GeoScene) {
-    scene.faces.forEach((faceData, id) => {
+  private syncFaces(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.faceIds.forEach((id) => {
+      const faceData = scene.faces.get(id)
+      if (!faceData) return
       let faceMesh = this.meshMap.get(id) as THREE.Mesh | undefined
       const triangulated = triangulateFace(faceData.boundaryPointIds, scene.points)
       if (!triangulated) return

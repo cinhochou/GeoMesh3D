@@ -74,6 +74,10 @@ export class IntersectionPointConstraint {
     return ids
   }
 
+  getDependencyPointIds() {
+    return [this.pointId, ...this.collectDrivenPointIds()]
+  }
+
   private collectPointIdsFromTarget(target: IntersectionTargetRef) {
     const ids = new Set<string>()
     if (target.type === 'line') {

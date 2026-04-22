@@ -122,6 +122,10 @@ export class CubeConstraint {
     )
   }
 
+  getDependencyPointIds() {
+    return [this.ownerPointIds[0], this.ownerPointIds[1], ...this.dependentLayouts.map((item) => item.pointId)]
+  }
+
   solve() {
     const axes = this.getResolvedAxes()
     if (!axes) return

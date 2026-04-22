@@ -15,6 +15,11 @@ export class PlanarFaceConstraint {
     public readonly faceId: string,
   ) {}
 
+  getDependencyPointIds() {
+    const face = this.scene.faces.get(this.faceId)
+    return face ? face.memberPointIds : []
+  }
+
   solve() {
     const face = this.scene.faces.get(this.faceId)
     if (!face) return
