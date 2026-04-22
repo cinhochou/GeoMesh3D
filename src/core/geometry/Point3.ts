@@ -2,10 +2,14 @@
 
 export class Point3 {
   private static readonly POSITION_EPSILON = 1e-8
+  static readonly DEFAULT_LABEL_OFFSET_X = 3
+  static readonly DEFAULT_LABEL_OFFSET_Y = 3
 
   id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   position: Vec3
   locked: boolean
   userLocked: boolean
@@ -20,10 +24,14 @@ export class Point3 {
     locked: boolean = false,
     nameVisible: boolean = true,
     userLocked: boolean = false,
+    labelOffsetX: number = Point3.DEFAULT_LABEL_OFFSET_X,
+    labelOffsetY: number = Point3.DEFAULT_LABEL_OFFSET_Y,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
+    this.labelOffsetX = labelOffsetX
+    this.labelOffsetY = labelOffsetY
     this.position = position
     this.locked = locked
     this.userLocked = userLocked

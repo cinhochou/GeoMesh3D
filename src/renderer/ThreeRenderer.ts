@@ -41,6 +41,13 @@ type RenderObjectUserData = THREE.Object3D['userData'] & {
 
 type LabelSpriteUserData = THREE.Object3D['userData'] & {
   text?: string
+  isNameLabel?: boolean
+  geoId?: string
+  geoType?: Exclude<RenderObjectType, 'axisLabel'>
+  textPixelWidth?: number
+  textPixelHeight?: number
+  canvasPixelWidth?: number
+  canvasPixelHeight?: number
 }
 
 type AxisArrowUserData = THREE.Object3D['userData'] & {
@@ -87,6 +94,7 @@ export class ThreeRenderer {
   private static readonly POINT_LABEL_CENTER_Y = 0.32
   private static readonly LINE_LABEL_CENTER_X = 0.5
   private static readonly LINE_LABEL_CENTER_Y = 0.3
+  static readonly LABEL_DRAG_LIMIT = 30
   private static readonly LINEAR_COLOR = 0xffffff
   private static readonly LINEAR_WIDTH = 2
   private static readonly INTERSECTION_POINT_COLOR = 0xffd84a
@@ -155,6 +163,8 @@ export class ThreeRenderer {
 
   /** geoId -> mesh */
   meshMap = new Map<string, THREE.Object3D>()
+  private currentSceneRef: GeoScene | null = null
+  private activeLabelTarget: { type: string; geoId: string } | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -261,6 +271,46 @@ export class ThreeRenderer {
 
   private getLabelUserData(sprite: THREE.Sprite): LabelSpriteUserData {
     return sprite.userData as LabelSpriteUserData
+  }
+
+  getNameLabelSprites() {
+    const labels: THREE.Sprite[] = []
+    this.meshMap.forEach((obj) => {
+      const label = this.getRenderUserData(obj).__labelSprite
+      if (label) labels.push(label)
+    })
+    return labels
+  }
+
+  previewLabelOffset(
+    geoId: string,
+    offsetX: number,
+    offsetY: number,
+  ) {
+    const object = this.meshMap.get(geoId)
+    if (!object) return
+    const userData = this.getRenderUserData(object)
+    userData.__labelOffsetX = offsetX
+    userData.__labelOffsetY = offsetY
+
+    const label = userData.__labelSprite
+    if (!label || !label.visible) return
+
+    if (userData.type === 'point') {
+      label.position.copy(this.getScreenOffsetPosition(object.position, offsetX, offsetY))
+      return
+    }
+
+    if (
+      userData.type === 'line' ||
+      userData.type === 'straightLine' ||
+      userData.type === 'ray' ||
+      userData.type === 'face'
+    ) {
+      const anchor = userData.__labelAnchor?.clone()
+      if (!anchor) return
+      label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
+    }
   }
 
   private getAxisArrowUserData(arrow: THREE.ArrowHelper): AxisArrowUserData {
@@ -483,7 +533,10 @@ export class ThreeRenderer {
     geoScene: GeoScene,
     previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null,
     facePreviewData?: FacePreviewData | null,
+    activeLabelTarget?: { type: string; geoId: string } | null,
   ) {
+    this.currentSceneRef = geoScene
+    this.activeLabelTarget = activeLabelTarget ?? null
     const dirtyState = geoScene.consumeRenderSyncState()
     if (dirtyState) {
       this.cleanupMissingMeshes(geoScene)
@@ -856,12 +909,14 @@ export class ThreeRenderer {
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
 
       // 点名称标签
-      const labelColor = isSelected ? 0x43f260 : 0xffffff
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'point' && this.activeLabelTarget.geoId === p.id
+      const labelColor = isLabelActive ? 0x43f260 : 0xffffff
       const labelKey = '__labelSprite'
       const spriteUserData = this.getRenderUserData(sprite)
       const existingLabel = spriteUserData[labelKey] as THREE.Sprite | undefined
-      spriteUserData.__labelOffsetX = ThreeRenderer.POINT_LABEL_OFFSET_X
-      spriteUserData.__labelOffsetY = ThreeRenderer.POINT_LABEL_OFFSET_Y
+      spriteUserData.__labelOffsetX = p.labelOffsetX
+      spriteUserData.__labelOffsetY = p.labelOffsetY
       if (!p.nameVisible) {
         if (existingLabel) existingLabel.visible = false
         return
@@ -876,7 +931,11 @@ export class ThreeRenderer {
         nameSprite.renderOrder = 10
         const scale = this.getPointLabelScale()
         nameSprite.scale.set(scale, scale, 1)
-        this.getLabelUserData(nameSprite).text = p.name ?? ''
+        const labelUserData = this.getLabelUserData(nameSprite)
+        labelUserData.text = p.name ?? ''
+        labelUserData.isNameLabel = true
+        labelUserData.geoId = p.id
+        labelUserData.geoType = 'point'
         spriteUserData[labelKey] = nameSprite
         this.world.add(nameSprite)
       } else {
@@ -891,6 +950,12 @@ export class ThreeRenderer {
           this.getLabelUserData(existingLabel).text = p.name ?? ''
           const material = existingLabel.material as THREE.SpriteMaterial
           const newSprite = this.makePointLabelSprite(p.name ?? '', labelColor)
+          Object.assign(this.getLabelUserData(existingLabel), {
+            textPixelWidth: this.getLabelUserData(newSprite).textPixelWidth,
+            textPixelHeight: this.getLabelUserData(newSprite).textPixelHeight,
+            canvasPixelWidth: this.getLabelUserData(newSprite).canvasPixelWidth,
+            canvasPixelHeight: this.getLabelUserData(newSprite).canvasPixelHeight,
+          })
           material.map = (newSprite.material as THREE.SpriteMaterial).map
         } else {
           const material = existingLabel.material as THREE.SpriteMaterial
@@ -898,7 +963,10 @@ export class ThreeRenderer {
           if (map) {
             const ctx = (map.image as HTMLCanvasElement).getContext('2d')
             if (ctx) {
-              this.drawNameLabel(ctx, map.image as HTMLCanvasElement, p.name ?? '', labelColor, 72)
+              Object.assign(
+                this.getLabelUserData(existingLabel),
+                this.drawNameLabel(ctx, map.image as HTMLCanvasElement, p.name ?? '', labelColor, 72),
+              )
               map.needsUpdate = true
             }
           }
@@ -948,12 +1016,14 @@ export class ThreeRenderer {
       )
 
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'line' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         line,
         lineData.name ?? '',
         lineData.nameVisible && lineData.visible !== false,
         mid,
-        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+        isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -993,12 +1063,14 @@ export class ThreeRenderer {
 
       this.updateRayArrowHead(ray, rayData, isSelected)
       const mid = new THREE.Vector3((p1.x + end.x) / 2, (p1.y + end.y) / 2, (p1.z + end.z) / 2)
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'ray' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         ray,
         rayData.name ?? '',
         rayData.nameVisible && rayData.visible,
         mid,
-        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+        isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -1044,12 +1116,14 @@ export class ThreeRenderer {
         (lineData.p1.position.y + lineData.p2.position.y) / 2,
         (lineData.p1.position.z + lineData.p2.position.z) / 2,
       )
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'straightLine' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         line,
         lineData.name ?? '',
         lineData.nameVisible && lineData.visible,
         mid,
-        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+        isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -1140,6 +1214,8 @@ export class ThreeRenderer {
         ;(outline.material as THREE.LineBasicMaterial).opacity = isSelected ? 1 : 0.95
       }
 
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'face' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         faceMesh,
         faceData.name ?? '',
@@ -1149,7 +1225,7 @@ export class ThreeRenderer {
           faceData.getCentroid(scene.points).y,
           faceData.getCentroid(scene.points).z,
         ),
-        shouldHighlightFaceFill ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
+        isLabelActive ? ThreeRenderer.FACE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -1165,8 +1241,9 @@ export class ThreeRenderer {
     const objectUserData = this.getRenderUserData(object)
     const existingLabel = objectUserData[labelKey] as THREE.Sprite | undefined
     objectUserData.__labelAnchor = anchor.clone()
-    objectUserData.__labelOffsetX = 0
-    objectUserData.__labelOffsetY = ThreeRenderer.LINE_LABEL_OFFSET_Y
+    const source = this.getLinearLabelSource(object)
+    objectUserData.__labelOffsetX = source?.labelOffsetX ?? 0
+    objectUserData.__labelOffsetY = source?.labelOffsetY ?? ThreeRenderer.LINE_LABEL_OFFSET_Y
     if (!visible) {
       if (existingLabel) existingLabel.visible = false
       return
@@ -1180,7 +1257,11 @@ export class ThreeRenderer {
       nameSprite.renderOrder = 10
       const scale = this.getLineLabelScale()
       nameSprite.scale.set(scale, scale, 1)
-      this.getLabelUserData(nameSprite).text = text
+      const labelUserData = this.getLabelUserData(nameSprite)
+      labelUserData.text = text
+      labelUserData.isNameLabel = true
+      labelUserData.geoId = object.userData.geoId
+      labelUserData.geoType = object.userData.type
       objectUserData[labelKey] = nameSprite
       this.world.add(nameSprite)
       return
@@ -1196,6 +1277,12 @@ export class ThreeRenderer {
       this.getLabelUserData(existingLabel).text = text
       const material = existingLabel.material as THREE.SpriteMaterial
       const newSprite = this.makeLineLabelSprite(text, color)
+      Object.assign(this.getLabelUserData(existingLabel), {
+        textPixelWidth: this.getLabelUserData(newSprite).textPixelWidth,
+        textPixelHeight: this.getLabelUserData(newSprite).textPixelHeight,
+        canvasPixelWidth: this.getLabelUserData(newSprite).canvasPixelWidth,
+        canvasPixelHeight: this.getLabelUserData(newSprite).canvasPixelHeight,
+      })
       material.map = (newSprite.material as THREE.SpriteMaterial).map
       return
     }
@@ -1205,7 +1292,10 @@ export class ThreeRenderer {
     if (!map) return
     const ctx = (map.image as HTMLCanvasElement).getContext('2d')
     if (!ctx) return
-    this.drawNameLabel(ctx, map.image as HTMLCanvasElement, text, color, 56)
+    Object.assign(
+      this.getLabelUserData(existingLabel),
+      this.drawNameLabel(ctx, map.image as HTMLCanvasElement, text, color, 56),
+    )
     map.needsUpdate = true
   }
 
@@ -1544,6 +1634,13 @@ export class ThreeRenderer {
       context.font = `Bold ${suffixFontSize}px Arial`
       context.fillText(suffixText, startX + mainWidth + gap, baselineY + mainFontSize * 0.22)
     }
+
+    return {
+      textPixelWidth: mainWidth + gap + suffixWidth,
+      textPixelHeight: mainFontSize,
+      canvasPixelWidth: canvas.width,
+      canvasPixelHeight: canvas.height,
+    }
   }
 
   /** 创建与轴同色的纯文字 Sprite（无背景、无边框） */
@@ -1594,7 +1691,7 @@ export class ThreeRenderer {
     canvas.height = size
 
     const context = canvas.getContext('2d')!
-    this.drawNameLabel(context, canvas, message, color, 72)
+    const metrics = this.drawNameLabel(context, canvas, message, color, 72)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.minFilter = THREE.LinearFilter
@@ -1607,7 +1704,9 @@ export class ThreeRenderer {
       transparent: true,
     })
 
-    return new THREE.Sprite(material)
+    const sprite = new THREE.Sprite(material)
+    Object.assign(this.getLabelUserData(sprite), metrics)
+    return sprite
   }
 
   /** 创建线段名称标签（无背景） */
@@ -1618,7 +1717,7 @@ export class ThreeRenderer {
     canvas.height = size
 
     const context = canvas.getContext('2d')!
-    this.drawNameLabel(context, canvas, message, color, 56)
+    const metrics = this.drawNameLabel(context, canvas, message, color, 56)
 
     const texture = new THREE.CanvasTexture(canvas)
     texture.minFilter = THREE.LinearFilter
@@ -1631,7 +1730,9 @@ export class ThreeRenderer {
       transparent: true,
     })
 
-    return new THREE.Sprite(material)
+    const sprite = new THREE.Sprite(material)
+    Object.assign(this.getLabelUserData(sprite), metrics)
+    return sprite
   }
 
   /** 计算标签位置：始终显示在屏幕上方 */
@@ -1671,6 +1772,17 @@ export class ThreeRenderer {
         label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
       }
     })
+  }
+
+  private getLinearLabelSource(object: THREE.Object3D) {
+    const geoId = object.userData.geoId
+    const type = object.userData.type
+    if (!geoId || !this.currentSceneRef) return null
+    if (type === 'line') return this.currentSceneRef.lines.get(geoId) ?? null
+    if (type === 'straightLine') return this.currentSceneRef.straightLines.get(geoId) ?? null
+    if (type === 'ray') return this.currentSceneRef.rays.get(geoId) ?? null
+    if (type === 'face') return this.currentSceneRef.faces.get(geoId) ?? null
+    return null
   }
 
   /** 生成圆点贴图（白色圆形 + 透明背景），供 SpriteMaterial 使用 */

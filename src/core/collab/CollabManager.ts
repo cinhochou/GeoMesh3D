@@ -29,6 +29,8 @@ type PointSyncData = {
   z: number
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   userLocked: boolean
 }
 
@@ -37,6 +39,8 @@ type LineSyncData = {
   p2Id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   userLocked: boolean
   lengthLocked: boolean
@@ -48,6 +52,8 @@ type RaySyncData = {
   p2Id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   displayLength: number
   userLocked: boolean
@@ -58,6 +64,8 @@ type StraightLineSyncData = {
   p2Id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   displayLength: number
   userLocked: boolean
@@ -66,6 +74,8 @@ type StraightLineSyncData = {
 type FaceSyncData = {
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   userLocked: boolean
   areaLocked: boolean
@@ -564,6 +574,8 @@ export class CollabManager {
             if (point.locked) return
             point.name = data.name ?? point.name
             if (typeof data.nameVisible === 'boolean') point.nameVisible = data.nameVisible
+            if (typeof data.labelOffsetX === 'number') point.labelOffsetX = data.labelOffsetX
+            if (typeof data.labelOffsetY === 'number') point.labelOffsetY = data.labelOffsetY
             if (typeof data.userLocked === 'boolean') point.userLocked = data.userLocked
             point.setPosition(new Vec3(data.x, data.y, data.z))
           } else {
@@ -576,6 +588,8 @@ export class CollabManager {
                 isOrigin,
                 typeof data.nameVisible === 'boolean' ? data.nameVisible : true,
                 typeof data.userLocked === 'boolean' ? data.userLocked : false,
+                typeof data.labelOffsetX === 'number' ? data.labelOffsetX : Point3.DEFAULT_LABEL_OFFSET_X,
+                typeof data.labelOffsetY === 'number' ? data.labelOffsetY : Point3.DEFAULT_LABEL_OFFSET_Y,
               ),
             )
           }
@@ -625,6 +639,8 @@ export class CollabManager {
           if (line) {
             line.name = data.name ?? line.name
             line.nameVisible = data.nameVisible ?? line.nameVisible
+            line.labelOffsetX = data.labelOffsetX ?? line.labelOffsetX
+            line.labelOffsetY = data.labelOffsetY ?? line.labelOffsetY
             line.visible = data.visible ?? line.visible
             line.userLocked = data.userLocked ?? line.userLocked
             line.lengthLocked = data.lengthLocked ?? line.lengthLocked
@@ -641,7 +657,7 @@ export class CollabManager {
                 data.name ?? '',
                 p1,
                 p2,
-                data.nameVisible ?? true,
+                data.nameVisible ?? false,
                 data.visible ?? true,
                 data.lengthLocked ?? false,
                 Line3.normalizeLockedLength(
@@ -653,6 +669,8 @@ export class CollabManager {
                     ),
                 ),
                 data.userLocked ?? false,
+                data.labelOffsetX ?? Line3.DEFAULT_LABEL_OFFSET_X,
+                data.labelOffsetY ?? Line3.DEFAULT_LABEL_OFFSET_Y,
               ),
             )
           }
@@ -677,6 +695,8 @@ export class CollabManager {
           if (line) {
             line.name = data.name ?? line.name
             line.nameVisible = data.nameVisible ?? line.nameVisible
+            line.labelOffsetX = data.labelOffsetX ?? line.labelOffsetX
+            line.labelOffsetY = data.labelOffsetY ?? line.labelOffsetY
             line.visible = data.visible ?? line.visible
             line.userLocked = data.userLocked ?? line.userLocked
             line.displayLength =
@@ -692,12 +712,14 @@ export class CollabManager {
                 data.name ?? '',
                 p1,
                 p2,
-                data.nameVisible ?? true,
+                data.nameVisible ?? false,
                 data.visible ?? true,
                 StraightLine3.normalizeDisplayLength(
                   data.displayLength ?? StraightLine3.DEFAULT_DISPLAY_LENGTH,
                 ),
                 data.userLocked ?? false,
+                data.labelOffsetX ?? StraightLine3.DEFAULT_LABEL_OFFSET_X,
+                data.labelOffsetY ?? StraightLine3.DEFAULT_LABEL_OFFSET_Y,
               ),
             )
           }
@@ -722,6 +744,8 @@ export class CollabManager {
           if (ray) {
             ray.name = data.name ?? ray.name
             ray.nameVisible = data.nameVisible ?? ray.nameVisible
+            ray.labelOffsetX = data.labelOffsetX ?? ray.labelOffsetX
+            ray.labelOffsetY = data.labelOffsetY ?? ray.labelOffsetY
             ray.visible = data.visible ?? ray.visible
             ray.userLocked = data.userLocked ?? ray.userLocked
             ray.displayLength =
@@ -737,10 +761,12 @@ export class CollabManager {
                 data.name ?? '',
                 p1,
                 p2,
-                data.nameVisible ?? true,
+                data.nameVisible ?? false,
                 data.visible ?? true,
                 Ray3.normalizeDisplayLength(data.displayLength ?? Ray3.DEFAULT_DISPLAY_LENGTH),
                 data.userLocked ?? false,
+                data.labelOffsetX ?? Ray3.DEFAULT_LABEL_OFFSET_X,
+                data.labelOffsetY ?? Ray3.DEFAULT_LABEL_OFFSET_Y,
               ),
             )
           }
@@ -764,6 +790,8 @@ export class CollabManager {
           if (face) {
             face.name = data.name ?? face.name
             face.nameVisible = data.nameVisible ?? face.nameVisible
+            face.labelOffsetX = data.labelOffsetX ?? face.labelOffsetX
+            face.labelOffsetY = data.labelOffsetY ?? face.labelOffsetY
             face.visible = data.visible ?? face.visible
             face.userLocked = data.userLocked ?? face.userLocked
             face.areaLocked = data.areaLocked ?? face.areaLocked
@@ -782,13 +810,15 @@ export class CollabManager {
                 [...data.boundaryPointIds],
                 [...data.memberPointIds],
                 [...data.boundaryLineIds],
-                data.nameVisible ?? true,
+                data.nameVisible ?? false,
                 data.visible ?? true,
                 data.userLocked ?? false,
                 [...data.supportPointIds],
                 data.areaLocked ?? false,
                 data.lockedArea ?? 0,
                 [...(data.edgeLengthLocks ?? [])],
+                data.labelOffsetX ?? PlanarFace.DEFAULT_LABEL_OFFSET_X,
+                data.labelOffsetY ?? PlanarFace.DEFAULT_LABEL_OFFSET_Y,
               ),
             )
           }
@@ -895,6 +925,8 @@ export class CollabManager {
           z: p.position.z,
           name: p.name,
           nameVisible: p.nameVisible,
+          labelOffsetX: p.labelOffsetX,
+          labelOffsetY: p.labelOffsetY,
           userLocked: p.userLocked,
         }
         const prev = this.yPoints.get(id)
@@ -905,6 +937,8 @@ export class CollabManager {
           prev.z !== next.z ||
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
+          prev.labelOffsetX !== next.labelOffsetX ||
+          prev.labelOffsetY !== next.labelOffsetY ||
           prev.userLocked !== next.userLocked
         ) {
           this.yPoints.set(id, next)
@@ -922,6 +956,8 @@ export class CollabManager {
           p2Id: l.p2.id,
           name: l.name,
           nameVisible: l.nameVisible,
+          labelOffsetX: l.labelOffsetX,
+          labelOffsetY: l.labelOffsetY,
           visible: l.visible,
           userLocked: l.userLocked,
           lengthLocked: l.lengthLocked,
@@ -934,6 +970,8 @@ export class CollabManager {
           prev.p2Id !== next.p2Id ||
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
+          prev.labelOffsetX !== next.labelOffsetX ||
+          prev.labelOffsetY !== next.labelOffsetY ||
           prev.visible !== next.visible ||
           prev.userLocked !== next.userLocked ||
           prev.lengthLocked !== next.lengthLocked ||
@@ -954,6 +992,8 @@ export class CollabManager {
           p2Id: line.p2.id,
           name: line.name,
           nameVisible: line.nameVisible,
+          labelOffsetX: line.labelOffsetX,
+          labelOffsetY: line.labelOffsetY,
           visible: line.visible,
           displayLength: line.displayLength,
           userLocked: line.userLocked,
@@ -965,6 +1005,8 @@ export class CollabManager {
           prev.p2Id !== next.p2Id ||
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
+          prev.labelOffsetX !== next.labelOffsetX ||
+          prev.labelOffsetY !== next.labelOffsetY ||
           prev.visible !== next.visible ||
           prev.displayLength !== next.displayLength ||
           prev.userLocked !== next.userLocked
@@ -984,6 +1026,8 @@ export class CollabManager {
           p2Id: ray.p2.id,
           name: ray.name,
           nameVisible: ray.nameVisible,
+          labelOffsetX: ray.labelOffsetX,
+          labelOffsetY: ray.labelOffsetY,
           visible: ray.visible,
           displayLength: ray.displayLength,
           userLocked: ray.userLocked,
@@ -995,6 +1039,8 @@ export class CollabManager {
           prev.p2Id !== next.p2Id ||
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
+          prev.labelOffsetX !== next.labelOffsetX ||
+          prev.labelOffsetY !== next.labelOffsetY ||
           prev.visible !== next.visible ||
           prev.displayLength !== next.displayLength ||
           prev.userLocked !== next.userLocked
@@ -1012,6 +1058,8 @@ export class CollabManager {
         const next = {
           name: face.name,
           nameVisible: face.nameVisible,
+          labelOffsetX: face.labelOffsetX,
+          labelOffsetY: face.labelOffsetY,
           visible: face.visible,
           userLocked: face.userLocked,
           areaLocked: face.areaLocked,
@@ -1031,6 +1079,8 @@ export class CollabManager {
           JSON.stringify(prev.supportPointIds) !== JSON.stringify(next.supportPointIds) ||
           prev.name !== next.name ||
           prev.nameVisible !== next.nameVisible ||
+          prev.labelOffsetX !== next.labelOffsetX ||
+          prev.labelOffsetY !== next.labelOffsetY ||
           prev.visible !== next.visible ||
           prev.userLocked !== next.userLocked ||
           prev.areaLocked !== next.areaLocked ||

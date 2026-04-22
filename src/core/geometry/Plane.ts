@@ -10,9 +10,13 @@ import {
 } from './PlanarUtils'
 
 export class PlanarFace {
+  static readonly DEFAULT_LABEL_OFFSET_X = 0
+  static readonly DEFAULT_LABEL_OFFSET_Y = 3
   id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   fillColor: number | null = null
   fillOpacity: number | null = null
@@ -34,13 +38,15 @@ export class PlanarFace {
     boundaryPointIds: string[],
     memberPointIds: string[] = [],
     boundaryLineIds: string[] = [],
-    nameVisible: boolean = true,
+    nameVisible: boolean = false,
     visible: boolean = true,
     userLocked: boolean = false,
     supportPointIds: string[] = [],
     areaLocked: boolean = false,
     lockedArea: number = 0,
     edgeLengthLocks: Array<number | null> = [],
+    labelOffsetX: number = PlanarFace.DEFAULT_LABEL_OFFSET_X,
+    labelOffsetY: number = PlanarFace.DEFAULT_LABEL_OFFSET_Y,
   ) {
     this.id = id
     this.name = name
@@ -48,6 +54,8 @@ export class PlanarFace {
     this.memberPointIds = [...new Set([...this.boundaryPointIds, ...memberPointIds])]
     this.boundaryLineIds = [...new Set(boundaryLineIds)]
     this.nameVisible = nameVisible
+    this.labelOffsetX = labelOffsetX
+    this.labelOffsetY = labelOffsetY
     this.visible = visible
     this.userLocked = userLocked
     this.supportPointIds = [...new Set(supportPointIds)]

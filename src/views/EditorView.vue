@@ -165,7 +165,12 @@ onMounted(() => {
     if (interaction.shouldSyncLiveScene()) {
       collabManager.value?.syncLivePreview(interaction.getLiveSyncPointIds())
     }
-    renderer.sync(scene, interaction.rubberBandData, interaction.getFacePreviewData())
+    renderer.sync(
+      scene,
+      interaction.rubberBandData,
+      interaction.getFacePreviewData(),
+      interaction.getActiveLabelTarget(),
+    )
     renderer.render()
     animationFrameId = requestAnimationFrame(loop)
   }

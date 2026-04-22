@@ -4,6 +4,8 @@ import { Ray3 } from '../../geometry/Ray3'
 type RayState = {
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   displayLength: number
   userLocked: boolean
@@ -19,6 +21,8 @@ export class UpdateRayCommand implements Command {
   execute() {
     this.ray.name = this.after.name
     this.ray.nameVisible = this.after.nameVisible
+    this.ray.labelOffsetX = this.after.labelOffsetX
+    this.ray.labelOffsetY = this.after.labelOffsetY
     this.ray.visible = this.after.visible
     this.ray.displayLength = Ray3.normalizeDisplayLength(this.after.displayLength)
     this.ray.userLocked = this.after.userLocked
@@ -27,6 +31,8 @@ export class UpdateRayCommand implements Command {
   undo() {
     this.ray.name = this.before.name
     this.ray.nameVisible = this.before.nameVisible
+    this.ray.labelOffsetX = this.before.labelOffsetX
+    this.ray.labelOffsetY = this.before.labelOffsetY
     this.ray.visible = this.before.visible
     this.ray.displayLength = Ray3.normalizeDisplayLength(this.before.displayLength)
     this.ray.userLocked = this.before.userLocked

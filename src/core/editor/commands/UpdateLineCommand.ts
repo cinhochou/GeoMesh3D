@@ -5,6 +5,8 @@ import { Vec3 } from '../../geometry/Vec3'
 type LineState = {
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   userLocked: boolean
   lengthLocked: boolean
@@ -23,6 +25,8 @@ export class UpdateLineCommand implements Command {
   execute() {
     this.line.name = this.after.name
     this.line.nameVisible = this.after.nameVisible
+    this.line.labelOffsetX = this.after.labelOffsetX
+    this.line.labelOffsetY = this.after.labelOffsetY
     this.line.visible = this.after.visible
     this.line.userLocked = this.after.userLocked
     this.line.lengthLocked = this.after.lengthLocked
@@ -34,6 +38,8 @@ export class UpdateLineCommand implements Command {
   undo() {
     this.line.name = this.before.name
     this.line.nameVisible = this.before.nameVisible
+    this.line.labelOffsetX = this.before.labelOffsetX
+    this.line.labelOffsetY = this.before.labelOffsetY
     this.line.visible = this.before.visible
     this.line.userLocked = this.before.userLocked
     this.line.lengthLocked = this.before.lengthLocked

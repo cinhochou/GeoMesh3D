@@ -34,6 +34,7 @@ import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
 import { ClearSceneCommand } from './commands/ClearSceneCommand'
 import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
 import { MergePointsCommand } from './commands/MergePointsCommand'
+import { MergeCubePointsCommand } from './commands/MergeCubePointsCommand'
 import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
 import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -184,6 +185,9 @@ const getFacesByPointId = (editor: Editor, pointId: string) =>
 
 const getFacesByLineId = (editor: Editor, lineId: string) =>
   [...editor.scene.faces.values()].filter((face) => face.boundaryLineIds.includes(lineId))
+
+const samePosition = (a: Vec3, b: Vec3, epsilon = 1e-6) =>
+  Math.abs(a.x - b.x) <= epsilon && Math.abs(a.y - b.y) <= epsilon && Math.abs(a.z - b.z) <= epsilon
 
 const buildFaceUnlockCascade = (editor: Editor, faces: PlanarFace[]) => {
   const pointTransforms = new Map<string, { point: Point3; before: boolean; after: boolean }>()
@@ -382,10 +386,7 @@ export class Editor {
   }
 
   collectDependentIntersectionPoints(targets: IntersectionTargetRef[]) {
-    const matched = new Map<
-      string,
-      { point: Point3; constraint: IntersectionPointConstraint }
-    >()
+    const matched = new Map<string, { point: Point3; constraint: IntersectionPointConstraint }>()
 
     const matchesTarget = (candidate: IntersectionTargetRef, target: IntersectionTargetRef) =>
       candidate.type === target.type && candidate.id === target.id
@@ -609,11 +610,93 @@ export class Editor {
     return this.getCubeConstraint(point.cubeId)
   }
 
-  private snapSolidOwnerPosition(
-    constraint: CubeConstraint,
-    position: Vec3,
-    comparePoint: Point3,
+  private getCubePointIds(constraint: CubeConstraint) {
+    return [
+      ...new Set([
+        ...constraint.ownerPointIds,
+        ...constraint.dependentLayouts.map((item) => item.pointId),
+      ]),
+    ]
+  }
+
+  private buildCubeTranslationMergeCommand(
+    keepPoint: Point3,
+    removePoint: Point3,
+    keepConstraint: CubeConstraint,
+    removeConstraint: CubeConstraint,
   ) {
+    if (keepPoint.cubeRole !== 'owner' || removePoint.cubeRole !== 'owner') {
+      emitToast('不同立体之间仅支持合并两个原始点')
+      return null
+    }
+
+    const movingPointIds = this.getCubePointIds(removeConstraint)
+    if (movingPointIds.includes(keepPoint.id)) {
+      emitToast('当前合并会让同一立体内部顶点重合，已取消')
+      return null
+    }
+
+    const movingPoints = movingPointIds
+      .map((pointId) => this.scene.points.get(pointId))
+      .filter((point): point is Point3 => point !== undefined)
+
+    const blockedPoint = movingPoints.find(
+      (point) => point.id !== removePoint.id && this.isPointCoordinateLocked(point),
+    )
+    if (blockedPoint) {
+      emitToast('被移动立体包含锁定点，无法合并')
+      return null
+    }
+
+    const otherOwnerId =
+      removeConstraint.ownerPointIds[0] === removePoint.id
+        ? removeConstraint.ownerPointIds[1]
+        : removeConstraint.ownerPointIds[0]
+    if (otherOwnerId === keepPoint.id) {
+      emitToast('当前合并会让立体的边长退化为 0，已取消')
+      return null
+    }
+
+    const delta = new Vec3(
+      keepPoint.position.x - removePoint.position.x,
+      keepPoint.position.y - removePoint.position.y,
+      keepPoint.position.z - removePoint.position.z,
+    )
+
+    const transforms = movingPoints
+      .map((point) => {
+        const before = point.position.clone()
+        const after =
+          point.id === removePoint.id
+            ? keepPoint.position.clone()
+            : new Vec3(before.x + delta.x, before.y + delta.y, before.z + delta.z)
+        if (samePosition(before, after)) return null
+        return { point, before, after }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
+
+    const translatedOtherOwner = movingPoints.find((point) => point.id === otherOwnerId)
+    if (!translatedOtherOwner) {
+      emitToast('未找到立体的参考棱端点，无法执行合并')
+      return null
+    }
+    const nextOtherOwnerPosition = new Vec3(
+      translatedOtherOwner.position.x + delta.x,
+      translatedOtherOwner.position.y + delta.y,
+      translatedOtherOwner.position.z + delta.z,
+    )
+    if (samePosition(nextOtherOwnerPosition, keepPoint.position)) {
+      emitToast('当前合并会让立体的边长退化为 0，已取消')
+      return null
+    }
+
+    return new MergeCubePointsCommand(this.scene, keepPoint, removePoint, transforms)
+  }
+
+  private snapSolidOwnerPosition(constraint: CubeConstraint, position: Vec3, comparePoint: Point3) {
     const currentLength = Math.hypot(
       comparePoint.position.x - position.x,
       comparePoint.position.y - position.y,
@@ -710,11 +793,7 @@ export class Editor {
     this.executeCommand(new TransformPointsCommand(transforms))
   }
 
-  private resolveCubeAxesFromPositions(
-    constraint: CubeConstraint,
-    ownerA: Vec3,
-    ownerB: Vec3,
-  ) {
+  private resolveCubeAxesFromPositions(constraint: CubeConstraint, ownerA: Vec3, ownerB: Vec3) {
     const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
     const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
     if (edgeLength <= 1e-8) return null
@@ -754,9 +833,11 @@ export class Editor {
 
   private applyCubeConstraintPositions(positionOverrides: Map<string, Vec3>) {
     this.getCubeConstraints().forEach((constraint) => {
-      const ownerA = positionOverrides.get(constraint.ownerPointIds[0]) ??
+      const ownerA =
+        positionOverrides.get(constraint.ownerPointIds[0]) ??
         this.scene.points.get(constraint.ownerPointIds[0])?.position
-      const ownerB = positionOverrides.get(constraint.ownerPointIds[1]) ??
+      const ownerB =
+        positionOverrides.get(constraint.ownerPointIds[1]) ??
         this.scene.points.get(constraint.ownerPointIds[1])?.position
       if (!ownerA || !ownerB) return
 
@@ -896,9 +977,7 @@ export class Editor {
   isPointCoordinateLocked(point: Point3 | null | undefined) {
     return Boolean(
       point &&
-        (point.locked ||
-          point.userLocked ||
-          this.isPointConstrainedByLockedLinear(point.id)),
+        (point.locked || point.userLocked || this.isPointConstrainedByLockedLinear(point.id)),
     )
   }
 
@@ -1231,6 +1310,8 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          labelOffsetX: face.labelOffsetX,
+          labelOffsetY: face.labelOffsetY,
           visible: face.visible,
           userLocked: face.userLocked,
           areaLocked: face.areaLocked,
@@ -1240,6 +1321,8 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          labelOffsetX: face.labelOffsetX,
+          labelOffsetY: face.labelOffsetY,
           visible: face.visible,
           userLocked: face.userLocked,
           areaLocked: locked,
@@ -1447,7 +1530,9 @@ export class Editor {
     const sharedNormal =
       solidType === 'tetrahedron' ? getSharedCoordinateNormal(p1.position, p2.position) : null
     const referenceAxis =
-      sharedNormal && Math.abs(sharedNormal.x * uAxis.x + sharedNormal.y * uAxis.y + sharedNormal.z * uAxis.z) <= 1 - AXIS_ALIGNMENT_EPSILON
+      sharedNormal &&
+      Math.abs(sharedNormal.x * uAxis.x + sharedNormal.y * uAxis.y + sharedNormal.z * uAxis.z) <=
+        1 - AXIS_ALIGNMENT_EPSILON
         ? new Vec3(
             sharedNormal.y * uAxis.z - sharedNormal.z * uAxis.y,
             sharedNormal.z * uAxis.x - sharedNormal.x * uAxis.z,
@@ -1461,9 +1546,15 @@ export class Editor {
             return candidateDot < bestDot ? candidate : best
           })
     const projectedReference = new Vec3(
-      referenceAxis.x - uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
-      referenceAxis.y - uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
-      referenceAxis.z - uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.x -
+        uAxis.x *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.y -
+        uAxis.y *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.z -
+        uAxis.z *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
     )
     const projectedLength = Math.hypot(
       projectedReference.x,
@@ -1601,17 +1692,27 @@ export class Editor {
 
   updatePoint(
     pointId: string,
-    patch: { name?: string; nameVisible?: boolean; userLocked?: boolean },
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      userLocked?: boolean
+    },
   ) {
     const point = this.scene.points.get(pointId)
     if (!point) return
 
     const nextName = patch.name ?? point.name
     const nextVisible = patch.nameVisible ?? point.nameVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? point.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? point.labelOffsetY
     const nextUserLocked = patch.userLocked ?? point.userLocked
     if (
       nextName === point.name &&
       nextVisible === point.nameVisible &&
+      nextLabelOffsetX === point.labelOffsetX &&
+      nextLabelOffsetY === point.labelOffsetY &&
       nextUserLocked === point.userLocked
     ) {
       return
@@ -1620,8 +1721,20 @@ export class Editor {
     this.executeCommand(
       new UpdatePointCommand(
         point,
-        { name: point.name, nameVisible: point.nameVisible, userLocked: point.userLocked },
-        { name: nextName, nameVisible: nextVisible, userLocked: nextUserLocked },
+        {
+          name: point.name,
+          nameVisible: point.nameVisible,
+          labelOffsetX: point.labelOffsetX,
+          labelOffsetY: point.labelOffsetY,
+          userLocked: point.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
+          userLocked: nextUserLocked,
+        },
       ),
     )
   }
@@ -1631,6 +1744,8 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
       visible?: boolean
       userLocked?: boolean
       lengthLocked?: boolean
@@ -1642,6 +1757,8 @@ export class Editor {
 
     const nextName = patch.name ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
     const nextVisible = patch.visible ?? line.visible
     const nextUserLocked = patch.userLocked ?? line.userLocked
     const nextLengthLocked = nextUserLocked
@@ -1690,6 +1807,8 @@ export class Editor {
     if (
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
+      nextLabelOffsetX === line.labelOffsetX &&
+      nextLabelOffsetY === line.labelOffsetY &&
       nextVisible === line.visible &&
       nextUserLocked === line.userLocked &&
       nextLengthLocked === line.lengthLocked &&
@@ -1710,6 +1829,8 @@ export class Editor {
         {
           name: line.name,
           nameVisible: line.nameVisible,
+          labelOffsetX: line.labelOffsetX,
+          labelOffsetY: line.labelOffsetY,
           visible: line.visible,
           userLocked: line.userLocked,
           lengthLocked: line.lengthLocked,
@@ -1720,6 +1841,8 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
           userLocked: nextUserLocked,
           lengthLocked: nextLengthLocked,
@@ -1736,6 +1859,8 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
       visible?: boolean
       displayLength?: number
       userLocked?: boolean
@@ -1746,12 +1871,16 @@ export class Editor {
 
     const nextName = patch.name ?? ray.name
     const nextNameVisible = patch.nameVisible ?? ray.nameVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? ray.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? ray.labelOffsetY
     const nextVisible = patch.visible ?? ray.visible
     const nextDisplayLength = Ray3.normalizeDisplayLength(patch.displayLength ?? ray.displayLength)
     const nextUserLocked = patch.userLocked ?? ray.userLocked
     if (
       nextName === ray.name &&
       nextNameVisible === ray.nameVisible &&
+      nextLabelOffsetX === ray.labelOffsetX &&
+      nextLabelOffsetY === ray.labelOffsetY &&
       nextVisible === ray.visible &&
       nextDisplayLength === ray.displayLength &&
       nextUserLocked === ray.userLocked
@@ -1765,6 +1894,8 @@ export class Editor {
         {
           name: ray.name,
           nameVisible: ray.nameVisible,
+          labelOffsetX: ray.labelOffsetX,
+          labelOffsetY: ray.labelOffsetY,
           visible: ray.visible,
           displayLength: ray.displayLength,
           userLocked: ray.userLocked,
@@ -1772,6 +1903,8 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
@@ -1785,6 +1918,8 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
       visible?: boolean
       displayLength?: number
       userLocked?: boolean
@@ -1795,6 +1930,8 @@ export class Editor {
 
     const nextName = patch.name ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
     const nextVisible = patch.visible ?? line.visible
     const nextDisplayLength = StraightLine3.normalizeDisplayLength(
       patch.displayLength ?? line.displayLength,
@@ -1803,6 +1940,8 @@ export class Editor {
     if (
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
+      nextLabelOffsetX === line.labelOffsetX &&
+      nextLabelOffsetY === line.labelOffsetY &&
       nextVisible === line.visible &&
       nextDisplayLength === line.displayLength &&
       nextUserLocked === line.userLocked
@@ -1816,6 +1955,8 @@ export class Editor {
         {
           name: line.name,
           nameVisible: line.nameVisible,
+          labelOffsetX: line.labelOffsetX,
+          labelOffsetY: line.labelOffsetY,
           visible: line.visible,
           displayLength: line.displayLength,
           userLocked: line.userLocked,
@@ -1823,6 +1964,8 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
@@ -1836,6 +1979,8 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
       visible?: boolean
       userLocked?: boolean
       areaLocked?: boolean
@@ -1848,6 +1993,8 @@ export class Editor {
 
     const nextName = patch.name ?? face.name
     const nextNameVisible = patch.nameVisible ?? face.nameVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? face.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? face.labelOffsetY
     const nextVisible = patch.visible ?? face.visible
     const nextUserLocked = patch.userLocked ?? face.userLocked
     const nextAreaLocked = patch.areaLocked ?? face.areaLocked
@@ -1856,6 +2003,8 @@ export class Editor {
     if (
       nextName === face.name &&
       nextNameVisible === face.nameVisible &&
+      nextLabelOffsetX === face.labelOffsetX &&
+      nextLabelOffsetY === face.labelOffsetY &&
       nextVisible === face.visible &&
       nextUserLocked === face.userLocked &&
       nextAreaLocked === face.areaLocked &&
@@ -1871,6 +2020,8 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          labelOffsetX: face.labelOffsetX,
+          labelOffsetY: face.labelOffsetY,
           visible: face.visible,
           userLocked: face.userLocked,
           areaLocked: face.areaLocked,
@@ -1880,6 +2031,8 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
           userLocked: nextUserLocked,
           areaLocked: nextAreaLocked,
@@ -1985,7 +2138,27 @@ export class Editor {
     const removePoint = this.scene.points.get(removePointId)
     if (!keepPoint || !removePoint || removePoint.locked) return
 
-    this.executeCommand(new MergePointsCommand(this.scene, keepPoint, removePoint))
+    const keepConstraint = keepPoint.cubeId ? this.getCubeConstraint(keepPoint.cubeId) : null
+    const removeConstraint = removePoint.cubeId ? this.getCubeConstraint(removePoint.cubeId) : null
+
+    if (keepConstraint && removeConstraint && keepConstraint.cubeId === removeConstraint.cubeId) {
+      emitToast('同一正四/六面体内部的点禁止合并')
+      return
+    }
+
+    if (keepConstraint && removeConstraint && keepConstraint.cubeId !== removeConstraint.cubeId) {
+      const mergeCommand = this.buildCubeTranslationMergeCommand(
+        keepPoint,
+        removePoint,
+        keepConstraint,
+        removeConstraint,
+      )
+      if (!mergeCommand) return
+      this.executeCommand(mergeCommand)
+    } else {
+      this.executeCommand(new MergePointsCommand(this.scene, keepPoint, removePoint))
+    }
+
     this.selectedPoints = []
     this.scene.selection.clear()
     this.scene.selection.selectPoint(keepPointId)
@@ -2024,7 +2197,7 @@ export class Editor {
       draft.boundaryPointIds,
       draft.memberPointIds,
       draft.boundaryLineIds,
-      true,
+      false,
       true,
       false,
       draft.supportPointIds,
@@ -2054,7 +2227,9 @@ export class Editor {
     }
     const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
     const nextFaceName = () => {
-      const name = genNextAvailableName(usedFaceNames, 0, (index) => (index === 0 ? 'F' : `F${index}`))
+      const name = genNextAvailableName(usedFaceNames, 0, (index) =>
+        index === 0 ? 'F' : `F${index}`,
+      )
       usedFaceNames.add(name)
       return name
     }
@@ -2155,7 +2330,9 @@ export class Editor {
     }
     const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
     const nextFaceName = () => {
-      const name = genNextAvailableName(usedFaceNames, 0, (index) => (index === 0 ? 'F' : `F${index}`))
+      const name = genNextAvailableName(usedFaceNames, 0, (index) =>
+        index === 0 ? 'F' : `F${index}`,
+      )
       usedFaceNames.add(name)
       return name
     }
@@ -2298,7 +2475,7 @@ export class Editor {
             ),
             p1!,
             p2!,
-            true,
+            false,
           )
           this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
         } else if (type === 'straightLine') {
@@ -2311,7 +2488,7 @@ export class Editor {
             ),
             p1!,
             p2!,
-            true,
+            false,
             true,
           )
           this.executeCommand(new AddElementCommand(this.scene, line, 'straightLine'))
@@ -2325,7 +2502,7 @@ export class Editor {
             ),
             p1!,
             p2!,
-            true,
+            false,
             true,
           )
           this.executeCommand(new AddElementCommand(this.scene, ray, 'ray'))

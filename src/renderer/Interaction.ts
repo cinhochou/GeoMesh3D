@@ -17,7 +17,11 @@ export class Interaction {
   private static readonly MOBILE_POINT_PICK_RADIUS_PX = 20
   private static readonly MOBILE_ENDPOINT_PROTECTION_RADIUS_PX = 2
   private static readonly MOBILE_LINE_PICK_THRESHOLD = 0.2
-
+  private static readonly POINT_LABEL_HITBOX_SCALE = 0.72
+  private static readonly POINT_PICK_PROTECTION_RADIUS_PX = 14
+  private static readonly POINT_LABEL_OVERLAP_PRIORITY_PX = 18
+  private static readonly POINT_LABEL_SAFE_ZONE_PX = 16
+  private static readonly POINT_LABEL_POINT_PRIORITY_RADIUS_PX = 16
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
@@ -25,6 +29,14 @@ export class Interaction {
   draggingStraightLineId: string | null = null
   draggingRayId: string | null = null
   draggingFaceId: string | null = null
+  private draggingLabelTarget: {
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    geoId: string
+    startClientX: number
+    startClientY: number
+    startOffsetX: number
+    startOffsetY: number
+  } | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
@@ -44,6 +56,10 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    geoId: string
+  } | null = null
+  private activeLabelTarget: {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
     geoId: string
   } | null = null
@@ -133,6 +149,21 @@ export class Interaction {
     this.pendingToggleSelection = null
   }
 
+  getActiveLabelTarget() {
+    return this.activeLabelTarget
+  }
+
+  private clearActiveLabelTarget() {
+    this.activeLabelTarget = null
+  }
+
+  private isSameActiveLabelTarget(
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    geoId: string,
+  ) {
+    return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
+  }
+
   private deselectGeometry(
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
     geoId: string,
@@ -142,6 +173,14 @@ export class Interaction {
     else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
     else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
     else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
+  }
+
+  private selectGeometry(type: 'point' | 'line' | 'straightLine' | 'ray' | 'face', geoId: string) {
+    if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
+    else if (type === 'line') this.editor.scene.selection.selectLine(geoId, true)
+    else if (type === 'straightLine') this.editor.scene.selection.selectStraightLine(geoId, true)
+    else if (type === 'ray') this.editor.scene.selection.selectRay(geoId, true)
+    else if (type === 'face') this.editor.selectCubeByFaceId(geoId, true)
   }
 
   private toggleCreateSelection(type: 'point' | 'line', geoId: string) {
@@ -189,6 +228,7 @@ export class Interaction {
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
     ) {
       this.renderer.controls.enabled = false
@@ -220,6 +260,7 @@ export class Interaction {
 
   private finishDragInteraction() {
     const hadDragPreview = this.dragStartPositions.size > 0
+    this.commitLabelDrag()
     this.commitDragHistory()
     this.editor.scene.activeDraggedPointIds.clear()
     this.draggingPointId = null
@@ -227,6 +268,7 @@ export class Interaction {
     this.draggingStraightLineId = null
     this.draggingRayId = null
     this.draggingFaceId = null
+    this.draggingLabelTarget = null
     this.pendingToggleSelection = null
     this.endDrag()
     if (hadDragPreview) {
@@ -351,9 +393,7 @@ export class Interaction {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const candidates = [...this.renderer.meshMap.values()].filter((obj) => {
       const type = obj.userData?.type
-      return (
-        type === 'line' || type === 'straightLine' || type === 'ray' || type === 'face'
-      )
+      return type === 'line' || type === 'straightLine' || type === 'ray' || type === 'face'
     })
     const hits = this.raycaster.intersectObjects(candidates)
     if (hits.length === 0) return null
@@ -676,8 +716,12 @@ export class Interaction {
   onMouseDown = (e: MouseEvent) => {
     if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
+    const labelHit =
+      this.editor.mode === EditorMode.Select ? this.pickLabelAtClient(e.clientX, e.clientY) : null
     const hit =
-      this.editor.mode === EditorMode.IntersectionPoint ? this.pickIntersectionTarget() : this.pick()
+      this.editor.mode === EditorMode.IntersectionPoint
+        ? this.pickIntersectionTarget()
+        : this.pick()
 
     if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
       return
@@ -703,9 +747,13 @@ export class Interaction {
       return
     }
 
-    if (hit) {
+    if (hit || labelHit) {
       this.renderer.controls.enabled = false
-      const { geoId, type } = hit.userData
+      const targetObject = this.resolvePreferredTarget(hit, labelHit, e.clientX, e.clientY)
+      const isNameLabel = Boolean(targetObject?.userData.isNameLabel)
+      const geoId = isNameLabel ? targetObject?.userData.geoId : targetObject?.userData.geoId
+      const type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+      if (!geoId || !type) return
       if (this.editor.mode === EditorMode.Delete) {
         if (type === 'point') {
           this.editor.deletePoint(geoId)
@@ -722,6 +770,14 @@ export class Interaction {
       }
       if (this.editor.mode === EditorMode.Select) {
         this.renderer.renderer.domElement.style.cursor = 'grabbing'
+        if (isNameLabel) {
+          if (!this.beginLabelDrag(type, geoId, e.clientX, e.clientY)) {
+            this.renderer.renderer.domElement.style.cursor = 'default'
+            this.syncControlLockState()
+          }
+          return
+        }
+        this.clearActiveLabelTarget()
         if (type === 'point') {
           const alreadySelected = this.editor.scene.selection.points.has(geoId)
           this.draggingPointId = geoId
@@ -823,18 +879,25 @@ export class Interaction {
         this.commitCreateTetrahedronSelection('line', geoId)
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
-      } else if (this.editor.mode === EditorMode.IntersectionPoint && isIntersectionTargetType(type)) {
+      } else if (
+        this.editor.mode === EditorMode.IntersectionPoint &&
+        isIntersectionTargetType(type)
+      ) {
         this.editor.toggleIntersectionSelection(type, geoId)
       }
     } else {
-      if (this.editor.mode === EditorMode.Select) this.editor.scene.selection.clear()
-      else if (this.editor.mode === EditorMode.CreatePlane) this.editor.tryCreateFaceFromSelection()
+      if (this.editor.mode === EditorMode.Select) {
+        this.editor.scene.selection.clear()
+        this.clearActiveLabelTarget()
+      } else if (this.editor.mode === EditorMode.CreatePlane)
+        this.editor.tryCreateFaceFromSelection()
       else if (
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron
       )
         this.editor.scene.selection.clear()
-      else if (this.editor.mode === EditorMode.IntersectionPoint) this.editor.clearIntersectionSelection()
+      else if (this.editor.mode === EditorMode.IntersectionPoint)
+        this.editor.clearIntersectionSelection()
     }
   }
 
@@ -898,11 +961,20 @@ export class Interaction {
       this.rubberBandData = null
     }
 
+    if (this.draggingLabelTarget) {
+      this.previewLabelDrag(e.clientX, e.clientY)
+      return
+    }
+
     this.handleSelectionDragMove(e.altKey)
   }
 
   onMouseUp = () => {
     if (this.shouldIgnoreMouseEvent()) return
+    if (this.draggingLabelTarget) {
+      this.finishDragInteraction()
+      return
+    }
     if (this.pendingToggleSelection && this.dragStartPositions.size === 0) {
       this.deselectGeometry(this.pendingToggleSelection.type, this.pendingToggleSelection.geoId)
       this.draggingPointId = null
@@ -971,13 +1043,14 @@ export class Interaction {
     this.mobileInteractionStartedOnEmpty = false
     this.mobileInteractionStartClient.set(e.clientX, e.clientY)
     this.updatePointerPosition(e.clientX, e.clientY)
-
+    const labelHit =
+      this.editor.mode === EditorMode.Select ? this.pickLabelAtClient(e.clientX, e.clientY) : null
     const hit =
       this.editor.mode === EditorMode.IntersectionPoint
         ? this.pickIntersectionTarget()
         : this.pickTouchTarget(e.clientX, e.clientY)
 
-    if (!hit) {
+    if (!hit && !labelHit) {
       if (this.editor.mode === EditorMode.CreatePlane) {
         e.preventDefault()
         e.stopPropagation()
@@ -1006,11 +1079,18 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.Select) {
+        this.clearActiveLabelTarget()
+      }
       this.mobileInteractionStartedOnEmpty = this.editor.mode === EditorMode.Select
       return
     }
 
-    const { geoId, type } = hit.userData
+    const targetObject = this.resolvePreferredTarget(hit, labelHit, e.clientX, e.clientY)
+    const isNameLabel = Boolean(targetObject?.userData.isNameLabel)
+    const geoId = isNameLabel ? targetObject?.userData.geoId : targetObject?.userData.geoId
+    const type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+    if (!geoId || !type) return
 
     if (this.editor.mode === EditorMode.Delete) {
       e.preventDefault()
@@ -1108,6 +1188,20 @@ export class Interaction {
       this.resetMobileInteractionState()
       return
     }
+
+    if (isNameLabel) {
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+      if (!this.beginLabelDrag(type, geoId, e.clientX, e.clientY)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        this.resetMobileInteractionState()
+        return
+      }
+      return
+    }
+    this.clearActiveLabelTarget()
 
     if (type === 'point') {
       const alreadySelected = this.editor.scene.selection.points.has(geoId)
@@ -1294,13 +1388,18 @@ export class Interaction {
       !this.draggingLineId &&
       !this.draggingStraightLineId &&
       !this.draggingRayId &&
-      !this.draggingFaceId
+      !this.draggingFaceId &&
+      !this.draggingLabelTarget
     )
       return
 
     e.preventDefault()
     e.stopPropagation()
     this.updatePointerPosition(e.clientX, e.clientY)
+    if (this.draggingLabelTarget) {
+      this.previewLabelDrag(e.clientX, e.clientY)
+      return
+    }
     this.handleSelectionDragMove(false)
   }
 
@@ -1343,7 +1442,8 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
-      this.draggingFaceId !== null
+      this.draggingFaceId !== null ||
+      this.draggingLabelTarget !== null
 
     if (hadDrag) {
       e.preventDefault()
@@ -1628,6 +1728,7 @@ export class Interaction {
     this.dragReferenceStartPos = null
     this.dragReferenceStartMathPos = null
     this.dragDepth = null
+    this.draggingLabelTarget = null
     this.editor.scene.activeDraggedPointIds.clear()
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
@@ -1651,5 +1752,221 @@ export class Interaction {
   getFacePreviewData(): FacePreviewData | null {
     if (this.editor.mode !== EditorMode.CreatePlane) return null
     return this.editor.getFacePreviewFromSelection()
+  }
+
+  private clampLabelOffset(value: number) {
+    return Math.max(
+      -ThreeRenderer.LABEL_DRAG_LIMIT,
+      Math.min(ThreeRenderer.LABEL_DRAG_LIMIT, value),
+    )
+  }
+
+  private projectWorldToClient(pos: THREE.Vector3, rect: DOMRect) {
+    const projected = pos.clone().project(this.renderer.getActiveCamera())
+    if (projected.z < -1 || projected.z > 1) return null
+    return new THREE.Vector2(
+      rect.left + (projected.x + 1) * 0.5 * rect.width,
+      rect.top + (1 - projected.y) * 0.5 * rect.height,
+    )
+  }
+
+  private getPointLabelScreenMetrics(geoId: string, sprite: THREE.Sprite, rect: DOMRect) {
+    const point = this.editor.scene.points.get(geoId)
+    const pointCenter = point ? this.projectMathPositionToClient(point.position, rect) : null
+    const labelCenter = this.projectWorldToClient(sprite.position, rect)
+    if (!pointCenter || !labelCenter) return null
+
+    return {
+      pointCenter,
+      labelCenter,
+      separation: pointCenter.distanceTo(labelCenter),
+    }
+  }
+
+  private resolvePreferredTarget(
+    geometryHit: THREE.Object3D | null,
+    labelHit: THREE.Object3D | null,
+    clientX: number,
+    clientY: number,
+  ) {
+    if (!labelHit) return geometryHit
+    if (!geometryHit) return labelHit
+
+    const labelType = labelHit.userData?.geoType as string | undefined
+    if (labelType !== 'point' || geometryHit.userData?.type !== 'point') {
+      return labelHit
+    }
+
+    const geoId = labelHit.userData?.geoId as string | undefined
+    if (!geoId) return labelHit
+
+    const rect = this.getPointerClientRect()
+    const metrics = this.getPointLabelScreenMetrics(geoId, labelHit as THREE.Sprite, rect)
+    if (!metrics) return labelHit
+
+    const pointer = new THREE.Vector2(clientX, clientY)
+    const pointDistance = pointer.distanceTo(metrics.pointCenter)
+    const labelDistance = pointer.distanceTo(metrics.labelCenter)
+
+    if (pointDistance <= Interaction.POINT_LABEL_POINT_PRIORITY_RADIUS_PX) {
+      return geometryHit
+    }
+
+    if (metrics.separation <= Interaction.POINT_LABEL_OVERLAP_PRIORITY_PX) {
+      return labelDistance + 4 < pointDistance ? labelHit : geometryHit
+    }
+
+    if (metrics.separation <= Interaction.POINT_LABEL_SAFE_ZONE_PX) {
+      return labelDistance <= pointDistance ? labelHit : geometryHit
+    }
+
+    return labelHit
+  }
+
+  private pickLabelAtClient(clientX: number, clientY: number) {
+    const rect = this.getPointerClientRect()
+    const pointer = new THREE.Vector2(clientX, clientY)
+    let best: {
+      sprite: THREE.Sprite
+      distance: number
+    } | null = null
+
+    for (const sprite of this.renderer.getNameLabelSprites()) {
+      const data = sprite.userData
+      const geoId = data?.geoId as string | undefined
+      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'face' | undefined
+      if (!sprite.visible || !geoId || !type) continue
+
+      const center = this.projectWorldToClient(sprite.position, rect)
+      if (!center) continue
+
+      const textPixelWidth = Number(data?.textPixelWidth ?? 0)
+      const textPixelHeight = Number(data?.textPixelHeight ?? 0)
+      const canvasPixelWidth = Number(data?.canvasPixelWidth ?? 256)
+      const canvasPixelHeight = Number(data?.canvasPixelHeight ?? 256)
+      let width =
+        Math.max(
+          28,
+          (sprite.scale.x * rect.height * Math.max(1, textPixelWidth)) / canvasPixelWidth,
+        ) + 10
+      let height =
+        Math.max(
+          20,
+          (sprite.scale.y * rect.height * Math.max(1, textPixelHeight)) / canvasPixelHeight,
+        ) + 8
+      if (type === 'point') {
+        const metrics = this.getPointLabelScreenMetrics(geoId, sprite, rect)
+        if (!metrics) continue
+        if (
+          metrics.separation > Interaction.POINT_LABEL_SAFE_ZONE_PX &&
+          pointer.distanceTo(metrics.pointCenter) <= Interaction.POINT_PICK_PROTECTION_RADIUS_PX
+        ) {
+          continue
+        }
+
+        const pointHitboxScale =
+          metrics.separation <= Interaction.POINT_LABEL_SAFE_ZONE_PX
+            ? 0.92
+            : Interaction.POINT_LABEL_HITBOX_SCALE
+        width *= pointHitboxScale
+        height *= pointHitboxScale
+      }
+
+      if (
+        Math.abs(pointer.x - center.x) > width * 0.5 ||
+        Math.abs(pointer.y - center.y) > height * 0.5
+      ) {
+        continue
+      }
+
+      const distance = pointer.distanceTo(center)
+      if (!best || distance < best.distance) {
+        best = { sprite, distance }
+      }
+    }
+
+    return best?.sprite ?? null
+  }
+
+  private getGeometryByType(
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    geoId: string,
+  ) {
+    if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
+    if (type === 'line') return this.editor.scene.lines.get(geoId) ?? null
+    if (type === 'straightLine') return this.editor.scene.straightLines.get(geoId) ?? null
+    if (type === 'ray') return this.editor.scene.rays.get(geoId) ?? null
+    return this.editor.scene.faces.get(geoId) ?? null
+  }
+
+  private beginLabelDrag(
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    geoId: string,
+    clientX: number,
+    clientY: number,
+  ) {
+    const geometry = this.getGeometryByType(type, geoId)
+    if (!geometry) return false
+
+    this.selectGeometry(type, geoId)
+    this.activeLabelTarget = { type, geoId }
+    this.draggingLabelTarget = {
+      type,
+      geoId,
+      startClientX: clientX,
+      startClientY: clientY,
+      startOffsetX: geometry.labelOffsetX,
+      startOffsetY: geometry.labelOffsetY,
+    }
+    this.pendingToggleSelection = null
+    this.renderer.controls.enabled = false
+    this.renderer.renderer.domElement.style.cursor = 'grabbing'
+    return true
+  }
+
+  private previewLabelDrag(clientX: number, clientY: number) {
+    const target = this.draggingLabelTarget
+    if (!target) return
+    const geometry = this.getGeometryByType(target.type, target.geoId)
+    if (!geometry) return
+    geometry.labelOffsetX = this.clampLabelOffset(
+      target.startOffsetX + clientX - target.startClientX,
+    )
+    geometry.labelOffsetY = this.clampLabelOffset(
+      target.startOffsetY - (clientY - target.startClientY),
+    )
+    this.renderer.previewLabelOffset(target.geoId, geometry.labelOffsetX, geometry.labelOffsetY)
+  }
+
+  private commitLabelDrag() {
+    const target = this.draggingLabelTarget
+    if (!target) return
+    const geometry = this.getGeometryByType(target.type, target.geoId)
+    if (!geometry) return
+
+    const nextOffsetX = this.clampLabelOffset(geometry.labelOffsetX)
+    const nextOffsetY = this.clampLabelOffset(geometry.labelOffsetY)
+    geometry.labelOffsetX = target.startOffsetX
+    geometry.labelOffsetY = target.startOffsetY
+
+    if (nextOffsetX === target.startOffsetX && nextOffsetY === target.startOffsetY) return
+
+    if (target.type === 'point') {
+      this.editor.updatePoint(target.geoId, {
+        labelOffsetX: nextOffsetX,
+        labelOffsetY: nextOffsetY,
+      })
+    } else if (target.type === 'line') {
+      this.editor.updateLine(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
+    } else if (target.type === 'straightLine') {
+      this.editor.updateStraightLine(target.geoId, {
+        labelOffsetX: nextOffsetX,
+        labelOffsetY: nextOffsetY,
+      })
+    } else if (target.type === 'ray') {
+      this.editor.updateRay(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
+    } else {
+      this.editor.updateFace(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
+    }
   }
 }

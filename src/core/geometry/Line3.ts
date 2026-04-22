@@ -2,9 +2,13 @@ import { Point3 } from './Point3'
 import { Vec3 } from './Vec3'
 
 export class Line3 {
+  static readonly DEFAULT_LABEL_OFFSET_X = 0
+  static readonly DEFAULT_LABEL_OFFSET_Y = 3
   id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   userLocked: boolean
   lengthLocked: boolean
@@ -17,15 +21,19 @@ export class Line3 {
     name: string,
     p1: Point3,
     p2: Point3,
-    nameVisible: boolean = true,
+    nameVisible: boolean = false,
     visible: boolean = true,
     lengthLocked: boolean = false,
     lockedLength?: number,
     userLocked: boolean = false,
+    labelOffsetX: number = Line3.DEFAULT_LABEL_OFFSET_X,
+    labelOffsetY: number = Line3.DEFAULT_LABEL_OFFSET_Y,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
+    this.labelOffsetX = labelOffsetX
+    this.labelOffsetY = labelOffsetY
     this.visible = visible
     this.userLocked = userLocked
     this.lengthLocked = lengthLocked

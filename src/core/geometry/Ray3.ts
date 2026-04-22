@@ -3,10 +3,14 @@ import { Vec3 } from './Vec3'
 
 export class Ray3 {
   static readonly DEFAULT_DISPLAY_LENGTH = 20
+  static readonly DEFAULT_LABEL_OFFSET_X = 0
+  static readonly DEFAULT_LABEL_OFFSET_Y = 3
 
   id: string
   name: string
   nameVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
   visible: boolean
   userLocked: boolean
   p1: Point3
@@ -18,14 +22,18 @@ export class Ray3 {
     name: string,
     p1: Point3,
     p2: Point3,
-    nameVisible: boolean = true,
+    nameVisible: boolean = false,
     visible: boolean = true,
     displayLength: number = Ray3.DEFAULT_DISPLAY_LENGTH,
     userLocked: boolean = false,
+    labelOffsetX: number = Ray3.DEFAULT_LABEL_OFFSET_X,
+    labelOffsetY: number = Ray3.DEFAULT_LABEL_OFFSET_Y,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
+    this.labelOffsetX = labelOffsetX
+    this.labelOffsetY = labelOffsetY
     this.visible = visible
     this.userLocked = userLocked
     this.p1 = p1
