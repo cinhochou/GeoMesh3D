@@ -122,6 +122,13 @@ const sendCurrentAwareness = (room, client) => {
   client.send(payload)
 }
 
+const sendSyncStep1 = (room, client) => {
+  const payload = encodeMessage(messageSync, (encoder) => {
+    syncProtocol.writeSyncStep1(encoder, room.doc)
+  })
+  client.send(payload)
+}
+
 const cleanupClient = (room, client) => {
   room.clients.delete(client)
 
@@ -154,6 +161,7 @@ server.on('connection', (socket, request) => {
   room.clients.add(client)
 
   console.log(`[y-websocket] client joined room "${roomName}" (${room.clients.size} online)`)
+  sendSyncStep1(room, client)
   sendCurrentAwareness(room, client)
 
   client.on('message', (data) => {
@@ -165,11 +173,7 @@ server.on('connection', (socket, request) => {
       case messageSync: {
         const encoder = encoding.createEncoder()
         encoding.writeVarUint(encoder, messageSync)
-        const syncMessageType = syncProtocol.readSyncMessage(decoder, encoder, room.doc, client)
-
-        if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
-          syncProtocol.writeSyncStep1(encoder, room.doc)
-        }
+        syncProtocol.readSyncMessage(decoder, encoder, room.doc, client)
 
         const reply = encoding.toUint8Array(encoder)
         if (reply.byteLength > 1) {

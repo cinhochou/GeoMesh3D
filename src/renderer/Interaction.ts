@@ -153,6 +153,14 @@ export class Interaction {
     return this.activeLabelTarget
   }
 
+  getLiveSyncLabelTarget() {
+    if (!this.draggingLabelTarget) return null
+    return {
+      type: this.draggingLabelTarget.type,
+      geoId: this.draggingLabelTarget.geoId,
+    }
+  }
+
   private clearActiveLabelTarget() {
     this.activeLabelTarget = null
   }
@@ -1741,12 +1749,36 @@ export class Interaction {
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
     )
   }
 
   getLiveSyncPointIds() {
-    return [...this.dragStartPositions.keys()]
+    const pointIds = new Set(this.dragStartPositions.keys())
+    if (pointIds.size === 0) return []
+
+    let changed = true
+    while (changed) {
+      changed = false
+      this.editor.scene.intersectionConstraints.forEach((constraint) => {
+        const dependencyIds = constraint.getDependencyPointIds?.()
+        if (!dependencyIds || !constraint.pointId) return
+
+        const linkedIds = new Set<string>([constraint.pointId, ...dependencyIds])
+        const shouldExpand = [...linkedIds].some((id) => pointIds.has(id))
+        if (!shouldExpand) return
+
+        linkedIds.forEach((id) => {
+          if (!pointIds.has(id)) {
+            pointIds.add(id)
+            changed = true
+          }
+        })
+      })
+    }
+
+    return [...pointIds]
   }
 
   getFacePreviewData(): FacePreviewData | null {

@@ -167,6 +167,23 @@ export class Scene {
     return constraint
   }
 
+  requestConstraintSolve(constraint: SceneConstraint | null | undefined) {
+    if (!constraint) return
+    this.markConstraintDirty(constraint)
+  }
+
+  requestFaceConstraintSolve(faceId: string) {
+    this.requestConstraintSolve(this.faceConstraints.get(faceId))
+  }
+
+  requestIntersectionConstraintSolve(pointId: string) {
+    this.requestConstraintSolve(this.intersectionConstraints.get(pointId))
+  }
+
+  requestCubeConstraintSolve(cubeId: string) {
+    this.requestConstraintSolve(this.cubeConstraints.get(cubeId))
+  }
+
   clearAllConstraints() {
     this.constraints = []
     this.faceConstraints.clear()

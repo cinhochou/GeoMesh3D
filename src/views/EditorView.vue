@@ -163,7 +163,10 @@ onMounted(() => {
       }
     }
     if (interaction.shouldSyncLiveScene()) {
-      collabManager.value?.syncLivePreview(interaction.getLiveSyncPointIds())
+      collabManager.value?.syncLivePreview(
+        interaction.getLiveSyncPointIds(),
+        interaction.getLiveSyncLabelTarget(),
+      )
     }
     renderer.sync(
       scene,
