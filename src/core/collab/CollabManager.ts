@@ -50,9 +50,25 @@ type FaceSharedArrayValue = string | number | null
 type FaceSharedMapValue = string | number | boolean | Y.Array<FaceSharedArrayValue>
 type FaceSharedMap = Y.Map<FaceSharedMapValue>
 type CubeSharedMap = Y.Map<string | number | boolean>
+type WorldTransformSharedMap = Y.Map<string | number | boolean>
+
+export type SharedWorldRotationState = {
+  quaternion: {
+    x: number
+    y: number
+    z: number
+    w: number
+  }
+  ownerClientId: number | null
+  ownerUpdatedAt: number | null
+  ownerName: string | null
+  isOwnedByLocal: boolean
+}
 
 export class CollabManager {
   private static readonly LIVE_SYNC_THROTTLE_MS = 33
+  private static readonly WORLD_ROTATION_OWNER_TIMEOUT_MS = 1500
+  private static readonly WORLD_ROTATION_OWNER_HEARTBEAT_MS = 500
   // 本地 websocket 服务不可用时，回退到这个公网协作地址。
   private static readonly FALLBACK_SERVER_URL = 'wss://kraig-scarabaeiform-zealously.ngrok-free.dev'
 
@@ -65,6 +81,7 @@ export class CollabManager {
   private yIntersections: Y.Map<IntersectionSharedMap>
   private yFaces: Y.Map<FaceSharedMap>
   private yCubes: Y.Map<CubeSharedMap>
+  private yWorldTransform: WorldTransformSharedMap
   private pointsObserver: ((event: Y.YMapEvent<PointSharedMap>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
   private straightLinesObserver: ((event: Y.YMapEvent<StraightLineSharedMap>) => void) | null = null
@@ -72,6 +89,7 @@ export class CollabManager {
   private intersectionsObserver: ((event: Y.YMapEvent<IntersectionSharedMap>) => void) | null = null
   private facesObserver: ((event: Y.YMapEvent<FaceSharedMap>) => void) | null = null
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
+  private worldTransformObserver: ((event: Y.YMapEvent<string | number | boolean>) => void) | null = null
   private readonly pointRecordCleanup = new Map<string, () => void>()
   private readonly lineRecordCleanup = new Map<string, () => void>()
   private readonly straightLineRecordCleanup = new Map<string, () => void>()
@@ -90,6 +108,8 @@ export class CollabManager {
   private liveSyncPending = false
   private providerCleanup: Array<() => void> = []
   private readonly serverUrls: string[]
+  private localUserLabel: string | null = null
+  private worldRotationOwnerHeartbeatTimer: number | null = null
   private readonly dirtyPointIds = new Set<string>()
   private readonly dirtyLineIds = new Set<string>()
   private readonly dirtyStraightLineIds = new Set<string>()
@@ -107,6 +127,7 @@ export class CollabManager {
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
+  public onSharedWorldRotationUpdate: (state: SharedWorldRotationState) => void = () => {}
 
   constructor(private scene: Scene) {
     this.ydoc = new Y.Doc()
@@ -117,6 +138,7 @@ export class CollabManager {
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
+    this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
   }
@@ -222,6 +244,75 @@ export class CollabManager {
     } catch {
       return []
     }
+  }
+
+  private getLocalClientId() {
+    return this.ydoc.clientID
+  }
+
+  private getSharedWorldTransformRecord() {
+    return this.yWorldTransform
+  }
+
+  private readSharedWorldRotationState(record: WorldTransformSharedMap | null = null): SharedWorldRotationState {
+    const source = record ?? this.yWorldTransform ?? null
+    const ownerClientId = source ? this.readNullableNumber(source, 'ownerClientId') : null
+    return {
+      quaternion: {
+        x: source ? this.readNumber(source, 'qx', 0) : 0,
+        y: source ? this.readNumber(source, 'qy', 0) : 0,
+        z: source ? this.readNumber(source, 'qz', 0) : 0,
+        w: source ? this.readNumber(source, 'qw', 1) : 1,
+      },
+      ownerClientId,
+      ownerUpdatedAt: source ? this.readNullableNumber(source, 'ownerUpdatedAt') : null,
+      ownerName: source ? this.readNullableString(source, 'ownerName') : null,
+      isOwnedByLocal: ownerClientId === this.getLocalClientId(),
+    }
+  }
+
+  private emitSharedWorldRotation(record: WorldTransformSharedMap | null = null) {
+    this.onSharedWorldRotationUpdate(this.readSharedWorldRotationState(record))
+  }
+
+  setLocalUserLabel(label: string | null) {
+    const nextLabel = label?.trim() || null
+    this.localUserLabel = nextLabel
+    if (this.provider) {
+      this.provider.awareness.setLocalStateField('userLabel', nextLabel)
+    }
+  }
+
+  private stopWorldRotationOwnerHeartbeat() {
+    if (this.worldRotationOwnerHeartbeatTimer !== null) {
+      window.clearInterval(this.worldRotationOwnerHeartbeatTimer)
+      this.worldRotationOwnerHeartbeatTimer = null
+    }
+  }
+
+  private writeWorldRotationOwnerHeartbeat(record: WorldTransformSharedMap) {
+    this.setScalarField(record, 'ownerClientId', this.getLocalClientId())
+    this.setScalarField(record, 'ownerUpdatedAt', Date.now())
+    this.setNullableScalarField(record, 'ownerName', this.localUserLabel)
+  }
+
+  private ensureWorldRotationOwnerHeartbeat() {
+    if (this.worldRotationOwnerHeartbeatTimer !== null) return
+    this.worldRotationOwnerHeartbeatTimer = window.setInterval(() => {
+      if (!this.provider || this.roomName === null) {
+        this.stopWorldRotationOwnerHeartbeat()
+        return
+      }
+      const state = this.readSharedWorldRotationState()
+      if (state.ownerClientId !== this.getLocalClientId()) {
+        this.stopWorldRotationOwnerHeartbeat()
+        return
+      }
+      const record = this.getSharedWorldTransformRecord()
+      this.ydoc.transact(() => {
+        this.writeWorldRotationOwnerHeartbeat(record)
+      })
+    }, CollabManager.WORLD_ROTATION_OWNER_HEARTBEAT_MS)
   }
 
   private syncFaceArrayField(record: FaceSharedMap, key: string, values: FaceSharedArrayValue[]) {
@@ -386,7 +477,11 @@ export class CollabManager {
   }
 
   leaveRoom() {
+    if (this.provider && this.roomName !== null) {
+      this.releaseSharedWorldRotationOwnership()
+    }
     this.clearProviderBindings()
+    this.stopWorldRotationOwnerHeartbeat()
 
     if (this.provider) {
       console.log('disconnecting collaboration provider...')
@@ -412,6 +507,13 @@ export class CollabManager {
     this.connecting = false
     this.connected = false
     this.emitStatus()
+    this.onSharedWorldRotationUpdate({
+      quaternion: { x: 0, y: 0, z: 0, w: 1 },
+      ownerClientId: null,
+      ownerUpdatedAt: null,
+      ownerName: null,
+      isOwnedByLocal: false,
+    })
   }
 
   private emitStatus() {
@@ -439,6 +541,7 @@ export class CollabManager {
   private bindProviderStatus(provider: WebsocketProvider) {
     this.clearProviderBindings()
     provider.awareness.setLocalStateField('online', true)
+    provider.awareness.setLocalStateField('userLabel', this.localUserLabel)
 
     const syncProviderState = () => {
       this.updateConnectionStateFromProvider(provider)
@@ -805,6 +908,7 @@ export class CollabManager {
     if (this.intersectionsObserver) this.yIntersections.unobserve(this.intersectionsObserver)
     if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
+    if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     this.cleanupAllRecordObservers()
 
     this.ydoc = new Y.Doc()
@@ -815,6 +919,7 @@ export class CollabManager {
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
+    this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.setupObservers()
   }
 
@@ -1567,6 +1672,12 @@ export class CollabManager {
       this.observeCubeRecord(id, record)
       this.applyCubeRecord(id, record)
     })
+
+    this.worldTransformObserver = () => {
+      this.emitSharedWorldRotation(this.yWorldTransform)
+    }
+    this.yWorldTransform.observe(this.worldTransformObserver)
+    this.emitSharedWorldRotation(this.yWorldTransform)
   }
 
   private syncPointRecord(record: PointSharedMap, point: Point3) {
@@ -1661,6 +1772,62 @@ export class CollabManager {
     this.setScalarField(record, 'name', cube.name)
     this.setScalarField(record, 'edgeLengthLocked', cube.edgeLengthLocked)
     this.setNullableScalarField(record, 'lockedEdgeLength', cube.lockedEdgeLength)
+  }
+
+  getSharedWorldRotationState() {
+    return this.readSharedWorldRotationState()
+  }
+
+  canRotateSharedWorld() {
+    const state = this.readSharedWorldRotationState()
+    const now = Date.now()
+    return (
+      state.ownerClientId === null ||
+      state.ownerClientId === this.getLocalClientId() ||
+      state.ownerUpdatedAt === null ||
+      now - state.ownerUpdatedAt > CollabManager.WORLD_ROTATION_OWNER_TIMEOUT_MS
+    )
+  }
+
+  tryAcquireSharedWorldRotationOwnership() {
+    if (!this.provider || this.roomName === null) return true
+    if (!this.canRotateSharedWorld()) return false
+    const record = this.getSharedWorldTransformRecord()
+    this.ydoc.transact(() => {
+      this.writeWorldRotationOwnerHeartbeat(record)
+    })
+    this.ensureWorldRotationOwnerHeartbeat()
+    this.emitSharedWorldRotation(record)
+    return true
+  }
+
+  releaseSharedWorldRotationOwnership() {
+    if (!this.provider || this.roomName === null) return
+    const state = this.readSharedWorldRotationState()
+    if (state.ownerClientId !== this.getLocalClientId()) return
+    this.stopWorldRotationOwnerHeartbeat()
+    const record = this.getSharedWorldTransformRecord()
+    this.ydoc.transact(() => {
+      if (record.has('ownerClientId')) record.delete('ownerClientId')
+      if (record.has('ownerUpdatedAt')) record.delete('ownerUpdatedAt')
+      if (record.has('ownerName')) record.delete('ownerName')
+    })
+    this.emitSharedWorldRotation(record)
+  }
+
+  syncSharedWorldQuaternion(quaternion: { x: number; y: number; z: number; w: number }) {
+    if (!this.provider || this.roomName === null) return
+    if (!this.tryAcquireSharedWorldRotationOwnership()) return
+    const record = this.getSharedWorldTransformRecord()
+    this.ydoc.transact(() => {
+      this.setScalarField(record, 'qx', quaternion.x)
+      this.setScalarField(record, 'qy', quaternion.y)
+      this.setScalarField(record, 'qz', quaternion.z)
+      this.setScalarField(record, 'qw', quaternion.w)
+      this.writeWorldRotationOwnerHeartbeat(record)
+    })
+    this.ensureWorldRotationOwnerHeartbeat()
+    this.emitSharedWorldRotation(record)
   }
 
   syncAction() {

@@ -188,6 +188,13 @@ const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
 let straightLineCoordCollapseTimer: number | null = null
 let rayCoordCollapseTimer: number | null = null
+const splitPaneRef = ref<HTMLElement | null>(null)
+const splitPaneDividerRef = ref<HTMLElement | null>(null)
+const selectedPaneHeight = ref(240)
+const isDraggingSplitPane = ref(false)
+const isSplitPaneEnabled = ref(true)
+const MIN_SELECTED_PANE_HEIGHT = 120
+const MIN_CONTENT_PANE_HEIGHT = 160
 
 const selectedPointIds = computed(() => selectedPoints.value.map((p) => p?.id).filter(Boolean))
 const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).filter(Boolean))
@@ -297,6 +304,74 @@ const clearContentSelection = () => {
   expandedRayEditorPoint.value = null
   props.scene.selection.clear()
 }
+
+const getSplitPaneMetrics = () => {
+  const container = splitPaneRef.value
+  const divider = splitPaneDividerRef.value
+  if (!container || !divider) return null
+
+  const dividerHeight = divider.offsetHeight || 10
+  const availableHeight = container.clientHeight - dividerHeight
+  if (availableHeight <= 0) return null
+
+  const maxSelectedHeight = Math.max(
+    MIN_SELECTED_PANE_HEIGHT,
+    availableHeight - MIN_CONTENT_PANE_HEIGHT,
+  )
+  const minSelectedHeight = Math.min(MIN_SELECTED_PANE_HEIGHT, maxSelectedHeight)
+
+  return { container, dividerHeight, availableHeight, minSelectedHeight, maxSelectedHeight }
+}
+
+const clampSelectedPaneHeight = (nextHeight: number) => {
+  const metrics = getSplitPaneMetrics()
+  if (!metrics) return nextHeight
+  return Math.min(Math.max(nextHeight, metrics.minSelectedHeight), metrics.maxSelectedHeight)
+}
+
+const syncSplitPaneMode = () => {
+  isSplitPaneEnabled.value = window.innerWidth > 820 || window.matchMedia('(orientation: portrait)').matches
+}
+
+const syncSelectedPaneHeight = () => {
+  if (!isSplitPaneEnabled.value) return
+  const metrics = getSplitPaneMetrics()
+  if (!metrics) return
+  if (selectedPaneHeight.value <= 0) {
+    selectedPaneHeight.value = Math.round(metrics.availableHeight * 0.38)
+  }
+  selectedPaneHeight.value = clampSelectedPaneHeight(selectedPaneHeight.value)
+}
+
+const handleSplitPaneDrag = (event: PointerEvent) => {
+  if (!isDraggingSplitPane.value || !isSplitPaneEnabled.value) return
+  const metrics = getSplitPaneMetrics()
+  if (!metrics) return
+  const bounds = metrics.container.getBoundingClientRect()
+  const nextHeight = event.clientY - bounds.top
+  selectedPaneHeight.value = clampSelectedPaneHeight(nextHeight)
+}
+
+const stopSplitPaneDrag = () => {
+  isDraggingSplitPane.value = false
+  document.body.classList.remove('sidebar-resizing')
+}
+
+const startSplitPaneDrag = (event: PointerEvent) => {
+  if (!isSplitPaneEnabled.value) return
+  event.preventDefault()
+  isDraggingSplitPane.value = true
+  document.body.classList.add('sidebar-resizing')
+  handleSplitPaneDrag(event)
+}
+
+const selectedPaneStyle = computed(() => {
+  if (!isSplitPaneEnabled.value) return undefined
+  return {
+    height: `${selectedPaneHeight.value}px`,
+    flex: '0 0 auto',
+  }
+})
 
 const updateCompactLineEditorMode = () => {
   const touchLike =
@@ -939,10 +1014,7 @@ const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
   ) {
     return
   }
-  props.editor.setPointPosition(
-    point.id,
-    new Vec3(nextPosition.x, nextPosition.y, nextPosition.z),
-  )
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
 }
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
@@ -970,10 +1042,6 @@ const getHexahedronEdgeLength = (cubeId: string) => {
     ownerPoints[1]!.position.y - ownerPoints[0]!.position.y,
     ownerPoints[1]!.position.z - ownerPoints[0]!.position.z,
   )
-}
-const getSolidDisplayName = (cubeId: string) => {
-  const constraint = props.editor.getCubeConstraint(cubeId)
-  return constraint?.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
 }
 const getSolidConstraintBadge = (cubeId: string | null | undefined) => {
   const constraint = cubeId ? props.editor.getCubeConstraint(cubeId) : null
@@ -1244,9 +1312,16 @@ watch(
 )
 
 onMounted(() => {
+  syncSplitPaneMode()
   updateCompactLineEditorMode()
   window.addEventListener('resize', updateCompactLineEditorMode)
+  window.addEventListener('resize', syncSplitPaneMode)
+  window.addEventListener('resize', syncSelectedPaneHeight)
   document.addEventListener('mousedown', handleGlobalClick)
+  document.addEventListener('pointermove', handleSplitPaneDrag)
+  document.addEventListener('pointerup', stopSplitPaneDrag)
+  document.addEventListener('pointercancel', stopSplitPaneDrag)
+  syncSelectedPaneHeight()
 })
 
 onUnmounted(() => {
@@ -1260,7 +1335,13 @@ onUnmounted(() => {
     window.clearTimeout(rayCoordCollapseTimer)
   }
   window.removeEventListener('resize', updateCompactLineEditorMode)
+  window.removeEventListener('resize', syncSplitPaneMode)
+  window.removeEventListener('resize', syncSelectedPaneHeight)
   document.removeEventListener('mousedown', handleGlobalClick)
+  document.removeEventListener('pointermove', handleSplitPaneDrag)
+  document.removeEventListener('pointerup', stopSplitPaneDrag)
+  document.removeEventListener('pointercancel', stopSplitPaneDrag)
+  document.body.classList.remove('sidebar-resizing')
 })
 </script>
 
@@ -1268,7 +1349,7 @@ onUnmounted(() => {
   <div class="sidebar">
     <p>当前操作模式：{{ modeName }}</p>
     <div v-if="modeHint" class="hint mode-hint">{{ modeHint }}</div>
-    <div class="divider"></div>
+    <div class="section-divider"></div>
     <h3>选中</h3>
     <div
       class="hint"
@@ -1283,26 +1364,27 @@ onUnmounted(() => {
     >
       双击标签以编辑几何元素~
     </div>
-    <div class="box selected-box">
-      <div
-        v-if="
-          selectedPoints.length === 0 &&
-          selectedLines.length === 0 &&
-          selectedStraightLines.length === 0 &&
-          selectedRays.length === 0 &&
-          selectedEditableFaces.length === 0 &&
-          selectedHexahedrons.length === 0
-        "
-      >
-        无
-      </div>
+    <div ref="splitPaneRef" class="split-pane">
+      <div class="box selected-box" :style="selectedPaneStyle">
+        <div
+          v-if="
+            selectedPoints.length === 0 &&
+            selectedLines.length === 0 &&
+            selectedStraightLines.length === 0 &&
+            selectedRays.length === 0 &&
+            selectedEditableFaces.length === 0 &&
+            selectedHexahedrons.length === 0
+          "
+        >
+          无
+        </div>
 
-      <div
-        v-for="p in selectedPoints"
-        :key="p!.id"
-        class="selectedPoint-info"
-        @dblclick="startEditPoint(p)"
-      >
+        <div
+          v-for="p in selectedPoints"
+          :key="p!.id"
+          class="selectedPoint-info"
+          @dblclick="startEditPoint(p)"
+        >
         <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
           <div class="name-row">
             <label>名称</label>
@@ -1431,9 +1513,9 @@ onUnmounted(() => {
             {{ getPointIntersectionSummary(p!)?.valid ? '' : '（约束失效）' }}
           </div>
         </div>
-      </div>
+        </div>
 
-      <div
+        <div
         v-for="l in selectedLines"
         :key="l!.id"
         class="selectedLine-info"
@@ -1752,7 +1834,7 @@ onUnmounted(() => {
             {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
           </div>
         </div>
-      </div>
+        </div>
 
       <div
         v-for="sl in selectedStraightLines"
@@ -2420,11 +2502,9 @@ onUnmounted(() => {
               边长锁定
             </label>
           </div>
-          <div class="face-metric-row">
-            {{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}
-          </div>
+          <div class="face-metric-row">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
           <div class="length-row">
-            <label>边长</label>
+            <label>边长：</label>
             <div class="coord-input compact-length-input">
               <button
                 type="button"
@@ -2469,7 +2549,14 @@ onUnmounted(() => {
             </div>
             <div class="line-axis-label">x</div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'x', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'x', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p1.x', el)"
@@ -2480,10 +2567,24 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'x', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'x', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                +
+              </button>
             </div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'x', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'x', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p2.x', el)"
@@ -2494,11 +2595,25 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'x', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'x', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                +
+              </button>
             </div>
             <div class="line-axis-label">y</div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'y', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'y', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p1.y', el)"
@@ -2509,10 +2624,24 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'y', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'y', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                +
+              </button>
             </div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'y', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'y', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p2.y', el)"
@@ -2523,11 +2652,25 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'y', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'y', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                +
+              </button>
             </div>
             <div class="line-axis-label">z</div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'z', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'z', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p1.z', el)"
@@ -2538,10 +2681,24 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p1', 'z', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p1', 'z', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+              >
+                +
+              </button>
             </div>
             <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'z', 'down')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">-</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'z', 'down')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                -
+              </button>
               <input
                 type="number"
                 :ref="(el) => setCoordInputRef('hexa.p2.z', el)"
@@ -2552,7 +2709,14 @@ onUnmounted(() => {
                 step="0.5"
                 :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
               />
-              <button type="button" class="step-btn" @click="nudgeHexahedronOwnerCoord('p2', 'z', 'up')" :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])">+</button>
+              <button
+                type="button"
+                class="step-btn"
+                @click="nudgeHexahedronOwnerCoord('p2', 'z', 'up')"
+                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+              >
+                +
+              </button>
             </div>
           </div>
         </div>
@@ -2565,8 +2729,8 @@ onUnmounted(() => {
               >🔒</span
             >
           </div>
-          <div>{{ getSolidDisplayName(cube.cubeId) }}边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-          <div>{{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+          <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+          <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
           <div>
             原始点：{{
               getHexahedronOwnerPoints(cube.cubeId)
@@ -2672,10 +2836,22 @@ onUnmounted(() => {
           <div>共面点：{{ getFaceMemberPointNames(face!) }}</div>
         </div>
       </div>
-    </div>
-    <div class="divider"></div>
-    <h3>内容</h3>
-    <div class="box content-box" @click.self="clearContentSelection">
+      </div>
+      <div
+        ref="splitPaneDividerRef"
+        class="panel-resizer"
+        :class="{ 'is-dragging': isDraggingSplitPane, 'is-disabled': !isSplitPaneEnabled }"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="调整选中区和内容区高度"
+        @pointerdown="startSplitPaneDrag"
+      >
+        <span class="panel-resizer-handle"></span>
+      </div>
+      <div class="content-heading">
+        <h3>内容</h3>
+      </div>
+      <div class="box content-box" @click.self="clearContentSelection">
       <div
         v-if="
           pointsInScene.length === 0 &&
@@ -2903,8 +3079,8 @@ onUnmounted(() => {
                 >🔒</span
               >
             </div>
-            <div>{{ getSolidDisplayName(cube.cubeId) }}边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-            <div>{{ getSolidDisplayName(cube.cubeId) }}体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+            <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+            <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
             <div>
               原始点：{{
                 getHexahedronOwnerPoints(cube.cubeId)
@@ -2961,6 +3137,7 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      </div>
     </div>
   </div>
 </template>
@@ -2977,7 +3154,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  overflow-y: auto;
+  overflow-y: hidden;
   overflow-x: hidden;
   min-height: 0;
   flex-shrink: 0;
@@ -3039,13 +3216,20 @@ hr {
   border-left-color: #ffffff;
   box-shadow: inset 0 0 0 1px rgba(67, 242, 96, 0.35);
 }
-.divider {
+.section-divider {
   width: 100%;
   height: 1px;
   background: #444;
   margin-top: 5px;
   margin-bottom: 5px;
   flex-shrink: 0;
+}
+.split-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 .box {
   flex: 0 1 auto;
@@ -3057,9 +3241,54 @@ hr {
 .selected-box {
   flex-basis: 38%;
 }
+.content-heading {
+  flex-shrink: 0;
+}
 .content-box {
   flex: 1 1 auto;
   min-height: 140px;
+}
+.panel-resizer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  touch-action: none;
+}
+.panel-resizer::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: #444;
+  transform: translateY(-50%);
+}
+.panel-resizer-handle {
+  position: relative;
+  z-index: 1;
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  background: #6f6f6f;
+  box-shadow: 0 0 0 2px #1a1a1a;
+}
+.panel-resizer:hover .panel-resizer-handle,
+.panel-resizer.is-dragging .panel-resizer-handle {
+  background: #9fd8ff;
+}
+.panel-resizer.is-dragging::before {
+  background: #9fd8ff;
+}
+.panel-resizer.is-disabled {
+  cursor: default;
+}
+.panel-resizer.is-disabled .panel-resizer-handle {
+  background: #5a5a5a;
 }
 .content-group {
   margin-bottom: 8px;
@@ -3396,11 +3625,6 @@ hr {
     font-size: 12px;
   }
 
-  .selected-box {
-    flex-basis: 44%;
-    min-height: 112px;
-  }
-
   .content-box {
     min-height: 0;
   }
@@ -3456,7 +3680,7 @@ hr {
 
   .sidebar > p,
   h3,
-  .divider,
+  .section-divider,
   .hint {
     margin-bottom: 4px;
   }
@@ -3474,6 +3698,10 @@ hr {
     font-size: 11px;
   }
 
+  .split-pane {
+    display: block;
+  }
+
   .box,
   .selected-box,
   .content-box {
@@ -3482,6 +3710,10 @@ hr {
     min-height: 0;
     max-height: none;
     overflow: visible;
+  }
+
+  .panel-resizer {
+    display: none;
   }
 
   .edit-grid {

@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import * as THREE from 'three'
 
 import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
@@ -18,11 +19,13 @@ import SolverSchedulerWorker from '../core/perf/solverScheduler.worker?worker'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
+import { useAuthStore } from '@/store/authStore'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
+const authStore = useAuthStore()
 const {
   fps,
   axisGridSize,
@@ -38,6 +41,7 @@ const {
   mergePointDialog,
 } = storeToRefs(uiStore)
 const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
+const { user } = storeToRefs(authStore)
 
 const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = getEditorSession()
 
@@ -56,6 +60,7 @@ let frameCount = 0
 
 // 提示框相关的响应式变量
 let toastTimer: number | null = null
+const sharedRotationOwnerNotice = ref('')
 
 const handleResize = () => {
   renderer.onResize()
@@ -108,6 +113,7 @@ onMounted(() => {
   sceneStore.syncSceneState(scene)
 
   collabManager.value = new CollabManager(scene)
+  collabManager.value.setLocalUserLabel(user.value?.nickname || user.value?.username || null)
   solverWorker = new SolverSchedulerWorker()
   scheduleSolverFlush = () => {
     if (solverFlushRequested || !solverWorker) return
@@ -129,6 +135,42 @@ onMounted(() => {
   }
   collabManager.value.onStatusUpdate = (status) => {
     collabStore.setStatus(status)
+  }
+  collabManager.value.onSharedWorldRotationUpdate = (state) => {
+    if (!isARMode.value) {
+      sharedRotationOwnerNotice.value = ''
+      return
+    }
+    renderer.setSharedWorldQuaternion(
+      new THREE.Quaternion(
+        state.quaternion.x,
+        state.quaternion.y,
+        state.quaternion.z,
+        state.quaternion.w,
+      ),
+      state.ownerClientId === null,
+    )
+    sharedRotationOwnerNotice.value =
+      state.ownerClientId !== null && !state.isOwnedByLocal
+        ? `${state.ownerName || '其他用户'}正在旋转场景`
+        : ''
+  }
+
+  interaction.onARSceneRotateStartRequest = () =>
+    isARMode.value &&
+    (collabManager.value?.getStatus().room
+      ? (collabManager.value?.tryAcquireSharedWorldRotationOwnership() ?? false)
+      : true)
+  interaction.onARSceneRotate = (quaternion) => {
+    collabManager.value?.syncSharedWorldQuaternion({
+      x: quaternion.x,
+      y: quaternion.y,
+      z: quaternion.z,
+      w: quaternion.w,
+    })
+  }
+  interaction.onARSceneRotateEnd = () => {
+    collabManager.value?.releaseSharedWorldRotationOwnership()
   }
 
   editor.executeCommand = (cmd: Command) => {
@@ -183,6 +225,14 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('toast', handleToast as EventListener)
 })
+
+watch(
+  () => user.value,
+  (nextUser) => {
+    collabManager.value?.setLocalUserLabel(nextUser?.nickname || nextUser?.username || null)
+  },
+  { immediate: true },
+)
 
 watch(
   [
@@ -380,6 +430,26 @@ const handleToggleAR = async (enabled: boolean) => {
 
   try {
     await renderer.toggleAR(enabled)
+    if (enabled) {
+      const rotationState = collabManager.value?.getSharedWorldRotationState()
+      if (rotationState) {
+        renderer.setSharedWorldQuaternion(
+          new THREE.Quaternion(
+            rotationState.quaternion.x,
+            rotationState.quaternion.y,
+            rotationState.quaternion.z,
+            rotationState.quaternion.w,
+          ),
+          rotationState.ownerClientId === null,
+        )
+        sharedRotationOwnerNotice.value =
+          rotationState.ownerClientId !== null && !rotationState.isOwnedByLocal
+            ? `${rotationState.ownerName || '其他用户'}正在旋转场景`
+            : ''
+      }
+    } else {
+      sharedRotationOwnerNotice.value = ''
+    }
   } catch (err) {
     // rollback if AR 初始化失败
     if (enabled && lastModeBeforeAR.value !== null) {
@@ -505,6 +575,11 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
             </div>
           </div>
         </Transition>
+        <Transition name="toast-fade">
+          <div v-if="sharedRotationOwnerNotice" class="rotation-owner-notice">
+            {{ sharedRotationOwnerNotice }}
+          </div>
+        </Transition>
         <div class="fps-indicator">FPS: {{ fps }}</div>
         <div v-if="!isARMode" class="viewport-controls">
           <button
@@ -564,6 +639,23 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   font-size: 12px;
   font-family: monospace;
   pointer-events: none;
+}
+
+.rotation-owner-notice {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 30;
+  max-width: min(280px, calc(100% - 24px));
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(18, 18, 18, 0.78);
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
 }
 
 .viewport-controls {

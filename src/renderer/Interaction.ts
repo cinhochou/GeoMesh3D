@@ -69,6 +69,15 @@ export class Interaction {
   } | null = null
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
+  private arMouseRotationCandidate = false
+  private arMouseRotationCandidateStartClient = new THREE.Vector2()
+  private arSceneRotating = false
+  private arSceneRotationPointerId: number | null = null
+  private arSceneRotationLastClientX = 0
+  private arSceneRotationLastClientY = 0
+  public onARSceneRotateStartRequest: (() => boolean) | null = null
+  public onARSceneRotate: ((quaternion: THREE.Quaternion) => void) | null = null
+  public onARSceneRotateEnd: (() => void) | null = null
 
   constructor(
     public editor: Editor,
@@ -128,7 +137,8 @@ export class Interaction {
   private getCreatePointPosition(shouldSnap: boolean): THREE.Vector3 {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const direction = this.raycaster.ray.direction
-    const pos = this.renderer.getActiveCameraWorldPosition().add(direction.multiplyScalar(30))
+    const worldPos = this.renderer.getActiveCameraWorldPosition().add(direction.multiplyScalar(30))
+    const pos = this.renderer.toMathLocalPosition(worldPos)
 
     if (shouldSnap) {
       pos.set(this.snap(pos.x), this.snap(pos.y), this.snap(pos.z))
@@ -159,6 +169,47 @@ export class Interaction {
     this.pinchZoomDistance = null
   }
 
+  private beginARSceneRotation(pointerId: number | null, clientX: number, clientY: number) {
+    if (this.editor.mode !== EditorMode.Select) return false
+    if (!this.renderer.isSharedSceneRotationAvailable()) return false
+    if (this.onARSceneRotateStartRequest && !this.onARSceneRotateStartRequest()) return false
+    this.arSceneRotating = true
+    this.arSceneRotationPointerId = pointerId
+    this.arSceneRotationLastClientX = clientX
+    this.arSceneRotationLastClientY = clientY
+    this.renderer.controls.enabled = false
+    this.renderer.renderer.domElement.style.cursor = 'grabbing'
+    return true
+  }
+
+  private resetARMouseRotationCandidate() {
+    this.arMouseRotationCandidate = false
+  }
+
+  private updateARSceneRotation(clientX: number, clientY: number) {
+    if (!this.arSceneRotating) return
+    if (!this.renderer.isSharedSceneRotationAvailable()) {
+      this.endARSceneRotation()
+      return
+    }
+    const deltaX = clientX - this.arSceneRotationLastClientX
+    const deltaY = clientY - this.arSceneRotationLastClientY
+    this.arSceneRotationLastClientX = clientX
+    this.arSceneRotationLastClientY = clientY
+    if (deltaX === 0 && deltaY === 0) return
+    const quaternion = this.renderer.rotateSharedWorldByScreenDelta(deltaX, deltaY)
+    this.onARSceneRotate?.(quaternion)
+  }
+
+  private endARSceneRotation() {
+    if (!this.arSceneRotating) return
+    this.arSceneRotating = false
+    this.arSceneRotationPointerId = null
+    this.syncControlLockState()
+    this.renderer.renderer.domElement.style.cursor = 'default'
+    this.onARSceneRotateEnd?.()
+  }
+
   private cancelActiveMobileDrag() {
     this.draggingPointId = null
     this.draggingLineId = null
@@ -168,6 +219,8 @@ export class Interaction {
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
     this.endDrag()
+    this.resetARMouseRotationCandidate()
+    this.endARSceneRotation()
     this.syncControlLockState()
     this.renderer.renderer.domElement.style.cursor = 'default'
   }
@@ -931,6 +984,11 @@ export class Interaction {
         this.editor.toggleIntersectionSelection(type, geoId)
       }
     } else {
+      if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
+        this.arMouseRotationCandidate = true
+        this.arMouseRotationCandidateStartClient.set(e.clientX, e.clientY)
+        return
+      }
       if (this.editor.mode === EditorMode.Select) {
         this.editor.scene.selection.clear()
         this.clearActiveLabelTarget()
@@ -949,6 +1007,24 @@ export class Interaction {
   onMouseMove = (e: MouseEvent) => {
     if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
+
+    if (this.arSceneRotating) {
+      this.updateARSceneRotation(e.clientX, e.clientY)
+      return
+    }
+
+    if (
+      this.arMouseRotationCandidate &&
+      this.renderer.isARActive() &&
+      this.editor.mode === EditorMode.Select &&
+      this.arMouseRotationCandidateStartClient.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) >=
+        Interaction.MOBILE_TAP_MOVE_THRESHOLD
+    ) {
+      if (this.beginARSceneRotation(null, e.clientX, e.clientY)) {
+        this.resetARMouseRotationCandidate()
+        return
+      }
+    }
 
     if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
       this.renderer.hideAxisGuides()
@@ -994,7 +1070,7 @@ export class Interaction {
       // 计算鼠标在 3D 空间的投影点
       this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
       // 这里我们假设在以起点为准的水平面上预览，或者简单的距离相机 30 个单位
-      const to = this.raycaster.ray.at(30, new THREE.Vector3())
+      const to = this.renderer.toMathLocalPosition(this.raycaster.ray.at(30, new THREE.Vector3()))
 
       // 如果有吸附开关，也应用到预览线上
       if (this.editor.isSnappingEnabled && !e.altKey) {
@@ -1016,6 +1092,18 @@ export class Interaction {
 
   onMouseUp = () => {
     if (this.shouldIgnoreMouseEvent()) return
+    if (this.arMouseRotationCandidate) {
+      this.resetARMouseRotationCandidate()
+      if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
+        this.editor.scene.selection.clear()
+        this.clearActiveLabelTarget()
+      }
+      return
+    }
+    if (this.arSceneRotating) {
+      this.endARSceneRotation()
+      return
+    }
     if (this.draggingLabelTarget) {
       this.finishDragInteraction()
       return
@@ -1040,6 +1128,8 @@ export class Interaction {
   }
 
   onMouseLeave = () => {
+    this.resetARMouseRotationCandidate()
+    this.endARSceneRotation()
     this.clearPreview()
   }
 
@@ -1438,6 +1528,37 @@ export class Interaction {
       return
     }
 
+    if (this.arSceneRotating) {
+      if (this.arSceneRotationPointerId !== e.pointerId) return
+      e.preventDefault()
+      e.stopPropagation()
+      this.updateMobileMoveThreshold(e.clientX, e.clientY)
+      this.updateARSceneRotation(e.clientX, e.clientY)
+      return
+    }
+
+    if (
+      this.renderer.isARActive() &&
+      this.editor.mode === EditorMode.Select &&
+      this.mobileInteractionStartedOnEmpty &&
+      !this.draggingPointId &&
+      !this.draggingLineId &&
+      !this.draggingStraightLineId &&
+      !this.draggingRayId &&
+      !this.draggingFaceId &&
+      !this.draggingLabelTarget
+    ) {
+      this.updateMobileMoveThreshold(e.clientX, e.clientY)
+      if (this.mobileInteractionMoved) {
+        e.preventDefault()
+        e.stopPropagation()
+        ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+        if (this.beginARSceneRotation(e.pointerId, e.clientX, e.clientY)) {
+          return
+        }
+      }
+    }
+
     if (this.editor.mode === EditorMode.CreatePoint) {
       if (
         this.editor.mode !== EditorMode.CreatePoint ||
@@ -1500,6 +1621,15 @@ export class Interaction {
     }
     if (this.renderer.isARActive() && this.activeTouchPoints.size === 0) {
       this.resetPinchZoomState()
+    }
+
+    if (this.arSceneRotating && this.arSceneRotationPointerId === e.pointerId) {
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+      this.endARSceneRotation()
+      this.resetMobileInteractionState()
+      return
     }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
@@ -1580,6 +1710,12 @@ export class Interaction {
     if (this.renderer.isARActive()) {
       ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
       if (this.activeTouchPoints.size < 2) this.resetPinchZoomState()
+    }
+
+    if (this.arSceneRotating && this.arSceneRotationPointerId === e.pointerId) {
+      this.endARSceneRotation()
+      this.resetMobileInteractionState()
+      return
     }
 
     if (this.mobileCreatePointerId === e.pointerId) {
@@ -1814,6 +1950,7 @@ export class Interaction {
   }
 
   clearPreview() {
+    this.endARSceneRotation()
     this.rubberBandData = null
     this.mobileCreatePreviewPos = null
     this.resetMobileCreatePointerState()
@@ -1894,10 +2031,14 @@ export class Interaction {
     )
   }
 
+  private projectObjectToClient(object: THREE.Object3D, rect: DOMRect) {
+    return this.projectWorldToClient(object.getWorldPosition(new THREE.Vector3()), rect)
+  }
+
   private getPointLabelScreenMetrics(geoId: string, sprite: THREE.Sprite, rect: DOMRect) {
     const point = this.editor.scene.points.get(geoId)
     const pointCenter = point ? this.projectMathPositionToClient(point.position, rect) : null
-    const labelCenter = this.projectWorldToClient(sprite.position, rect)
+    const labelCenter = this.projectObjectToClient(sprite, rect)
     if (!pointCenter || !labelCenter) return null
 
     return {
@@ -1915,6 +2056,9 @@ export class Interaction {
   ) {
     if (!labelHit) return geometryHit
     if (!geometryHit) return labelHit
+    if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
+      return labelHit
+    }
 
     const labelType = labelHit.userData?.geoType as string | undefined
     if (labelType !== 'point' || geometryHit.userData?.type !== 'point') {
@@ -1961,7 +2105,7 @@ export class Interaction {
       const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'face' | undefined
       if (!sprite.visible || !geoId || !type) continue
 
-      const center = this.projectWorldToClient(sprite.position, rect)
+      const center = this.projectObjectToClient(sprite, rect)
       if (!center) continue
 
       const textPixelWidth = Number(data?.textPixelWidth ?? 0)

@@ -144,6 +144,8 @@ export class ThreeRenderer {
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
   private arInitialWorldScale = 1
+  private sharedWorldTargetQuaternion = new THREE.Quaternion()
+  private sharedWorldRotationInitialized = false
   private axisGridGroup: THREE.Group
   private gridHelper: THREE.GridHelper | null = null
   private axisArrows: THREE.ArrowHelper[] = []
@@ -157,14 +159,17 @@ export class ThreeRenderer {
   private static readonly AR_MARKER_PERSIST_MS = 1500
   private static readonly AR_WORLD_SCALE_MIN = 0.02
   private static readonly AR_WORLD_SCALE_MAX = 1.6
+  private static readonly SHARED_WORLD_ROTATION_LERP = 0.22
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
     position: new THREE.Vector3(),
     quaternion: new THREE.Quaternion(),
     target: new THREE.Vector3(), // OrbitControls 的聚焦点
+    worldQuaternion: new THREE.Quaternion(),
     zoom: 1,
     fov: 60,
+    controlsEnabled: true,
   }
 
   /** geoId -> mesh */
@@ -180,6 +185,7 @@ export class ThreeRenderer {
     this.scene.add(this.arAnchorGroup)
     this.world = new THREE.Group()
     this.arAnchorGroup.add(this.world)
+    this.sharedWorldTargetQuaternion.copy(this.world.quaternion)
     this.arMarkerRoot = new THREE.Group()
     this.arMarkerRoot.matrixAutoUpdate = false
     this.arMarkerRoot.visible = false
@@ -240,6 +246,11 @@ export class ThreeRenderer {
   /** 是否处于 AR 模式（供交互层判断） */
   isARActive(): boolean {
     return this.isARMode
+  }
+
+  isSharedSceneRotationAvailable(): boolean {
+    if (!this.isARMode) return false
+    return this.arMarkerRoot.visible || this.shouldRenderPersistentARWorld()
   }
 
   /** 返回 AR 视频元素，便于在拾取时获取真实显示区域 */
@@ -356,6 +367,55 @@ export class ThreeRenderer {
 
   getWorldScale() {
     return this.worldScale
+  }
+
+  private getSharedWorldRotationDeltaAngle(deltaPixels: number) {
+    const elementHeight = Math.max(this.renderer.domElement.clientHeight, 1)
+    return ((2 * Math.PI * deltaPixels) / elementHeight) * this.controls.rotateSpeed
+  }
+
+  getSharedWorldQuaternion() {
+    return this.world.quaternion.clone()
+  }
+
+  setSharedWorldQuaternion(quaternion: THREE.Quaternion, immediate: boolean = false) {
+    const normalized = quaternion.clone().normalize()
+    this.sharedWorldTargetQuaternion.copy(normalized)
+    if (!this.sharedWorldRotationInitialized || immediate) {
+      this.world.quaternion.copy(normalized)
+      this.sharedWorldRotationInitialized = true
+    }
+    this.world.updateMatrixWorld(true)
+  }
+
+  rotateSharedWorldByScreenDelta(deltaX: number, deltaY: number) {
+    if ((!Number.isFinite(deltaX) && !Number.isFinite(deltaY)) || (deltaX === 0 && deltaY === 0)) {
+      return this.getSharedWorldQuaternion()
+    }
+
+    const rotateLeftAngle = this.getSharedWorldRotationDeltaAngle(deltaX)
+    const rotateUpAngle = this.getSharedWorldRotationDeltaAngle(deltaY)
+    const camera = this.getActiveCamera()
+    const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion())
+    const parentQuaternion = this.world.parent?.getWorldQuaternion(new THREE.Quaternion()) ?? null
+    const parentInverseQuaternion = parentQuaternion?.invert() ?? new THREE.Quaternion()
+    const cameraUp = new THREE.Vector3(0, 1, 0)
+      .applyQuaternion(cameraQuaternion)
+      .applyQuaternion(parentInverseQuaternion)
+      .normalize()
+    const cameraRight = new THREE.Vector3(1, 0, 0)
+      .applyQuaternion(cameraQuaternion)
+      .applyQuaternion(parentInverseQuaternion)
+      .normalize()
+
+    // Match OrbitControls' drag-to-angle mapping, but apply it to the AR world
+    // so the user can continue rotating past the usual polar-angle limits.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(cameraUp, rotateLeftAngle)
+    const pitch = new THREE.Quaternion().setFromAxisAngle(cameraRight, rotateUpAngle)
+    const deltaQuaternion = yaw.multiply(pitch).normalize()
+    const nextQuaternion = deltaQuaternion.multiply(this.world.quaternion.clone()).normalize()
+    this.setSharedWorldQuaternion(nextQuaternion, true)
+    return nextQuaternion
   }
 
   setARWorldScale(scale: number) {
@@ -676,8 +736,10 @@ export class ThreeRenderer {
       this.backupState.position.copy(this.camera.position)
       this.backupState.quaternion.copy(this.camera.quaternion)
       this.backupState.target.copy(this.controls.target)
+      this.backupState.worldQuaternion.copy(this.world.quaternion)
       this.backupState.zoom = this.camera.zoom
       this.backupState.fov = this.camera.fov
+      this.backupState.controlsEnabled = this.controls.enabled
 
       this.renderer.setClearColor(0x000000, 0)
       this.scene.background = null
@@ -705,6 +767,7 @@ export class ThreeRenderer {
     this.resetARAnchor()
     // 恢复世界缩放
     this.setWorldScale(1)
+    this.setSharedWorldQuaternion(this.backupState.worldQuaternion, true)
     // ===== 退出 AR =====
     if (this.arToolkitSource) {
       if (this.arToolkitSource.domElement) {
@@ -743,7 +806,7 @@ export class ThreeRenderer {
     this.camera.updateMatrixWorld(true)
 
     this.controls.target.copy(this.backupState.target)
-    this.controls.enabled = true
+    this.controls.enabled = this.backupState.controlsEnabled
     this.controls.update()
 
     this.renderer.setClearColor(0x111111, 1)
@@ -848,9 +911,25 @@ export class ThreeRenderer {
       this.controls.update()
     }
 
+    this.updateSharedWorldRotation()
     this.updateResponsiveScales()
     this.updateScreenSpaceLabels()
     this.renderer.render(this.scene, this.getActiveCamera())
+  }
+
+  private updateSharedWorldRotation() {
+    if (!this.sharedWorldRotationInitialized) {
+      this.sharedWorldRotationInitialized = true
+      this.sharedWorldTargetQuaternion.copy(this.world.quaternion)
+      return
+    }
+    if (this.world.quaternion.angleTo(this.sharedWorldTargetQuaternion) <= 0.0001) return
+    this.world.quaternion.slerp(
+      this.sharedWorldTargetQuaternion,
+      ThreeRenderer.SHARED_WORLD_ROTATION_LERP,
+    )
+    this.world.quaternion.normalize()
+    this.world.updateMatrixWorld(true)
   }
 
   // 暴露给外部用于处理窗口缩放
