@@ -14,6 +14,8 @@ export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
   private static readonly COLLAB_SETTLE_SYNC_MS = 250
   private static readonly TOUCH_MOUSE_GUARD_MS = 500
+  private static readonly AR_WHEEL_ZOOM_STEP = 0.0015
+  private static readonly AR_PINCH_ZOOM_MIN_DELTA = 0.01
   private static readonly MOBILE_POINT_PICK_RADIUS_PX = 20
   private static readonly MOBILE_ENDPOINT_PROTECTION_RADIUS_PX = 2
   private static readonly MOBILE_LINE_PICK_THRESHOLD = 0.2
@@ -59,6 +61,8 @@ export class Interaction {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
     geoId: string
   } | null = null
+  private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
+  private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
     geoId: string
@@ -79,6 +83,7 @@ export class Interaction {
     dom.addEventListener('mousemove', this.onMouseMove)
     dom.addEventListener('mouseup', this.onMouseUp)
     dom.addEventListener('mouseleave', this.onMouseLeave)
+    dom.addEventListener('wheel', this.onWheel, { passive: false })
     dom.addEventListener('pointerdown', this.onPointerDown, { capture: true })
     dom.addEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.addEventListener('pointerup', this.onPointerUp, { capture: true })
@@ -90,6 +95,7 @@ export class Interaction {
     dom.removeEventListener('mousemove', this.onMouseMove)
     dom.removeEventListener('mouseup', this.onMouseUp)
     dom.removeEventListener('mouseleave', this.onMouseLeave)
+    dom.removeEventListener('wheel', this.onWheel)
     dom.removeEventListener('pointerdown', this.onPointerDown, { capture: true })
     dom.removeEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.removeEventListener('pointerup', this.onPointerUp, { capture: true })
@@ -147,6 +153,37 @@ export class Interaction {
     this.mobileInteractionMoved = false
     this.mobileInteractionStartedOnEmpty = false
     this.pendingToggleSelection = null
+  }
+
+  private resetPinchZoomState() {
+    this.pinchZoomDistance = null
+  }
+
+  private cancelActiveMobileDrag() {
+    this.draggingPointId = null
+    this.draggingLineId = null
+    this.draggingStraightLineId = null
+    this.draggingRayId = null
+    this.draggingFaceId = null
+    this.draggingLabelTarget = null
+    this.pendingToggleSelection = null
+    this.endDrag()
+    this.syncControlLockState()
+    this.renderer.renderer.domElement.style.cursor = 'default'
+  }
+
+  private handleARZoom(deltaScale: number) {
+    if (!this.renderer.isARActive() || !Number.isFinite(deltaScale) || deltaScale === 0) return
+    this.renderer.scaleARWorldBy(deltaScale)
+  }
+
+  private getActivePinchDistance() {
+    if (this.activeTouchPoints.size < 2) return null
+    const points = [...this.activeTouchPoints.values()]
+    const first = points[0]
+    const second = points[1]
+    if (!first || !second) return null
+    return first.distanceTo(second)
   }
 
   getActiveLabelTarget() {
@@ -1006,9 +1043,28 @@ export class Interaction {
     this.clearPreview()
   }
 
+  onWheel = (e: WheelEvent) => {
+    if (!this.renderer.isARActive()) return
+    e.preventDefault()
+    const factor = Math.exp(-e.deltaY * Interaction.AR_WHEEL_ZOOM_STEP)
+    this.handleARZoom(factor)
+  }
+
   onPointerDown = (e: PointerEvent) => {
     if (e.pointerType !== 'touch') return
     this.lastTouchEventAt = performance.now()
+    this.activeTouchPoints.set(e.pointerId, new THREE.Vector2(e.clientX, e.clientY))
+
+    if (this.renderer.isARActive() && this.activeTouchPoints.size >= 2) {
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+      this.resetMobileCreatePointerState()
+      this.resetMobileInteractionState()
+      this.cancelActiveMobileDrag()
+      this.pinchZoomDistance = this.getActivePinchDistance()
+      return
+    }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
       if (this.renderer.isARActive()) return
@@ -1360,6 +1416,27 @@ export class Interaction {
   onPointerMove = (e: PointerEvent) => {
     if (e.pointerType !== 'touch') return
     this.lastTouchEventAt = performance.now()
+    if (this.activeTouchPoints.has(e.pointerId)) {
+      this.activeTouchPoints.get(e.pointerId)!.set(e.clientX, e.clientY)
+    }
+
+    if (this.renderer.isARActive() && this.activeTouchPoints.size >= 2) {
+      const distance = this.getActivePinchDistance()
+      if (distance !== null) {
+        if (this.pinchZoomDistance !== null) {
+          const ratio = distance / this.pinchZoomDistance
+          if (Math.abs(ratio - 1) >= Interaction.AR_PINCH_ZOOM_MIN_DELTA) {
+            e.preventDefault()
+            e.stopPropagation()
+            this.handleARZoom(ratio)
+            this.pinchZoomDistance = distance
+          }
+        } else {
+          this.pinchZoomDistance = distance
+        }
+      }
+      return
+    }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
       if (
@@ -1414,6 +1491,16 @@ export class Interaction {
   onPointerUp = (e: PointerEvent) => {
     if (e.pointerType !== 'touch') return
     this.lastTouchEventAt = performance.now()
+    const wasPinching = this.renderer.isARActive() && this.activeTouchPoints.size >= 2
+    this.activeTouchPoints.delete(e.pointerId)
+    if (wasPinching) {
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+      this.resetPinchZoomState()
+      return
+    }
+    if (this.renderer.isARActive() && this.activeTouchPoints.size === 0) {
+      this.resetPinchZoomState()
+    }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
       if (
@@ -1489,6 +1576,11 @@ export class Interaction {
   onPointerCancel = (e: PointerEvent) => {
     if (e.pointerType !== 'touch') return
     this.lastTouchEventAt = performance.now()
+    this.activeTouchPoints.delete(e.pointerId)
+    if (this.renderer.isARActive()) {
+      ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
+      if (this.activeTouchPoints.size < 2) this.resetPinchZoomState()
+    }
 
     if (this.mobileCreatePointerId === e.pointerId) {
       ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)

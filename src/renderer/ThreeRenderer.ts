@@ -107,10 +107,13 @@ export class ThreeRenderer {
   private static readonly FACE_PREVIEW_OPACITY = 0.16
   private static readonly RAY_HEAD_LENGTH = 0.7
   private static readonly RAY_HEAD_RADIUS = 0.22
-  /** 让与地面共面的轴线轻微抬高，避免和 GridHelper 深度竞争 */
-  private static readonly AXIS_LIFT_Y = 0.02
+  /** 让坐标轴与网格共面，避免放大坐标系后出现明显“分层” */
+  private static readonly AXIS_LIFT_Y = 0
   /** AR 模式下点大小缩放系数（相对当前尺寸） */
   private static readonly AR_POINT_SCALE_FACTOR = 2 / 3
+  private static readonly AR_POINT_ZOOM_RESPONSE_EXPONENT = 0.85
+  private static readonly AR_POINT_ZOOM_MIN_FACTOR = 0.65
+  private static readonly AR_POINT_ZOOM_MAX_FACTOR = 2.4
   private static readonly AXIS_ARROW_BASE_LENGTH = 0.8
   private static readonly AXIS_ARROW_BASE_HEAD_LENGTH = 0.5
   private static readonly AXIS_ARROW_BASE_HEAD_WIDTH = 0.3
@@ -140,6 +143,7 @@ export class ThreeRenderer {
   private arLastMarkerSeenAt = 0
   /** 记录当前世界缩放，普通模式 1，AR 模式会缩小 */
   private worldScale = 1
+  private arInitialWorldScale = 1
   private axisGridGroup: THREE.Group
   private gridHelper: THREE.GridHelper | null = null
   private axisArrows: THREE.ArrowHelper[] = []
@@ -151,6 +155,8 @@ export class ThreeRenderer {
   private static readonly AR_MARKER_FOLLOW_LERP = 0.35
   private static readonly AR_MARKER_REACQUIRE_LERP = 0.18
   private static readonly AR_MARKER_PERSIST_MS = 1500
+  private static readonly AR_WORLD_SCALE_MIN = 0.02
+  private static readonly AR_WORLD_SCALE_MAX = 1.6
 
   // 用于备份进入 AR 前的相机和控制器状态
   private backupState = {
@@ -202,6 +208,7 @@ export class ThreeRenderer {
     this.renderer.domElement.style.left = '0'
     this.renderer.domElement.style.zIndex = '10' // Canvas 层级设为 10
     this.renderer.domElement.style.pointerEvents = 'auto' // 允许鼠标交互
+    this.renderer.domElement.style.touchAction = 'none'
     container.appendChild(this.renderer.domElement)
 
     const light = new THREE.DirectionalLight(0xffffff, 1)
@@ -335,11 +342,30 @@ export class ThreeRenderer {
 
   /** 统一设置世界缩放，同时保持标记点/浮窗等屏幕尺寸不变 */
   private setWorldScale(scale: number) {
-    this.worldScale = scale
-    this.world.scale.setScalar(scale)
+    const clampedScale = THREE.MathUtils.clamp(
+      scale,
+      ThreeRenderer.AR_WORLD_SCALE_MIN,
+      ThreeRenderer.AR_WORLD_SCALE_MAX,
+    )
+    this.worldScale = clampedScale
+    this.world.scale.setScalar(clampedScale)
     this.updateARWorldPlacement()
 
     this.refreshScreenSpaceScales()
+  }
+
+  getWorldScale() {
+    return this.worldScale
+  }
+
+  setARWorldScale(scale: number) {
+    if (!this.isARMode) return
+    this.setWorldScale(scale)
+  }
+
+  scaleARWorldBy(factor: number) {
+    if (!this.isARMode || !Number.isFinite(factor) || factor <= 0) return
+    this.setWorldScale(this.worldScale * factor)
   }
 
   /** 重新按当前画布尺寸刷新点与标签的屏幕空间大小 */
@@ -384,7 +410,16 @@ export class ThreeRenderer {
   private getPointSpriteScale() {
     const h = this.renderer.domElement.clientHeight || 1
     const baseScale = ThreeRenderer.POINT_PIXEL / h / this.worldScale
-    if (this.isARMode) return baseScale * ThreeRenderer.AR_POINT_SCALE_FACTOR
+    if (this.isARMode) {
+      const safeInitialScale = Math.max(this.arInitialWorldScale, 0.0001)
+      const zoomRatio = this.worldScale / safeInitialScale
+      const zoomFactor = THREE.MathUtils.clamp(
+        Math.pow(zoomRatio, ThreeRenderer.AR_POINT_ZOOM_RESPONSE_EXPONENT),
+        ThreeRenderer.AR_POINT_ZOOM_MIN_FACTOR,
+        ThreeRenderer.AR_POINT_ZOOM_MAX_FACTOR,
+      )
+      return baseScale * ThreeRenderer.AR_POINT_SCALE_FACTOR * zoomFactor
+    }
 
     const distance = this.camera.position.distanceTo(this.controls.target)
     const safeDistance = Math.max(distance, 0.001)
@@ -650,6 +685,7 @@ export class ThreeRenderer {
       this.resetARAnchor()
       // AR 模式整体缩放，避免相机贴得太近导致看不到边缘
       this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridSize))
+      this.arInitialWorldScale = this.worldScale
 
       try {
         this.initAR()
@@ -665,6 +701,7 @@ export class ThreeRenderer {
 
   private restoreFromBackupState() {
     this.isARMode = false
+    this.arInitialWorldScale = 1
     this.resetARAnchor()
     // 恢复世界缩放
     this.setWorldScale(1)
@@ -1581,6 +1618,16 @@ export class ThreeRenderer {
     const gridSize = size * 2
     const divisions = gridSize
     this.gridHelper = new THREE.GridHelper(gridSize, divisions)
+    this.gridHelper.renderOrder = 0
+    const gridMaterial = this.gridHelper.material as THREE.Material | THREE.Material[]
+    const applyGridMaterial = (material: THREE.Material) => {
+      material.depthWrite = false
+      material.polygonOffset = true
+      material.polygonOffsetFactor = 1
+      material.polygonOffsetUnits = 1
+    }
+    if (Array.isArray(gridMaterial)) gridMaterial.forEach(applyGridMaterial)
+    else applyGridMaterial(gridMaterial)
     this.gridHelper.visible = this.isGridVisible
     this.axisGridGroup.add(this.gridHelper)
     this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridSize))
