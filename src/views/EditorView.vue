@@ -98,8 +98,8 @@ const handleKeydown = (e: KeyboardEvent) => {
 onMounted(() => {
   uiStore.setTouchDevice(
     navigator.maxTouchPoints > 0 ||
-    window.matchMedia('(pointer: coarse)').matches ||
-    window.matchMedia('(hover: none)').matches,
+      window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(hover: none)').matches,
   )
 
   renderer = new ThreeRenderer(viewportRef.value!)
@@ -111,6 +111,8 @@ onMounted(() => {
   interaction.syncControlLockState()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
+  // Ensure renderer rebuilds meshes when editor view is mounted again
+  scene.markAllRenderDirty()
 
   collabManager.value = new CollabManager(scene)
   collabManager.value.setLocalUserLabel(user.value?.nickname || user.value?.username || null)
