@@ -15,6 +15,7 @@ export class PlanarFace {
   id: string
   name: string
   nameVisible: boolean
+  valueVisible: boolean
   labelOffsetX: number
   labelOffsetY: number
   visible: boolean
@@ -47,6 +48,7 @@ export class PlanarFace {
     edgeLengthLocks: Array<number | null> = [],
     labelOffsetX: number = PlanarFace.DEFAULT_LABEL_OFFSET_X,
     labelOffsetY: number = PlanarFace.DEFAULT_LABEL_OFFSET_Y,
+    valueVisible: boolean = false,
   ) {
     this.id = id
     this.name = name
@@ -54,6 +56,7 @@ export class PlanarFace {
     this.memberPointIds = [...new Set([...this.boundaryPointIds, ...memberPointIds])]
     this.boundaryLineIds = [...new Set(boundaryLineIds)]
     this.nameVisible = nameVisible
+    this.valueVisible = valueVisible
     this.labelOffsetX = labelOffsetX
     this.labelOffsetY = labelOffsetY
     this.visible = visible

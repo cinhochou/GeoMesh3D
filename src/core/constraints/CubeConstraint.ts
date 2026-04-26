@@ -61,6 +61,7 @@ export class CubeConstraint {
     public name: string = '正六面体1',
     public edgeLengthLocked: boolean = false,
     public lockedEdgeLength: number | null = null,
+    public valueVisible: boolean = false,
   ) {}
 
   setAxisHint(nextHint: Vec3) {
@@ -79,7 +80,8 @@ export class CubeConstraint {
     const edgeLength = length(edge)
     if (!uAxis || edgeLength <= 1e-8) return null
 
-    const sharedNormal = null
+    const sharedNormal =
+      this.solidType === 'tetrahedron' ? getSharedCoordinateNormal(p1.position, p2.position) : null
     const alignmentHint =
       sharedNormal &&
       Math.abs(dot(sharedNormal, uAxis)) <= 1 - AXIS_ALIGNMENT_EPSILON
@@ -124,6 +126,37 @@ export class CubeConstraint {
 
   getDependencyPointIds() {
     return [this.ownerPointIds[0], this.ownerPointIds[1], ...this.dependentLayouts.map((item) => item.pointId)]
+  }
+
+  getEdgeLength() {
+    const axes = this.getResolvedAxes()
+    return axes?.edgeLength ?? 0
+  }
+
+  getCentroid() {
+    const axes = this.getResolvedAxes()
+    if (!axes) return null
+    const edgeLength = axes.edgeLength
+    const uFactor = 0.5
+    const vFactor = this.solidType === 'tetrahedron' ? Math.sqrt(3) / 6 : 0.5
+    const wFactor = this.solidType === 'tetrahedron' ? Math.sqrt(2 / 3) / 4 : 0.5
+
+    return new Vec3(
+      axes.origin.x +
+        (axes.uAxis.x * uFactor + axes.vAxis.x * vFactor + axes.wAxis.x * wFactor) * edgeLength,
+      axes.origin.y +
+        (axes.uAxis.y * uFactor + axes.vAxis.y * vFactor + axes.wAxis.y * wFactor) * edgeLength,
+      axes.origin.z +
+        (axes.uAxis.z * uFactor + axes.vAxis.z * vFactor + axes.wAxis.z * wFactor) * edgeLength,
+    )
+  }
+
+  getVolume() {
+    const edgeLength = this.getEdgeLength()
+    if (edgeLength <= 0) return 0
+    return this.solidType === 'tetrahedron'
+      ? (Math.sqrt(2) / 12) * edgeLength ** 3
+      : edgeLength ** 3
   }
 
   solve() {

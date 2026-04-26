@@ -7,6 +7,7 @@ export class Line3 {
   id: string
   name: string
   nameVisible: boolean
+  valueVisible: boolean
   labelOffsetX: number
   labelOffsetY: number
   visible: boolean
@@ -28,10 +29,12 @@ export class Line3 {
     userLocked: boolean = false,
     labelOffsetX: number = Line3.DEFAULT_LABEL_OFFSET_X,
     labelOffsetY: number = Line3.DEFAULT_LABEL_OFFSET_Y,
+    valueVisible: boolean = false,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
+    this.valueVisible = valueVisible
     this.labelOffsetX = labelOffsetX
     this.labelOffsetY = labelOffsetY
     this.visible = visible

@@ -1042,6 +1042,7 @@ export class CollabManager {
     const z = this.readNumber(record, 'z', point?.position.z ?? 0)
     const name = this.readString(record, 'name', point?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', point?.nameVisible ?? true)
+    const valueVisible = this.readBoolean(record, 'valueVisible', point?.valueVisible ?? false)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -1061,6 +1062,7 @@ export class CollabManager {
     if (point) {
       point.name = name
       point.nameVisible = nameVisible
+      point.valueVisible = valueVisible
       point.labelOffsetX = labelOffsetX
       point.labelOffsetY = labelOffsetY
       point.userLocked = userLocked
@@ -1082,6 +1084,7 @@ export class CollabManager {
       userLocked,
       labelOffsetX,
       labelOffsetY,
+      valueVisible,
     )
     nextPoint.cubeId = cubeId
     nextPoint.cubeRole = cubeRole
@@ -1100,6 +1103,7 @@ export class CollabManager {
     const line = this.scene.lines.get(id)
     const name = this.readString(record, 'name', line?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', line?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', line?.valueVisible ?? false)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -1129,6 +1133,7 @@ export class CollabManager {
     if (line) {
       line.name = name
       line.nameVisible = nameVisible
+      line.valueVisible = valueVisible
       line.labelOffsetX = labelOffsetX
       line.labelOffsetY = labelOffsetY
       line.visible = visible
@@ -1154,6 +1159,7 @@ export class CollabManager {
         userLocked,
         labelOffsetX,
         labelOffsetY,
+        valueVisible,
       ),
     )
     this.reconcileIntersectionsForTarget('line', id)
@@ -1169,6 +1175,7 @@ export class CollabManager {
     const line = this.scene.straightLines.get(id)
     const name = this.readString(record, 'name', line?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', line?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', line?.valueVisible ?? false)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -1192,6 +1199,7 @@ export class CollabManager {
     if (line) {
       line.name = name
       line.nameVisible = nameVisible
+      line.valueVisible = valueVisible
       line.labelOffsetX = labelOffsetX
       line.labelOffsetY = labelOffsetY
       line.visible = visible
@@ -1215,6 +1223,7 @@ export class CollabManager {
         userLocked,
         labelOffsetX,
         labelOffsetY,
+        valueVisible,
       ),
     )
     this.reconcileIntersectionsForTarget('straightLine', id)
@@ -1230,6 +1239,7 @@ export class CollabManager {
     const ray = this.scene.rays.get(id)
     const name = this.readString(record, 'name', ray?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', ray?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', ray?.valueVisible ?? false)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -1249,6 +1259,7 @@ export class CollabManager {
     if (ray) {
       ray.name = name
       ray.nameVisible = nameVisible
+      ray.valueVisible = valueVisible
       ray.labelOffsetX = labelOffsetX
       ray.labelOffsetY = labelOffsetY
       ray.visible = visible
@@ -1272,6 +1283,7 @@ export class CollabManager {
         userLocked,
         labelOffsetX,
         labelOffsetY,
+        valueVisible,
       ),
     )
     this.reconcileIntersectionsForTarget('ray', id)
@@ -1306,6 +1318,7 @@ export class CollabManager {
     const edgeLengthLocks = this.readNullableNumberArray(record, 'edgeLengthLocks')
     const name = this.readString(record, 'name', face?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', face?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', face?.valueVisible ?? false)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -1329,6 +1342,7 @@ export class CollabManager {
     if (face) {
       face.name = name
       face.nameVisible = nameVisible
+      face.valueVisible = valueVisible
       face.labelOffsetX = labelOffsetX
       face.labelOffsetY = labelOffsetY
       face.visible = visible
@@ -1368,6 +1382,7 @@ export class CollabManager {
       [...edgeLengthLocks],
       labelOffsetX,
       labelOffsetY,
+      valueVisible,
     )
     nextFace.fillColor = fillColor
     nextFace.fillOpacity = fillOpacity
@@ -1404,6 +1419,7 @@ export class CollabManager {
     )
     const name = this.readString(record, 'name', solidType === 'tetrahedron' ? '正四面体1' : '正六面体1')
     const edgeLengthLocked = this.readBoolean(record, 'edgeLengthLocked', false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', false)
     const lockedEdgeLength = this.readNullableNumber(record, 'lockedEdgeLength')
 
     ;[ownerPointA, ownerPointB].forEach((pointId) => {
@@ -1438,6 +1454,7 @@ export class CollabManager {
       existing.faceIds.splice(0, existing.faceIds.length, ...faceIds)
       existing.setAxisHint(vAxisHint)
       existing.name = name
+      existing.valueVisible = valueVisible
       existing.edgeLengthLocked = edgeLengthLocked
       existing.lockedEdgeLength = lockedEdgeLength
       this.scene.requestCubeConstraintSolve(id)
@@ -1458,6 +1475,7 @@ export class CollabManager {
         name,
         edgeLengthLocked,
         lockedEdgeLength,
+        valueVisible,
       ),
     )
     this.scene.requestCubeConstraintSolve(id)
@@ -1686,6 +1704,7 @@ export class CollabManager {
     this.setScalarField(record, 'z', point.position.z)
     this.setScalarField(record, 'name', point.name)
     this.setScalarField(record, 'nameVisible', point.nameVisible)
+    this.setScalarField(record, 'valueVisible', point.valueVisible)
     this.setScalarField(record, 'labelOffsetX', point.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', point.labelOffsetY)
     this.setScalarField(record, 'userLocked', point.userLocked)
@@ -1698,6 +1717,7 @@ export class CollabManager {
     this.setScalarField(record, 'p2Id', line.p2.id)
     this.setScalarField(record, 'name', line.name)
     this.setScalarField(record, 'nameVisible', line.nameVisible)
+    this.setScalarField(record, 'valueVisible', line.valueVisible)
     this.setScalarField(record, 'labelOffsetX', line.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', line.labelOffsetY)
     this.setScalarField(record, 'visible', line.visible)
@@ -1711,6 +1731,7 @@ export class CollabManager {
     this.setScalarField(record, 'p2Id', line.p2.id)
     this.setScalarField(record, 'name', line.name)
     this.setScalarField(record, 'nameVisible', line.nameVisible)
+    this.setScalarField(record, 'valueVisible', line.valueVisible)
     this.setScalarField(record, 'labelOffsetX', line.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', line.labelOffsetY)
     this.setScalarField(record, 'visible', line.visible)
@@ -1723,6 +1744,7 @@ export class CollabManager {
     this.setScalarField(record, 'p2Id', ray.p2.id)
     this.setScalarField(record, 'name', ray.name)
     this.setScalarField(record, 'nameVisible', ray.nameVisible)
+    this.setScalarField(record, 'valueVisible', ray.valueVisible)
     this.setScalarField(record, 'labelOffsetX', ray.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', ray.labelOffsetY)
     this.setScalarField(record, 'visible', ray.visible)
@@ -1740,6 +1762,7 @@ export class CollabManager {
   private syncFaceRecord(record: FaceSharedMap, face: PlanarFace) {
     this.setScalarField(record, 'name', face.name)
     this.setScalarField(record, 'nameVisible', face.nameVisible)
+    this.setScalarField(record, 'valueVisible', face.valueVisible)
     this.setScalarField(record, 'labelOffsetX', face.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', face.labelOffsetY)
     this.setScalarField(record, 'visible', face.visible)
@@ -1770,6 +1793,7 @@ export class CollabManager {
     this.setScalarField(record, 'vAxisHintY', axisHint.y)
     this.setScalarField(record, 'vAxisHintZ', axisHint.z)
     this.setScalarField(record, 'name', cube.name)
+    this.setScalarField(record, 'valueVisible', cube.valueVisible)
     this.setScalarField(record, 'edgeLengthLocked', cube.edgeLengthLocked)
     this.setNullableScalarField(record, 'lockedEdgeLength', cube.lockedEdgeLength)
   }

@@ -535,6 +535,14 @@ export class Editor {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return
     constraint.name = `${getSolidNamePrefix(constraint.solidType)}${suffix.trim()}`
+    this.scene.markAllRenderDirty()
+  }
+
+  setCubeValueVisible(cubeId: string, visible: boolean) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint || constraint.valueVisible === visible) return
+    constraint.valueVisible = visible
+    this.scene.markAllRenderDirty()
   }
 
   setCubeLockState(cubeId: string, locked: boolean) {
@@ -1310,6 +1318,7 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          valueVisible: face.valueVisible,
           labelOffsetX: face.labelOffsetX,
           labelOffsetY: face.labelOffsetY,
           visible: face.visible,
@@ -1321,6 +1330,7 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          valueVisible: face.valueVisible,
           labelOffsetX: face.labelOffsetX,
           labelOffsetY: face.labelOffsetY,
           visible: face.visible,
@@ -1695,6 +1705,7 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      valueVisible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       userLocked?: boolean
@@ -1705,12 +1716,14 @@ export class Editor {
 
     const nextName = patch.name ?? point.name
     const nextVisible = patch.nameVisible ?? point.nameVisible
+    const nextValueVisible = patch.valueVisible ?? point.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? point.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? point.labelOffsetY
     const nextUserLocked = patch.userLocked ?? point.userLocked
     if (
       nextName === point.name &&
       nextVisible === point.nameVisible &&
+      nextValueVisible === point.valueVisible &&
       nextLabelOffsetX === point.labelOffsetX &&
       nextLabelOffsetY === point.labelOffsetY &&
       nextUserLocked === point.userLocked
@@ -1724,6 +1737,7 @@ export class Editor {
         {
           name: point.name,
           nameVisible: point.nameVisible,
+          valueVisible: point.valueVisible,
           labelOffsetX: point.labelOffsetX,
           labelOffsetY: point.labelOffsetY,
           userLocked: point.userLocked,
@@ -1731,6 +1745,7 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextVisible,
+          valueVisible: nextValueVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           userLocked: nextUserLocked,
@@ -1744,6 +1759,7 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      valueVisible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       visible?: boolean
@@ -1757,6 +1773,7 @@ export class Editor {
 
     const nextName = patch.name ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
     const nextVisible = patch.visible ?? line.visible
@@ -1807,6 +1824,7 @@ export class Editor {
     if (
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
+      nextValueVisible === line.valueVisible &&
       nextLabelOffsetX === line.labelOffsetX &&
       nextLabelOffsetY === line.labelOffsetY &&
       nextVisible === line.visible &&
@@ -1829,6 +1847,7 @@ export class Editor {
         {
           name: line.name,
           nameVisible: line.nameVisible,
+          valueVisible: line.valueVisible,
           labelOffsetX: line.labelOffsetX,
           labelOffsetY: line.labelOffsetY,
           visible: line.visible,
@@ -1841,6 +1860,7 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
@@ -1859,6 +1879,7 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      valueVisible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       visible?: boolean
@@ -1871,6 +1892,7 @@ export class Editor {
 
     const nextName = patch.name ?? ray.name
     const nextNameVisible = patch.nameVisible ?? ray.nameVisible
+    const nextValueVisible = patch.valueVisible ?? ray.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? ray.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? ray.labelOffsetY
     const nextVisible = patch.visible ?? ray.visible
@@ -1879,6 +1901,7 @@ export class Editor {
     if (
       nextName === ray.name &&
       nextNameVisible === ray.nameVisible &&
+      nextValueVisible === ray.valueVisible &&
       nextLabelOffsetX === ray.labelOffsetX &&
       nextLabelOffsetY === ray.labelOffsetY &&
       nextVisible === ray.visible &&
@@ -1894,6 +1917,7 @@ export class Editor {
         {
           name: ray.name,
           nameVisible: ray.nameVisible,
+          valueVisible: ray.valueVisible,
           labelOffsetX: ray.labelOffsetX,
           labelOffsetY: ray.labelOffsetY,
           visible: ray.visible,
@@ -1903,6 +1927,7 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
@@ -1918,6 +1943,7 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      valueVisible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       visible?: boolean
@@ -1930,6 +1956,7 @@ export class Editor {
 
     const nextName = patch.name ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
     const nextVisible = patch.visible ?? line.visible
@@ -1940,6 +1967,7 @@ export class Editor {
     if (
       nextName === line.name &&
       nextNameVisible === line.nameVisible &&
+      nextValueVisible === line.valueVisible &&
       nextLabelOffsetX === line.labelOffsetX &&
       nextLabelOffsetY === line.labelOffsetY &&
       nextVisible === line.visible &&
@@ -1955,6 +1983,7 @@ export class Editor {
         {
           name: line.name,
           nameVisible: line.nameVisible,
+          valueVisible: line.valueVisible,
           labelOffsetX: line.labelOffsetX,
           labelOffsetY: line.labelOffsetY,
           visible: line.visible,
@@ -1964,6 +1993,7 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,
@@ -1979,6 +2009,7 @@ export class Editor {
     patch: {
       name?: string
       nameVisible?: boolean
+      valueVisible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       visible?: boolean
@@ -1993,6 +2024,7 @@ export class Editor {
 
     const nextName = patch.name ?? face.name
     const nextNameVisible = patch.nameVisible ?? face.nameVisible
+    const nextValueVisible = patch.valueVisible ?? face.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? face.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? face.labelOffsetY
     const nextVisible = patch.visible ?? face.visible
@@ -2003,6 +2035,7 @@ export class Editor {
     if (
       nextName === face.name &&
       nextNameVisible === face.nameVisible &&
+      nextValueVisible === face.valueVisible &&
       nextLabelOffsetX === face.labelOffsetX &&
       nextLabelOffsetY === face.labelOffsetY &&
       nextVisible === face.visible &&
@@ -2020,6 +2053,7 @@ export class Editor {
         {
           name: face.name,
           nameVisible: face.nameVisible,
+          valueVisible: face.valueVisible,
           labelOffsetX: face.labelOffsetX,
           labelOffsetY: face.labelOffsetY,
           visible: face.visible,
@@ -2031,6 +2065,7 @@ export class Editor {
         {
           name: nextName,
           nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           visible: nextVisible,

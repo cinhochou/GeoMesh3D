@@ -9,6 +9,7 @@ export class Ray3 {
   id: string
   name: string
   nameVisible: boolean
+  valueVisible: boolean
   labelOffsetX: number
   labelOffsetY: number
   visible: boolean
@@ -28,10 +29,12 @@ export class Ray3 {
     userLocked: boolean = false,
     labelOffsetX: number = Ray3.DEFAULT_LABEL_OFFSET_X,
     labelOffsetY: number = Ray3.DEFAULT_LABEL_OFFSET_Y,
+    valueVisible: boolean = false,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
+    this.valueVisible = valueVisible
     this.labelOffsetX = labelOffsetX
     this.labelOffsetY = labelOffsetY
     this.visible = visible

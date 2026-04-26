@@ -4,6 +4,7 @@ import { PlanarFace } from '../../geometry/Plane'
 type FaceState = {
   name: string
   nameVisible: boolean
+  valueVisible: boolean
   labelOffsetX: number
   labelOffsetY: number
   visible: boolean
@@ -23,6 +24,7 @@ export class UpdateFaceCommand implements Command {
   execute() {
     this.face.name = this.after.name
     this.face.nameVisible = this.after.nameVisible
+    this.face.valueVisible = this.after.valueVisible
     this.face.labelOffsetX = this.after.labelOffsetX
     this.face.labelOffsetY = this.after.labelOffsetY
     this.face.visible = this.after.visible
@@ -35,6 +37,7 @@ export class UpdateFaceCommand implements Command {
   undo() {
     this.face.name = this.before.name
     this.face.nameVisible = this.before.nameVisible
+    this.face.valueVisible = this.before.valueVisible
     this.face.labelOffsetX = this.before.labelOffsetX
     this.face.labelOffsetY = this.before.labelOffsetY
     this.face.visible = this.before.visible

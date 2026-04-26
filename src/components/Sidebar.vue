@@ -134,6 +134,7 @@ const isCubeFace = (face: PlanarFace | undefined) => Boolean(face?.cubeId)
 const editPoint = reactive({
   name: '',
   nameVisible: true,
+  valueVisible: false,
   userLocked: false,
   x: '',
   y: '',
@@ -142,6 +143,7 @@ const editPoint = reactive({
 const editLine = reactive({
   name: '',
   nameVisible: true,
+  valueVisible: false,
   visible: true,
   userLocked: false,
   lengthLocked: false,
@@ -152,6 +154,7 @@ const editLine = reactive({
 const editRay = reactive({
   name: '',
   nameVisible: true,
+  valueVisible: false,
   visible: true,
   userLocked: false,
   displayLength: '',
@@ -161,6 +164,7 @@ const editRay = reactive({
 const editStraightLine = reactive({
   name: '',
   nameVisible: true,
+  valueVisible: false,
   visible: true,
   userLocked: false,
   displayLength: '',
@@ -170,6 +174,7 @@ const editStraightLine = reactive({
 const editFace = reactive({
   name: '',
   nameVisible: true,
+  valueVisible: false,
   visible: true,
   userLocked: false,
   areaLocked: false,
@@ -177,6 +182,7 @@ const editFace = reactive({
 })
 const editHexahedron = reactive({
   nameSuffix: '',
+  valueVisible: false,
   edgeLength: '',
   userLocked: false,
   edgeLengthLocked: false,
@@ -688,6 +694,7 @@ const startEditPoint = (p: Point3 | undefined) => {
   expandedRayEditorPoint.value = null
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
+  editPoint.valueVisible = p.valueVisible === true
   editPoint.userLocked = isPointCoordinateLocked(p)
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
@@ -701,6 +708,7 @@ const startEditLine = (l: Line3 | undefined) => {
   expandedRayEditorPoint.value = null
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
+  editLine.valueVisible = l.valueVisible === true
   editLine.visible = l.visible !== false
   editLine.userLocked = props.editor.isLineLocked(l)
   editLine.lengthLocked = l.lengthLocked === true
@@ -720,6 +728,7 @@ const startEditStraightLine = (l: StraightLine3 | undefined) => {
   expandedRayEditorPoint.value = null
   editStraightLine.name = l.name ?? ''
   editStraightLine.nameVisible = l.nameVisible !== false
+  editStraightLine.valueVisible = l.valueVisible === true
   editStraightLine.visible = l.visible !== false
   editStraightLine.userLocked = props.editor.isStraightLineLocked(l)
   editStraightLine.displayLength = toFixed2(l.displayLength)
@@ -738,6 +747,7 @@ const startEditRay = (r: Ray3 | undefined) => {
   expandedRayEditorPoint.value = null
   editRay.name = r.name ?? ''
   editRay.nameVisible = r.nameVisible !== false
+  editRay.valueVisible = r.valueVisible === true
   editRay.visible = r.visible !== false
   editRay.userLocked = props.editor.isRayLocked(r)
   editRay.displayLength = toFixed2(r.displayLength)
@@ -756,6 +766,7 @@ const startEditFace = (face: PlanarFace | undefined) => {
   expandedRayEditorPoint.value = null
   editFace.name = face.name ?? ''
   editFace.nameVisible = face.nameVisible !== false
+  editFace.valueVisible = face.valueVisible === true
   editFace.visible = face.visible !== false
   editFace.userLocked = props.editor.isFaceLocked(face)
   editFace.areaLocked = face.areaLocked === true
@@ -775,6 +786,7 @@ const startEditHexahedron = (cubeId: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   editHexahedron.nameSuffix = props.editor.getCubeNameSuffix(cubeId)
+  editHexahedron.valueVisible = constraint.valueVisible === true
   editHexahedron.userLocked = constraint.faceIds.every(
     (faceId) => props.scene.faces.get(faceId)?.userLocked,
   )
@@ -812,6 +824,7 @@ const applyEditPoint = () => {
     props.editor.updatePoint(editing.value.id, {
       name: editPoint.name,
       nameVisible: editPoint.nameVisible,
+      valueVisible: editPoint.valueVisible,
     })
     if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
       props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
@@ -831,6 +844,7 @@ const applyEditLine = () => {
   props.editor.updateLine(editing.value.id, {
     name: editLine.name,
     nameVisible: editLine.nameVisible,
+    valueVisible: editLine.valueVisible,
     visible: editLine.visible,
     lengthLocked: editLine.lengthLocked,
     lockedLength: Number.isFinite(parsedLockedLength) ? parsedLockedLength : undefined,
@@ -907,6 +921,7 @@ const applyEditRay = () => {
   props.editor.updateRay(editing.value.id, {
     name: editRay.name,
     nameVisible: editRay.nameVisible,
+    valueVisible: editRay.valueVisible,
     visible: editRay.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
@@ -927,6 +942,7 @@ const applyEditStraightLine = () => {
   props.editor.updateStraightLine(editing.value.id, {
     name: editStraightLine.name,
     nameVisible: editStraightLine.nameVisible,
+    valueVisible: editStraightLine.valueVisible,
     visible: editStraightLine.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
@@ -955,6 +971,7 @@ const applyEditFace = () => {
   props.editor.updateFace(editing.value.id, {
     name: editFace.name,
     nameVisible: editFace.nameVisible,
+    valueVisible: editFace.valueVisible,
     visible: editFace.visible,
   })
   if (editFace.userLocked !== props.editor.isFaceLocked(face)) {
@@ -980,6 +997,7 @@ const applyHexahedronMeta = () => {
   const state = getEditingHexahedronState()
   if (!state) return
   props.editor.updateCubeName(state.cubeId, editHexahedron.nameSuffix)
+  props.editor.setCubeValueVisible(state.cubeId, editHexahedron.valueVisible)
   props.editor.setCubeLockState(state.cubeId, editHexahedron.userLocked)
   props.editor.setCubeEdgeLengthLockState(state.cubeId, editHexahedron.edgeLengthLocked)
 }
@@ -1109,6 +1127,7 @@ watch(
       ? {
           name: p.name ?? '',
           nameVisible: p.nameVisible !== false,
+          valueVisible: p.valueVisible === true,
           userLocked: isPointCoordinateLocked(p),
           x: p.position.x,
           y: p.position.y,
@@ -1120,6 +1139,7 @@ watch(
     if (!newPos) return
     editPoint.name = newPos.name
     editPoint.nameVisible = newPos.nameVisible
+    editPoint.valueVisible = newPos.valueVisible
     editPoint.userLocked = newPos.userLocked
     if (!focusedCoord['point.x']) editPoint.x = toFixed2(newPos.x)
     if (!focusedCoord['point.y']) editPoint.y = toFixed2(newPos.y)
@@ -1137,6 +1157,7 @@ watch(
     return {
       name: l.name ?? '',
       nameVisible: l.nameVisible !== false,
+      valueVisible: l.valueVisible === true,
       visible: l.visible !== false,
       userLocked: props.editor.isLineLocked(l),
       lengthLocked: l.lengthLocked === true,
@@ -1150,6 +1171,7 @@ watch(
     if (!newLine) return
     editLine.name = newLine.name
     editLine.nameVisible = newLine.nameVisible
+    editLine.valueVisible = newLine.valueVisible
     editLine.visible = newLine.visible
     editLine.userLocked = newLine.userLocked
     editLine.lengthLocked = newLine.lengthLocked
@@ -1176,6 +1198,7 @@ watch(
     return {
       name: l.name ?? '',
       nameVisible: l.nameVisible !== false,
+      valueVisible: l.valueVisible === true,
       visible: l.visible !== false,
       userLocked: props.editor.isStraightLineLocked(l),
       displayLength: l.displayLength,
@@ -1187,6 +1210,7 @@ watch(
     if (!newLine) return
     editStraightLine.name = newLine.name
     editStraightLine.nameVisible = newLine.nameVisible
+    editStraightLine.valueVisible = newLine.valueVisible
     editStraightLine.visible = newLine.visible
     editStraightLine.userLocked = newLine.userLocked
     if (!focusedCoord['straightLine.displayLength']) {
@@ -1210,6 +1234,7 @@ watch(
     return {
       name: r.name ?? '',
       nameVisible: r.nameVisible !== false,
+      valueVisible: r.valueVisible === true,
       visible: r.visible !== false,
       userLocked: props.editor.isRayLocked(r),
       displayLength: r.displayLength,
@@ -1221,6 +1246,7 @@ watch(
     if (!newRay) return
     editRay.name = newRay.name
     editRay.nameVisible = newRay.nameVisible
+    editRay.valueVisible = newRay.valueVisible
     editRay.visible = newRay.visible
     editRay.userLocked = newRay.userLocked
     if (!focusedCoord['ray.displayLength']) editRay.displayLength = toFixed2(newRay.displayLength)
@@ -1242,6 +1268,7 @@ watch(
     return {
       name: face.name ?? '',
       nameVisible: face.nameVisible !== false,
+      valueVisible: face.valueVisible === true,
       visible: face.visible !== false,
       userLocked: props.editor.isFaceLocked(face),
       areaLocked: face.areaLocked === true,
@@ -1254,6 +1281,7 @@ watch(
     if (!nextFace) return
     editFace.name = nextFace.name
     editFace.nameVisible = nextFace.nameVisible
+    editFace.valueVisible = nextFace.valueVisible
     editFace.visible = nextFace.visible
     editFace.userLocked = nextFace.userLocked
     editFace.areaLocked = nextFace.areaLocked
@@ -1278,6 +1306,7 @@ watch(
     if (ownerPoints.length < 2) return null
     return {
       nameSuffix: props.editor.getCubeNameSuffix(editing.value.id),
+      valueVisible: constraint.valueVisible === true,
       userLocked: constraint.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked),
       edgeLengthLocked: constraint.edgeLengthLocked,
       edgeLength: getHexahedronEdgeLength(editing.value.id),
@@ -1296,6 +1325,7 @@ watch(
   (nextCube) => {
     if (!nextCube) return
     editHexahedron.nameSuffix = nextCube.nameSuffix
+    editHexahedron.valueVisible = nextCube.valueVisible
     editHexahedron.userLocked = nextCube.userLocked
     editHexahedron.edgeLengthLocked = nextCube.edgeLengthLocked
     if (!focusedCoord['hexa.edgeLength']) {
@@ -1392,6 +1422,10 @@ onUnmounted(() => {
             <label class="toggle-label">
               <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
               {{ editPoint.nameVisible ? '隐藏' : '显示' }}
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editPoint.valueVisible" @change="applyEditPoint" />
+              数值显示
             </label>
             <label class="toggle-label">
               <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" />
@@ -1532,6 +1566,10 @@ onUnmounted(() => {
             <label class="toggle-label">
               <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
               名称显示
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editLine.valueVisible" @change="applyEditLine" />
+              数值显示
             </label>
             <label class="toggle-label">
               <input type="checkbox" v-model="editLine.userLocked" @change="applyEditLine" />
@@ -1865,6 +1903,14 @@ onUnmounted(() => {
             <label class="toggle-label">
               <input
                 type="checkbox"
+                v-model="editStraightLine.valueVisible"
+                @change="applyEditStraightLine"
+              />
+              数值显示
+            </label>
+            <label class="toggle-label">
+              <input
+                type="checkbox"
                 v-model="editStraightLine.userLocked"
                 @change="applyEditStraightLine"
               />
@@ -2190,6 +2236,10 @@ onUnmounted(() => {
               {{ editRay.nameVisible ? '名称显示' : '名称隐藏' }}
             </label>
             <label class="toggle-label">
+              <input type="checkbox" v-model="editRay.valueVisible" @change="applyEditRay" />
+              数值显示
+            </label>
+            <label class="toggle-label">
               <input type="checkbox" v-model="editRay.userLocked" @change="applyEditRay" />
               锁定
             </label>
@@ -2496,6 +2546,14 @@ onUnmounted(() => {
             <label class="toggle-label">
               <input
                 type="checkbox"
+                v-model="editHexahedron.valueVisible"
+                @change="applyHexahedronMeta"
+              />
+              数值显示
+            </label>
+            <label class="toggle-label">
+              <input
+                type="checkbox"
                 v-model="editHexahedron.edgeLengthLocked"
                 @change="applyHexahedronMeta"
               />
@@ -2758,6 +2816,10 @@ onUnmounted(() => {
             <label class="toggle-label">
               <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
               名称显示
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="editFace.valueVisible" @change="applyEditFace" />
+              数值显示
             </label>
             <label class="toggle-label">
               <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
