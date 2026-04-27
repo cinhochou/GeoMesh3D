@@ -210,12 +210,15 @@ export class ThreeRenderer {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     this.updateRendererPixelRatio()
-    this.renderer.setSize(w, h)
+    this.renderer.setSize(w, h, false)
 
     // 设置 Canvas 样式，确保它覆盖在视频之上
     this.renderer.domElement.style.position = 'absolute'
     this.renderer.domElement.style.top = '0'
     this.renderer.domElement.style.left = '0'
+    this.renderer.domElement.style.width = '100%'
+    this.renderer.domElement.style.height = '100%'
+    this.renderer.domElement.style.display = 'block'
     this.renderer.domElement.style.zIndex = '10' // Canvas 层级设为 10
     this.renderer.domElement.style.pointerEvents = 'auto' // 允许鼠标交互
     this.renderer.domElement.style.touchAction = 'none'
@@ -983,15 +986,23 @@ export class ThreeRenderer {
     this.world.updateMatrixWorld(true)
   }
 
+  syncContainerAspect() {
+    if (!this.container || this.isARMode) return
+    const w = Math.max(this.container.clientWidth, 1)
+    const h = Math.max(this.container.clientHeight, 1)
+    this.camera.aspect = w / h
+    this.camera.updateProjectionMatrix()
+  }
+
   // 暴露给外部用于处理窗口缩放
   onResize() {
     if (!this.container) return
-    const w = this.container.clientWidth
-    const h = this.container.clientHeight
+    const w = Math.max(this.container.clientWidth, 1)
+    const h = Math.max(this.container.clientHeight, 1)
 
     // 更新渲染器
     this.updateRendererPixelRatio()
-    this.renderer.setSize(w, h)
+    this.renderer.setSize(w, h, false)
 
     if (!this.isARMode) {
       this.camera.aspect = w / h

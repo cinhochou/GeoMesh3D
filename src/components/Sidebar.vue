@@ -3581,15 +3581,20 @@ hr {
 }
 .line-editor-grid {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: 14px max-content max-content;
   gap: 6px 8px;
   align-items: center;
+  justify-content: start;
+  justify-items: start;
   grid-column: 1 / -1;
+  width: fit-content;
+  max-width: 100%;
 }
 .line-editor-head {
   font-size: 12px;
   color: #e6ffe9;
   white-space: nowrap;
+  justify-self: start;
 }
 .line-editor-title-short {
   display: none;
@@ -3721,6 +3726,7 @@ hr {
   }
 
   .line-editor-grid {
+    grid-template-columns: 14px max-content max-content;
     gap: 4px 6px;
   }
 
@@ -3849,7 +3855,7 @@ hr {
   }
 
   .line-editor-grid {
-    grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 14px max-content max-content;
   }
 
   .compact-axis {

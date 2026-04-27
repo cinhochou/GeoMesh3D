@@ -1,6 +1,6 @@
 ﻿<!-- src/views/EditorView.vue -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 
@@ -22,6 +22,8 @@ import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
+const editorBodyRef = ref<HTMLDivElement | null>(null)
+const sidebarShellRef = ref<HTMLDivElement | null>(null)
 const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
@@ -57,14 +59,108 @@ let solverFlushReady = false
 const collabManager = ref<CollabManager | null>(null)
 let lastFpsTime = performance.now()
 let frameCount = 0
+const sidebarWidth = ref<number | null>(null)
+const sidebarMinWidth = ref(200)
+const isDraggingSidebarWidth = ref(false)
+const isSidebarResizeEnabled = ref(true)
+let sidebarResizeRafId: number | null = null
+let sidebarPreviewResizeRafId: number | null = null
+let viewportResizeObserver: ResizeObserver | null = null
 
 // 提示框相关的响应式变量
 let toastTimer: number | null = null
 const sharedRotationOwnerNotice = ref('')
 
 const handleResize = () => {
-  renderer.onResize()
+  syncSidebarResizeMode()
+  syncSidebarWidthBounds()
+  scheduleViewportResize()
 }
+
+const scheduleViewportResize = () => {
+  if (!renderer || sidebarResizeRafId !== null) return
+  sidebarResizeRafId = window.requestAnimationFrame(() => {
+    sidebarResizeRafId = null
+    renderer.onResize()
+  })
+}
+
+const scheduleViewportPreviewResize = () => {
+  if (!renderer || sidebarPreviewResizeRafId !== null) return
+  sidebarPreviewResizeRafId = window.requestAnimationFrame(() => {
+    sidebarPreviewResizeRafId = null
+    renderer.syncContainerAspect()
+  })
+}
+
+const getDefaultSidebarWidth = () => {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0
+  return Math.min(Math.max(viewportWidth * 0.21, 200), 280)
+}
+
+const getSidebarMaxWidth = () => {
+  const containerWidth = editorBodyRef.value?.clientWidth ?? window.innerWidth
+  return Math.max(sidebarMinWidth.value, Math.floor(containerWidth / 2))
+}
+
+const clampSidebarWidth = (nextWidth: number) => {
+  return Math.min(Math.max(nextWidth, sidebarMinWidth.value), getSidebarMaxWidth())
+}
+
+const syncSidebarResizeMode = () => {
+  isSidebarResizeEnabled.value =
+    window.innerWidth > 820 || window.matchMedia('(orientation: portrait)').matches
+}
+
+const syncSidebarWidthBounds = () => {
+  const nextMinWidth = Math.round(getDefaultSidebarWidth())
+  const previousMinWidth = sidebarMinWidth.value
+  sidebarMinWidth.value = nextMinWidth
+  if (!sidebarWidth.value || !isSidebarResizeEnabled.value) return
+
+  const shouldTrackDefaultWidth =
+    Math.abs(sidebarWidth.value - previousMinWidth) <= 1 || sidebarWidth.value < nextMinWidth
+  const clamped = clampSidebarWidth(sidebarWidth.value)
+  const nextWidth = shouldTrackDefaultWidth ? nextMinWidth : clamped
+  if (nextWidth !== sidebarWidth.value) {
+    sidebarWidth.value = nextWidth
+  }
+}
+
+const handleSidebarWidthDrag = (event: PointerEvent) => {
+  if (!isDraggingSidebarWidth.value || !isSidebarResizeEnabled.value) return
+  const containerBounds = editorBodyRef.value?.getBoundingClientRect()
+  if (!containerBounds) return
+  sidebarWidth.value = clampSidebarWidth(event.clientX - containerBounds.left)
+  scheduleViewportPreviewResize()
+}
+
+const stopSidebarWidthDrag = () => {
+  if (isDraggingSidebarWidth.value) {
+    scheduleViewportResize()
+  }
+  isDraggingSidebarWidth.value = false
+  document.body.classList.remove('sidebar-width-resizing')
+}
+
+const startSidebarWidthDrag = (event: PointerEvent) => {
+  if (!isSidebarResizeEnabled.value) return
+  event.preventDefault()
+  isDraggingSidebarWidth.value = true
+  document.body.classList.add('sidebar-width-resizing')
+  handleSidebarWidthDrag(event)
+}
+
+const sidebarShellStyle = computed(() => {
+  if (!sidebarWidth.value || !isSidebarResizeEnabled.value) return undefined
+  const width = `${sidebarWidth.value}px`
+  return {
+    width,
+    minWidth: width,
+    maxWidth: width,
+    flex: `0 0 ${width}`,
+  }
+})
 
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false
@@ -223,9 +319,33 @@ onMounted(() => {
   }
   loop()
 
+  nextTick(() => {
+    syncSidebarResizeMode()
+    const defaultWidth = Math.round(getDefaultSidebarWidth())
+    sidebarMinWidth.value = defaultWidth
+    sidebarWidth.value = defaultWidth
+    syncSidebarWidthBounds()
+
+    if (viewportRef.value) {
+      viewportResizeObserver = new ResizeObserver(() => {
+        if (isDraggingSidebarWidth.value) {
+          scheduleViewportPreviewResize()
+          return
+        }
+        scheduleViewportResize()
+      })
+      viewportResizeObserver.observe(viewportRef.value)
+    }
+
+    scheduleViewportResize()
+  })
+
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('toast', handleToast as EventListener)
+  window.addEventListener('pointermove', handleSidebarWidthDrag)
+  window.addEventListener('pointerup', stopSidebarWidthDrag)
+  window.addEventListener('pointercancel', stopSidebarWidthDrag)
 })
 
 watch(
@@ -315,9 +435,23 @@ onUnmounted(() => {
   solverWorker = null
   interaction?.unbind(renderer.renderer.domElement)
   renderer?.dispose()
+  viewportResizeObserver?.disconnect()
+  viewportResizeObserver = null
+  if (sidebarResizeRafId !== null) {
+    cancelAnimationFrame(sidebarResizeRafId)
+    sidebarResizeRafId = null
+  }
+  if (sidebarPreviewResizeRafId !== null) {
+    cancelAnimationFrame(sidebarPreviewResizeRafId)
+    sidebarPreviewResizeRafId = null
+  }
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('toast', handleToast as EventListener)
+  window.removeEventListener('pointermove', handleSidebarWidthDrag)
+  window.removeEventListener('pointerup', stopSidebarWidthDrag)
+  window.removeEventListener('pointercancel', stopSidebarWidthDrag)
+  document.body.classList.remove('sidebar-width-resizing')
 })
 
 function onModeChange(mode: EditorMode) {
@@ -566,8 +700,20 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @toggle-collab="handleToggleCollab"
     />
 
-    <div class="editor-body">
-      <Sidebar :scene="scene" :editor="editor" />
+    <div ref="editorBodyRef" class="editor-body">
+      <div ref="sidebarShellRef" class="sidebar-shell" :style="sidebarShellStyle">
+        <Sidebar class="editor-sidebar" :scene="scene" :editor="editor" />
+      </div>
+      <div
+        class="sidebar-width-resizer"
+        :class="{ 'is-dragging': isDraggingSidebarWidth, 'is-disabled': !isSidebarResizeEnabled }"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整侧边栏宽度"
+        @pointerdown="startSidebarWidthDrag"
+      >
+        <span class="sidebar-width-resizer-handle"></span>
+      </div>
 
       <div ref="viewportRef" class="viewport">
         <Transition name="toast-fade">
@@ -628,6 +774,73 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   min-height: 0;
   min-width: 0;
 }
+.sidebar-shell {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.editor-sidebar {
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  flex: 1 1 auto;
+}
+
+.sidebar-width-resizer {
+  position: relative;
+  z-index: 20;
+  width: 12px;
+  margin-left: -6px;
+  margin-right: -6px;
+  flex: 0 0 12px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.sidebar-width-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: #333;
+  transform: translateX(-50%);
+}
+
+.sidebar-width-resizer-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 48px;
+  border-radius: 999px;
+  background: #6f6f6f;
+  box-shadow: 0 0 0 2px #111111;
+  transform: translate(-50%, -50%);
+}
+
+.sidebar-width-resizer:hover .sidebar-width-resizer-handle,
+.sidebar-width-resizer.is-dragging .sidebar-width-resizer-handle {
+  background: #9fd8ff;
+}
+
+.sidebar-width-resizer.is-dragging::before {
+  background: #9fd8ff;
+}
+
+.sidebar-width-resizer.is-disabled {
+  cursor: default;
+}
+
+.sidebar-width-resizer.is-disabled .sidebar-width-resizer-handle {
+  background: #5a5a5a;
+}
+
 .fps-indicator {
   position: absolute;
   top: 12px;
@@ -898,6 +1111,12 @@ select.axis-control option {
   .toast-content {
     padding: 12px 20px;
     font-size: 14px;
+  }
+}
+
+@media (max-width: 820px) and (orientation: landscape) {
+  .sidebar-width-resizer {
+    display: none;
   }
 }
 </style>
