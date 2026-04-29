@@ -22,6 +22,7 @@ const emit = defineEmits<{
   (e: 'mode-change', mode: EditorMode): void
   (e: 'toggle-snapping'): void
   (e: 'toggle-coordinate-system', isOpen: boolean): void
+  (e: 'toggle-global-point-value', isOpen: boolean): void
   (e: 'toggle-ar', isOpen: boolean): void
   (e: 'toggle-collab', data: { open: boolean; room: string }): void
   (e: 'clear-all'): void
@@ -45,6 +46,7 @@ const isEditingLocked = computed(() => isArLocked.value || isCoordinateSystemOff
 const isCollabOpen = computed(() => isConnected.value)
 const isCollabConnecting = computed(() => isConnecting.value)
 const isAROpen = computed(() => isARMode.value)
+const isGlobalPointValueOpen = computed(() => uiStore.isGlobalPointValueMode)
 const isDeleteMenuOpen = computed(() => toolbarMenus.value.deleteOpen)
 const isPointMenuOpen = computed(() => toolbarMenus.value.pointOpen)
 const isLineMenuOpen = computed(() => toolbarMenus.value.lineOpen)
@@ -204,6 +206,10 @@ const requestClearAll = () => {
 
 const toggleCoordinateSystem = () => {
   emit('toggle-coordinate-system', !props.isCoordinateSystemVisible)
+}
+
+const toggleGlobalPointValue = () => {
+  emit('toggle-global-point-value', !isGlobalPointValueOpen.value)
 }
 
 const selectCreateFreePointMode = () => {
@@ -496,6 +502,14 @@ onUnmounted(() => {
 
     <button :class="{ active: isCoordinateSystemVisible }" @click="toggleCoordinateSystem">
       {{ isCoordinateSystemVisible ? '坐标系开' : '坐标系关' }}
+    </button>
+
+    <button
+      :class="{ active: isGlobalPointValueOpen }"
+      @click="toggleGlobalPointValue"
+      :disabled="isEditingLocked"
+    >
+      {{ isGlobalPointValueOpen ? '全局数值开' : '全局数值关' }}
     </button>
 
     <div class="divider"></div>

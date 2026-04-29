@@ -46,6 +46,7 @@ export const useUiStore = defineStore('ui', () => {
   const axisGridSize = ref(10)
   const isGridVisible = ref(true)
   const isCoordinateSystemVisible = ref(true)
+  const isGlobalPointValueMode = ref(false)
   const isARMode = ref(false)
   const lastModeBeforeAR = ref<EditorMode | null>(null)
   const lastModeBeforeCoordinateOff = ref<EditorMode | null>(null)
@@ -119,6 +120,14 @@ export const useUiStore = defineStore('ui', () => {
 
   const setCoordinateSystemVisible = (value: boolean) => {
     isCoordinateSystemVisible.value = value
+  }
+
+  const setGlobalPointValueMode = (value: boolean) => {
+    isGlobalPointValueMode.value = value
+  }
+
+  const toggleGlobalPointValueMode = () => {
+    isGlobalPointValueMode.value = !isGlobalPointValueMode.value
   }
 
   const setARMode = (value: boolean) => {
@@ -213,6 +222,7 @@ export const useUiStore = defineStore('ui', () => {
     axisGridSize.value = 10
     isGridVisible.value = true
     isCoordinateSystemVisible.value = true
+    isGlobalPointValueMode.value = false
     isARMode.value = false
     lastModeBeforeAR.value = null
     lastModeBeforeCoordinateOff.value = null
@@ -230,6 +240,7 @@ export const useUiStore = defineStore('ui', () => {
     axisGridSize,
     isGridVisible,
     isCoordinateSystemVisible,
+    isGlobalPointValueMode,
     isARMode,
     lastModeBeforeAR,
     lastModeBeforeCoordinateOff,
@@ -251,6 +262,8 @@ export const useUiStore = defineStore('ui', () => {
     setGridVisible,
     toggleGridVisible,
     setCoordinateSystemVisible,
+    setGlobalPointValueMode,
+    toggleGlobalPointValueMode,
     setARMode,
     setLastModeBeforeAR,
     setLastModeBeforeCoordinateOff,

@@ -336,7 +336,7 @@ const clampSelectedPaneHeight = (nextHeight: number) => {
 }
 
 const syncSplitPaneMode = () => {
-  isSplitPaneEnabled.value = window.innerWidth > 820 || window.matchMedia('(orientation: portrait)').matches
+  isSplitPaneEnabled.value = true
 }
 
 const syncSelectedPaneHeight = () => {
@@ -351,6 +351,7 @@ const syncSelectedPaneHeight = () => {
 
 const handleSplitPaneDrag = (event: PointerEvent) => {
   if (!isDraggingSplitPane.value || !isSplitPaneEnabled.value) return
+  event.preventDefault()
   const metrics = getSplitPaneMetrics()
   if (!metrics) return
   const bounds = metrics.container.getBoundingClientRect()
@@ -366,6 +367,7 @@ const stopSplitPaneDrag = () => {
 const startSplitPaneDrag = (event: PointerEvent) => {
   if (!isSplitPaneEnabled.value) return
   event.preventDefault()
+  ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
   isDraggingSplitPane.value = true
   document.body.classList.add('sidebar-resizing')
   handleSplitPaneDrag(event)
@@ -3767,21 +3769,19 @@ hr {
   }
 
   .split-pane {
-    display: block;
+    display: flex;
   }
 
   .box,
   .selected-box,
   .content-box {
-    display: block;
-    flex: none;
-    min-height: 0;
-    max-height: none;
-    overflow: visible;
+    min-height: 96px;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .panel-resizer {
-    display: none;
+    display: flex;
   }
 
   .edit-grid {

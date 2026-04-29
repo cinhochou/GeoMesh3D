@@ -1098,8 +1098,9 @@ export class ThreeRenderer {
       spriteUserData.__labelOffsetX = p.labelOffsetX
       spriteUserData.__labelOffsetY = p.labelOffsetY
       const pointValueText = `=(${this.formatMetricNumber(p.position.x)},${this.formatMetricNumber(p.position.y)},${this.formatMetricNumber(p.position.z)})`
-      const combinedPointText = p.valueVisible ? pointValueText : ''
-      if (!p.nameVisible && !p.valueVisible) {
+      const pointValueVisible = p.valueVisible || isLabelActive
+      const combinedPointText = pointValueVisible ? pointValueText : ''
+      if (!p.nameVisible && !pointValueVisible) {
         if (existingLabel) existingLabel.visible = false
       } else if (!existingLabel) {
         const nameSprite = p.nameVisible

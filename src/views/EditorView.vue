@@ -33,6 +33,7 @@ const {
   axisGridSize,
   isGridVisible,
   isCoordinateSystemVisible,
+  isGlobalPointValueMode,
   isARMode,
   lastModeBeforeAR,
   lastModeBeforeCoordinateOff,
@@ -108,8 +109,7 @@ const clampSidebarWidth = (nextWidth: number) => {
 }
 
 const syncSidebarResizeMode = () => {
-  isSidebarResizeEnabled.value =
-    window.innerWidth > 820 || window.matchMedia('(orientation: portrait)').matches
+  isSidebarResizeEnabled.value = true
 }
 
 const syncSidebarWidthBounds = () => {
@@ -129,6 +129,7 @@ const syncSidebarWidthBounds = () => {
 
 const handleSidebarWidthDrag = (event: PointerEvent) => {
   if (!isDraggingSidebarWidth.value || !isSidebarResizeEnabled.value) return
+  event.preventDefault()
   const containerBounds = editorBodyRef.value?.getBoundingClientRect()
   if (!containerBounds) return
   sidebarWidth.value = clampSidebarWidth(event.clientX - containerBounds.left)
@@ -146,6 +147,7 @@ const stopSidebarWidthDrag = () => {
 const startSidebarWidthDrag = (event: PointerEvent) => {
   if (!isSidebarResizeEnabled.value) return
   event.preventDefault()
+  ;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
   isDraggingSidebarWidth.value = true
   document.body.classList.add('sidebar-width-resizing')
   handleSidebarWidthDrag(event)
@@ -203,6 +205,7 @@ onMounted(() => {
   uiStore.setGridVisible(renderer.isAxisGridVisible())
   uiStore.setCoordinateSystemVisible(renderer.isCoordinateSystemVisible())
   interaction = new Interaction(editor, renderer)
+  interaction.setGlobalPointValueMode(isGlobalPointValueMode.value)
   interaction.bind(renderer.renderer.domElement)
   interaction.syncControlLockState()
   sceneStore.syncEditorState(editor)
@@ -347,6 +350,14 @@ onMounted(() => {
   window.addEventListener('pointerup', stopSidebarWidthDrag)
   window.addEventListener('pointercancel', stopSidebarWidthDrag)
 })
+
+watch(
+  isGlobalPointValueMode,
+  (enabled) => {
+    interaction?.setGlobalPointValueMode(enabled)
+  },
+  { immediate: true },
+)
 
 watch(
   () => user.value,
@@ -548,6 +559,11 @@ const handleToggleCoordinateSystem = (enabled: boolean) => {
   }
 }
 
+const handleToggleGlobalPointValue = (enabled: boolean) => {
+  uiStore.setGlobalPointValueMode(enabled)
+  interaction?.setGlobalPointValueMode(enabled)
+}
+
 const handleToggleAR = async (enabled: boolean) => {
   interaction.clearPreview()
   if (enabled) {
@@ -696,6 +712,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @redo="handleRedo"
       @toggle-snapping="editor.toggleSnapping()"
       @toggle-coordinate-system="handleToggleCoordinateSystem"
+      @toggle-global-point-value="handleToggleGlobalPointValue"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"
     />
@@ -1114,9 +1131,4 @@ select.axis-control option {
   }
 }
 
-@media (max-width: 820px) and (orientation: landscape) {
-  .sidebar-width-resizer {
-    display: none;
-  }
-}
 </style>

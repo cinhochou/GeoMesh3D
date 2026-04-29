@@ -67,6 +67,7 @@ export class Interaction {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
     geoId: string
   } | null = null
+  private globalPointValueMode = false
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
   private arMouseRotationCandidate = false
@@ -243,6 +244,13 @@ export class Interaction {
     return this.activeLabelTarget
   }
 
+  setGlobalPointValueMode(enabled: boolean) {
+    this.globalPointValueMode = enabled
+    if (!enabled && this.activeLabelTarget?.type === 'point') {
+      this.clearActiveLabelTarget()
+    }
+  }
+
   getLiveSyncLabelTarget() {
     if (!this.draggingLabelTarget) return null
     return {
@@ -252,7 +260,15 @@ export class Interaction {
   }
 
   private clearActiveLabelTarget() {
+    if (this.activeLabelTarget) this.editor.scene.markAllRenderDirty()
     this.activeLabelTarget = null
+  }
+
+  private setActivePointValueTarget(geoId: string) {
+    if (!this.globalPointValueMode) return
+    if (this.activeLabelTarget?.type === 'point' && this.activeLabelTarget.geoId === geoId) return
+    this.activeLabelTarget = { type: 'point', geoId }
+    this.editor.scene.markAllRenderDirty()
   }
 
   private isSameActiveLabelTarget(
@@ -881,6 +897,7 @@ export class Interaction {
           this.draggingPointId = geoId
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectPoint(geoId, true)
+          this.setActivePointValueTarget(geoId)
           const p = this.editor.scene.points.get(geoId)
           if (p) {
             if (this.editor.isPointCoordinateLocked(p)) {
@@ -1116,6 +1133,7 @@ export class Interaction {
       this.draggingRayId = null
       this.draggingFaceId = null
       this.pendingToggleSelection = null
+      this.clearActiveLabelTarget()
       this.endDrag()
       this.syncControlLockState()
       this.renderer.renderer.domElement.style.cursor = 'default'
@@ -1125,6 +1143,7 @@ export class Interaction {
       return
     }
     this.finishDragInteraction()
+    if (this.globalPointValueMode) this.clearActiveLabelTarget()
   }
 
   onMouseLeave = () => {
@@ -1361,6 +1380,7 @@ export class Interaction {
       const alreadySelected = this.editor.scene.selection.points.has(geoId)
       this.editor.scene.selection.selectPoint(geoId, true)
       this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+      this.setActivePointValueTarget(geoId)
 
       if (!alreadySelected) {
         this.syncControlLockState()
@@ -1686,10 +1706,12 @@ export class Interaction {
         this.draggingRayId = null
         this.draggingFaceId = null
         this.pendingToggleSelection = null
+        this.clearActiveLabelTarget()
         this.endDrag()
         this.syncControlLockState()
       } else {
         this.finishDragInteraction()
+        if (this.globalPointValueMode) this.clearActiveLabelTarget()
       }
     } else if (
       this.editor.mode === EditorMode.Select &&
@@ -1700,6 +1722,7 @@ export class Interaction {
     }
 
     this.resetMobileInteractionState()
+    if (this.globalPointValueMode) this.clearActiveLabelTarget()
     this.syncControlLockState()
   }
 
@@ -1728,6 +1751,7 @@ export class Interaction {
     if (this.mobileInteractionPointerId !== e.pointerId) return
     ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
     this.finishDragInteraction()
+    if (this.globalPointValueMode) this.clearActiveLabelTarget()
     this.resetMobileInteractionState()
     this.syncControlLockState()
   }
@@ -1954,6 +1978,7 @@ export class Interaction {
     this.rubberBandData = null
     this.mobileCreatePreviewPos = null
     this.resetMobileCreatePointerState()
+    this.clearActiveLabelTarget()
     this.syncControlLockState()
     this.renderer.hideAxisGuides()
   }
