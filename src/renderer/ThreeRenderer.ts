@@ -180,6 +180,7 @@ export class ThreeRenderer {
   private cubeValueLabels = new Map<string, THREE.Sprite>()
   private currentSceneRef: GeoScene | null = null
   private activeLabelTarget: { type: string; geoId: string } | null = null
+  private activePointValueTarget: { type: 'point'; geoId: string } | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -662,9 +663,11 @@ export class ThreeRenderer {
     previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null,
     facePreviewData?: FacePreviewData | null,
     activeLabelTarget?: { type: string; geoId: string } | null,
+    activePointValueTarget?: { type: 'point'; geoId: string } | null,
   ) {
     this.currentSceneRef = geoScene
     this.activeLabelTarget = activeLabelTarget ?? null
+    this.activePointValueTarget = activePointValueTarget ?? null
     const dirtyState = geoScene.consumeRenderSyncState()
     if (dirtyState) {
       this.cleanupMissingMeshes(geoScene)
@@ -1098,7 +1101,9 @@ export class ThreeRenderer {
       spriteUserData.__labelOffsetX = p.labelOffsetX
       spriteUserData.__labelOffsetY = p.labelOffsetY
       const pointValueText = `=(${this.formatMetricNumber(p.position.x)},${this.formatMetricNumber(p.position.y)},${this.formatMetricNumber(p.position.z)})`
-      const pointValueVisible = p.valueVisible || isLabelActive
+      const pointValueVisible =
+        p.valueVisible ||
+        (this.activePointValueTarget?.type === 'point' && this.activePointValueTarget.geoId === p.id)
       const combinedPointText = pointValueVisible ? pointValueText : ''
       if (!p.nameVisible && !pointValueVisible) {
         if (existingLabel) existingLabel.visible = false

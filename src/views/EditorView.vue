@@ -316,6 +316,7 @@ onMounted(() => {
       interaction.rubberBandData,
       interaction.getFacePreviewData(),
       interaction.getActiveLabelTarget(),
+      interaction.getActivePointValueTarget(),
     )
     renderer.render()
     animationFrameId = requestAnimationFrame(loop)

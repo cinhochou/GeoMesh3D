@@ -67,6 +67,7 @@ export class Interaction {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
     geoId: string
   } | null = null
+  private activePointValueTarget: { type: 'point'; geoId: string } | null = null
   private globalPointValueMode = false
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
@@ -244,10 +245,14 @@ export class Interaction {
     return this.activeLabelTarget
   }
 
+  getActivePointValueTarget() {
+    return this.activePointValueTarget
+  }
+
   setGlobalPointValueMode(enabled: boolean) {
     this.globalPointValueMode = enabled
-    if (!enabled && this.activeLabelTarget?.type === 'point') {
-      this.clearActiveLabelTarget()
+    if (!enabled) {
+      this.clearActivePointValueTarget()
     }
   }
 
@@ -264,10 +269,15 @@ export class Interaction {
     this.activeLabelTarget = null
   }
 
+  private clearActivePointValueTarget() {
+    if (this.activePointValueTarget) this.editor.scene.markAllRenderDirty()
+    this.activePointValueTarget = null
+  }
+
   private setActivePointValueTarget(geoId: string) {
     if (!this.globalPointValueMode) return
-    if (this.activeLabelTarget?.type === 'point' && this.activeLabelTarget.geoId === geoId) return
-    this.activeLabelTarget = { type: 'point', geoId }
+    if (this.activePointValueTarget?.geoId === geoId) return
+    this.activePointValueTarget = { type: 'point', geoId }
     this.editor.scene.markAllRenderDirty()
   }
 
@@ -892,6 +902,7 @@ export class Interaction {
           return
         }
         this.clearActiveLabelTarget()
+        this.clearActivePointValueTarget()
         if (type === 'point') {
           const alreadySelected = this.editor.scene.selection.points.has(geoId)
           this.draggingPointId = geoId
@@ -1009,6 +1020,7 @@ export class Interaction {
       if (this.editor.mode === EditorMode.Select) {
         this.editor.scene.selection.clear()
         this.clearActiveLabelTarget()
+        this.clearActivePointValueTarget()
       } else if (this.editor.mode === EditorMode.CreatePlane)
         this.editor.tryCreateFaceFromSelection()
       else if (
@@ -1114,6 +1126,7 @@ export class Interaction {
       if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
         this.editor.scene.selection.clear()
         this.clearActiveLabelTarget()
+        this.clearActivePointValueTarget()
       }
       return
     }
@@ -1134,6 +1147,7 @@ export class Interaction {
       this.draggingFaceId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
+      this.clearActivePointValueTarget()
       this.endDrag()
       this.syncControlLockState()
       this.renderer.renderer.domElement.style.cursor = 'default'
@@ -1143,7 +1157,7 @@ export class Interaction {
       return
     }
     this.finishDragInteraction()
-    if (this.globalPointValueMode) this.clearActiveLabelTarget()
+    this.clearActivePointValueTarget()
   }
 
   onMouseLeave = () => {
@@ -1707,11 +1721,12 @@ export class Interaction {
         this.draggingFaceId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
+        this.clearActivePointValueTarget()
         this.endDrag()
         this.syncControlLockState()
       } else {
         this.finishDragInteraction()
-        if (this.globalPointValueMode) this.clearActiveLabelTarget()
+        this.clearActivePointValueTarget()
       }
     } else if (
       this.editor.mode === EditorMode.Select &&
@@ -1722,7 +1737,7 @@ export class Interaction {
     }
 
     this.resetMobileInteractionState()
-    if (this.globalPointValueMode) this.clearActiveLabelTarget()
+    this.clearActivePointValueTarget()
     this.syncControlLockState()
   }
 
@@ -1751,7 +1766,7 @@ export class Interaction {
     if (this.mobileInteractionPointerId !== e.pointerId) return
     ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
     this.finishDragInteraction()
-    if (this.globalPointValueMode) this.clearActiveLabelTarget()
+    this.clearActivePointValueTarget()
     this.resetMobileInteractionState()
     this.syncControlLockState()
   }
@@ -1979,6 +1994,7 @@ export class Interaction {
     this.mobileCreatePreviewPos = null
     this.resetMobileCreatePointerState()
     this.clearActiveLabelTarget()
+    this.clearActivePointValueTarget()
     this.syncControlLockState()
     this.renderer.hideAxisGuides()
   }
