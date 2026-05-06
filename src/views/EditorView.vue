@@ -1,4 +1,4 @@
-﻿<!-- src/views/EditorView.vue -->
+<!-- src/views/EditorView.vue -->
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -374,6 +374,7 @@ watch(
     () => scene.selection.lines.size,
     () => scene.selection.straightLines.size,
     () => scene.selection.rays.size,
+    () => scene.selection.circles.size,
     () => scene.selection.faces.size,
     () => editor.mode,
     isARMode,
@@ -397,6 +398,7 @@ watch(
     () => scene.lines.size,
     () => scene.straightLines.size,
     () => scene.rays.size,
+    () => scene.circles.size,
     () => scene.faces.size,
   ],
   () => {

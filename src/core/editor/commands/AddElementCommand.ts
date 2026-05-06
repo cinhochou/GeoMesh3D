@@ -5,14 +5,15 @@ import { Point3 } from '../../geometry/Point3'
 import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
+import { Circle3 } from '../../geometry/Circle3'
 import { PlanarFace } from '../../geometry/Plane'
 
-export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face'
 
 export class AddElementCommand implements Command {
   constructor(
     private scene: Scene,
-    private element: Point3 | Line3 | StraightLine3 | Ray3 | PlanarFace,
+    private element: Point3 | Line3 | StraightLine3 | Ray3 | Circle3 | PlanarFace,
     private type: ElementType,
   ) {}
 
@@ -26,6 +27,8 @@ export class AddElementCommand implements Command {
       this.scene.addStraightLine(this.element as StraightLine3)
     } else if (this.type === 'face') {
       this.scene.addFace(this.element as PlanarFace)
+    } else if (this.type === 'circle') {
+      this.scene.addCircle(this.element as Circle3)
     } else {
       this.scene.addRay(this.element as Ray3)
     }
@@ -44,6 +47,9 @@ export class AddElementCommand implements Command {
       this.scene.selection.straightLines.delete(this.element.id)
     } else if (this.type === 'face') {
       this.scene.removeFace(this.element.id)
+    } else if (this.type === 'circle') {
+      this.scene.circles.delete(this.element.id)
+      this.scene.selection.circles.delete(this.element.id)
     } else {
       this.scene.rays.delete(this.element.id)
       this.scene.selection.rays.delete(this.element.id)

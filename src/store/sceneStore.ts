@@ -8,6 +8,7 @@ type CountSummary = {
   line: number
   straightLine: number
   ray: number
+  circle: number
   face: number
 }
 
@@ -16,6 +17,7 @@ const createEmptyCounts = (): CountSummary => ({
   line: 0,
   straightLine: 0,
   ray: 0,
+  circle: 0,
   face: 0,
 })
 
@@ -37,6 +39,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建直线'
     case EditorMode.CreateRay:
       return '创建射线'
+    case EditorMode.CreateCircleThreePoints:
+      return '创建三点圆'
     case EditorMode.CreatePlane:
       return '创建面'
     case EditorMode.CreateHexahedron:
@@ -58,6 +62,8 @@ const getModeHint = (mode: EditorMode) => {
       return '点击场景中的两个不同点以创建直线~'
     case EditorMode.CreateRay:
       return '点击场景中的两个不同点以创建射线~'
+    case EditorMode.CreateCircleThreePoints:
+      return '点击场景中的三个不共线的点以创建三点圆~'
     case EditorMode.CreatePlane:
       return '先选择多个点或闭合线段，再点击空白处确认创建面~'
     case EditorMode.MergePoint:
@@ -134,6 +140,7 @@ export const useSceneStore = defineStore('scene', () => {
       line: scene.selection.lines.size,
       straightLine: scene.selection.straightLines.size,
       ray: scene.selection.rays.size,
+      circle: scene.selection.circles.size,
       face: scene.selection.faces.size,
     }
     sceneCounts.value = {
@@ -141,6 +148,7 @@ export const useSceneStore = defineStore('scene', () => {
       line: scene.lines.size,
       straightLine: scene.straightLines.size,
       ray: scene.rays.size,
+      circle: scene.circles.size,
       face: scene.faces.size,
     }
   }

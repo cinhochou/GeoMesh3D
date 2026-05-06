@@ -9,6 +9,7 @@ type ContentGroupKey =
   | 'line'
   | 'straightLine'
   | 'ray'
+  | 'circle'
   | 'face'
   | 'hexahedron'
   | 'tetrahedron'
@@ -23,6 +24,7 @@ interface ContentGroupCollapseState {
   line: boolean
   straightLine: boolean
   ray: boolean
+  circle: boolean
   face: boolean
   hexahedron: boolean
   tetrahedron: boolean
@@ -33,6 +35,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   line: false,
   straightLine: false,
   ray: false,
+  circle: false,
   face: false,
   hexahedron: false,
   tetrahedron: false,
@@ -64,6 +67,7 @@ export const useUiStore = defineStore('ui', () => {
     deleteOpen: false,
     pointOpen: false,
     lineOpen: false,
+    circleOpen: false,
     solidOpen: false,
   })
 
@@ -75,6 +79,7 @@ export const useUiStore = defineStore('ui', () => {
       toolbarMenus.value.deleteOpen ||
       toolbarMenus.value.pointOpen ||
       toolbarMenus.value.lineOpen ||
+      toolbarMenus.value.circleOpen ||
       toolbarMenus.value.solidOpen,
   )
 
@@ -168,12 +173,13 @@ export const useUiStore = defineStore('ui', () => {
       deleteOpen: false,
       pointOpen: false,
       lineOpen: false,
+      circleOpen: false,
       solidOpen: false,
     }
   }
 
   const setToolbarMenuOpen = (
-    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'solidOpen',
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'solidOpen',
     value: boolean,
     options?: { exclusive?: boolean },
   ) => {
@@ -187,7 +193,9 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
-  const toggleToolbarMenu = (menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'solidOpen') => {
+  const toggleToolbarMenu = (
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'solidOpen',
+  ) => {
     const next = !toolbarMenus.value[menu]
     setToolbarMenuOpen(menu, next, { exclusive: true })
   }
@@ -198,6 +206,7 @@ export const useUiStore = defineStore('ui', () => {
       line: collapsed,
       straightLine: collapsed,
       ray: collapsed,
+      circle: collapsed,
       face: collapsed,
       hexahedron: collapsed,
       tetrahedron: collapsed,

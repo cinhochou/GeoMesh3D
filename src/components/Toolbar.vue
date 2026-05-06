@@ -50,6 +50,7 @@ const isGlobalPointValueOpen = computed(() => uiStore.isGlobalPointValueMode)
 const isDeleteMenuOpen = computed(() => toolbarMenus.value.deleteOpen)
 const isPointMenuOpen = computed(() => toolbarMenus.value.pointOpen)
 const isLineMenuOpen = computed(() => toolbarMenus.value.lineOpen)
+const isCircleMenuOpen = computed(() => toolbarMenus.value.circleOpen)
 const isSolidMenuOpen = computed(() => toolbarMenus.value.solidOpen)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
@@ -60,6 +61,9 @@ const pointPanelRef = ref<HTMLElement | null>(null)
 const lineMenuRef = ref<HTMLElement | null>(null)
 const lineTriggerRef = ref<HTMLElement | null>(null)
 const linePanelRef = ref<HTMLElement | null>(null)
+const circleMenuRef = ref<HTMLElement | null>(null)
+const circleTriggerRef = ref<HTMLElement | null>(null)
+const circlePanelRef = ref<HTMLElement | null>(null)
 const solidMenuRef = ref<HTMLElement | null>(null)
 const solidTriggerRef = ref<HTMLElement | null>(null)
 const solidPanelRef = ref<HTMLElement | null>(null)
@@ -74,6 +78,11 @@ const pointMenuStyle = ref({
   minWidth: '132px',
 })
 const lineMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '132px',
+})
+const circleMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '132px',
@@ -178,6 +187,22 @@ const updateLineMenuPosition = () => {
   }
 }
 
+const toggleCircleMenu = () => {
+  if (isEditingLocked.value) return
+  uiStore.toggleToolbarMenu('circleOpen')
+}
+
+const updateCircleMenuPosition = () => {
+  const trigger = circleTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  circleMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 132)}px`,
+  }
+}
+
 const toggleSolidMenu = () => {
   if (isEditingLocked.value) return
   uiStore.toggleToolbarMenu('solidOpen')
@@ -234,6 +259,10 @@ const selectCreateStraightLineMode = () => {
 
 const selectCreateRayMode = () => {
   setMode(EditorMode.CreateRay)
+}
+
+const selectCreateThreePointCircleMode = () => {
+  setMode(EditorMode.CreateCircleThreePoints)
 }
 
 const createHexahedron = () => {
@@ -323,6 +352,13 @@ const handleClickOutside = (event: MouseEvent) => {
     uiStore.setToolbarMenuOpen('lineOpen', false, { exclusive: false })
   }
   if (
+    isCircleMenuOpen.value &&
+    !circleMenuRef.value?.contains(target) &&
+    !circlePanelRef.value?.contains(target)
+  ) {
+    uiStore.setToolbarMenuOpen('circleOpen', false, { exclusive: false })
+  }
+  if (
     isSolidMenuOpen.value &&
     !solidMenuRef.value?.contains(target) &&
     !solidPanelRef.value?.contains(target)
@@ -356,6 +392,12 @@ watch(isLineMenuOpen, async (isOpen) => {
   updateLineMenuPosition()
 })
 
+watch(isCircleMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updateCircleMenuPosition()
+})
+
 watch(isSolidMenuOpen, async (isOpen) => {
   if (!isOpen) return
   await nextTick()
@@ -381,11 +423,13 @@ onMounted(() => {
   window.addEventListener('resize', updateDeleteMenuPosition)
   window.addEventListener('resize', updatePointMenuPosition)
   window.addEventListener('resize', updateLineMenuPosition)
+  window.addEventListener('resize', updateCircleMenuPosition)
   window.addEventListener('resize', updateSolidMenuPosition)
   window.addEventListener('resize', updateProfileMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
   document.addEventListener('scroll', updatePointMenuPosition, true)
   document.addEventListener('scroll', updateLineMenuPosition, true)
+  document.addEventListener('scroll', updateCircleMenuPosition, true)
   document.addEventListener('scroll', updateSolidMenuPosition, true)
   document.addEventListener('scroll', updateProfileMenuPosition, true)
 })
@@ -395,11 +439,13 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateDeleteMenuPosition)
   window.removeEventListener('resize', updatePointMenuPosition)
   window.removeEventListener('resize', updateLineMenuPosition)
+  window.removeEventListener('resize', updateCircleMenuPosition)
   window.removeEventListener('resize', updateSolidMenuPosition)
   window.removeEventListener('resize', updateProfileMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
   document.removeEventListener('scroll', updatePointMenuPosition, true)
   document.removeEventListener('scroll', updateLineMenuPosition, true)
+  document.removeEventListener('scroll', updateCircleMenuPosition, true)
   document.removeEventListener('scroll', updateSolidMenuPosition, true)
   document.removeEventListener('scroll', updateProfileMenuPosition, true)
 })
@@ -461,6 +507,22 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>线</span>
+        <span class="menu-caret">▾</span>
+      </button>
+    </div>
+
+    <div ref="circleMenuRef" class="menu-wrap">
+      <button
+        ref="circleTriggerRef"
+        class="menu-trigger"
+        :class="{
+          'is-active': currentMode === EditorMode.CreateCircleThreePoints,
+          'is-open': isCircleMenuOpen,
+        }"
+        @click="toggleCircleMenu"
+        :disabled="isEditingLocked"
+      >
+        <span>圆</span>
         <span class="menu-caret">▾</span>
       </button>
     </div>
@@ -622,6 +684,18 @@ onUnmounted(() => {
         @click="selectCreateRayMode"
       >
         射线
+      </button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="isCircleMenuOpen" ref="circlePanelRef" class="menu-panel" :style="circleMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateCircleThreePoints }"
+        @click="selectCreateThreePointCircleMode"
+      >
+        三点圆
       </button>
     </div>
   </Teleport>

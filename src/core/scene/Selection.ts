@@ -4,6 +4,7 @@ export class Selection {
   lines = new Set<string>()
   straightLines = new Set<string>()
   rays = new Set<string>()
+  circles = new Set<string>()
   faces = new Set<string>()
 
   clear() {
@@ -11,6 +12,7 @@ export class Selection {
     this.lines.clear()
     this.straightLines.clear()
     this.rays.clear()
+    this.circles.clear()
     this.faces.clear()
   }
 
@@ -50,6 +52,15 @@ export class Selection {
     this.rays.delete(id)
   }
 
+  selectCircle(id: string, additive = false) {
+    if (!additive) this.clear()
+    this.circles.add(id)
+  }
+
+  deselectCircle(id: string) {
+    this.circles.delete(id)
+  }
+
   selectFace(id: string, additive = false) {
     if (!additive) this.clear()
     this.faces.add(id)
@@ -65,6 +76,7 @@ export class Selection {
       this.lines.size === 0 &&
       this.straightLines.size === 0 &&
       this.rays.size === 0 &&
+      this.circles.size === 0 &&
       this.faces.size === 0
     )
   }

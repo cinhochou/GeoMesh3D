@@ -1,4 +1,4 @@
-﻿<!-- src/components/SideBar.vue -->
+<!-- src/components/SideBar.vue -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -7,6 +7,7 @@ import { Editor } from '../core/editor/Editor'
 import { Vec3 } from '../core/geometry/Vec3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
+import type { Circle3 } from '../core/geometry/Circle3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PlanarFace } from '../core/geometry/Plane'
@@ -57,6 +58,12 @@ const selectedFaces = computed(() => {
     .map((id) => props.scene.faces.get(id))
     .filter((face): face is PlanarFace => face !== undefined)
 })
+const selectedCircles = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.circles]
+    .map((id) => props.scene.circles.get(id))
+    .filter((circle): circle is Circle3 => circle !== undefined)
+})
 const pointsInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.points.values()]
@@ -76,6 +83,10 @@ const raysInScene = computed(() => {
 const facesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.faces.values()]
+})
+const circlesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.circles.values()]
 })
 const hexahedronsInScene = computed(() => {
   void commandRevision.value
@@ -103,7 +114,7 @@ const selectedEditableFaces = computed(() =>
 )
 
 const editing = ref<{
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -129,6 +140,10 @@ const isLineConstraintLocked = (line: Line3 | undefined) =>
         (isPointCoordinateLocked(line.p1) && isPointCoordinateLocked(line.p2))),
   )
 const hasCubeConstraint = (point: Point3 | undefined) => Boolean(point?.cubeId)
+const hasCircleConstraint = (point: Point3 | undefined) =>
+  Boolean(point?.circleId && point?.circleRole === 'center')
+const getCircleCenterPoint = (circleId: string) =>
+  [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarFace | undefined) => Boolean(face?.cubeId)
 
 const editPoint = reactive({
@@ -180,6 +195,17 @@ const editFace = reactive({
   areaLocked: false,
   edgeLengths: [] as string[],
 })
+const editCircle = reactive({
+  name: '',
+  nameVisible: true,
+  valueVisible: false,
+  visible: true,
+  userLocked: false,
+  centerVisible: true,
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+  p3: { x: '', y: '', z: '' },
+})
 const editHexahedron = reactive({
   nameSuffix: '',
   valueVisible: false,
@@ -212,6 +238,7 @@ const selectedEditableFaceIds = computed(() =>
   selectedEditableFaces.value.map((f) => f?.id).filter(Boolean),
 )
 const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).filter(Boolean))
+const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id).filter(Boolean))
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const totalContentCount = computed(
   () =>
@@ -219,18 +246,20 @@ const totalContentCount = computed(
     linesInScene.value.length +
     straightLinesInScene.value.length +
     raysInScene.value.length +
+    circlesInScene.value.length +
     facesInScene.value.length +
     hexahedronsInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
 const contentGroupLabels: Record<
-  'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron',
+  'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron',
   string
 > = {
   point: '点',
   line: '线段',
   straightLine: '直线',
   ray: '射线',
+  circle: '圆',
   face: '面',
   hexahedron: '立体',
 }
@@ -239,7 +268,7 @@ const setContentGroupsCollapsed = (collapsed: boolean) => {
 }
 
 const toggleContentGroup = (
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'hexahedron',
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron',
 ) => {
   if (!canCollapseContentGroups.value) return
   uiStore.toggleContentGroup(type)
@@ -291,6 +320,14 @@ const selectFaceFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectFace(id)
+}
+
+const selectCircleFromContent = (id: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectCircle(id)
 }
 
 const selectHexahedronFromContent = (cubeId: string) => {
@@ -398,6 +435,7 @@ watch(
     selectedStraightLineIds,
     selectedRayIds,
     selectedEditableFaceIds,
+    selectedCircleIds,
     selectedHexahedronIds,
   ],
   () => {
@@ -408,6 +446,7 @@ watch(
     if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
     if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
     if (type === 'face' && !selectedEditableFaceIds.value.includes(id)) editing.value = null
+    if (type === 'circle' && !selectedCircleIds.value.includes(id)) editing.value = null
     if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
   },
 )
@@ -776,6 +815,28 @@ const startEditFace = (face: PlanarFace | undefined) => {
     .getBoundaryPoints(props.scene.points)
     .map((_, index) => toFixed2(face.getEdgeLength(props.scene.points, index)))
 }
+const startEditCircle = (c: Circle3 | undefined) => {
+  if (!c) return
+  editing.value = { type: 'circle', id: c.id }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editCircle.name = c.name ?? ''
+  editCircle.nameVisible = c.nameVisible !== false
+  editCircle.valueVisible = c.valueVisible === true
+  editCircle.visible = c.visible !== false
+  editCircle.userLocked = props.editor.isCircleLocked(c)
+  editCircle.centerVisible = c.centerVisible !== false
+  editCircle.p1.x = toFixed2(c.p1.position.x)
+  editCircle.p1.y = toFixed2(c.p1.position.y)
+  editCircle.p1.z = toFixed2(c.p1.position.z)
+  editCircle.p2.x = toFixed2(c.p2.position.x)
+  editCircle.p2.y = toFixed2(c.p2.position.y)
+  editCircle.p2.z = toFixed2(c.p2.position.z)
+  editCircle.p3.x = toFixed2(c.p3.position.x)
+  editCircle.p3.y = toFixed2(c.p3.position.y)
+  editCircle.p3.z = toFixed2(c.p3.position.z)
+}
 const startEditHexahedron = (cubeId: string) => {
   const constraint = props.editor.getCubeConstraint(cubeId)
   if (!constraint) return
@@ -983,6 +1044,21 @@ const applyEditFace = () => {
     props.editor.setFaceAreaLockState(editing.value.id, editFace.areaLocked)
   }
 }
+const applyEditCircle = () => {
+  if (!editing.value || editing.value.type !== 'circle') return
+  const circle = props.scene.circles.get(editing.value.id)
+  if (!circle) return
+  props.editor.updateCircle(editing.value.id, {
+    name: editCircle.name,
+    nameVisible: editCircle.nameVisible,
+    valueVisible: editCircle.valueVisible,
+    visible: editCircle.visible,
+    centerVisible: editCircle.centerVisible,
+  })
+  if (editCircle.userLocked !== props.editor.isCircleLocked(circle)) {
+    props.editor.setCircleLockState(editing.value.id, editCircle.userLocked)
+  }
+}
 const getEditingHexahedronState = () => {
   if (!editing.value || editing.value.type !== 'hexahedron') return null
   const constraint = props.editor.getCubeConstraint(editing.value.id)
@@ -994,6 +1070,48 @@ const getEditingHexahedronState = () => {
     constraint,
     ownerPoints: [ownerPoints[0]!, ownerPoints[1]!] as [Point3, Point3],
   }
+}
+const getEditingCircleState = () => {
+  if (!editing.value || editing.value.type !== 'circle') return null
+  const circle = props.scene.circles.get(editing.value.id)
+  if (!circle) return null
+  return { circleId: editing.value.id, circle }
+}
+const applyCirclePointCoord = (pointKey: 'p1' | 'p2' | 'p3') => {
+  const state = getEditingCircleState()
+  if (!state) return
+  const point = state.circle[pointKey]
+  const nextPosition = {
+    x: Number(editCircle[pointKey].x),
+    y: Number(editCircle[pointKey].y),
+    z: Number(editCircle[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  )
+    return
+  if (isPointCoordinateLocked(point)) return
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+}
+const nudgeCirclePointCoord = (
+  pointKey: 'p1' | 'p2' | 'p3',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`circle.${pointKey}.${axis}`, direction)
+  if (nextValue === null) return
+  editCircle[pointKey][axis] = nextValue
+  applyCirclePointCoord(pointKey)
+}
+const handleCirclePointCoordFocus = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`circle.${pointKey}.${axis}`, true)
+}
+const handleCirclePointCoordBlur = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y' | 'z') => {
+  editCircle[pointKey][axis] = normalizeCoord(editCircle[pointKey][axis])
+  setCoordFocus(`circle.${pointKey}.${axis}`, false)
+  applyCirclePointCoord(pointKey)
 }
 const applyHexahedronMeta = () => {
   const state = getEditingHexahedronState()
@@ -1085,7 +1203,7 @@ const getFaceEdgeLabel = (face: PlanarFace, edgeIndex: number) => {
   const current = points[edgeIndex]
   const next = points[(edgeIndex + 1) % points.length]
   if (!current || !next) return `边 ${edgeIndex + 1}`
-  return `${current.name}-${next.name}`
+  return `${current.name}${next.name}`
 }
 const getFaceEdgeTargets = (faceId: string) => {
   const face = props.scene.faces.get(faceId)
@@ -1301,6 +1419,44 @@ watch(
 
 watch(
   () => {
+    if (!editing.value || editing.value.type !== 'circle') return null
+    const circle = props.scene.circles.get(editing.value.id)
+    if (!circle) return null
+    return {
+      name: circle.name ?? '',
+      nameVisible: circle.nameVisible !== false,
+      valueVisible: circle.valueVisible === true,
+      visible: circle.visible !== false,
+      userLocked: props.editor.isCircleLocked(circle),
+      centerVisible: circle.centerVisible !== false,
+      p1: { x: circle.p1.position.x, y: circle.p1.position.y, z: circle.p1.position.z },
+      p2: { x: circle.p2.position.x, y: circle.p2.position.y, z: circle.p2.position.z },
+      p3: { x: circle.p3.position.x, y: circle.p3.position.y, z: circle.p3.position.z },
+    }
+  },
+  (nextCircle) => {
+    if (!nextCircle) return
+    editCircle.name = nextCircle.name
+    editCircle.nameVisible = nextCircle.nameVisible
+    editCircle.valueVisible = nextCircle.valueVisible
+    editCircle.visible = nextCircle.visible
+    editCircle.userLocked = nextCircle.userLocked
+    editCircle.centerVisible = nextCircle.centerVisible
+    if (!focusedCoord['circle.p1.x']) editCircle.p1.x = toFixed2(nextCircle.p1.x)
+    if (!focusedCoord['circle.p1.y']) editCircle.p1.y = toFixed2(nextCircle.p1.y)
+    if (!focusedCoord['circle.p1.z']) editCircle.p1.z = toFixed2(nextCircle.p1.z)
+    if (!focusedCoord['circle.p2.x']) editCircle.p2.x = toFixed2(nextCircle.p2.x)
+    if (!focusedCoord['circle.p2.y']) editCircle.p2.y = toFixed2(nextCircle.p2.y)
+    if (!focusedCoord['circle.p2.z']) editCircle.p2.z = toFixed2(nextCircle.p2.z)
+    if (!focusedCoord['circle.p3.x']) editCircle.p3.x = toFixed2(nextCircle.p3.x)
+    if (!focusedCoord['circle.p3.y']) editCircle.p3.y = toFixed2(nextCircle.p3.y)
+    if (!focusedCoord['circle.p3.z']) editCircle.p3.z = toFixed2(nextCircle.p3.z)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
     if (!editing.value || editing.value.type !== 'hexahedron') return null
     const constraint = props.editor.getCubeConstraint(editing.value.id)
     if (!constraint) return null
@@ -1390,6 +1546,7 @@ onUnmounted(() => {
         selectedLines.length > 0 ||
         selectedStraightLines.length > 0 ||
         selectedRays.length > 0 ||
+        selectedCircles.length > 0 ||
         selectedEditableFaces.length > 0 ||
         selectedHexahedrons.length > 0
       "
@@ -1404,6 +1561,7 @@ onUnmounted(() => {
             selectedLines.length === 0 &&
             selectedStraightLines.length === 0 &&
             selectedRays.length === 0 &&
+            selectedCircles.length === 0 &&
             selectedEditableFaces.length === 0 &&
             selectedHexahedrons.length === 0
           "
@@ -1417,1550 +1575,122 @@ onUnmounted(() => {
           class="selectedPoint-info"
           @dblclick="startEditPoint(p)"
         >
-        <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
-              {{ editPoint.nameVisible ? '隐藏' : '显示' }}
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editPoint.valueVisible" @change="applyEditPoint" />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" />
-              锁定
-            </label>
-          </div>
-          <div class="coord-row">
-            <div class="axis-field">
-              <label>x</label>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('x', 'down')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('point.x', el)"
-                  v-model="editPoint.x"
-                  @input="applyEditPoint"
-                  @focus="handlePointCoordFocus('x')"
-                  @blur="handlePointCoordBlur('x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(p!)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('x', 'up')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  +
-                </button>
+          <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
+                {{ editPoint.nameVisible ? '隐藏' : '显示' }}
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editPoint.valueVisible" @change="applyEditPoint" />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" :disabled="hasCircleConstraint(p!)" />
+                锁定
+              </label>
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('x', 'down')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('point.x', el)"
+                    v-model="editPoint.x"
+                    @input="applyEditPoint"
+                    @focus="handlePointCoordFocus('x')"
+                    @blur="handlePointCoordBlur('x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('x', 'up')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-            </div>
-            <div class="axis-field">
-              <label>y</label>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('y', 'down')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('point.y', el)"
-                  v-model="editPoint.y"
-                  @input="applyEditPoint"
-                  @focus="handlePointCoordFocus('y')"
-                  @blur="handlePointCoordBlur('y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(p!)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('y', 'up')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  +
-                </button>
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('y', 'down')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('point.y', el)"
+                    v-model="editPoint.y"
+                    @input="applyEditPoint"
+                    @focus="handlePointCoordFocus('y')"
+                    @blur="handlePointCoordBlur('y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('y', 'up')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-            </div>
-            <div class="axis-field">
-              <label>z</label>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('z', 'down')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('point.z', el)"
-                  v-model="editPoint.z"
-                  @input="applyEditPoint"
-                  @focus="handlePointCoordFocus('z')"
-                  @blur="handlePointCoordBlur('z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(p!)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgePointCoord('z', 'up')"
-                  :disabled="isPointCoordinateLocked(p!)"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else>
-          <div>
-            点{{ p!.name ?? '' }}
-            <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
-            <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge">交点约束</span>
-            <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
-              getSolidConstraintBadge(p!.cubeId)
-            }}</span>
-          </div>
-          <div>
-            x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
-            {{ p!.position.z.toFixed(2) }}
-          </div>
-          <div v-if="getPointIntersectionSummary(p!)">
-            来源：{{ getPointIntersectionSummary(p!)?.left }} ×
-            {{ getPointIntersectionSummary(p!)?.right }}
-            {{ getPointIntersectionSummary(p!)?.valid ? '' : '（约束失效）' }}
-          </div>
-        </div>
-        </div>
-
-        <div
-        v-for="l in selectedLines"
-        :key="l!.id"
-        class="selectedLine-info"
-        @dblclick="startEditLine(l)"
-      >
-        <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editLine.name" @input="applyEditLine" />
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editLine.visible" @change="applyEditLine" />
-              线段显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
-              名称显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editLine.valueVisible" @change="applyEditLine" />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editLine.userLocked" @change="applyEditLine" />
-              锁定
-            </label>
-          </div>
-          <div class="name-row length-row">
-            <label>长度</label>
-            <div class="coord-input compact-length-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeLineLength('down')"
-                :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.lockedLength', el)"
-                v-model="editLine.lockedLength"
-                @input="applyEditLine"
-                @focus="handleLineLengthFocus"
-                @blur="handleLineLengthBlur"
-                step="0.5"
-                min="0"
-                :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeLineLength('up')"
-                :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
-              >
-                +
-              </button>
-            </div>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editLine.lengthLocked"
-                @change="applyEditLine"
-                :disabled="isLineConstraintLocked(l!)"
-              />
-              {{ isCompactLineEditor ? '约束' : '长度约束' }}
-            </label>
-          </div>
-          <div
-            class="line-editor-grid"
-            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
-          >
-            <div class="line-editor-head"></div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                点{{ l!.p1.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">点A</span>
-              <span v-if="isPointCoordinateLocked(l!.p1)" class="lock-badge">🔒</span>
-            </div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                点{{ l!.p2.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">点B</span>
-              <span v-if="isPointCoordinateLocked(l!.p2)" class="lock-badge">🔒</span>
-            </div>
-
-            <div class="line-axis-label">x</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'x', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p1.x', el)"
-                v-model="editLine.p1.x"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p1', 'x')"
-                @blur="handleLineCoordBlur('p1', 'x')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'x', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'x', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p2.x', el)"
-                v-model="editLine.p2.x"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p2', 'x')"
-                @blur="handleLineCoordBlur('p2', 'x')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'x', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">y</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'y', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p1.y', el)"
-                v-model="editLine.p1.y"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p1', 'y')"
-                @blur="handleLineCoordBlur('p1', 'y')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'y', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'y', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p2.y', el)"
-                v-model="editLine.p2.y"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p2', 'y')"
-                @blur="handleLineCoordBlur('p2', 'y')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'y', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">z</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'z', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p1.z', el)"
-                v-model="editLine.p1.z"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p1', 'z')"
-                @blur="handleLineCoordBlur('p1', 'z')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p1')"
-                @click="nudgeLineCoord('p1', 'z', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'z', 'down')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('line.p2.z', el)"
-                v-model="editLine.p2.z"
-                @input="applyEditLine"
-                @focus="handleLineCoordFocus('p2', 'z')"
-                @blur="handleLineCoordBlur('p2', 'z')"
-                step="0.5"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepLineCoordExpanded('p2')"
-                @click="nudgeLineCoord('p2', 'z', 'up')"
-                :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else>
-          <div>
-            线段{{ l!.name ?? '' }}
-            <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
-          </div>
-          <div>
-            长度：{{ l!.getLength().toFixed(2) }}
-            <span v-if="l!.lengthLocked" class="constraint-badge">受约束</span>
-          </div>
-          <div>
-            点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
-            {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
-            {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
-          </div>
-        </div>
-        </div>
-
-      <div
-        v-for="sl in selectedStraightLines"
-        :key="sl!.id"
-        class="selectedStraightLine-info"
-        @dblclick="startEditStraightLine(sl)"
-      >
-        <div v-if="editing?.type === 'straightLine' && editing?.id === sl!.id" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editStraightLine.name" @input="applyEditStraightLine" />
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editStraightLine.visible"
-                @change="applyEditStraightLine"
-              />
-              直线显示
-            </label>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editStraightLine.nameVisible"
-                @change="applyEditStraightLine"
-              />
-              名称显示
-            </label>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editStraightLine.valueVisible"
-                @change="applyEditStraightLine"
-              />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editStraightLine.userLocked"
-                @change="applyEditStraightLine"
-              />
-              锁定
-            </label>
-          </div>
-          <div class="name-row">
-            <label>显示长度</label>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeStraightLineDisplayLength('down')"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.displayLength', el)"
-                v-model="editStraightLine.displayLength"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineDisplayLengthFocus"
-                @blur="handleStraightLineDisplayLengthBlur"
-                step="1"
-                min="2"
-              />
-              <button type="button" class="step-btn" @click="nudgeStraightLineDisplayLength('up')">
-                +
-              </button>
-            </div>
-          </div>
-          <div
-            class="line-editor-grid"
-            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
-          >
-            <div class="line-editor-head"></div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                点{{ sl!.p1.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">点A</span>
-              <span v-if="isPointCoordinateLocked(sl!.p1)" class="lock-badge">🔒</span>
-            </div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                点{{ sl!.p2.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">点B</span>
-              <span v-if="isPointCoordinateLocked(sl!.p2)" class="lock-badge">🔒</span>
-            </div>
-
-            <div class="line-axis-label">x</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'x', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p1.x', el)"
-                v-model="editStraightLine.p1.x"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p1', 'x')"
-                @blur="handleStraightLineCoordBlur('p1', 'x')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'x', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'x', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p2.x', el)"
-                v-model="editStraightLine.p2.x"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p2', 'x')"
-                @blur="handleStraightLineCoordBlur('p2', 'x')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'x', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">y</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'y', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p1.y', el)"
-                v-model="editStraightLine.p1.y"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p1', 'y')"
-                @blur="handleStraightLineCoordBlur('p1', 'y')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'y', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'y', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p2.y', el)"
-                v-model="editStraightLine.p2.y"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p2', 'y')"
-                @blur="handleStraightLineCoordBlur('p2', 'y')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'y', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">z</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'z', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p1.z', el)"
-                v-model="editStraightLine.p1.z"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p1', 'z')"
-                @blur="handleStraightLineCoordBlur('p1', 'z')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
-                @click="nudgeStraightLineCoord('p1', 'z', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed':
-                  isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'z', 'down')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('straightLine.p2.z', el)"
-                v-model="editStraightLine.p2.z"
-                @input="applyEditStraightLine"
-                @focus="handleStraightLineCoordFocus('p2', 'z')"
-                @blur="handleStraightLineCoordBlur('p2', 'z')"
-                step="0.5"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
-                @click="nudgeStraightLineCoord('p2', 'z', 'up')"
-                :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else>
-          <div>
-            直线{{ sl!.name ?? '' }}
-            <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
-          </div>
-          <div>显示长度：{{ sl!.displayLength.toFixed(2) }}</div>
-          <div>
-            点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
-            {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
-            {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            方向向量（{{ getStraightLineDirection(sl!).x.toFixed(2) }},
-            {{ getStraightLineDirection(sl!).y.toFixed(2) }},
-            {{ getStraightLineDirection(sl!).z.toFixed(2) }}）
-          </div>
-          <div>
-            显示起点（{{ getStraightLineDisplayPoints(sl!).start.x.toFixed(2) }},
-            {{ getStraightLineDisplayPoints(sl!).start.y.toFixed(2) }},
-            {{ getStraightLineDisplayPoints(sl!).start.z.toFixed(2) }}）
-          </div>
-          <div>
-            显示终点（{{ getStraightLineDisplayPoints(sl!).end.x.toFixed(2) }},
-            {{ getStraightLineDisplayPoints(sl!).end.y.toFixed(2) }},
-            {{ getStraightLineDisplayPoints(sl!).end.z.toFixed(2) }}）
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-for="r in selectedRays"
-        :key="r!.id"
-        class="selectedRay-info"
-        @dblclick="startEditRay(r)"
-      >
-        <div v-if="editing?.type === 'ray' && editing?.id === r!.id" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editRay.name" @input="applyEditRay" />
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editRay.visible" @change="applyEditRay" />
-              {{ editRay.visible ? '射线显示' : '射线隐藏' }}
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editRay.nameVisible" @change="applyEditRay" />
-              {{ editRay.nameVisible ? '名称显示' : '名称隐藏' }}
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editRay.valueVisible" @change="applyEditRay" />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editRay.userLocked" @change="applyEditRay" />
-              锁定
-            </label>
-          </div>
-          <div class="name-row">
-            <label>长度</label>
-            <div class="coord-input">
-              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.displayLength', el)"
-                v-model="editRay.displayLength"
-                @input="applyEditRay"
-                @focus="handleRayDisplayLengthFocus"
-                @blur="handleRayDisplayLengthBlur"
-                step="1"
-                min="1"
-              />
-              <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">+</button>
-            </div>
-          </div>
-          <div
-            class="line-editor-grid"
-            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
-          >
-            <div class="line-editor-head"></div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                起点{{ r!.p1.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">起点{{ r!.p1.name ?? '' }}</span>
-              <span v-if="isPointCoordinateLocked(r!.p1)" class="lock-badge">🔒</span>
-            </div>
-            <div class="line-editor-head">
-              <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                方向点{{ r!.p2.name ?? '' }}(x,y,z)
-              </span>
-              <span v-else class="line-editor-title-short">方向点{{ r!.p2.name ?? '' }}</span>
-              <span v-if="isPointCoordinateLocked(r!.p2)" class="lock-badge">🔒</span>
-            </div>
-
-            <div class="line-axis-label">x</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'x', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p1.x', el)"
-                v-model="editRay.p1.x"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p1', 'x')"
-                @blur="handleRayCoordBlur('p1', 'x')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'x', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'x', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p2.x', el)"
-                v-model="editRay.p2.x"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p2', 'x')"
-                @blur="handleRayCoordBlur('p2', 'x')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'x', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">y</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'y', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p1.y', el)"
-                v-model="editRay.p1.y"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p1', 'y')"
-                @blur="handleRayCoordBlur('p1', 'y')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'y', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'y', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p2.y', el)"
-                v-model="editRay.p2.y"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p2', 'y')"
-                @blur="handleRayCoordBlur('p2', 'y')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'y', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="line-axis-label">z</div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'z', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p1.z', el)"
-                v-model="editRay.p1.z"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p1', 'z')"
-                @blur="handleRayCoordBlur('p1', 'z')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p1')"
-                @click="nudgeRayCoord('p1', 'z', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
-              >
-                +
-              </button>
-            </div>
-            <div
-              class="coord-input"
-              :class="{
-                'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-              }"
-            >
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'z', 'down')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('ray.p2.z', el)"
-                v-model="editRay.p2.z"
-                @input="applyEditRay"
-                @focus="handleRayCoordFocus('p2', 'z')"
-                @blur="handleRayCoordBlur('p2', 'z')"
-                step="0.5"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @pointerdown.prevent="keepRayCoordExpanded('p2')"
-                @click="nudgeRayCoord('p2', 'z', 'up')"
-                :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else>
-          <div>
-            射线{{ r!.name ?? '' }}
-            <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
-          </div>
-          <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
-          <div>
-            起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
-            {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
-            {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
-          </div>
-          <div>
-            方向向量（{{ getRayDirection(r!).x.toFixed(2) }},
-            {{ getRayDirection(r!).y.toFixed(2) }}, {{ getRayDirection(r!).z.toFixed(2) }}）
-          </div>
-          <div>
-            显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }},
-            {{ getRayDisplayEnd(r!).y.toFixed(2) }}, {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-for="cube in selectedHexahedrons"
-        :key="cube.cubeId"
-        class="selectedFace-info"
-        @dblclick="startEditHexahedron(cube.cubeId)"
-      >
-        <div v-if="editing?.type === 'hexahedron' && editing?.id === cube.cubeId" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editHexahedron.nameSuffix" @input="applyHexahedronMeta" />
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editHexahedron.userLocked"
-                @change="applyHexahedronMeta"
-              />
-              锁定
-            </label>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editHexahedron.valueVisible"
-                @change="applyHexahedronMeta"
-              />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input
-                type="checkbox"
-                v-model="editHexahedron.edgeLengthLocked"
-                @change="applyHexahedronMeta"
-              />
-              边长锁定
-            </label>
-          </div>
-          <div class="face-metric-row">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
-          <div class="length-row">
-            <label>边长：</label>
-            <div class="coord-input compact-length-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronEdgeLength('down')"
-                :disabled="isHexahedronEdgeLengthInputDisabled()"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                min="1"
-                step="0.5"
-                :ref="(el) => setCoordInputRef('hexa.edgeLength', el)"
-                v-model="editHexahedron.edgeLength"
-                @input="applyHexahedronEdgeLength"
-                @focus="handleHexahedronEdgeLengthFocus"
-                @blur="handleHexahedronEdgeLengthBlur"
-                :disabled="isHexahedronEdgeLengthInputDisabled()"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronEdgeLength('up')"
-                :disabled="isHexahedronEdgeLengthInputDisabled()"
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div class="face-metric-row">原始点坐标</div>
-          <div
-            class="line-editor-grid"
-            :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
-          >
-            <div class="line-editor-head"></div>
-            <div class="line-editor-head">
-              {{ getHexahedronOwnerPoints(cube.cubeId)[0]?.name ?? 'A' }}(x,y,z)
-            </div>
-            <div class="line-editor-head">
-              {{ getHexahedronOwnerPoints(cube.cubeId)[1]?.name ?? 'B' }}(x,y,z)
-            </div>
-            <div class="line-axis-label">x</div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'x', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p1.x', el)"
-                v-model="editHexahedron.p1.x"
-                @input="applyHexahedronOwnerPoint('p1')"
-                @focus="handleHexahedronOwnerCoordFocus('p1', 'x')"
-                @blur="handleHexahedronOwnerCoordBlur('p1', 'x')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'x', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                +
-              </button>
-            </div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'x', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p2.x', el)"
-                v-model="editHexahedron.p2.x"
-                @input="applyHexahedronOwnerPoint('p2')"
-                @focus="handleHexahedronOwnerCoordFocus('p2', 'x')"
-                @blur="handleHexahedronOwnerCoordBlur('p2', 'x')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'x', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                +
-              </button>
-            </div>
-            <div class="line-axis-label">y</div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'y', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p1.y', el)"
-                v-model="editHexahedron.p1.y"
-                @input="applyHexahedronOwnerPoint('p1')"
-                @focus="handleHexahedronOwnerCoordFocus('p1', 'y')"
-                @blur="handleHexahedronOwnerCoordBlur('p1', 'y')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'y', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                +
-              </button>
-            </div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'y', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p2.y', el)"
-                v-model="editHexahedron.p2.y"
-                @input="applyHexahedronOwnerPoint('p2')"
-                @focus="handleHexahedronOwnerCoordFocus('p2', 'y')"
-                @blur="handleHexahedronOwnerCoordBlur('p2', 'y')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'y', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                +
-              </button>
-            </div>
-            <div class="line-axis-label">z</div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'z', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p1.z', el)"
-                v-model="editHexahedron.p1.z"
-                @input="applyHexahedronOwnerPoint('p1')"
-                @focus="handleHexahedronOwnerCoordFocus('p1', 'z')"
-                @blur="handleHexahedronOwnerCoordBlur('p1', 'z')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p1', 'z', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
-              >
-                +
-              </button>
-            </div>
-            <div class="coord-input">
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'z', 'down')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                :ref="(el) => setCoordInputRef('hexa.p2.z', el)"
-                v-model="editHexahedron.p2.z"
-                @input="applyHexahedronOwnerPoint('p2')"
-                @focus="handleHexahedronOwnerCoordFocus('p2', 'z')"
-                @blur="handleHexahedronOwnerCoordBlur('p2', 'z')"
-                step="0.5"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              />
-              <button
-                type="button"
-                class="step-btn"
-                @click="nudgeHexahedronOwnerCoord('p2', 'z', 'up')"
-                :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
-              >
-                +
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else>
-          <div>
-            {{ cube.name }}
-            <span
-              v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
-              class="lock-badge"
-              >🔒</span
-            >
-          </div>
-          <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-          <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
-          <div>
-            原始点：{{
-              getHexahedronOwnerPoints(cube.cubeId)
-                .map((point) => point.name)
-                .join(' - ')
-            }}
-          </div>
-        </div>
-      </div>
-
-      <div
-        v-for="face in selectedEditableFaces"
-        :key="face!.id"
-        class="selectedFace-info"
-        @dblclick="startEditFace(face)"
-      >
-        <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
-          <div class="name-row">
-            <label>名称</label>
-            <input type="text" v-model="editFace.name" @input="applyEditFace" />
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
-              面显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
-              名称显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editFace.valueVisible" @change="applyEditFace" />
-              数值显示
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
-              锁定
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="editFace.areaLocked" @change="applyEditFace" />
-              面积锁定
-            </label>
-          </div>
-          <div class="face-metric-row">面积：{{ getFaceArea(face!).toFixed(2) }}</div>
-          <div class="face-edge-grid">
-            <div
-              v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
-              :key="`${face!.id}-edge-${edgeIndex}`"
-              class="face-edge-row axis-field"
-            >
-              <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  :disabled="editFace.areaLocked"
-                  @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'down')"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="1"
-                  :value="editFace.edgeLengths[edgeIndex]"
-                  :disabled="editFace.areaLocked"
-                  :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
-                  @input="
-                    editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value
-                  "
-                  @focus="handleFaceEdgeLengthFocus(edgeIndex)"
-                  @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  :disabled="editFace.areaLocked"
-                  @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'up')"
-                >
-                  +
-                </button>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('z', 'down')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('point.z', el)"
+                    v-model="editPoint.z"
+                    @input="applyEditPoint"
+                    @focus="handlePointCoordFocus('z')"
+                    @blur="handlePointCoordBlur('z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePointCoord('z', 'up')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-        <div v-else>
-          <div>
-            面{{ face!.name ?? '' }}
-            <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
-            <span v-if="isCubeFace(face!)" class="constraint-badge">{{
-              getSolidConstraintBadge(face!.cubeId)
-            }}</span>
-          </div>
-          <div>
-            面积：{{ getFaceArea(face!).toFixed(2) }}
-            <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
-          </div>
-          <div>
-            质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
-            {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
-          </div>
-          <div>
-            边界点：{{
-              getFaceBoundaryPoints(face!)
-                .map((p) => p.name)
-                .join(' - ')
-            }}
-          </div>
-          <div>共面点：{{ getFaceMemberPointNames(face!) }}</div>
-        </div>
-      </div>
-      </div>
-      <div
-        ref="splitPaneDividerRef"
-        class="panel-resizer"
-        :class="{ 'is-dragging': isDraggingSplitPane, 'is-disabled': !isSplitPaneEnabled }"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="调整选中区和内容区高度"
-        @pointerdown="startSplitPaneDrag"
-      >
-        <span class="panel-resizer-handle"></span>
-      </div>
-      <div class="content-heading">
-        <h3>内容</h3>
-      </div>
-      <div class="box content-box" @click.self="clearContentSelection">
-      <div
-        v-if="
-          pointsInScene.length === 0 &&
-          linesInScene.length === 0 &&
-          straightLinesInScene.length === 0 &&
-          raysInScene.length === 0 &&
-          facesInScene.length === 0
-        "
-      >
-        无
-      </div>
-      <div v-if="pointsInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.point"
-          @click="toggleContentGroup('point')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.point ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.point }}</span>
-          <span class="content-group-count">{{ pointsInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.point }}</span>
-          <span class="content-group-count">{{ pointsInScene.length }}</span>
-        </div>
-        <div
-          v-show="!collapsedContentGroups.point || !canCollapseContentGroups"
-          class="content-group-body"
-        >
-          <div
-            v-for="p in pointsInScene"
-            :key="p!.id"
-            class="point-info selectable-geo"
-            :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
-            @click="selectPointFromContent(p!.id)"
-          >
-            <div class="point-summary-line">
-              <span class="point-summary-text">
-                点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
-                {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
-              </span>
+          <div v-else>
+            <div>
+              点{{ p!.name ?? '' }}
               <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
               <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                 >交点约束</span
@@ -2968,89 +1698,666 @@ onUnmounted(() => {
               <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
                 getSolidConstraintBadge(p!.cubeId)
               }}</span>
+              <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
+            </div>
+            <div>
+              x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
+              {{ p!.position.z.toFixed(2) }}
+            </div>
+            <div v-if="getPointIntersectionSummary(p!)">
+              来源：{{ getPointIntersectionSummary(p!)?.left }} ×
+              {{ getPointIntersectionSummary(p!)?.right }}
+              {{ getPointIntersectionSummary(p!)?.valid ? '' : '（约束失效）' }}
             </div>
           </div>
         </div>
-      </div>
-      <div v-if="linesInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.line"
-          @click="toggleContentGroup('line')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.line ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.line }}</span>
-          <span class="content-group-count">{{ linesInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.line }}</span>
-          <span class="content-group-count">{{ linesInScene.length }}</span>
-        </div>
+
         <div
-          v-show="!collapsedContentGroups.line || !canCollapseContentGroups"
-          class="content-group-body"
+          v-for="l in selectedLines"
+          :key="l!.id"
+          class="selectedLine-info"
+          @dblclick="startEditLine(l)"
         >
-          <div
-            v-for="l in linesInScene"
-            :key="l!.id"
-            class="line-info selectable-geo"
-            :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
-            @click="selectLineFromContent(l!.id)"
-          >
+          <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editLine.name" @input="applyEditLine" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editLine.visible" @change="applyEditLine" />
+                线段显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editLine.nameVisible" @change="applyEditLine" />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editLine.valueVisible" @change="applyEditLine" />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editLine.userLocked" @change="applyEditLine" />
+                锁定
+              </label>
+            </div>
+            <div class="name-row length-row">
+              <label>长度</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeLineLength('down')"
+                  :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.lockedLength', el)"
+                  v-model="editLine.lockedLength"
+                  @input="applyEditLine"
+                  @focus="handleLineLengthFocus"
+                  @blur="handleLineLengthBlur"
+                  step="0.5"
+                  min="0"
+                  :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeLineLength('up')"
+                  :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
+                >
+                  +
+                </button>
+              </div>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editLine.lengthLocked"
+                  @change="applyEditLine"
+                  :disabled="isLineConstraintLocked(l!)"
+                />
+                {{ isCompactLineEditor ? '约束' : '长度约束' }}
+              </label>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ l!.p1.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点A</span>
+                <span v-if="isPointCoordinateLocked(l!.p1)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ l!.p2.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点B</span>
+                <span v-if="isPointCoordinateLocked(l!.p2)" class="lock-badge">🔒</span>
+              </div>
+
+              <div class="line-axis-label">x</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'x', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p1.x', el)"
+                  v-model="editLine.p1.x"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p1', 'x')"
+                  @blur="handleLineCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'x', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'x', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p2.x', el)"
+                  v-model="editLine.p2.x"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p2', 'x')"
+                  @blur="handleLineCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'x', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">y</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'y', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p1.y', el)"
+                  v-model="editLine.p1.y"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p1', 'y')"
+                  @blur="handleLineCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'y', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'y', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p2.y', el)"
+                  v-model="editLine.p2.y"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p2', 'y')"
+                  @blur="handleLineCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'y', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">z</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'z', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p1.z', el)"
+                  v-model="editLine.p1.z"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p1', 'z')"
+                  @blur="handleLineCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
+                  @click="nudgeLineCoord('p1', 'z', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'z', 'down')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('line.p2.z', el)"
+                  v-model="editLine.p2.z"
+                  @input="applyEditLine"
+                  @focus="handleLineCoordFocus('p2', 'z')"
+                  @blur="handleLineCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
+                  @click="nudgeLineCoord('p2', 'z', 'up')"
+                  :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
               线段{{ l!.name ?? '' }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
             </div>
             <div>
-              <div>
-                点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
-                {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
-              </div>
-              <div>
-                点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
-                {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
-              </div>
+              长度：{{ l!.getLength().toFixed(2) }}
+              <span v-if="l!.lengthLocked" class="constraint-badge">受约束</span>
+            </div>
+            <div>
+              点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+              {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+              {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
             </div>
           </div>
         </div>
-      </div>
-      <div v-if="straightLinesInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.straightLine"
-          @click="toggleContentGroup('straightLine')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.straightLine ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
-          <span class="content-group-count">{{ straightLinesInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
-          <span class="content-group-count">{{ straightLinesInScene.length }}</span>
-        </div>
+
         <div
-          v-show="!collapsedContentGroups.straightLine || !canCollapseContentGroups"
-          class="content-group-body"
+          v-for="sl in selectedStraightLines"
+          :key="sl!.id"
+          class="selectedStraightLine-info"
+          @dblclick="startEditStraightLine(sl)"
         >
-          <div
-            v-for="sl in straightLinesInScene"
-            :key="sl!.id"
-            class="straight-line-info selectable-geo"
-            :class="{ 'is-selected': selectedStraightLineIds.includes(sl!.id) }"
-            @click="selectStraightLineFromContent(sl!.id)"
-          >
+          <div v-if="editing?.type === 'straightLine' && editing?.id === sl!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editStraightLine.name" @input="applyEditStraightLine" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editStraightLine.visible"
+                  @change="applyEditStraightLine"
+                />
+                直线显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editStraightLine.nameVisible"
+                  @change="applyEditStraightLine"
+                />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editStraightLine.valueVisible"
+                  @change="applyEditStraightLine"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editStraightLine.userLocked"
+                  @change="applyEditStraightLine"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="name-row">
+              <label>显示长度</label>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeStraightLineDisplayLength('down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.displayLength', el)"
+                  v-model="editStraightLine.displayLength"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineDisplayLengthFocus"
+                  @blur="handleStraightLineDisplayLengthBlur"
+                  step="1"
+                  min="2"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeStraightLineDisplayLength('up')"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ sl!.p1.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点A</span>
+                <span v-if="isPointCoordinateLocked(sl!.p1)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ sl!.p2.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点B</span>
+                <span v-if="isPointCoordinateLocked(sl!.p2)" class="lock-badge">🔒</span>
+              </div>
+
+              <div class="line-axis-label">x</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'x', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p1.x', el)"
+                  v-model="editStraightLine.p1.x"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p1', 'x')"
+                  @blur="handleStraightLineCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'x', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'x', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p2.x', el)"
+                  v-model="editStraightLine.p2.x"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p2', 'x')"
+                  @blur="handleStraightLineCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'x', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">y</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'y', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p1.y', el)"
+                  v-model="editStraightLine.p1.y"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p1', 'y')"
+                  @blur="handleStraightLineCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'y', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'y', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p2.y', el)"
+                  v-model="editStraightLine.p2.y"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p2', 'y')"
+                  @blur="handleStraightLineCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'y', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">z</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'z', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p1.z', el)"
+                  v-model="editStraightLine.p1.z"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p1', 'z')"
+                  @blur="handleStraightLineCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
+                  @click="nudgeStraightLineCoord('p1', 'z', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed':
+                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'z', 'down')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('straightLine.p2.z', el)"
+                  v-model="editStraightLine.p2.z"
+                  @input="applyEditStraightLine"
+                  @focus="handleStraightLineCoordFocus('p2', 'z')"
+                  @blur="handleStraightLineCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
+                  @click="nudgeStraightLineCoord('p2', 'z', 'up')"
+                  :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
               直线{{ sl!.name ?? '' }}
               <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
             </div>
+            <div>显示长度：{{ sl!.displayLength.toFixed(2) }}</div>
             <div>
               点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
               {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
@@ -3059,42 +2366,315 @@ onUnmounted(() => {
               点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
               {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
             </div>
+            <div>
+              方向向量（{{ getStraightLineDirection(sl!).x.toFixed(2) }},
+              {{ getStraightLineDirection(sl!).y.toFixed(2) }},
+              {{ getStraightLineDirection(sl!).z.toFixed(2) }}）
+            </div>
+            <div>
+              显示起点（{{ getStraightLineDisplayPoints(sl!).start.x.toFixed(2) }},
+              {{ getStraightLineDisplayPoints(sl!).start.y.toFixed(2) }},
+              {{ getStraightLineDisplayPoints(sl!).start.z.toFixed(2) }}）
+            </div>
+            <div>
+              显示终点（{{ getStraightLineDisplayPoints(sl!).end.x.toFixed(2) }},
+              {{ getStraightLineDisplayPoints(sl!).end.y.toFixed(2) }},
+              {{ getStraightLineDisplayPoints(sl!).end.z.toFixed(2) }}）
+            </div>
           </div>
         </div>
-      </div>
-      <div v-if="raysInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.ray"
-          @click="toggleContentGroup('ray')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.ray ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
-          <span class="content-group-count">{{ raysInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
-          <span class="content-group-count">{{ raysInScene.length }}</span>
-        </div>
+
         <div
-          v-show="!collapsedContentGroups.ray || !canCollapseContentGroups"
-          class="content-group-body"
+          v-for="r in selectedRays"
+          :key="r!.id"
+          class="selectedRay-info"
+          @dblclick="startEditRay(r)"
         >
-          <div
-            v-for="r in raysInScene"
-            :key="r!.id"
-            class="ray-info selectable-geo"
-            :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
-            @click="selectRayFromContent(r!.id)"
-          >
+          <div v-if="editing?.type === 'ray' && editing?.id === r!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editRay.name" @input="applyEditRay" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editRay.visible" @change="applyEditRay" />
+                {{ editRay.visible ? '射线显示' : '射线隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editRay.nameVisible" @change="applyEditRay" />
+                {{ editRay.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editRay.valueVisible" @change="applyEditRay" />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editRay.userLocked" @change="applyEditRay" />
+                锁定
+              </label>
+            </div>
+            <div class="name-row">
+              <label>长度</label>
+              <div class="coord-input">
+                <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.displayLength', el)"
+                  v-model="editRay.displayLength"
+                  @input="applyEditRay"
+                  @focus="handleRayDisplayLengthFocus"
+                  @blur="handleRayDisplayLengthBlur"
+                  step="1"
+                  min="1"
+                />
+                <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">
+                  +
+                </button>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  起点{{ r!.p1.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">起点{{ r!.p1.name ?? '' }}</span>
+                <span v-if="isPointCoordinateLocked(r!.p1)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  方向点{{ r!.p2.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">方向点{{ r!.p2.name ?? '' }}</span>
+                <span v-if="isPointCoordinateLocked(r!.p2)" class="lock-badge">🔒</span>
+              </div>
+
+              <div class="line-axis-label">x</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'x', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p1.x', el)"
+                  v-model="editRay.p1.x"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p1', 'x')"
+                  @blur="handleRayCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'x', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'x', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p2.x', el)"
+                  v-model="editRay.p2.x"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p2', 'x')"
+                  @blur="handleRayCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'x', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">y</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'y', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p1.y', el)"
+                  v-model="editRay.p1.y"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p1', 'y')"
+                  @blur="handleRayCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'y', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'y', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p2.y', el)"
+                  v-model="editRay.p2.y"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p2', 'y')"
+                  @blur="handleRayCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'y', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">z</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'z', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p1.z', el)"
+                  v-model="editRay.p1.z"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p1', 'z')"
+                  @blur="handleRayCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
+                  @click="nudgeRayCoord('p1', 'z', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'z', 'down')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('ray.p2.z', el)"
+                  v-model="editRay.p2.z"
+                  @input="applyEditRay"
+                  @focus="handleRayCoordFocus('p2', 'z')"
+                  @blur="handleRayCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
+                  @click="nudgeRayCoord('p2', 'z', 'up')"
+                  :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
               射线{{ r!.name ?? '' }}
               <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
             </div>
+            <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
             <div>
               起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
               {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
@@ -3103,38 +2683,649 @@ onUnmounted(() => {
               方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
               {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
             </div>
+            <div>
+              方向向量（{{ getRayDirection(r!).x.toFixed(2) }},
+              {{ getRayDirection(r!).y.toFixed(2) }}, {{ getRayDirection(r!).z.toFixed(2) }}）
+            </div>
+            <div>
+              显示终点（{{ getRayDisplayEnd(r!).x.toFixed(2) }},
+              {{ getRayDisplayEnd(r!).y.toFixed(2) }}, {{ getRayDisplayEnd(r!).z.toFixed(2) }}）
+            </div>
           </div>
         </div>
-      </div>
-      <div v-if="hexahedronsInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.hexahedron"
-          @click="toggleContentGroup('hexahedron')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.hexahedron ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
-          <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
-          <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
-        </div>
+
         <div
-          v-show="!collapsedContentGroups.hexahedron || !canCollapseContentGroups"
-          class="content-group-body"
+          v-for="c in selectedCircles"
+          :key="c!.id"
+          class="selectedCircle-info"
+          @dblclick="startEditCircle(c)"
+        >
+          <div v-if="editing?.type === 'circle' && editing?.id === c!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editCircle.name" @input="applyEditCircle" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editCircle.visible" @change="applyEditCircle" />
+                {{ editCircle.visible ? '圆显示' : '圆隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editCircle.nameVisible" @change="applyEditCircle" />
+                {{ editCircle.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCircle.valueVisible"
+                  @change="applyEditCircle"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editCircle.userLocked" @change="applyEditCircle" />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCircle.centerVisible"
+                  @change="applyEditCircle"
+                />
+                圆心显示
+              </label>
+            </div>
+            <div class="face-metric-row">半径：{{ c!.getRadius().toFixed(2) }}</div>
+            <div class="face-metric-row">面积：{{ c!.getArea().toFixed(2) }}</div>
+            <div
+              class="line-editor-grid circle-editor-grid line-editor-grid--compact"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ c!.p1.name ?? 'A' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点{{ c!.p1.name ?? 'A' }}</span>
+                <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ c!.p2.name ?? 'B' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点{{ c!.p2.name ?? 'B' }}</span>
+                <span v-if="isPointCoordinateLocked(c!.p2)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  点{{ c!.p3.name ?? 'C' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">点{{ c!.p3.name ?? 'C' }}</span>
+                <span v-if="isPointCoordinateLocked(c!.p3)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p1.x', el)"
+                  v-model="editCircle.p1.x"
+                  @input="applyCirclePointCoord('p1')"
+                  @focus="handleCirclePointCoordFocus('p1', 'x')"
+                  @blur="handleCirclePointCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p2.x', el)"
+                  v-model="editCircle.p2.x"
+                  @input="applyCirclePointCoord('p2')"
+                  @focus="handleCirclePointCoordFocus('p2', 'x')"
+                  @blur="handleCirclePointCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p3.x', el)"
+                  v-model="editCircle.p3.x"
+                  @input="applyCirclePointCoord('p3')"
+                  @focus="handleCirclePointCoordFocus('p3', 'x')"
+                  @blur="handleCirclePointCoordBlur('p3', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p1.y', el)"
+                  v-model="editCircle.p1.y"
+                  @input="applyCirclePointCoord('p1')"
+                  @focus="handleCirclePointCoordFocus('p1', 'y')"
+                  @blur="handleCirclePointCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p2.y', el)"
+                  v-model="editCircle.p2.y"
+                  @input="applyCirclePointCoord('p2')"
+                  @focus="handleCirclePointCoordFocus('p2', 'y')"
+                  @blur="handleCirclePointCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p3.y', el)"
+                  v-model="editCircle.p3.y"
+                  @input="applyCirclePointCoord('p3')"
+                  @focus="handleCirclePointCoordFocus('p3', 'y')"
+                  @blur="handleCirclePointCoordBlur('p3', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p1.z', el)"
+                  v-model="editCircle.p1.z"
+                  @input="applyCirclePointCoord('p1')"
+                  @focus="handleCirclePointCoordFocus('p1', 'z')"
+                  @blur="handleCirclePointCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p1', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p2.z', el)"
+                  v-model="editCircle.p2.z"
+                  @input="applyCirclePointCoord('p2')"
+                  @focus="handleCirclePointCoordFocus('p2', 'z')"
+                  @blur="handleCirclePointCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p2', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p2)"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.p3.z', el)"
+                  v-model="editCircle.p3.z"
+                  @input="applyCirclePointCoord('p3')"
+                  @focus="handleCirclePointCoordFocus('p3', 'z')"
+                  @blur="handleCirclePointCoordBlur('p3', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeCirclePointCoord('p3', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(c!.p3)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              圆{{ c!.name ?? '' }}
+              <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
+            </div>
+            <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
+            <div>面积：{{ c!.getArea().toFixed(2) }}</div>
+            <div>
+              {{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+              {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              {{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
+              {{ c!.p2.position.y.toFixed(2) }}, {{ c!.p2.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              {{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
+              {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
+            </div>
+            <div v-if="getCircleCenterPoint(c!.id)">
+              <span class="point-summary-text">
+                {{ getCircleCenterPoint(c!.id)!.name }}（{{
+                  getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
+                }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
+                {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
+              </span>
+              <span class="lock-badge">🔒</span>
+              <span class="constraint-badge">圆心约束</span>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-for="cube in selectedHexahedrons"
+          :key="cube.cubeId"
+          class="selectedFace-info"
+          @dblclick="startEditHexahedron(cube.cubeId)"
         >
           <div
-            v-for="cube in hexahedronsInScene"
-            :key="cube.cubeId"
-            class="face-info selectable-geo"
-            :class="{ 'is-selected': selectedHexahedronIds.includes(cube.cubeId) }"
-            @click="selectHexahedronFromContent(cube.cubeId)"
+            v-if="editing?.type === 'hexahedron' && editing?.id === cube.cubeId"
+            class="edit-grid"
           >
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editHexahedron.nameSuffix" @input="applyHexahedronMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editHexahedron.userLocked"
+                  @change="applyHexahedronMeta"
+                />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editHexahedron.valueVisible"
+                  @change="applyHexahedronMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editHexahedron.edgeLengthLocked"
+                  @change="applyHexahedronMeta"
+                />
+                边长锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}
+            </div>
+            <div class="length-row">
+              <label>边长：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronEdgeLength('down')"
+                  :disabled="isHexahedronEdgeLengthInputDisabled()"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('hexa.edgeLength', el)"
+                  v-model="editHexahedron.edgeLength"
+                  @input="applyHexahedronEdgeLength"
+                  @focus="handleHexahedronEdgeLengthFocus"
+                  @blur="handleHexahedronEdgeLengthBlur"
+                  :disabled="isHexahedronEdgeLengthInputDisabled()"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronEdgeLength('up')"
+                  :disabled="isHexahedronEdgeLengthInputDisabled()"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div class="face-metric-row">原始点坐标</div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                {{ getHexahedronOwnerPoints(cube.cubeId)[0]?.name ?? 'A' }}(x,y,z)
+              </div>
+              <div class="line-editor-head">
+                {{ getHexahedronOwnerPoints(cube.cubeId)[1]?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p1.x', el)"
+                  v-model="editHexahedron.p1.x"
+                  @input="applyHexahedronOwnerPoint('p1')"
+                  @focus="handleHexahedronOwnerCoordFocus('p1', 'x')"
+                  @blur="handleHexahedronOwnerCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p2.x', el)"
+                  v-model="editHexahedron.p2.x"
+                  @input="applyHexahedronOwnerPoint('p2')"
+                  @focus="handleHexahedronOwnerCoordFocus('p2', 'x')"
+                  @blur="handleHexahedronOwnerCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p1.y', el)"
+                  v-model="editHexahedron.p1.y"
+                  @input="applyHexahedronOwnerPoint('p1')"
+                  @focus="handleHexahedronOwnerCoordFocus('p1', 'y')"
+                  @blur="handleHexahedronOwnerCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p2.y', el)"
+                  v-model="editHexahedron.p2.y"
+                  @input="applyHexahedronOwnerPoint('p2')"
+                  @focus="handleHexahedronOwnerCoordFocus('p2', 'y')"
+                  @blur="handleHexahedronOwnerCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p1.z', el)"
+                  v-model="editHexahedron.p1.z"
+                  @input="applyHexahedronOwnerPoint('p1')"
+                  @focus="handleHexahedronOwnerCoordFocus('p1', 'z')"
+                  @blur="handleHexahedronOwnerCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p1', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('hexa.p2.z', el)"
+                  v-model="editHexahedron.p2.z"
+                  @input="applyHexahedronOwnerPoint('p2')"
+                  @focus="handleHexahedronOwnerCoordFocus('p2', 'z')"
+                  @blur="handleHexahedronOwnerCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeHexahedronOwnerCoord('p2', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(getHexahedronOwnerPoints(cube.cubeId)[1])"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
               {{ cube.name }}
               <span
@@ -3154,36 +3345,81 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-      </div>
-      <div v-if="facesInScene.length > 0" class="content-group">
-        <button
-          v-if="canCollapseContentGroups"
-          type="button"
-          class="content-group-header content-group-toggle"
-          :aria-expanded="!collapsedContentGroups.face"
-          @click="toggleContentGroup('face')"
-        >
-          <span class="content-group-toggle-icon">
-            {{ collapsedContentGroups.face ? '▸' : '▾' }}
-          </span>
-          <span class="content-group-label">{{ contentGroupLabels.face }}</span>
-          <span class="content-group-count">{{ facesInScene.length }}</span>
-        </button>
-        <div v-else class="content-group-header content-group-title">
-          <span class="content-group-label">{{ contentGroupLabels.face }}</span>
-          <span class="content-group-count">{{ facesInScene.length }}</span>
-        </div>
+
         <div
-          v-show="!collapsedContentGroups.face || !canCollapseContentGroups"
-          class="content-group-body"
+          v-for="face in selectedEditableFaces"
+          :key="face!.id"
+          class="selectedFace-info"
+          @dblclick="startEditFace(face)"
         >
-          <div
-            v-for="face in facesInScene"
-            :key="face!.id"
-            class="face-info selectable-geo"
-            :class="{ 'is-selected': selectedFaceIds.includes(face!.id) }"
-            @click="selectFaceFromContent(face!.id)"
-          >
+          <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editFace.name" @input="applyEditFace" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
+                面显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.valueVisible" @change="applyEditFace" />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.areaLocked" @change="applyEditFace" />
+                面积锁定
+              </label>
+            </div>
+            <div class="face-metric-row">面积：{{ getFaceArea(face!).toFixed(2) }}</div>
+            <div class="face-edge-grid">
+              <div
+                v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
+                :key="`${face!.id}-edge-${edgeIndex}`"
+                class="face-edge-row axis-field"
+              >
+                <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    :disabled="editFace.areaLocked"
+                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'down')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="1"
+                    :value="editFace.edgeLengths[edgeIndex]"
+                    :disabled="editFace.areaLocked"
+                    :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
+                    @input="
+                      editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value
+                    "
+                    @focus="handleFaceEdgeLengthFocus(edgeIndex)"
+                    @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    :disabled="editFace.areaLocked"
+                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'up')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
               面{{ face!.name ?? '' }}
               <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
@@ -3192,15 +3428,373 @@ onUnmounted(() => {
               }}</span>
             </div>
             <div>
+              面积：{{ getFaceArea(face!).toFixed(2) }}
+              <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
+            </div>
+            <div>
+              质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
+              {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
+            </div>
+            <div>
               边界点：{{
                 getFaceBoundaryPoints(face!)
                   .map((p) => p.name)
                   .join(' - ')
               }}
             </div>
+            <div>共面点：{{ getFaceMemberPointNames(face!) }}</div>
           </div>
         </div>
       </div>
+      <div
+        ref="splitPaneDividerRef"
+        class="panel-resizer"
+        :class="{ 'is-dragging': isDraggingSplitPane, 'is-disabled': !isSplitPaneEnabled }"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="调整选中区和内容区高度"
+        @pointerdown="startSplitPaneDrag"
+      >
+        <span class="panel-resizer-handle"></span>
+      </div>
+      <div class="content-heading">
+        <h3>内容</h3>
+      </div>
+      <div class="box content-box" @click.self="clearContentSelection">
+        <div
+          v-if="
+            pointsInScene.length === 0 &&
+            linesInScene.length === 0 &&
+            straightLinesInScene.length === 0 &&
+            raysInScene.length === 0 &&
+            circlesInScene.length === 0 &&
+            facesInScene.length === 0
+          "
+        >
+          无
+        </div>
+        <div v-if="pointsInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.point"
+            @click="toggleContentGroup('point')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.point ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.point }}</span>
+            <span class="content-group-count">{{ pointsInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.point }}</span>
+            <span class="content-group-count">{{ pointsInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.point || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="p in pointsInScene"
+              :key="p!.id"
+              class="point-info selectable-geo"
+              :class="{ 'is-selected': selectedPointIds.includes(p!.id) }"
+              @click="selectPointFromContent(p!.id)"
+            >
+              <div class="point-summary-line">
+                <span class="point-summary-text">
+                  点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
+                  {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
+                </span>
+                <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
+                <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
+                  >交点约束</span
+                >
+                <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
+                  getSolidConstraintBadge(p!.cubeId)
+                }}</span>
+                <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="linesInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.line"
+            @click="toggleContentGroup('line')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.line ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.line }}</span>
+            <span class="content-group-count">{{ linesInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.line }}</span>
+            <span class="content-group-count">{{ linesInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.line || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="l in linesInScene"
+              :key="l!.id"
+              class="line-info selectable-geo"
+              :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
+              @click="selectLineFromContent(l!.id)"
+            >
+              <div>
+                线段{{ l!.name ?? '' }}
+                <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
+              </div>
+              <div>
+                <div>
+                  点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+                  {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
+                </div>
+                <div>
+                  点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+                  {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="straightLinesInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.straightLine"
+            @click="toggleContentGroup('straightLine')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.straightLine ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
+            <span class="content-group-count">{{ straightLinesInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
+            <span class="content-group-count">{{ straightLinesInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.straightLine || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="sl in straightLinesInScene"
+              :key="sl!.id"
+              class="straight-line-info selectable-geo"
+              :class="{ 'is-selected': selectedStraightLineIds.includes(sl!.id) }"
+              @click="selectStraightLineFromContent(sl!.id)"
+            >
+              <div>
+                直线{{ sl!.name ?? '' }}
+                <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+              </div>
+              <div>
+                点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
+                {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
+                {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="raysInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.ray"
+            @click="toggleContentGroup('ray')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.ray ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
+            <span class="content-group-count">{{ raysInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
+            <span class="content-group-count">{{ raysInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.ray || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="r in raysInScene"
+              :key="r!.id"
+              class="ray-info selectable-geo"
+              :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
+              @click="selectRayFromContent(r!.id)"
+            >
+              <div>
+                射线{{ r!.name ?? '' }}
+                <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+              </div>
+              <div>
+                起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+                {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+                {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="circlesInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.circle"
+            @click="toggleContentGroup('circle')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.circle ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.circle }}</span>
+            <span class="content-group-count">{{ circlesInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.circle }}</span>
+            <span class="content-group-count">{{ circlesInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.circle || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="c in circlesInScene"
+              :key="c!.id"
+              class="circle-info selectable-geo"
+              :class="{ 'is-selected': selectedCircleIds.includes(c!.id) }"
+              @click="selectCircleFromContent(c!.id)"
+            >
+              <div>
+                圆{{ c!.name ?? '' }}
+                <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
+              </div>
+              <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
+              <div>
+                构造点：{{ c!.p1.name ?? '' }}-{{ c!.p2.name ?? '' }}-{{ c!.p3.name ?? '' }}
+              </div>
+              <div v-if="getCircleCenterPoint(c!.id)">
+                <span class="point-summary-text">
+                  圆心：{{ getCircleCenterPoint(c!.id)!.name }}
+                </span>
+                <span class="lock-badge">🔒</span>
+                <span class="constraint-badge">圆心约束</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="hexahedronsInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.hexahedron"
+            @click="toggleContentGroup('hexahedron')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.hexahedron ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
+            <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
+            <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.hexahedron || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="cube in hexahedronsInScene"
+              :key="cube.cubeId"
+              class="face-info selectable-geo"
+              :class="{ 'is-selected': selectedHexahedronIds.includes(cube.cubeId) }"
+              @click="selectHexahedronFromContent(cube.cubeId)"
+            >
+              <div>
+                {{ cube.name }}
+                <span
+                  v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                  class="lock-badge"
+                  >🔒</span
+                >
+              </div>
+              <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
+              <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+              <div>
+                原始点：{{
+                  getHexahedronOwnerPoints(cube.cubeId)
+                    .map((point) => point.name)
+                    .join(' - ')
+                }}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="facesInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.face"
+            @click="toggleContentGroup('face')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.face ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.face }}</span>
+            <span class="content-group-count">{{ facesInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.face }}</span>
+            <span class="content-group-count">{{ facesInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.face || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="face in facesInScene"
+              :key="face!.id"
+              class="face-info selectable-geo"
+              :class="{ 'is-selected': selectedFaceIds.includes(face!.id) }"
+              @click="selectFaceFromContent(face!.id)"
+            >
+              <div>
+                面{{ face!.name ?? '' }}
+                <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+                <span v-if="isCubeFace(face!)" class="constraint-badge">{{
+                  getSolidConstraintBadge(face!.cubeId)
+                }}</span>
+              </div>
+              <div>
+                边界点：{{
+                  getFaceBoundaryPoints(face!)
+                    .map((p) => p.name)
+                    .join(' - ')
+                }}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -3241,10 +3835,12 @@ hr {
 .selectedLine-info,
 .selectedStraightLine-info,
 .selectedRay-info,
+.selectedCircle-info,
 .selectedFace-info,
 .line-info,
 .straight-line-info,
 .ray-info,
+.circle-info,
 .face-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
@@ -3266,6 +3862,11 @@ hr {
 .ray-info {
   background-color: rgba(80, 136, 194, 0.28);
   border-left-color: #7fc8ff;
+}
+.selectedCircle-info,
+.circle-info {
+  background-color: rgba(180, 100, 200, 0.22);
+  border-left-color: #d08fff;
 }
 .selectedFace-info,
 .face-info {
@@ -3550,6 +4151,7 @@ hr {
   align-items: center;
   gap: 4px;
   grid-column: 1 / -1;
+  flex-wrap: wrap;
 }
 .toggle-label {
   display: inline-flex;
@@ -3578,7 +4180,6 @@ hr {
 .length-row .toggle-label {
   flex: 0 1 auto;
   min-width: 0;
-  margin-left: auto;
   white-space: nowrap;
 }
 .line-editor-grid {
@@ -3657,22 +4258,36 @@ hr {
 .face-edge-grid {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 6px 8px;
   align-items: start;
+  max-width: 240px;
 }
 .face-edge-row {
   min-width: 0;
 }
+.face-edge-row.axis-field {
+  grid-template-columns: 14px 1fr;
+  gap: 4px;
+}
 .face-edge-row label {
   color: #d9d0ff !important;
   font-size: 11px;
+  white-space: nowrap;
 }
 .face-edge-row .coord-input {
+  display: grid;
+  grid-template-columns: 24px 1fr 24px;
   width: 100%;
 }
 .face-edge-row .coord-input input[type='number'] {
-  width: 100%;
+  width: auto;
+  min-width: 0;
+}
+.face-edge-row .step-btn {
+  min-width: 24px;
+  padding: 0 4px;
+  font-size: 13px;
 }
 @media (max-width: 1024px) and (orientation: landscape) {
   .sidebar {
@@ -3686,10 +4301,12 @@ hr {
   .selectedLine-info,
   .selectedFace-info,
   .selectedRay-info,
+  .selectedCircle-info,
   .point-info,
   .line-info,
   .face-info,
-  .ray-info {
+  .ray-info,
+  .circle-info {
     padding: 6px;
     font-size: 12px;
   }
@@ -3759,10 +4376,12 @@ hr {
   .selectedLine-info,
   .selectedFace-info,
   .selectedRay-info,
+  .selectedCircle-info,
   .point-info,
   .line-info,
   .face-info,
-  .ray-info {
+  .ray-info,
+  .circle-info {
     margin-bottom: 4px;
     padding: 5px;
     font-size: 11px;
@@ -3951,13 +4570,70 @@ hr {
   text-align: left;
 }
 
+.circle-editor-grid {
+  grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 3px 4px;
+  justify-items: stretch;
+  max-width: 320px;
+}
+
+.circle-editor-grid.line-editor-grid--compact {
+  grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 3px 4px;
+  justify-items: stretch;
+  max-width: 320px;
+}
+
+.circle-editor-grid.line-editor-grid--compact > .line-editor-head:nth-child(n+2) {
+  padding-right: 0;
+  padding-left: 0;
+  text-align: center;
+}
+
+.circle-editor-grid.line-editor-grid--compact > .coord-input {
+  margin: 0;
+  grid-template-columns: 18px minmax(0, 1fr) 18px;
+  width: 100%;
+  min-width: 0;
+}
+
+.circle-editor-grid.line-editor-grid--compact > .coord-input .step-btn {
+  min-width: 18px;
+  min-height: 22px;
+  font-size: 11px;
+  padding: 0;
+}
+
+.circle-editor-grid.line-editor-grid--compact > .coord-input input[type='number'] {
+  font-size: 10px;
+  padding-left: 1px;
+  padding-right: 1px;
+  width: 100%;
+  min-width: 0;
+}
+
+.circle-editor-grid.line-editor-grid--compact .line-axis-label {
+  font-size: 9px;
+  text-align: left;
+}
+
+.circle-editor-grid > .coord-input:nth-child(4n + 2) {
+  margin-right: 0;
+}
+
+.circle-editor-grid > .coord-input:nth-child(4n) {
+  margin-left: 0;
+}
+
 @media (hover: none) and (pointer: coarse) {
   .selectedPoint-info,
   .selectedLine-info,
   .selectedRay-info,
+  .selectedCircle-info,
   .point-info,
   .line-info,
-  .ray-info {
+  .ray-info,
+  .circle-info {
     padding: 4px;
     font-size: 10px;
   }

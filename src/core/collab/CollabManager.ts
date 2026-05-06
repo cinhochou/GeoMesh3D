@@ -23,7 +23,7 @@ export type CollabStatus = {
 }
 
 type LiveLabelTarget = {
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face'
   geoId: string
 }
 

@@ -1,4 +1,4 @@
-﻿// src/renderer/Interaction.ts
+// src/renderer/Interaction.ts
 import * as THREE from 'three'
 import { Editor, EditorMode, type FacePreviewData } from '../core/editor/Editor'
 import { Scene } from '../core/scene/Scene'
@@ -6,6 +6,7 @@ import type { Line3 } from '../core/geometry/Line3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
+import type { Circle3 } from '../core/geometry/Circle3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
@@ -30,9 +31,10 @@ export class Interaction {
   draggingLineId: string | null = null
   draggingStraightLineId: string | null = null
   draggingRayId: string | null = null
+  draggingCircleId: string | null = null
   draggingFaceId: string | null = null
   private draggingLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face'
     geoId: string
     startClientX: number
     startClientY: number
@@ -58,13 +60,13 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face'
     geoId: string
   } | null = null
   private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
   private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face'
     geoId: string
   } | null = null
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
@@ -217,6 +219,7 @@ export class Interaction {
     this.draggingLineId = null
     this.draggingStraightLineId = null
     this.draggingRayId = null
+    this.draggingCircleId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -282,28 +285,33 @@ export class Interaction {
   }
 
   private isSameActiveLabelTarget(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face',
     geoId: string,
   ) {
     return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
   }
 
   private deselectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face',
     geoId: string,
   ) {
     if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
     else if (type === 'line') this.editor.scene.selection.deselectLine(geoId)
     else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
     else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
+    else if (type === 'circle') this.editor.scene.selection.deselectCircle(geoId)
     else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
   }
 
-  private selectGeometry(type: 'point' | 'line' | 'straightLine' | 'ray' | 'face', geoId: string) {
+  private selectGeometry(
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face',
+    geoId: string,
+  ) {
     if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
     else if (type === 'line') this.editor.scene.selection.selectLine(geoId, true)
     else if (type === 'straightLine') this.editor.scene.selection.selectStraightLine(geoId, true)
     else if (type === 'ray') this.editor.scene.selection.selectRay(geoId, true)
+    else if (type === 'circle') this.editor.scene.selection.selectCircle(geoId, true)
     else if (type === 'face') this.editor.selectCubeByFaceId(geoId, true)
   }
 
@@ -351,6 +359,7 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
+      this.draggingCircleId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
@@ -391,6 +400,7 @@ export class Interaction {
     this.draggingLineId = null
     this.draggingStraightLineId = null
     this.draggingRayId = null
+    this.draggingCircleId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -517,7 +527,13 @@ export class Interaction {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     const candidates = [...this.renderer.meshMap.values()].filter((obj) => {
       const type = obj.userData?.type
-      return type === 'line' || type === 'straightLine' || type === 'ray' || type === 'face'
+      return (
+        type === 'line' ||
+        type === 'straightLine' ||
+        type === 'ray' ||
+        type === 'circle' ||
+        type === 'face'
+      )
     })
     const hits = this.raycaster.intersectObjects(candidates)
     if (hits.length === 0) return null
@@ -591,6 +607,18 @@ export class Interaction {
     return face.getCentroid(this.editor.scene.points)
   }
 
+  private getCircleDragReferencePoint(circle: Circle3) {
+    const frame = circle.getFrame()
+    if (!frame) {
+      return new Vec3(
+        (circle.p1.position.x + circle.p2.position.x + circle.p3.position.x) / 3,
+        (circle.p1.position.y + circle.p2.position.y + circle.p3.position.y) / 3,
+        (circle.p1.position.z + circle.p2.position.z + circle.p3.position.z) / 3,
+      )
+    }
+    return frame.center
+  }
+
   private addSelectedFacePoints(toMove: Set<string>) {
     this.editor.scene.selection.faces.forEach((faceId) => {
       const face = this.editor.scene.faces.get(faceId)
@@ -630,6 +658,14 @@ export class Interaction {
             if (line && !this.editor.isStraightLineGeometryLocked(line)) {
               toMove.add(line.p1.id)
               toMove.add(line.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -685,6 +721,14 @@ export class Interaction {
               toMove.add(straightLine.p2.id)
             }
           })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
@@ -730,6 +774,14 @@ export class Interaction {
             if (ray && !this.editor.isRayGeometryLocked(ray)) {
               toMove.add(ray.p1.id)
               toMove.add(ray.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -779,6 +831,14 @@ export class Interaction {
               toMove.add(selectedRay.p2.id)
             }
           })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           if (canRotateAroundOrigin) {
@@ -787,6 +847,56 @@ export class Interaction {
             toMove.add(ray.p1.id)
             toMove.add(ray.p2.id)
           }
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingCircleId) {
+      const circle = this.editor.scene.circles.get(this.draggingCircleId)
+      if (!circle) return
+      if (this.editor.isCircleGeometryLocked(circle)) return
+
+      this.handleDrag(
+        this.getCircleDragReferencePoint(circle),
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(circle.p1.id)
+          toMove.add(circle.p2.id)
+          toMove.add(circle.p3.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -828,6 +938,14 @@ export class Interaction {
               toMove.add(ray.p2.id)
             }
           })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              toMove.add(c.p2.id)
+              toMove.add(c.p3.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           face.memberPointIds.forEach((pointId) => toMove.add(pointId))
           this.previewMovePoints([...toMove], delta)
@@ -856,6 +974,7 @@ export class Interaction {
       (this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
+        this.editor.mode === EditorMode.CreateCircleThreePoints ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
@@ -887,6 +1006,8 @@ export class Interaction {
           this.editor.deleteStraightLine(geoId)
         } else if (type === 'ray') {
           this.editor.deleteRay(geoId)
+        } else if (type === 'circle') {
+          this.editor.deleteCircle(geoId)
         } else if (type === 'face') {
           this.editor.deleteFace(geoId)
         }
@@ -905,15 +1026,23 @@ export class Interaction {
         this.clearActivePointValueTarget()
         if (type === 'point') {
           const alreadySelected = this.editor.scene.selection.points.has(geoId)
-          this.draggingPointId = geoId
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectPoint(geoId, true)
           this.setActivePointValueTarget(geoId)
           const p = this.editor.scene.points.get(geoId)
           if (p) {
-            if (this.editor.isPointCoordinateLocked(p)) {
+            if (p.circleRole === 'center' && p.circleId) {
+              const circle = this.editor.scene.circles.get(p.circleId)
+              if (circle && !this.editor.isCircleGeometryLocked(circle)) {
+                this.draggingCircleId = p.circleId
+                this.startDrag(this.getCircleDragReferencePoint(circle))
+              } else {
+                this.draggingPointId = null
+              }
+            } else if (this.editor.isPointCoordinateLocked(p)) {
               this.draggingPointId = null
             } else {
+              this.draggingPointId = geoId
               this.startDrag(p.position)
             }
           }
@@ -960,6 +1089,19 @@ export class Interaction {
               this.startDrag(this.getRayDragReferencePoint(ray))
             }
           }
+        } else if (type === 'circle') {
+          const alreadySelected = this.editor.scene.selection.circles.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+          this.editor.scene.selection.selectCircle(geoId, true)
+          const circle = this.editor.scene.circles.get(geoId)
+          if (circle) {
+            if (this.editor.isCircleGeometryLocked(circle)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingCircleId = geoId
+              this.startDrag(this.getCircleDragReferencePoint(circle))
+            }
+          }
         } else if (type === 'face') {
           const alreadySelected = this.editor.scene.selection.faces.has(geoId)
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
@@ -990,6 +1132,12 @@ export class Interaction {
           this.toggleCreateSelection('point', geoId)
         } else {
           this.editor.tryCreateRayWith(this.editor.scene.points.get(geoId)!)
+        }
+      } else if (this.editor.mode === EditorMode.CreateCircleThreePoints && type === 'point') {
+        if (this.editor.scene.selection.points.has(geoId)) {
+          this.toggleCreateSelection('point', geoId)
+        } else {
+          this.editor.tryCreateThreePointCircleWith(this.editor.scene.points.get(geoId)!)
         }
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'point') {
         this.toggleCreateSelection('point', geoId)
@@ -1065,6 +1213,7 @@ export class Interaction {
       (this.editor.mode === EditorMode.CreateLine ||
         this.editor.mode === EditorMode.CreateStraightLine ||
         this.editor.mode === EditorMode.CreateRay ||
+        this.editor.mode === EditorMode.CreateCircleThreePoints ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
@@ -1144,6 +1293,7 @@ export class Interaction {
       this.draggingLineId = null
       this.draggingStraightLineId = null
       this.draggingRayId = null
+      this.draggingCircleId = null
       this.draggingFaceId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
@@ -1408,13 +1558,27 @@ export class Interaction {
 
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
-      this.draggingPointId = geoId
       const point = this.editor.scene.points.get(geoId)
-      if (!point || this.editor.isPointCoordinateLocked(point)) {
+      if (!point) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      if (point.circleRole === 'center' && point.circleId) {
+        const circle = this.editor.scene.circles.get(point.circleId)
+        if (circle && !this.editor.isCircleGeometryLocked(circle)) {
+          this.draggingCircleId = point.circleId
+          this.startDrag(this.getCircleDragReferencePoint(circle))
+        } else {
+          this.syncControlLockState()
+          this.renderer.renderer.domElement.style.cursor = 'default'
+        }
+      } else if (this.editor.isPointCoordinateLocked(point)) {
         this.draggingPointId = null
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
       } else {
+        this.draggingPointId = geoId
         this.startDrag(point.position)
       }
       return
@@ -1505,6 +1669,34 @@ export class Interaction {
       }
       this.draggingRayId = geoId
       this.startDrag(this.getRayDragReferencePoint(ray))
+      return
+    }
+
+    if (type === 'circle') {
+      const alreadySelected = this.editor.scene.selection.circles.has(geoId)
+      this.editor.scene.selection.selectCircle(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const circle = this.editor.scene.circles.get(geoId)
+      if (!circle || this.editor.isCircleGeometryLocked(circle)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingCircleId = geoId
+      this.startDrag(this.getCircleDragReferencePoint(circle))
       return
     }
 
@@ -1628,6 +1820,7 @@ export class Interaction {
       !this.draggingLineId &&
       !this.draggingStraightLineId &&
       !this.draggingRayId &&
+      !this.draggingCircleId &&
       !this.draggingFaceId &&
       !this.draggingLabelTarget
     )
@@ -1701,6 +1894,7 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
+      this.draggingCircleId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null
 
@@ -1718,6 +1912,7 @@ export class Interaction {
         this.draggingLineId = null
         this.draggingStraightLineId = null
         this.draggingRayId = null
+        this.draggingCircleId = null
         this.draggingFaceId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
@@ -1786,7 +1981,8 @@ export class Interaction {
         (h) =>
           h.object.userData.type === 'line' ||
           h.object.userData.type === 'straightLine' ||
-          h.object.userData.type === 'ray',
+          h.object.userData.type === 'ray' ||
+          h.object.userData.type === 'circle',
       )
       if (lineHit) return lineHit.object
 
@@ -2018,6 +2214,7 @@ export class Interaction {
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
       this.draggingRayId !== null ||
+      this.draggingCircleId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
@@ -2143,7 +2340,7 @@ export class Interaction {
     for (const sprite of this.renderer.getNameLabelSprites()) {
       const data = sprite.userData
       const geoId = data?.geoId as string | undefined
-      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'face' | undefined
+      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | undefined
       if (!sprite.visible || !geoId || !type) continue
 
       const center = this.projectObjectToClient(sprite, rect)
@@ -2198,18 +2395,19 @@ export class Interaction {
   }
 
   private getGeometryByType(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face',
     geoId: string,
   ) {
     if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
     if (type === 'line') return this.editor.scene.lines.get(geoId) ?? null
     if (type === 'straightLine') return this.editor.scene.straightLines.get(geoId) ?? null
     if (type === 'ray') return this.editor.scene.rays.get(geoId) ?? null
+    if (type === 'circle') return this.editor.scene.circles.get(geoId) ?? null
     return this.editor.scene.faces.get(geoId) ?? null
   }
 
   private beginLabelDrag(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face',
     geoId: string,
     clientX: number,
     clientY: number,
@@ -2274,6 +2472,11 @@ export class Interaction {
       })
     } else if (target.type === 'ray') {
       this.editor.updateRay(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
+    } else if (target.type === 'circle') {
+      this.editor.updateCircle(target.geoId, {
+        labelOffsetX: nextOffsetX,
+        labelOffsetY: nextOffsetY,
+      })
     } else {
       this.editor.updateFace(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
     }

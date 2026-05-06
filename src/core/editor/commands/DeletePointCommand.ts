@@ -3,6 +3,7 @@ import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
 import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
+import { Circle3 } from '../../geometry/Circle3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarFace } from '../../geometry/Plane'
 import type { SceneConstraint } from '../../scene/Scene'
@@ -10,12 +11,15 @@ import { IntersectionPointConstraint } from '../../constraints/IntersectionPoint
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 
 export class DeletePointCommand implements Command {
+  private centerPoints: Point3[] = []
+
   constructor(
     private scene: Scene,
     private point: Point3,
     private relatedLines: Line3[],
     private relatedStraightLines: StraightLine3[],
     private relatedRays: Ray3[],
+    private relatedCircles: Circle3[],
     private relatedFaces: PlanarFace[],
     private pointConstraint: SceneConstraint | null = null,
     private dependentIntersectionPoints: Array<{
@@ -31,7 +35,15 @@ export class DeletePointCommand implements Command {
         constraint: IntersectionPointConstraint
       }>
     }> = [],
-  ) {}
+  ) {
+    this.centerPoints = relatedCircles
+      .map((circle) =>
+        [...scene.points.values()].find(
+          (p) => p.circleId === circle.id && p.circleRole === 'center',
+        ),
+      )
+      .filter((p): p is Point3 => p !== undefined)
+  }
 
   execute() {
     this.relatedLines.forEach((line) => {
@@ -45,6 +57,14 @@ export class DeletePointCommand implements Command {
     this.relatedRays.forEach((ray) => {
       this.scene.rays.delete(ray.id)
       this.scene.selection.rays.delete(ray.id)
+    })
+    this.relatedCircles.forEach((circle) => {
+      this.scene.circles.delete(circle.id)
+      this.scene.selection.circles.delete(circle.id)
+    })
+    this.centerPoints.forEach((point) => {
+      this.scene.points.delete(point.id)
+      this.scene.selection.points.delete(point.id)
     })
     this.relatedFaces.forEach((face) => {
       this.scene.removeFace(face.id)
@@ -81,6 +101,8 @@ export class DeletePointCommand implements Command {
     this.relatedLines.forEach((line) => this.scene.addLine(line))
     this.relatedStraightLines.forEach((line) => this.scene.addStraightLine(line))
     this.relatedRays.forEach((ray) => this.scene.addRay(ray))
+    this.relatedCircles.forEach((circle) => this.scene.addCircle(circle))
+    this.centerPoints.forEach((point) => this.scene.addPoint(point))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))
     this.dependentCubes.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {
       dependentPoints.forEach((point) => this.scene.addPoint(point))

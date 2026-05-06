@@ -1,4 +1,4 @@
-﻿import { Vec3 } from './Vec3'
+import { Vec3 } from './Vec3'
 
 export class Point3 {
   private static readonly POSITION_EPSILON = 1e-8
@@ -16,6 +16,8 @@ export class Point3 {
   userLocked: boolean
   cubeId: string | null
   cubeRole: 'owner' | 'dependent' | null
+  circleId: string | null
+  circleRole: 'center' | null
   onPositionChanged: ((point: Point3, previous: Vec3, next: Vec3) => void) | null = null
 
   constructor(
@@ -40,6 +42,8 @@ export class Point3 {
     this.userLocked = userLocked
     this.cubeId = null
     this.cubeRole = null
+    this.circleId = null
+    this.circleRole = null
   }
 
   setPosition(v: Vec3) {

@@ -1,4 +1,4 @@
-﻿// src/renderer/ThreeRenderer.ts
+// src/renderer/ThreeRenderer.ts
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene, type SceneRenderSyncState } from '../core/scene/Scene'
@@ -27,7 +27,7 @@ type ARToolkitContextLike = {
   update: (sourceElement: HTMLElement) => void
 }
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'face' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -340,6 +340,7 @@ export class ThreeRenderer {
       userData.type === 'line' ||
       userData.type === 'straightLine' ||
       userData.type === 'ray' ||
+      userData.type === 'circle' ||
       userData.type === 'face'
     ) {
       const anchor = userData.__labelAnchor?.clone()
@@ -470,6 +471,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'ray' ||
         userData.type === 'straightLine' ||
+        userData.type === 'circle' ||
         userData.type === 'face'
       ) {
         const label = userData.__labelSprite
@@ -581,6 +583,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
         userData.type === 'ray' ||
+        userData.type === 'circle' ||
         userData.type === 'face'
       ) {
         const label = userData.__labelSprite
@@ -675,6 +678,7 @@ export class ThreeRenderer {
       this.syncLines(geoScene, dirtyState)
       this.syncStraightLines(geoScene, dirtyState)
       this.syncRays(geoScene, dirtyState)
+      this.syncCircles(geoScene, dirtyState)
       this.syncFaces(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
     }
@@ -757,6 +761,13 @@ export class ThreeRenderer {
         this.world.remove(obj)
         this.meshMap.delete(id)
       } else if (type === 'ray' && !scene.rays.has(id)) {
+        const label = userData.__labelSprite
+        if (label) this.world.remove(label)
+        const valueLabel = userData.__valueLabelSprite
+        if (valueLabel) this.world.remove(valueLabel)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
+      } else if (type === 'circle' && !scene.circles.has(id)) {
         const label = userData.__labelSprite
         if (label) this.world.remove(label)
         const valueLabel = userData.__valueLabelSprite
@@ -1074,20 +1085,40 @@ export class ThreeRenderer {
       }
 
       // 同步位置
+      if (p.circleRole === 'center' && p.circleId) {
+        const circle = scene.circles.get(p.circleId)
+        if (circle) {
+          const frame = circle.getFrame()
+          if (frame) {
+            p.position = frame.center
+          }
+        }
+      }
       sprite.position.set(p.position.x, p.position.y, p.position.z)
 
       // 选中高亮
       const isSelected = scene.selection.points.has(p.id)
       const isIntersectionPoint = Boolean(scene.getIntersectionConstraint(p.id))
       const isCubeDependentPoint = p.cubeRole === 'dependent'
+      const isCircleCenterPoint = p.circleRole === 'center'
       const baseColor = p.locked
-        ? 0xffffff
+        ? isCircleCenterPoint
+          ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
+          : 0xffffff
         : isIntersectionPoint
           ? ThreeRenderer.INTERSECTION_POINT_COLOR
           : isCubeDependentPoint
             ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
-            : 0xff5555
+            : isCircleCenterPoint
+              ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
+              : 0xff5555
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
+
+      // 圆心点可见性
+      if (isCircleCenterPoint && p.circleId) {
+        const circle = scene.circles.get(p.circleId)
+        sprite.visible = circle ? circle.centerVisible && circle.visible : false
+      }
 
       // 点名称标签
       const isLabelActive =
@@ -1382,6 +1413,68 @@ export class ThreeRenderer {
         lineData.valueVisible === true && lineData.visible,
         `=(${this.formatMetricNumber(lineData.p1.position.x)},${this.formatMetricNumber(lineData.p1.position.y)},${this.formatMetricNumber(lineData.p1.position.z)})+λ(${this.formatMetricNumber(lineData.getDirectionVector().x)},${this.formatMetricNumber(lineData.getDirectionVector().y)},${this.formatMetricNumber(lineData.getDirectionVector().z)})`,
         mid,
+        isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+    })
+  }
+
+  private syncCircles(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.circleIds.forEach((id) => {
+      const circleData = scene.circles.get(id)
+      if (!circleData) return
+      const frame = circleData.getFrame()
+      let circle = this.meshMap.get(id) as THREE.LineLoop | undefined
+      if (!frame) {
+        if (circle) circle.visible = false
+        return
+      }
+
+      const segments = 128
+      const points = Array.from({ length: segments }, (_, index) => {
+        const angle = (Math.PI * 2 * index) / segments
+        const x =
+          frame.center.x +
+          (frame.uAxis.x * Math.cos(angle) + frame.vAxis.x * Math.sin(angle)) * frame.radius
+        const y =
+          frame.center.y +
+          (frame.uAxis.y * Math.cos(angle) + frame.vAxis.y * Math.sin(angle)) * frame.radius
+        const z =
+          frame.center.z +
+          (frame.uAxis.z * Math.cos(angle) + frame.vAxis.z * Math.sin(angle)) * frame.radius
+        return new THREE.Vector3(x, y, z)
+      })
+
+      if (!circle) {
+        const geo = new THREE.BufferGeometry().setFromPoints(points)
+        const mat = new THREE.LineBasicMaterial({
+          color: ThreeRenderer.LINEAR_COLOR,
+          linewidth: ThreeRenderer.LINEAR_WIDTH,
+        })
+        circle = new THREE.LineLoop(geo, mat)
+        circle.userData = { geoId: id, type: 'circle' }
+        this.world.add(circle)
+        this.meshMap.set(id, circle)
+      } else {
+        circle.geometry.setFromPoints(points)
+        circle.geometry.attributes.position!.needsUpdate = true
+        circle.geometry.computeBoundingBox()
+        circle.geometry.computeBoundingSphere()
+      }
+
+      circle.visible = circleData.visible
+      const isSelected = scene.selection.circles.has(id)
+      ;(circle.material as THREE.LineBasicMaterial).color.set(
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'circle' && this.activeLabelTarget.geoId === id
+      this.syncLinearLabel(
+        circle,
+        circleData.name ?? '',
+        circleData.nameVisible && circleData.visible,
+        circleData.valueVisible === true && circleData.visible,
+        `=${this.formatMetricNumber(frame.radius)}`,
+        new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
         isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
     })
@@ -2360,6 +2453,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
         userData.type === 'ray' ||
+        userData.type === 'circle' ||
         userData.type === 'face'
       ) {
         const anchor = userData.__labelAnchor?.clone()
@@ -2376,6 +2470,7 @@ export class ThreeRenderer {
     if (type === 'line') return this.currentSceneRef.lines.get(geoId) ?? null
     if (type === 'straightLine') return this.currentSceneRef.straightLines.get(geoId) ?? null
     if (type === 'ray') return this.currentSceneRef.rays.get(geoId) ?? null
+    if (type === 'circle') return this.currentSceneRef.circles.get(geoId) ?? null
     if (type === 'face') return this.currentSceneRef.faces.get(geoId) ?? null
     return null
   }

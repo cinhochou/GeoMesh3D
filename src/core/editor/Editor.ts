@@ -1,4 +1,4 @@
-﻿// src/core/editor/Editor.ts
+// src/core/editor/Editor.ts
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { TransformCommand } from './commands/TransformCommand'
@@ -6,6 +6,7 @@ import { AddElementCommand } from './commands/AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
@@ -23,6 +24,7 @@ import { TransformPointsCommand } from './commands/TransformPointsCommand'
 import { UpdatePointCommand } from './commands/UpdatePointCommand'
 import { UpdateLineCommand } from './commands/UpdateLineCommand'
 import { UpdateRayCommand } from './commands/UpdateRayCommand'
+import { UpdateCircleCommand } from './commands/UpdateCircleCommand'
 import { UpdateStraightLineCommand } from './commands/UpdateStraightLineCommand'
 import { UpdateFaceCommand } from './commands/UpdateFaceCommand'
 import { DeletePointCommand } from './commands/DeletePointCommand'
@@ -55,6 +57,7 @@ export enum EditorMode {
   CreateLine,
   CreateStraightLine,
   CreateRay,
+  CreateCircleThreePoints,
   CreatePlane,
   CreateHexahedron,
   CreateTetrahedron,
@@ -341,6 +344,12 @@ export class Editor {
     for (const line of this.scene.straightLines.values()) {
       if (!line.userLocked) continue
       if (line.p1.id === pointId || line.p2.id === pointId) return true
+    }
+
+    for (const circle of this.scene.circles.values()) {
+      if (!circle.userLocked) continue
+      if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)
+        return true
     }
 
     return false
@@ -1013,6 +1022,26 @@ export class Editor {
     )
   }
 
+  isCircleLocked(circle: Circle3 | null | undefined) {
+    return Boolean(
+      circle &&
+        (circle.userLocked ||
+          (this.isPointCoordinateLocked(circle.p1) &&
+            this.isPointCoordinateLocked(circle.p2) &&
+            this.isPointCoordinateLocked(circle.p3))),
+    )
+  }
+
+  isCircleGeometryLocked(circle: Circle3 | null | undefined) {
+    return Boolean(
+      circle &&
+        (circle.userLocked ||
+          this.isPointCoordinateLocked(circle.p1) ||
+          this.isPointCoordinateLocked(circle.p2) ||
+          this.isPointCoordinateLocked(circle.p3)),
+    )
+  }
+
   isLineGeometryLocked(line: Line3 | null | undefined) {
     return Boolean(
       line &&
@@ -1072,6 +1101,9 @@ export class Editor {
     )
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
+    )
+    const relatedCircles = [...this.scene.circles.values()].filter(
+      (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
     const relatedFaces = getFacesByPointId(this, pointId)
 
@@ -1135,11 +1167,22 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
+    const circleTransforms = locked
+      ? []
+      : relatedCircles
+          .map((circle) => ({
+            circle,
+            before: circle.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
     if (
       pointTransforms.length === 0 &&
       lineTransforms.length === 0 &&
       straightLineTransforms.length === 0 &&
-      rayTransforms.length === 0
+      rayTransforms.length === 0 &&
+      circleTransforms.length === 0
     ) {
       return
     }
@@ -1150,6 +1193,8 @@ export class Editor {
         lineTransforms,
         straightLineTransforms,
         rayTransforms,
+        [],
+        circleTransforms,
       ),
     )
   }
@@ -1254,6 +1299,34 @@ export class Editor {
         [],
         [{ ray, before: ray.userLocked, after: locked }],
         [],
+      ),
+    )
+  }
+
+  setCircleLockState(circleId: string, locked: boolean) {
+    const circle = this.scene.circles.get(circleId)
+    if (!circle) return
+    const endpointTransforms = !locked
+      ? [circle.p1, circle.p2, circle.p3]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (circle.userLocked === locked && endpointTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [],
+        [],
+        [],
+        [{ circle, before: circle.userLocked, after: locked }],
       ),
     )
   }
@@ -1371,6 +1444,9 @@ export class Editor {
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
+    const relatedCircles = [...this.scene.circles.values()].filter(
+      (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
+    )
     const relatedFaces = [...this.scene.faces.values()].filter(
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
     )
@@ -1389,6 +1465,7 @@ export class Editor {
         relatedLines,
         relatedStraightLines,
         relatedRays,
+        relatedCircles,
         relatedFaces,
         pointConstraint,
         dependentIntersectionPoints,
@@ -1417,6 +1494,21 @@ export class Editor {
       { type: 'ray', id: rayId },
     ])
     this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints))
+  }
+
+  deleteCircle(circleId: string) {
+    const circle = this.scene.circles.get(circleId)
+    if (!circle) return
+    const centerPoint = [...this.scene.points.values()].find(
+      (p) => p.circleId === circleId && p.circleRole === 'center',
+    )
+    if (centerPoint) {
+      this.scene.points.delete(centerPoint.id)
+      this.scene.selection.points.delete(centerPoint.id)
+    }
+    this.scene.circles.delete(circleId)
+    this.scene.selection.circles.delete(circleId)
+    this.scene.markAllRenderDirty()
   }
 
   deleteStraightLine(lineId: string) {
@@ -1462,10 +1554,13 @@ export class Editor {
   }
 
   clearAll() {
-    const points = [...this.scene.points.values()].filter((point) => !point.locked)
+    const points = [...this.scene.points.values()].filter(
+      (point) => !point.locked || point.circleRole === 'center',
+    )
     const lines = [...this.scene.lines.values()]
     const straightLines = [...this.scene.straightLines.values()]
     const rays = [...this.scene.rays.values()]
+    const circles = [...this.scene.circles.values()]
     const faces = [...this.scene.faces.values()]
     const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
 
@@ -1474,13 +1569,14 @@ export class Editor {
       lines.length === 0 &&
       straightLines.length === 0 &&
       rays.length === 0 &&
+      circles.length === 0 &&
       faces.length === 0 &&
       constraints.length === 0
     )
       return
 
     this.executeCommand(
-      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, faces, constraints),
+      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, circles, faces, constraints),
     )
     this.selectedPoints = []
   }
@@ -1874,6 +1970,45 @@ export class Editor {
     )
   }
 
+  updateCircle(
+    circleId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      userLocked?: boolean
+      centerVisible?: boolean
+    },
+  ) {
+    const circle = this.scene.circles.get(circleId)
+    if (!circle) return
+    const before = {
+      name: circle.name,
+      nameVisible: circle.nameVisible,
+      valueVisible: circle.valueVisible,
+      labelOffsetX: circle.labelOffsetX,
+      labelOffsetY: circle.labelOffsetY,
+      visible: circle.visible,
+      userLocked: circle.userLocked,
+      centerVisible: circle.centerVisible,
+    }
+    const after = {
+      name: patch.name ?? circle.name,
+      nameVisible: patch.nameVisible ?? circle.nameVisible,
+      valueVisible: patch.valueVisible ?? circle.valueVisible,
+      labelOffsetX: patch.labelOffsetX ?? circle.labelOffsetX,
+      labelOffsetY: patch.labelOffsetY ?? circle.labelOffsetY,
+      visible: patch.visible ?? circle.visible,
+      userLocked: patch.userLocked ?? circle.userLocked,
+      centerVisible: patch.centerVisible ?? circle.centerVisible,
+    }
+    this.executeCommand(new UpdateCircleCommand(circle, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
   updateRay(
     rayId: string,
     patch: {
@@ -2207,6 +2342,70 @@ export class Editor {
   tryCreateRayWith(point: Point3) {
     if (this.mode !== EditorMode.CreateRay) return
     this.tryCreateLinearWith(point, 'ray')
+  }
+
+  tryCreateThreePointCircleWith(point: Point3) {
+    if (this.mode !== EditorMode.CreateCircleThreePoints) return
+    this.scene.selection.selectPoint(point.id, true)
+    if (!this.selectedPoints.includes(point)) this.selectedPoints.push(point)
+    if (this.selectedPoints.length !== 3) return
+
+    const [p1, p2, p3] = this.selectedPoints
+    const exists = [...this.scene.circles.values()].some((circle) => {
+      const ids = [circle.p1.id, circle.p2.id, circle.p3.id]
+      return [p1!.id, p2!.id, p3!.id].every((id) => ids.includes(id))
+    })
+    if (exists) {
+      emitToast('三点圆已存在，创建圆失败')
+      this.selectedPoints = []
+      this.scene.selection.clear()
+      return
+    }
+
+    const circle = new Circle3(
+      genId('c'),
+      genNextAvailableName(
+        [...this.scene.circles.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'c' : `c${index}`),
+      ),
+      p1!,
+      p2!,
+      p3!,
+      false,
+      true,
+    )
+    if (!circle.isValid()) {
+      emitToast('三个点不能在同一条直线上')
+      this.selectedPoints = []
+      this.scene.selection.clear()
+      return
+    }
+
+    const frame = circle.getFrame()!
+    const centerPoint = new Point3(
+      genId('p'),
+      genNextAvailableName(
+        [...this.scene.points.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'P' : `P${index}`),
+      ),
+      frame.center,
+      true,
+      true,
+      false,
+      Point3.DEFAULT_LABEL_OFFSET_X,
+      Point3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+    )
+    centerPoint.circleId = circle.id
+    centerPoint.circleRole = 'center'
+
+    this.executeCommand(new AddElementCommand(this.scene, circle, 'circle'))
+    this.executeCommand(new AddElementCommand(this.scene, centerPoint, 'point'))
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.scene.selection.selectCircle(circle.id)
   }
 
   tryCreateFaceFromSelection() {

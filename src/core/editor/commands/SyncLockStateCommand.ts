@@ -4,6 +4,7 @@ import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarFace } from '../../geometry/Plane'
+import { Circle3 } from '../../geometry/Circle3'
 
 type PointLockTransform = {
   point: Point3
@@ -35,6 +36,12 @@ type FaceLockTransform = {
   after: boolean
 }
 
+type CircleLockTransform = {
+  circle: Circle3
+  before: boolean
+  after: boolean
+}
+
 export class SyncLockStateCommand implements Command {
   constructor(
     private pointTransforms: PointLockTransform[],
@@ -42,6 +49,7 @@ export class SyncLockStateCommand implements Command {
     private straightLineTransforms: StraightLineLockTransform[],
     private rayTransforms: RayLockTransform[],
     private faceTransforms: FaceLockTransform[] = [],
+    private circleTransforms: CircleLockTransform[] = [],
   ) {}
 
   execute() {
@@ -60,6 +68,9 @@ export class SyncLockStateCommand implements Command {
     this.faceTransforms.forEach(({ face, after }) => {
       face.userLocked = after
     })
+    this.circleTransforms.forEach(({ circle, after }) => {
+      circle.userLocked = after
+    })
   }
 
   undo() {
@@ -77,6 +88,9 @@ export class SyncLockStateCommand implements Command {
     })
     this.faceTransforms.forEach(({ face, before }) => {
       face.userLocked = before
+    })
+    this.circleTransforms.forEach(({ circle, before }) => {
+      circle.userLocked = before
     })
   }
 }

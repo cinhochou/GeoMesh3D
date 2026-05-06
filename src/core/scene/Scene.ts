@@ -2,6 +2,7 @@ import { PlanarFaceConstraint } from '../constraints/PlanarFaceConstraint'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
@@ -22,6 +23,7 @@ export type SceneRenderSyncState = {
   lineIds: Set<string>
   straightLineIds: Set<string>
   rayIds: Set<string>
+  circleIds: Set<string>
   faceIds: Set<string>
 }
 
@@ -32,6 +34,7 @@ export class Scene {
   lines = new Map<string, Line3>()
   straightLines = new Map<string, StraightLine3>()
   rays = new Map<string, Ray3>()
+  circles = new Map<string, Circle3>()
   faces = new Map<string, PlanarFace>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
@@ -45,6 +48,7 @@ export class Scene {
   private dirtyLineIds = new Set<string>()
   private dirtyStraightLineIds = new Set<string>()
   private dirtyRayIds = new Set<string>()
+  private dirtyCircleIds = new Set<string>()
   private dirtyFaceIds = new Set<string>()
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
@@ -75,6 +79,11 @@ export class Scene {
   addRay(ray: Ray3) {
     this.rays.set(ray.id, ray)
     this.dirtyRayIds.add(ray.id)
+  }
+
+  addCircle(circle: Circle3) {
+    this.circles.set(circle.id, circle)
+    this.dirtyCircleIds.add(circle.id)
   }
 
   addFace(face: PlanarFace) {
@@ -213,6 +222,15 @@ export class Scene {
 
   markPointDirty(pointId: string) {
     this.dirtyPointIds.add(pointId)
+    this.circles.forEach((circle) => {
+      if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId) {
+        this.dirtyCircleIds.add(circle.id)
+        const centerPoint = [...this.points.values()].find(
+          (p) => p.circleId === circle.id && p.circleRole === 'center',
+        )
+        if (centerPoint) this.dirtyPointIds.add(centerPoint.id)
+      }
+    })
     this.constraints.forEach((constraint) => {
       if (constraint.pointId === pointId) {
         this.markConstraintDirty(constraint)
@@ -256,6 +274,7 @@ export class Scene {
       this.dirtyLineIds.clear()
       this.dirtyStraightLineIds.clear()
       this.dirtyRayIds.clear()
+      this.dirtyCircleIds.clear()
       this.dirtyFaceIds.clear()
       return {
         fullSync: true,
@@ -263,6 +282,7 @@ export class Scene {
         lineIds: new Set(this.lines.keys()),
         straightLineIds: new Set(this.straightLines.keys()),
         rayIds: new Set(this.rays.keys()),
+        circleIds: new Set(this.circles.keys()),
         faceIds: new Set(this.faces.keys()),
       }
     }
@@ -271,6 +291,7 @@ export class Scene {
     const lineIds = new Set(this.dirtyLineIds)
     const straightLineIds = new Set(this.dirtyStraightLineIds)
     const rayIds = new Set(this.dirtyRayIds)
+    const circleIds = new Set(this.dirtyCircleIds)
     const faceIds = new Set(this.dirtyFaceIds)
 
     pointIds.forEach((pointId) => {
@@ -283,6 +304,11 @@ export class Scene {
       this.rays.forEach((ray, rayId) => {
         if (ray.p1.id === pointId || ray.p2.id === pointId) rayIds.add(rayId)
       })
+      this.circles.forEach((circle, circleId) => {
+        if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId) {
+          circleIds.add(circleId)
+        }
+      })
       this.faces.forEach((face, faceId) => {
         if (face.includesPoint(pointId)) faceIds.add(faceId)
       })
@@ -292,6 +318,7 @@ export class Scene {
     this.dirtyLineIds.clear()
     this.dirtyStraightLineIds.clear()
     this.dirtyRayIds.clear()
+    this.dirtyCircleIds.clear()
     this.dirtyFaceIds.clear()
 
     if (
@@ -299,6 +326,7 @@ export class Scene {
       lineIds.size === 0 &&
       straightLineIds.size === 0 &&
       rayIds.size === 0 &&
+      circleIds.size === 0 &&
       faceIds.size === 0
     ) {
       return null
@@ -310,6 +338,7 @@ export class Scene {
       lineIds,
       straightLineIds,
       rayIds,
+      circleIds,
       faceIds,
     }
   }
