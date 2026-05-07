@@ -1,13 +1,16 @@
 import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
+import { Vec3 } from '../../geometry/Vec3'
 import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
+import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
+import { Circle3 } from '../../geometry/Circle3'
 import { PlanarFace } from '../../geometry/Plane'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 
-type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3> = {
+type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
   item: T
   p1: Point3
   p2: Point3
@@ -35,23 +38,47 @@ type PointCubeSnapshot = {
   cubeRole: 'owner' | 'dependent' | null
 }
 
+type CircleSnapshot = {
+  circle: Circle3
+  p1: Point3
+  p2: Point3
+  p3: Point3
+  centerPoint: Point3 | null
+  centerPosition: Vec3 | null
+  centerCircleId: string | null
+  centerCircleRole: string | null
+  movedPoints: Array<{ point: Point3; originalPosition: Vec3 }>
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
   private raySnapshots: Array<LinearSnapshot<Ray3>>
+  private vectorSnapshots: Array<LinearSnapshot<GeoVector3>>
   private faceSnapshots: FaceSnapshot[]
   private cubeSnapshots: CubeSnapshot[]
   private pointCubeSnapshots: PointCubeSnapshot[]
+  private circleSnapshots: CircleSnapshot[]
+  private keepPointCircleId: string | null
+  private keepPointCircleRole: 'center' | null
+  private keepPointLocked: boolean
+  private keepPointUserLocked: boolean
   private removedLines = new Set<string>()
   private removedStraightLines = new Set<string>()
   private removedRays = new Set<string>()
+  private removedVectors = new Set<string>()
   private removedFaces = new Set<string>()
+  private removedCircles = new Set<string>()
 
   constructor(
     private scene: Scene,
     private keepPoint: Point3,
     private removePoint: Point3,
   ) {
+    this.keepPointCircleId = keepPoint.circleId
+    this.keepPointCircleRole = keepPoint.circleRole
+    this.keepPointLocked = keepPoint.locked
+    this.keepPointUserLocked = keepPoint.userLocked
     this.lineSnapshots = [...scene.lines.values()]
       .filter((line) => line.p1.id === keepPoint.id || line.p2.id === keepPoint.id || line.p1.id === removePoint.id || line.p2.id === removePoint.id)
       .map((line) => ({ item: line, p1: line.p1, p2: line.p2 }))
@@ -61,6 +88,9 @@ export class MergePointsCommand implements Command {
     this.raySnapshots = [...scene.rays.values()]
       .filter((ray) => ray.p1.id === keepPoint.id || ray.p2.id === keepPoint.id || ray.p1.id === removePoint.id || ray.p2.id === removePoint.id)
       .map((ray) => ({ item: ray, p1: ray.p1, p2: ray.p2 }))
+    this.vectorSnapshots = [...scene.vectors.values()]
+      .filter((vector) => vector.p1.id === keepPoint.id || vector.p2.id === keepPoint.id || vector.p1.id === removePoint.id || vector.p2.id === removePoint.id)
+      .map((vector) => ({ item: vector, p1: vector.p1, p2: vector.p2 }))
     this.faceSnapshots = [...scene.faces.values()]
       .filter((face) => face.includesPoint(keepPoint.id) || face.includesPoint(removePoint.id))
       .map((face) => ({
@@ -103,6 +133,32 @@ export class MergePointsCommand implements Command {
       cubeId: point.cubeId,
       cubeRole: point.cubeRole,
     }))
+
+    this.circleSnapshots = [...scene.circles.values()]
+      .filter((circle) =>
+        circle.p1.id === keepPoint.id || circle.p2.id === keepPoint.id || circle.p3.id === keepPoint.id ||
+        circle.p1.id === removePoint.id || circle.p2.id === removePoint.id || circle.p3.id === removePoint.id ||
+        [...scene.points.values()].some(
+          (p) => p.circleId === circle.id && p.circleRole === 'center' &&
+            (p.id === keepPoint.id || p.id === removePoint.id),
+        ),
+      )
+      .map((circle) => {
+        const centerPoint = [...scene.points.values()].find(
+          (p) => p.circleId === circle.id && p.circleRole === 'center',
+        ) ?? null
+        return {
+          circle,
+          p1: circle.p1,
+          p2: circle.p2,
+          p3: circle.p3,
+          centerPoint,
+          centerPosition: centerPoint ? centerPoint.position.clone() : null,
+          centerCircleId: centerPoint ? centerPoint.circleId : null,
+          centerCircleRole: centerPoint ? centerPoint.circleRole : null,
+          movedPoints: [],
+        }
+      })
   }
 
   private replacePointId(ids: string[]) {
@@ -137,6 +193,16 @@ export class MergePointsCommand implements Command {
         this.scene.rays.delete(item.id)
         this.scene.selection.rays.delete(item.id)
         this.removedRays.add(item.id)
+      }
+    })
+
+    this.vectorSnapshots.forEach(({ item }) => {
+      if (item.p1.id === this.removePoint.id) item.p1 = this.keepPoint
+      if (item.p2.id === this.removePoint.id) item.p2 = this.keepPoint
+      if (item.p1.id === item.p2.id) {
+        this.scene.vectors.delete(item.id)
+        this.scene.selection.vectors.delete(item.id)
+        this.removedVectors.add(item.id)
       }
     })
 
@@ -177,6 +243,96 @@ export class MergePointsCommand implements Command {
       this.keepPoint.cubeRole = inheritedCubeSnapshot.cubeRole
     }
 
+    this.circleSnapshots.forEach((snapshot) => {
+      const { circle } = snapshot
+      const isRemoveCenter = snapshot.centerPoint?.id === this.removePoint.id
+      const isKeepCenter = snapshot.centerPoint?.id === this.keepPoint.id
+
+      if (isRemoveCenter) {
+        const frame = circle.getFrame()
+        if (frame) {
+          const delta = new Vec3(
+            this.keepPoint.position.x - frame.center.x,
+            this.keepPoint.position.y - frame.center.y,
+            this.keepPoint.position.z - frame.center.z,
+          )
+          const movedPoints: Array<{ point: Point3; originalPosition: Vec3 }> = []
+          const pointIds = new Set([circle.p1.id, circle.p2.id, circle.p3.id])
+          pointIds.forEach((pid) => {
+            const pt = this.scene.points.get(pid)
+            if (pt && pt.id !== this.keepPoint.id) {
+              movedPoints.push({ point: pt, originalPosition: pt.position.clone() })
+              pt.position = new Vec3(
+                pt.position.x + delta.x,
+                pt.position.y + delta.y,
+                pt.position.z + delta.z,
+              )
+            }
+          })
+          snapshot.movedPoints = movedPoints
+        }
+        this.keepPoint.circleId = circle.id
+        this.keepPoint.circleRole = 'center'
+        this.keepPoint.locked = true
+        this.keepPoint.userLocked = false
+      }
+
+      if (circle.p1.id === this.removePoint.id) circle.p1 = this.keepPoint
+      if (circle.p2.id === this.removePoint.id) circle.p2 = this.keepPoint
+      if (circle.p3.id === this.removePoint.id) circle.p3 = this.keepPoint
+
+      const pointIds = [circle.p1.id, circle.p2.id, circle.p3.id]
+      const uniqueIds = new Set(pointIds)
+      if (uniqueIds.size < 3) {
+        this.scene.circles.delete(circle.id)
+        this.scene.selection.circles.delete(circle.id)
+        this.removedCircles.add(circle.id)
+        if (snapshot.centerPoint) {
+          this.scene.points.delete(snapshot.centerPoint.id)
+          this.scene.selection.points.delete(snapshot.centerPoint.id)
+        }
+        if (isRemoveCenter) {
+          this.keepPoint.circleId = null
+          this.keepPoint.circleRole = null
+          this.keepPoint.locked = false
+        }
+        if (isKeepCenter && snapshot.centerPoint) {
+          snapshot.centerPoint.circleId = null
+          snapshot.centerPoint.circleRole = null
+          snapshot.centerPoint.locked = false
+        }
+        return
+      }
+
+      if (!circle.isValid()) {
+        this.scene.circles.delete(circle.id)
+        this.scene.selection.circles.delete(circle.id)
+        this.removedCircles.add(circle.id)
+        if (snapshot.centerPoint) {
+          this.scene.points.delete(snapshot.centerPoint.id)
+          this.scene.selection.points.delete(snapshot.centerPoint.id)
+        }
+        if (isRemoveCenter) {
+          this.keepPoint.circleId = null
+          this.keepPoint.circleRole = null
+          this.keepPoint.locked = false
+        }
+        if (isKeepCenter && snapshot.centerPoint) {
+          snapshot.centerPoint.circleId = null
+          snapshot.centerPoint.circleRole = null
+          snapshot.centerPoint.locked = false
+        }
+        return
+      }
+
+      if (isKeepCenter && snapshot.centerPoint) {
+        const newFrame = circle.getFrame()
+        if (newFrame) {
+          snapshot.centerPoint.position = newFrame.center
+        }
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
@@ -185,6 +341,38 @@ export class MergePointsCommand implements Command {
 
   undo() {
     this.scene.addPoint(this.removePoint)
+
+    this.circleSnapshots.forEach((snapshot) => {
+      const { circle } = snapshot
+      circle.p1 = snapshot.p1
+      circle.p2 = snapshot.p2
+      circle.p3 = snapshot.p3
+
+      snapshot.movedPoints.forEach(({ point, originalPosition }) => {
+        point.position = originalPosition
+      })
+
+      if (snapshot.centerPoint) {
+        if (!this.scene.points.has(snapshot.centerPoint.id)) {
+          this.scene.addPoint(snapshot.centerPoint)
+        }
+        snapshot.centerPoint.position = snapshot.centerPosition!
+        snapshot.centerPoint.circleId = snapshot.centerCircleId
+        snapshot.centerPoint.circleRole = snapshot.centerCircleRole as 'center' | null
+      }
+
+      const isRemoveCenter = snapshot.centerPoint?.id === this.removePoint.id
+      if (isRemoveCenter) {
+        this.keepPoint.circleId = this.keepPointCircleId
+        this.keepPoint.circleRole = this.keepPointCircleRole
+        this.keepPoint.locked = this.keepPointLocked
+        this.keepPoint.userLocked = this.keepPointUserLocked
+      }
+
+      if (this.removedCircles.has(circle.id)) {
+        this.scene.addCircle(circle)
+      }
+    })
 
     this.lineSnapshots.forEach(({ item, p1, p2 }) => {
       item.p1 = p1
@@ -200,6 +388,11 @@ export class MergePointsCommand implements Command {
       item.p1 = p1
       item.p2 = p2
       if (this.removedRays.has(item.id)) this.scene.addRay(item)
+    })
+    this.vectorSnapshots.forEach(({ item, p1, p2 }) => {
+      item.p1 = p1
+      item.p2 = p2
+      if (this.removedVectors.has(item.id)) this.scene.addVector(item)
     })
     this.faceSnapshots.forEach(({ face, boundaryPointIds, memberPointIds, boundaryLineIds, supportPointIds }) => {
       face.boundaryPointIds = [...boundaryPointIds]

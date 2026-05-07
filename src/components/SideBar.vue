@@ -1928,9 +1928,9 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="point-summary-line">
               点{{ p!.name ?? '' }}
-              <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
+              <span v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)" class="lock-badge">🔒</span>
               <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                 >交点约束</span
               >
@@ -3609,14 +3609,13 @@ onUnmounted(() => {
               点{{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
               {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
             </div>
-            <div v-if="getCircleCenterPoint(c!.id)">
+            <div v-if="getCircleCenterPoint(c!.id)" class="point-summary-line">
               <span class="point-summary-text">
                 点{{ getCircleCenterPoint(c!.id)!.name }}（{{
                   getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
                 }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
                 {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
               </span>
-              <span class="lock-badge">🔒</span>
               <span class="constraint-badge">圆心约束</span>
             </div>
           </div>
@@ -4062,7 +4061,7 @@ onUnmounted(() => {
                   点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
                   {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
                 </span>
-                <span v-if="isPointCoordinateLocked(p!)" class="lock-badge">🔒</span>
+                <span v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)" class="lock-badge">🔒</span>
                 <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                   >交点约束</span
                 >
@@ -4293,7 +4292,6 @@ onUnmounted(() => {
                 <span class="point-summary-text">
                   圆心：{{ getCircleCenterPoint(c!.id)!.name }}
                 </span>
-                <span class="lock-badge">🔒</span>
                 <span class="constraint-badge">圆心约束</span>
               </div>
             </div>

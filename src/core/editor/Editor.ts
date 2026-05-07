@@ -2344,7 +2344,19 @@ export class Editor {
     if (keepPointId === removePointId) return
     const keepPoint = this.scene.points.get(keepPointId)
     const removePoint = this.scene.points.get(removePointId)
-    if (!keepPoint || !removePoint || removePoint.locked) return
+    if (!keepPoint || !removePoint || (removePoint.locked && !removePoint.circleId)) return
+
+    const centerPoint = keepPoint.circleRole === 'center' ? keepPoint
+      : removePoint.circleRole === 'center' ? removePoint
+      : null
+    if (centerPoint) {
+      const otherPoint = centerPoint === keepPoint ? removePoint : keepPoint
+      const circle = this.scene.circles.get(centerPoint.circleId!)
+      if (circle && (circle.p1.id === otherPoint.id || circle.p2.id === otherPoint.id || circle.p3.id === otherPoint.id)) {
+        emitToast('圆心不能和所属圆上的点合并')
+        return
+      }
+    }
 
     const keepConstraint = keepPoint.cubeId ? this.getCubeConstraint(keepPoint.cubeId) : null
     const removeConstraint = removePoint.cubeId ? this.getCubeConstraint(removePoint.cubeId) : null

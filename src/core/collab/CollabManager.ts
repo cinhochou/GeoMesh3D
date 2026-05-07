@@ -1059,7 +1059,11 @@ export class CollabManager {
     if (id === Scene.ORIGIN_ID) return
     const point = this.scene.points.get(id)
     if (point?.circleId && point.circleRole === 'center') {
-      this.removeCircleFromScene(point.circleId)
+      if (!this.yCircles.has(point.circleId)) {
+        this.removeCircleFromScene(point.circleId)
+      }
+      this.scene.points.delete(id)
+      this.scene.selection.points.delete(id)
       return
     }
 
@@ -1087,7 +1091,9 @@ export class CollabManager {
     })
     this.scene.circles.forEach((circle, circleId) => {
       if (circle.p1.id === id || circle.p2.id === id || circle.p3.id === id) {
-        this.removeCircleFromScene(circleId)
+        if (!this.yCircles.has(circleId)) {
+          this.removeCircleFromScene(circleId)
+        }
       }
     })
     this.scene.straightLines.forEach((line, lineId) => {
