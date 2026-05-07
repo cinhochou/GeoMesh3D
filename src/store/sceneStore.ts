@@ -8,6 +8,7 @@ type CountSummary = {
   line: number
   straightLine: number
   ray: number
+  vector: number
   circle: number
   face: number
 }
@@ -17,6 +18,7 @@ const createEmptyCounts = (): CountSummary => ({
   line: 0,
   straightLine: 0,
   ray: 0,
+  vector: 0,
   circle: 0,
   face: 0,
 })
@@ -39,6 +41,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建直线'
     case EditorMode.CreateRay:
       return '创建射线'
+    case EditorMode.CreateVector:
+      return '创建向量'
     case EditorMode.CreateCircleThreePoints:
       return '创建三点圆'
     case EditorMode.CreatePlane:
@@ -62,6 +66,8 @@ const getModeHint = (mode: EditorMode) => {
       return '点击场景中的两个不同点以创建直线~'
     case EditorMode.CreateRay:
       return '点击场景中的两个不同点以创建射线~'
+    case EditorMode.CreateVector:
+      return '点击场景中的两个不同点以创建向量~'
     case EditorMode.CreateCircleThreePoints:
       return '点击场景中的三个不共线的点以创建三点圆~'
     case EditorMode.CreatePlane:
@@ -95,6 +101,7 @@ export const useSceneStore = defineStore('scene', () => {
       selectionCounts.value.line +
       selectionCounts.value.straightLine +
       selectionCounts.value.ray +
+      selectionCounts.value.vector +
       selectionCounts.value.face,
   )
   const totalSceneElements = computed(
@@ -103,6 +110,7 @@ export const useSceneStore = defineStore('scene', () => {
       sceneCounts.value.line +
       sceneCounts.value.straightLine +
       sceneCounts.value.ray +
+      sceneCounts.value.vector +
       sceneCounts.value.face,
   )
 
@@ -140,6 +148,7 @@ export const useSceneStore = defineStore('scene', () => {
       line: scene.selection.lines.size,
       straightLine: scene.selection.straightLines.size,
       ray: scene.selection.rays.size,
+      vector: scene.selection.vectors.size,
       circle: scene.selection.circles.size,
       face: scene.selection.faces.size,
     }
@@ -148,6 +157,7 @@ export const useSceneStore = defineStore('scene', () => {
       line: scene.lines.size,
       straightLine: scene.straightLines.size,
       ray: scene.rays.size,
+      vector: scene.vectors.size,
       circle: scene.circles.size,
       face: scene.faces.size,
     }

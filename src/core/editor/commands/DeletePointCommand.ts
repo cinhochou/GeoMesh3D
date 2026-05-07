@@ -3,6 +3,7 @@ import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
 import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
+import { GeoVector3 } from '../../geometry/GeoVector3'
 import { Circle3 } from '../../geometry/Circle3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarFace } from '../../geometry/Plane'
@@ -19,6 +20,7 @@ export class DeletePointCommand implements Command {
     private relatedLines: Line3[],
     private relatedStraightLines: StraightLine3[],
     private relatedRays: Ray3[],
+    private relatedVectors: GeoVector3[],
     private relatedCircles: Circle3[],
     private relatedFaces: PlanarFace[],
     private pointConstraint: SceneConstraint | null = null,
@@ -57,6 +59,10 @@ export class DeletePointCommand implements Command {
     this.relatedRays.forEach((ray) => {
       this.scene.rays.delete(ray.id)
       this.scene.selection.rays.delete(ray.id)
+    })
+    this.relatedVectors.forEach((vector) => {
+      this.scene.vectors.delete(vector.id)
+      this.scene.selection.vectors.delete(vector.id)
     })
     this.relatedCircles.forEach((circle) => {
       this.scene.circles.delete(circle.id)
@@ -101,6 +107,7 @@ export class DeletePointCommand implements Command {
     this.relatedLines.forEach((line) => this.scene.addLine(line))
     this.relatedStraightLines.forEach((line) => this.scene.addStraightLine(line))
     this.relatedRays.forEach((ray) => this.scene.addRay(ray))
+    this.relatedVectors.forEach((vector) => this.scene.addVector(vector))
     this.relatedCircles.forEach((circle) => this.scene.addCircle(circle))
     this.centerPoints.forEach((point) => this.scene.addPoint(point))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))

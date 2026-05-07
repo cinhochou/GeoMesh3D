@@ -9,6 +9,7 @@ type ContentGroupKey =
   | 'line'
   | 'straightLine'
   | 'ray'
+  | 'vector'
   | 'circle'
   | 'face'
   | 'hexahedron'
@@ -24,6 +25,7 @@ interface ContentGroupCollapseState {
   line: boolean
   straightLine: boolean
   ray: boolean
+  vector: boolean
   circle: boolean
   face: boolean
   hexahedron: boolean
@@ -35,6 +37,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   line: false,
   straightLine: false,
   ray: false,
+  vector: false,
   circle: false,
   face: false,
   hexahedron: false,
@@ -206,6 +209,7 @@ export const useUiStore = defineStore('ui', () => {
       line: collapsed,
       straightLine: collapsed,
       ray: collapsed,
+      vector: collapsed,
       circle: collapsed,
       face: collapsed,
       hexahedron: collapsed,

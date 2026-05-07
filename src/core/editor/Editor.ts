@@ -6,6 +6,7 @@ import { AddElementCommand } from './commands/AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
+import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarFace } from '../geometry/Plane'
@@ -24,12 +25,14 @@ import { TransformPointsCommand } from './commands/TransformPointsCommand'
 import { UpdatePointCommand } from './commands/UpdatePointCommand'
 import { UpdateLineCommand } from './commands/UpdateLineCommand'
 import { UpdateRayCommand } from './commands/UpdateRayCommand'
+import { UpdateVectorCommand } from './commands/UpdateVectorCommand'
 import { UpdateCircleCommand } from './commands/UpdateCircleCommand'
 import { UpdateStraightLineCommand } from './commands/UpdateStraightLineCommand'
 import { UpdateFaceCommand } from './commands/UpdateFaceCommand'
 import { DeletePointCommand } from './commands/DeletePointCommand'
 import { DeleteLineCommand } from './commands/DeleteLineCommand'
 import { DeleteRayCommand } from './commands/DeleteRayCommand'
+import { DeleteVectorCommand } from './commands/DeleteVectorCommand'
 import { DeleteStraightLineCommand } from './commands/DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
 import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
@@ -57,6 +60,7 @@ export enum EditorMode {
   CreateLine,
   CreateStraightLine,
   CreateRay,
+  CreateVector,
   CreateCircleThreePoints,
   CreatePlane,
   CreateHexahedron,
@@ -344,6 +348,11 @@ export class Editor {
     for (const line of this.scene.straightLines.values()) {
       if (!line.userLocked) continue
       if (line.p1.id === pointId || line.p2.id === pointId) return true
+    }
+
+    for (const vector of this.scene.vectors.values()) {
+      if (!vector.userLocked) continue
+      if (vector.p1.id === pointId || vector.p2.id === pointId) return true
     }
 
     for (const circle of this.scene.circles.values()) {
@@ -1099,6 +1108,9 @@ export class Editor {
     const relatedRays = [...this.scene.rays.values()].filter(
       (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
     )
+    const relatedVectors = [...this.scene.vectors.values()].filter(
+      (vector) => vector.p1.id === pointId || vector.p2.id === pointId,
+    )
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
@@ -1121,6 +1133,7 @@ export class Editor {
         new SyncLockStateCommand(
           faceCascade.pointTransforms,
           faceCascade.lineTransforms,
+          [],
           [],
           [],
           faceCascade.faceTransforms,
@@ -1167,6 +1180,16 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
+    const vectorTransforms = locked
+      ? []
+      : relatedVectors
+          .map((vector) => ({
+            vector,
+            before: vector.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
     const circleTransforms = locked
       ? []
       : relatedCircles
@@ -1182,6 +1205,7 @@ export class Editor {
       lineTransforms.length === 0 &&
       straightLineTransforms.length === 0 &&
       rayTransforms.length === 0 &&
+      vectorTransforms.length === 0 &&
       circleTransforms.length === 0
     ) {
       return
@@ -1193,6 +1217,7 @@ export class Editor {
         lineTransforms,
         straightLineTransforms,
         rayTransforms,
+        vectorTransforms,
         [],
         circleTransforms,
       ),
@@ -1217,6 +1242,7 @@ export class Editor {
         new SyncLockStateCommand(
           faceCascade.pointTransforms,
           faceCascade.lineTransforms,
+          [],
           [],
           [],
           faceCascade.faceTransforms,
@@ -1326,6 +1352,7 @@ export class Editor {
         [],
         [],
         [],
+        [],
         [{ circle, before: circle.userLocked, after: locked }],
       ),
     )
@@ -1370,7 +1397,7 @@ export class Editor {
       return
 
     this.executeCommand(
-      new SyncLockStateCommand(pointTransforms, lineTransforms, [], [], faceTransforms),
+      new SyncLockStateCommand(pointTransforms, lineTransforms, [], [], [], faceTransforms),
     )
   }
 
@@ -1441,6 +1468,9 @@ export class Editor {
     const relatedRays = [...this.scene.rays.values()].filter(
       (ray) => ray.p1.id === pointId || ray.p2.id === pointId,
     )
+    const relatedVectors = [...this.scene.vectors.values()].filter(
+      (vector) => vector.p1.id === pointId || vector.p2.id === pointId,
+    )
     const relatedStraightLines = [...this.scene.straightLines.values()].filter(
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
@@ -1465,6 +1495,7 @@ export class Editor {
         relatedLines,
         relatedStraightLines,
         relatedRays,
+        relatedVectors,
         relatedCircles,
         relatedFaces,
         pointConstraint,
@@ -1560,6 +1591,7 @@ export class Editor {
     const lines = [...this.scene.lines.values()]
     const straightLines = [...this.scene.straightLines.values()]
     const rays = [...this.scene.rays.values()]
+    const vectors = [...this.scene.vectors.values()]
     const circles = [...this.scene.circles.values()]
     const faces = [...this.scene.faces.values()]
     const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
@@ -1569,6 +1601,7 @@ export class Editor {
       lines.length === 0 &&
       straightLines.length === 0 &&
       rays.length === 0 &&
+      vectors.length === 0 &&
       circles.length === 0 &&
       faces.length === 0 &&
       constraints.length === 0
@@ -1576,7 +1609,7 @@ export class Editor {
       return
 
     this.executeCommand(
-      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, circles, faces, constraints),
+      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, vectors, circles, faces, constraints),
     )
     this.selectedPoints = []
   }
@@ -2218,6 +2251,7 @@ export class Editor {
     this.scene.selection.lines.forEach((id) => targets.push({ type: 'line', id }))
     this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
     this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
+    this.scene.selection.vectors.forEach((id) => targets.push({ type: 'vector', id }))
     this.scene.selection.faces.forEach((id) => targets.push({ type: 'face', id }))
     return targets
   }
@@ -2227,6 +2261,7 @@ export class Editor {
     this.scene.selection.lines.clear()
     this.scene.selection.straightLines.clear()
     this.scene.selection.rays.clear()
+    this.scene.selection.vectors.clear()
     this.scene.selection.faces.clear()
     this.selectedPoints = []
   }
@@ -2238,12 +2273,14 @@ export class Editor {
       (type === 'line' && this.scene.selection.lines.has(geoId)) ||
       (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
       (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
+      (type === 'vector' && this.scene.selection.vectors.has(geoId)) ||
       (type === 'face' && this.scene.selection.faces.has(geoId))
 
     if (isSelected) {
       if (type === 'line') this.scene.selection.deselectLine(geoId)
       else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
       else if (type === 'ray') this.scene.selection.deselectRay(geoId)
+      else if (type === 'vector') this.scene.selection.deselectVector(geoId)
       else this.scene.selection.deselectFace(geoId)
       return
     }
@@ -2255,6 +2292,7 @@ export class Editor {
     if (type === 'line') this.scene.selection.selectLine(geoId, true)
     else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
     else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
+    else if (type === 'vector') this.scene.selection.selectVector(geoId, true)
     else this.scene.selection.selectFace(geoId, true)
 
     this.tryCreateIntersectionPointFromSelection()
@@ -2342,6 +2380,158 @@ export class Editor {
   tryCreateRayWith(point: Point3) {
     if (this.mode !== EditorMode.CreateRay) return
     this.tryCreateLinearWith(point, 'ray')
+  }
+
+  tryCreateVectorWith(point: Point3) {
+    if (this.mode !== EditorMode.CreateVector) return
+
+    if (this.selectedPoints.length === 1 && this.selectedPoints[0]!.id === point.id) {
+      emitToast('向量的起点和终点不能是同一个点')
+      return
+    }
+
+    this.scene.selection.selectPoint(point.id, true)
+
+    if (!this.selectedPoints.includes(point)) {
+      this.selectedPoints.push(point)
+    }
+
+    if (this.selectedPoints.length === 2) {
+      const [sp1, sp2] = this.selectedPoints
+      const exists = [...this.scene.vectors.values()].some(
+        (v) => v.p1.id === sp1!.id && v.p2.id === sp2!.id,
+      )
+      if (!exists) {
+        const vector = new GeoVector3(
+          genId('v'),
+          genNextAvailableName(
+            [...this.scene.vectors.values()].map((v) => v.name),
+            0,
+            (index) => (index === 0 ? 'v' : `v${index}`),
+          ),
+          sp1!,
+          sp2!,
+          false,
+          true,
+        )
+        this.executeCommand(new AddElementCommand(this.scene, vector, 'vector'))
+      } else {
+        emitToast('向量已存在，创建向量失败')
+      }
+
+      this.selectedPoints = []
+      this.scene.selection.clear()
+    }
+  }
+
+  deleteVector(vectorId: string) {
+    const vector = this.scene.vectors.get(vectorId)
+    if (!vector) return
+    this.executeCommand(new DeleteVectorCommand(this.scene, vector))
+  }
+
+  isVectorLocked(vector: GeoVector3 | null | undefined) {
+    return Boolean(
+      vector &&
+        (vector.userLocked ||
+          (this.isPointCoordinateLocked(vector.p1) && this.isPointCoordinateLocked(vector.p2))),
+    )
+  }
+
+  isVectorGeometryLocked(vector: GeoVector3 | null | undefined) {
+    return Boolean(
+      vector &&
+        (vector.userLocked ||
+          this.isPointCoordinateLocked(vector.p1) ||
+          this.isPointCoordinateLocked(vector.p2)),
+    )
+  }
+
+  setVectorLockState(vectorId: string, locked: boolean) {
+    const vector = this.scene.vectors.get(vectorId)
+    if (!vector) return
+    const endpointTransforms = !locked
+      ? [vector.p1, vector.p2]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (vector.userLocked === locked && endpointTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [],
+        [],
+        [{ vector, before: vector.userLocked, after: locked }],
+      ),
+    )
+  }
+
+  updateVector(
+    vectorId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      userLocked?: boolean
+    },
+  ) {
+    const vector = this.scene.vectors.get(vectorId)
+    if (!vector) return
+
+    const nextName = patch.name ?? vector.name
+    const nextNameVisible = patch.nameVisible ?? vector.nameVisible
+    const nextValueVisible = patch.valueVisible ?? vector.valueVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? vector.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? vector.labelOffsetY
+    const nextVisible = patch.visible ?? vector.visible
+    const nextUserLocked = patch.userLocked ?? vector.userLocked
+    if (
+      nextName === vector.name &&
+      nextNameVisible === vector.nameVisible &&
+      nextValueVisible === vector.valueVisible &&
+      nextLabelOffsetX === vector.labelOffsetX &&
+      nextLabelOffsetY === vector.labelOffsetY &&
+      nextVisible === vector.visible &&
+      nextUserLocked === vector.userLocked
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateVectorCommand(
+        this.scene,
+        vector,
+        {
+          name: vector.name,
+          nameVisible: vector.nameVisible,
+          valueVisible: vector.valueVisible,
+          labelOffsetX: vector.labelOffsetX,
+          labelOffsetY: vector.labelOffsetY,
+          visible: vector.visible,
+          userLocked: vector.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
+          visible: nextVisible,
+          userLocked: nextUserLocked,
+        },
+      ),
+    )
   }
 
   tryCreateThreePointCircleWith(point: Point3) {

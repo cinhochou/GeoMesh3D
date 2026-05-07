@@ -374,6 +374,7 @@ watch(
     () => scene.selection.lines.size,
     () => scene.selection.straightLines.size,
     () => scene.selection.rays.size,
+    () => scene.selection.vectors.size,
     () => scene.selection.circles.size,
     () => scene.selection.faces.size,
     () => editor.mode,

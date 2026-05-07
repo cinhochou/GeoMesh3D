@@ -1,12 +1,13 @@
 import type { PlanarFace } from './Plane'
 import type { Point3 } from './Point3'
 import type { Ray3 } from './Ray3'
+import type { GeoVector3 } from './GeoVector3'
 import type { StraightLine3 } from './StraightLine3'
 import type { Line3 } from './Line3'
 import { Vec3 } from './Vec3'
 import { computePlaneBasis } from './PlanarUtils'
 
-export type IntersectionLinearType = 'line' | 'straightLine' | 'ray'
+export type IntersectionLinearType = 'line' | 'straightLine' | 'ray' | 'vector'
 export type IntersectionTargetType = IntersectionLinearType | 'face'
 
 export type IntersectionTargetRef = {
@@ -19,6 +20,7 @@ type IntersectionSceneAccess = {
   lines: Map<string, Line3>
   straightLines: Map<string, StraightLine3>
   rays: Map<string, Ray3>
+  vectors: Map<string, GeoVector3>
   faces: Map<string, PlanarFace>
 }
 
@@ -61,7 +63,9 @@ const resolveLinearData = (
         ? scene.straightLines.get(target.id)
         : target.type === 'ray'
           ? scene.rays.get(target.id)
-          : null
+          : target.type === 'vector'
+            ? scene.vectors.get(target.id)
+            : null
   if (!entity) return null
 
   const origin = entity.p1.position
@@ -127,11 +131,11 @@ const computeLinearFaceIntersection = (
 }
 
 export const isIntersectionTargetType = (type: string): type is IntersectionTargetType =>
-  type === 'line' || type === 'straightLine' || type === 'ray' || type === 'face'
+  type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector' || type === 'face'
 
 export const isLinearIntersectionTarget = (
   type: IntersectionTargetType,
-): type is IntersectionLinearType => type === 'line' || type === 'straightLine' || type === 'ray'
+): type is IntersectionLinearType => type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector'
 
 export const canCreateIntersectionFromTargets = (a: IntersectionTargetRef, b: IntersectionTargetRef) =>
   (isLinearIntersectionTarget(a.type) && isLinearIntersectionTarget(b.type)) ||

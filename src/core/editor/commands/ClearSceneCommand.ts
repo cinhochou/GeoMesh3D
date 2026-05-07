@@ -2,6 +2,7 @@ import type { Command } from '../Command'
 import { Point3 } from '../../geometry/Point3'
 import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
+import { GeoVector3 } from '../../geometry/GeoVector3'
 import { Circle3 } from '../../geometry/Circle3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarFace } from '../../geometry/Plane'
@@ -14,6 +15,7 @@ export class ClearSceneCommand implements Command {
     private lines: Line3[],
     private straightLines: StraightLine3[],
     private rays: Ray3[],
+    private vectors: GeoVector3[],
     private circles: Circle3[],
     private faces: PlanarFace[],
     private constraints: SceneConstraint[],
@@ -23,6 +25,7 @@ export class ClearSceneCommand implements Command {
     this.scene.lines.clear()
     this.scene.straightLines.clear()
     this.scene.rays.clear()
+    this.scene.vectors.clear()
     this.scene.circles.clear()
     this.scene.faces.clear()
     this.points.forEach((point) => this.scene.points.delete(point.id))
@@ -35,6 +38,7 @@ export class ClearSceneCommand implements Command {
     this.lines.forEach((line) => this.scene.addLine(line))
     this.straightLines.forEach((line) => this.scene.addStraightLine(line))
     this.rays.forEach((ray) => this.scene.addRay(ray))
+    this.vectors.forEach((vector) => this.scene.addVector(vector))
     this.circles.forEach((circle) => this.scene.addCircle(circle))
     this.faces.forEach((face) => this.scene.addFace(face))
     this.scene.constraints.push(...this.constraints)

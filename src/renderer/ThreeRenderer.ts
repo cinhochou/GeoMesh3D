@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene, type SceneRenderSyncState } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
+import { GeoVector3 } from '../core/geometry/GeoVector3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -27,7 +28,7 @@ type ARToolkitContextLike = {
   update: (sourceElement: HTMLElement) => void
 }
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -340,6 +341,7 @@ export class ThreeRenderer {
       userData.type === 'line' ||
       userData.type === 'straightLine' ||
       userData.type === 'ray' ||
+      userData.type === 'vector' ||
       userData.type === 'circle' ||
       userData.type === 'face'
     ) {
@@ -471,6 +473,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'ray' ||
         userData.type === 'straightLine' ||
+        userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'face'
       ) {
@@ -583,6 +586,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
         userData.type === 'ray' ||
+        userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'face'
       ) {
@@ -678,6 +682,7 @@ export class ThreeRenderer {
       this.syncLines(geoScene, dirtyState)
       this.syncStraightLines(geoScene, dirtyState)
       this.syncRays(geoScene, dirtyState)
+      this.syncVectors(geoScene, dirtyState)
       this.syncCircles(geoScene, dirtyState)
       this.syncFaces(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
@@ -761,6 +766,13 @@ export class ThreeRenderer {
         this.world.remove(obj)
         this.meshMap.delete(id)
       } else if (type === 'ray' && !scene.rays.has(id)) {
+        const label = userData.__labelSprite
+        if (label) this.world.remove(label)
+        const valueLabel = userData.__valueLabelSprite
+        if (valueLabel) this.world.remove(valueLabel)
+        this.world.remove(obj)
+        this.meshMap.delete(id)
+      } else if (type === 'vector' && !scene.vectors.has(id)) {
         const label = userData.__labelSprite
         if (label) this.world.remove(label)
         const valueLabel = userData.__valueLabelSprite
@@ -1418,6 +1430,119 @@ export class ThreeRenderer {
     })
   }
 
+  private syncVectors(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.vectorIds.forEach((id) => {
+      const vectorData = scene.vectors.get(id)
+      if (!vectorData) return
+      let vector = this.meshMap.get(id) as THREE.Line | undefined
+      const p1 = vectorData.p1.position
+      const p2 = vectorData.p2.position
+      const start = new THREE.Vector3(p1.x, p1.y, p1.z)
+      const end = new THREE.Vector3(p2.x, p2.y, p2.z)
+      const direction = end.clone().sub(start)
+      const length = direction.length()
+      const headLen = ThreeRenderer.RAY_HEAD_LENGTH
+      const shortEnough = length <= headLen
+      const lineEnd = shortEnough
+        ? end.clone()
+        : end.clone().sub(direction.clone().normalize().multiplyScalar(headLen))
+      const points = [start.clone(), lineEnd]
+
+      if (!vector) {
+        const geo = new THREE.BufferGeometry().setFromPoints(points)
+        const mat = new THREE.LineBasicMaterial({
+          color: ThreeRenderer.LINEAR_COLOR,
+          linewidth: ThreeRenderer.LINEAR_WIDTH,
+        })
+        vector = new THREE.Line(geo, mat)
+        vector.userData = { geoId: id, type: 'vector' }
+        this.attachVectorArrowHead(vector)
+        this.world.add(vector)
+        this.meshMap.set(id, vector)
+      } else {
+        vector.geometry.setFromPoints(points)
+        vector.geometry.attributes.position!.needsUpdate = true
+        vector.geometry.computeBoundingBox()
+        vector.geometry.computeBoundingSphere()
+      }
+
+      vector.visible = vectorData.visible
+      const isSelected = scene.selection.vectors.has(id)
+      ;(vector.material as THREE.LineBasicMaterial).color.set(
+        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+
+      this.updateVectorArrowHead(vector, vectorData, isSelected)
+      const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'vector' && this.activeLabelTarget.geoId === id
+      this.syncLinearLabel(
+        vector,
+        vectorData.name ?? '',
+        vectorData.nameVisible && vectorData.visible,
+        vectorData.valueVisible === true && vectorData.visible,
+        `=(${this.formatMetricNumber(vectorData.getDirectionVector().x)},${this.formatMetricNumber(vectorData.getDirectionVector().y)},${this.formatMetricNumber(vectorData.getDirectionVector().z)})`,
+        mid,
+        isLabelActive ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+      )
+    })
+  }
+
+  private attachVectorArrowHead(vector: THREE.Line) {
+    const geometry = new THREE.ConeGeometry(
+      ThreeRenderer.RAY_HEAD_RADIUS,
+      ThreeRenderer.RAY_HEAD_LENGTH,
+      16,
+    )
+    const material = new THREE.MeshBasicMaterial({ color: ThreeRenderer.LINEAR_COLOR })
+    const arrowHead = new THREE.Mesh(geometry, material)
+    arrowHead.rotation.x = Math.PI / 2
+    this.getRenderUserData(vector).__arrowHead = arrowHead
+    vector.add(arrowHead)
+  }
+
+  private updateVectorArrowHead(
+    vector: THREE.Line,
+    vectorData: GeoVector3,
+    isSelected: boolean,
+  ) {
+    const arrowHead = this.getRenderUserData(vector).__arrowHead
+    if (!arrowHead) return
+
+    arrowHead.visible = vectorData.visible
+    ;(arrowHead.material as THREE.MeshBasicMaterial).color.set(
+      isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+    )
+
+    const start = new THREE.Vector3(
+      vectorData.p1.position.x,
+      vectorData.p1.position.y,
+      vectorData.p1.position.z,
+    )
+    const end = new THREE.Vector3(
+      vectorData.p2.position.x,
+      vectorData.p2.position.y,
+      vectorData.p2.position.z,
+    )
+    const direction = end.clone().sub(start)
+    const length = direction.length()
+    if (length === 0) {
+      arrowHead.visible = false
+      return
+    }
+
+    const normalized = direction.clone().normalize()
+    const headLen = ThreeRenderer.RAY_HEAD_LENGTH
+    if (length <= headLen) {
+      const scale = length / headLen
+      arrowHead.scale.set(1, scale, 1)
+    } else {
+      arrowHead.scale.set(1, 1, 1)
+    }
+    arrowHead.position.copy(end.clone().sub(normalized.clone().multiplyScalar(headLen / 2)))
+    arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized)
+  }
+
   private syncCircles(scene: GeoScene, dirtyState: SceneRenderSyncState) {
     dirtyState.circleIds.forEach((id) => {
       const circleData = scene.circles.get(id)
@@ -1714,7 +1839,11 @@ export class ThreeRenderer {
         ThreeRenderer.LINE_LABEL_CENTER_Y,
       )
       existingLabel.position.copy(
-        this.getScreenOffsetPosition(anchor, 0, ThreeRenderer.LINE_LABEL_OFFSET_Y),
+        this.getScreenOffsetPosition(
+          anchor,
+          objectUserData.__labelOffsetX ?? 0,
+          objectUserData.__labelOffsetY ?? ThreeRenderer.LINE_LABEL_OFFSET_Y,
+        ),
       )
       const nextText = visible ? `${text}${combinedValueText}` : valueText
       const labelText = this.getLabelUserData(existingLabel).text ?? ''
@@ -2453,6 +2582,7 @@ export class ThreeRenderer {
         userData.type === 'line' ||
         userData.type === 'straightLine' ||
         userData.type === 'ray' ||
+        userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'face'
       ) {
@@ -2470,6 +2600,7 @@ export class ThreeRenderer {
     if (type === 'line') return this.currentSceneRef.lines.get(geoId) ?? null
     if (type === 'straightLine') return this.currentSceneRef.straightLines.get(geoId) ?? null
     if (type === 'ray') return this.currentSceneRef.rays.get(geoId) ?? null
+    if (type === 'vector') return this.currentSceneRef.vectors.get(geoId) ?? null
     if (type === 'circle') return this.currentSceneRef.circles.get(geoId) ?? null
     if (type === 'face') return this.currentSceneRef.faces.get(geoId) ?? null
     return null

@@ -9,6 +9,7 @@ import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Circle3 } from '../core/geometry/Circle3'
 import type { Ray3 } from '../core/geometry/Ray3'
+import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PlanarFace } from '../core/geometry/Plane'
 import { useUiStore } from '@/store/uiStore'
@@ -52,6 +53,12 @@ const selectedRays = computed(() => {
     .map((id) => props.scene.rays.get(id))
     .filter((ray): ray is Ray3 => ray !== undefined)
 })
+const selectedVectors = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.vectors]
+    .map((id) => props.scene.vectors.get(id))
+    .filter((vector): vector is GeoVector3 => vector !== undefined)
+})
 const selectedFaces = computed(() => {
   void commandRevision.value
   return [...props.scene.selection.faces]
@@ -79,6 +86,10 @@ const straightLinesInScene = computed(() => {
 const raysInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.rays.values()]
+})
+const vectorsInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.vectors.values()]
 })
 const facesInScene = computed(() => {
   void commandRevision.value
@@ -114,18 +125,23 @@ const selectedEditableFaces = computed(() =>
 )
 
 const editing = ref<{
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedStraightLineEditorPoint = ref<'p1' | 'p2' | null>(null)
 const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
+const expandedVectorEditorPoint = ref<'p1' | 'p2' | null>(null)
 const isPointCoordinateLocked = (point: Point3 | undefined) =>
   Boolean(point && props.editor.isPointCoordinateLocked(point))
 const isLineEndpointCoordinateLocked = (line: Line3 | undefined, point: Point3 | undefined) =>
   Boolean(line && point && (props.editor.isLineLocked(line) || isPointCoordinateLocked(point)))
 const isRayEndpointCoordinateLocked = (ray: Ray3 | undefined, point: Point3 | undefined) =>
   Boolean(ray && point && (props.editor.isRayLocked(ray) || isPointCoordinateLocked(point)))
+const isVectorEndpointCoordinateLocked = (vector: GeoVector3 | undefined, point: Point3 | undefined) =>
+  Boolean(
+    vector && point && (props.editor.isVectorLocked(vector) || isPointCoordinateLocked(point)),
+  )
 const isStraightLineEndpointCoordinateLocked = (
   line: StraightLine3 | undefined,
   point: Point3 | undefined,
@@ -176,6 +192,16 @@ const editRay = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editVector = reactive({
+  name: '',
+  nameVisible: true,
+  valueVisible: false,
+  visible: true,
+  userLocked: false,
+  length: '',
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+})
 const editStraightLine = reactive({
   name: '',
   nameVisible: true,
@@ -220,6 +246,7 @@ const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
 let straightLineCoordCollapseTimer: number | null = null
 let rayCoordCollapseTimer: number | null = null
+let vectorCoordCollapseTimer: number | null = null
 const splitPaneRef = ref<HTMLElement | null>(null)
 const splitPaneDividerRef = ref<HTMLElement | null>(null)
 const selectedPaneHeight = ref(240)
@@ -234,6 +261,7 @@ const selectedStraightLineIds = computed(() =>
   selectedStraightLines.value.map((l) => l?.id).filter(Boolean),
 )
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
+const selectedVectorIds = computed(() => selectedVectors.value.map((v) => v?.id).filter(Boolean))
 const selectedEditableFaceIds = computed(() =>
   selectedEditableFaces.value.map((f) => f?.id).filter(Boolean),
 )
@@ -246,19 +274,21 @@ const totalContentCount = computed(
     linesInScene.value.length +
     straightLinesInScene.value.length +
     raysInScene.value.length +
+    vectorsInScene.value.length +
     circlesInScene.value.length +
     facesInScene.value.length +
     hexahedronsInScene.value.length,
 )
 const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
 const contentGroupLabels: Record<
-  'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron',
+  'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
   string
 > = {
   point: '点',
   line: '线段',
   straightLine: '直线',
   ray: '射线',
+  vector: '向量',
   circle: '圆',
   face: '面',
   hexahedron: '立体',
@@ -268,7 +298,7 @@ const setContentGroupsCollapsed = (collapsed: boolean) => {
 }
 
 const toggleContentGroup = (
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | 'hexahedron',
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
 ) => {
   if (!canCollapseContentGroups.value) return
   uiStore.toggleContentGroup(type)
@@ -312,6 +342,14 @@ const selectRayFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectRay(id)
+}
+
+const selectVectorFromContent = (id: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectVector(id)
 }
 
 const selectFaceFromContent = (id: string) => {
@@ -434,6 +472,7 @@ watch(
     selectedLineIds,
     selectedStraightLineIds,
     selectedRayIds,
+    selectedVectorIds,
     selectedEditableFaceIds,
     selectedCircleIds,
     selectedHexahedronIds,
@@ -445,6 +484,7 @@ watch(
     if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
     if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
     if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
+    if (type === 'vector' && !selectedVectorIds.value.includes(id)) editing.value = null
     if (type === 'face' && !selectedEditableFaceIds.value.includes(id)) editing.value = null
     if (type === 'circle' && !selectedCircleIds.value.includes(id)) editing.value = null
     if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
@@ -478,6 +518,10 @@ const normalizeCoord = (value: string) => {
 const normalizeDisplayLength = (value: string) => {
   const n = Number(value)
   return Number.isFinite(n) ? Math.max(1, n).toFixed(2) : value
+}
+const normalizeVectorLength = (value: string) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, n).toFixed(2) : value
 }
 const normalizeFaceEdgeLength = (value: string) => {
   const n = Number(value)
@@ -660,6 +704,61 @@ const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
   editRay.displayLength = nextValue
   applyEditRay()
 }
+const handleVectorLengthFocus = () => {
+  setCoordFocus('vector.length', true)
+}
+const handleVectorLengthBlur = () => {
+  editVector.length = normalizeVectorLength(editVector.length)
+  setCoordFocus('vector.length', false)
+  applyEditVector()
+}
+const nudgeVectorLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('vector.length', direction)
+  if (nextValue === null) return
+  setCoordFocus('vector.length', true)
+  editVector.length = nextValue
+  applyEditVector()
+  setCoordFocus('vector.length', false)
+}
+const handleVectorCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  if (vectorCoordCollapseTimer !== null) {
+    window.clearTimeout(vectorCoordCollapseTimer)
+    vectorCoordCollapseTimer = null
+  }
+  expandedVectorEditorPoint.value = which
+  setCoordFocus(`vector.${which}.${axis}`, true)
+}
+const handleVectorCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editVector[which][axis] = normalizeCoord(editVector[which][axis])
+  setCoordFocus(`vector.${which}.${axis}`, false)
+  applyEditVector()
+  if (vectorCoordCollapseTimer !== null) {
+    window.clearTimeout(vectorCoordCollapseTimer)
+  }
+  vectorCoordCollapseTimer = window.setTimeout(() => {
+    const stillFocused =
+      focusedCoord[`vector.${which}.x`] ||
+      focusedCoord[`vector.${which}.y`] ||
+      focusedCoord[`vector.${which}.z`]
+    if (!stillFocused && expandedVectorEditorPoint.value === which) {
+      expandedVectorEditorPoint.value = null
+    }
+    vectorCoordCollapseTimer = null
+  }, 0)
+}
+const keepVectorCoordExpanded = (which: 'p1' | 'p2') => {
+  if (vectorCoordCollapseTimer !== null) {
+    window.clearTimeout(vectorCoordCollapseTimer)
+    vectorCoordCollapseTimer = null
+  }
+  expandedVectorEditorPoint.value = which
+}
+const nudgeVectorCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput(`vector.${which}.${axis}`, direction)
+  if (nextValue === null) return
+  editVector[which][axis] = nextValue
+  applyEditVector()
+}
 const handleStraightLineDisplayLengthFocus = () => {
   setCoordFocus('straightLine.displayLength', true)
 }
@@ -798,6 +897,26 @@ const startEditRay = (r: Ray3 | undefined) => {
   editRay.p2.x = toFixed2(r.p2.position.x)
   editRay.p2.y = toFixed2(r.p2.position.y)
   editRay.p2.z = toFixed2(r.p2.position.z)
+}
+const startEditVector = (v: GeoVector3 | undefined) => {
+  if (!v) return
+  editing.value = { type: 'vector', id: v.id }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  expandedVectorEditorPoint.value = null
+  editVector.name = v.name ?? ''
+  editVector.nameVisible = v.nameVisible !== false
+  editVector.valueVisible = v.valueVisible === true
+  editVector.visible = v.visible !== false
+  editVector.userLocked = props.editor.isVectorLocked(v)
+  editVector.length = toFixed2(v.getLength())
+  editVector.p1.x = toFixed2(v.p1.position.x)
+  editVector.p1.y = toFixed2(v.p1.position.y)
+  editVector.p1.z = toFixed2(v.p1.position.z)
+  editVector.p2.x = toFixed2(v.p2.position.x)
+  editVector.p2.y = toFixed2(v.p2.position.y)
+  editVector.p2.z = toFixed2(v.p2.position.z)
 }
 const startEditFace = (face: PlanarFace | undefined) => {
   if (!face) return
@@ -995,6 +1114,85 @@ const applyEditRay = () => {
   if (!updatedRay || props.editor.isRayLocked(updatedRay)) return
   applyPointPosition(ray.p1.id, editRay.p1.x, editRay.p1.y, editRay.p1.z)
   applyPointPosition(ray.p2.id, editRay.p2.x, editRay.p2.y, editRay.p2.z)
+}
+const applyEditVector = () => {
+  if (!editing.value || editing.value.type !== 'vector') return
+  const vector = props.scene.vectors.get(editing.value.id)
+  if (!vector) return
+  const previousUserLocked = props.editor.isVectorLocked(vector)
+  props.editor.updateVector(editing.value.id, {
+    name: editVector.name,
+    nameVisible: editVector.nameVisible,
+    valueVisible: editVector.valueVisible,
+    visible: editVector.visible,
+  })
+  if (editVector.userLocked !== previousUserLocked) {
+    props.editor.setVectorLockState(editing.value.id, editVector.userLocked)
+  }
+
+  const updatedVector = props.scene.vectors.get(editing.value.id)
+  if (!updatedVector || props.editor.isVectorLocked(updatedVector)) return
+
+  const isLengthFocused = !!focusedCoord['vector.length']
+  const previousLength = updatedVector.getLength()
+  const parsedLength = Number(editVector.length)
+  const lengthChanged =
+    Number.isFinite(parsedLength) && parsedLength >= 0 && Math.abs(parsedLength - previousLength) > 1e-6
+
+  if (isLengthFocused && lengthChanged) {
+    if (previousLength > 1e-6) {
+      const scale = parsedLength / previousLength
+      const newP2 = new Vec3(
+        updatedVector.p1.position.x + (updatedVector.p2.position.x - updatedVector.p1.position.x) * scale,
+        updatedVector.p1.position.y + (updatedVector.p2.position.y - updatedVector.p1.position.y) * scale,
+        updatedVector.p1.position.z + (updatedVector.p2.position.z - updatedVector.p1.position.z) * scale,
+      )
+      props.editor.setPointPosition(updatedVector.p2.id, newP2)
+    } else if (parsedLength > 1e-6) {
+      const dir = updatedVector.getNormalizedDirectionVector()
+      const newP2 = new Vec3(
+        updatedVector.p1.position.x + dir.x * parsedLength,
+        updatedVector.p1.position.y + dir.y * parsedLength,
+        updatedVector.p1.position.z + dir.z * parsedLength,
+      )
+      props.editor.setPointPosition(updatedVector.p2.id, newP2)
+    } else {
+      props.editor.setPointPosition(
+        updatedVector.p2.id,
+        new Vec3(updatedVector.p1.position.x, updatedVector.p1.position.y, updatedVector.p1.position.z),
+      )
+    }
+    return
+  }
+
+  const p1x = Number(editVector.p1.x)
+  const p1y = Number(editVector.p1.y)
+  const p1z = Number(editVector.p1.z)
+  const p2x = Number(editVector.p2.x)
+  const p2y = Number(editVector.p2.y)
+  const p2z = Number(editVector.p2.z)
+
+  const p1Changed =
+    Number.isFinite(p1x) &&
+    Number.isFinite(p1y) &&
+    Number.isFinite(p1z) &&
+    (Math.abs(p1x - updatedVector.p1.position.x) > 1e-6 ||
+      Math.abs(p1y - updatedVector.p1.position.y) > 1e-6 ||
+      Math.abs(p1z - updatedVector.p1.position.z) > 1e-6)
+  const p2Changed =
+    Number.isFinite(p2x) &&
+    Number.isFinite(p2y) &&
+    Number.isFinite(p2z) &&
+    (Math.abs(p2x - updatedVector.p2.position.x) > 1e-6 ||
+      Math.abs(p2y - updatedVector.p2.position.y) > 1e-6 ||
+      Math.abs(p2z - updatedVector.p2.position.z) > 1e-6)
+
+  if (p1Changed) {
+    applyPointPosition(updatedVector.p1.id, editVector.p1.x, editVector.p1.y, editVector.p1.z)
+  }
+  if (p2Changed) {
+    applyPointPosition(updatedVector.p2.id, editVector.p2.x, editVector.p2.y, editVector.p2.z)
+  }
 }
 const applyEditStraightLine = () => {
   if (!editing.value || editing.value.type !== 'straightLine') return
@@ -1419,6 +1617,40 @@ watch(
 
 watch(
   () => {
+    if (!editing.value || editing.value.type !== 'vector') return null
+    const vec = props.scene.vectors.get(editing.value.id)
+    if (!vec) return null
+    return {
+      name: vec.name ?? '',
+      nameVisible: vec.nameVisible !== false,
+      valueVisible: vec.valueVisible === true,
+      visible: vec.visible !== false,
+      userLocked: props.editor.isVectorLocked(vec),
+      length: vec.getLength(),
+      p1: { x: vec.p1.position.x, y: vec.p1.position.y, z: vec.p1.position.z },
+      p2: { x: vec.p2.position.x, y: vec.p2.position.y, z: vec.p2.position.z },
+    }
+  },
+  (newVec) => {
+    if (!newVec) return
+    editVector.name = newVec.name
+    editVector.nameVisible = newVec.nameVisible
+    editVector.valueVisible = newVec.valueVisible
+    editVector.visible = newVec.visible
+    editVector.userLocked = newVec.userLocked
+    if (!focusedCoord['vector.length']) editVector.length = toFixed2(newVec.length)
+    if (!focusedCoord['vector.p1.x']) editVector.p1.x = toFixed2(newVec.p1.x)
+    if (!focusedCoord['vector.p1.y']) editVector.p1.y = toFixed2(newVec.p1.y)
+    if (!focusedCoord['vector.p1.z']) editVector.p1.z = toFixed2(newVec.p1.z)
+    if (!focusedCoord['vector.p2.x']) editVector.p2.x = toFixed2(newVec.p2.x)
+    if (!focusedCoord['vector.p2.y']) editVector.p2.y = toFixed2(newVec.p2.y)
+    if (!focusedCoord['vector.p2.z']) editVector.p2.z = toFixed2(newVec.p2.z)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
     if (!editing.value || editing.value.type !== 'circle') return null
     const circle = props.scene.circles.get(editing.value.id)
     if (!circle) return null
@@ -1546,6 +1778,7 @@ onUnmounted(() => {
         selectedLines.length > 0 ||
         selectedStraightLines.length > 0 ||
         selectedRays.length > 0 ||
+        selectedVectors.length > 0 ||
         selectedCircles.length > 0 ||
         selectedEditableFaces.length > 0 ||
         selectedHexahedrons.length > 0
@@ -1561,6 +1794,7 @@ onUnmounted(() => {
             selectedLines.length === 0 &&
             selectedStraightLines.length === 0 &&
             selectedRays.length === 0 &&
+            selectedVectors.length === 0 &&
             selectedCircles.length === 0 &&
             selectedEditableFaces.length === 0 &&
             selectedHexahedrons.length === 0
@@ -1588,7 +1822,12 @@ onUnmounted(() => {
                 数值显示
               </label>
               <label class="toggle-label">
-                <input type="checkbox" v-model="editPoint.userLocked" @change="applyEditPoint" :disabled="hasCircleConstraint(p!)" />
+                <input
+                  type="checkbox"
+                  v-model="editPoint.userLocked"
+                  @change="applyEditPoint"
+                  :disabled="hasCircleConstraint(p!)"
+                />
                 锁定
               </label>
             </div>
@@ -2695,6 +2934,324 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="v in selectedVectors"
+          :key="v!.id"
+          class="selectedVector-info"
+          @dblclick="startEditVector(v)"
+        >
+          <div v-if="editing?.type === 'vector' && editing?.id === v!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editVector.name" @input="applyEditVector" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editVector.visible" @change="applyEditVector" />
+                {{ editVector.visible ? '向量显示' : '向量隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editVector.nameVisible" @change="applyEditVector" />
+                {{ editVector.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editVector.valueVisible"
+                  @change="applyEditVector"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editVector.userLocked" @change="applyEditVector" />
+                锁定
+              </label>
+            </div>
+            <div class="name-row length-row">
+              <label>长度</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeVectorLength('down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.length', el)"
+                  v-model="editVector.length"
+                  @input="applyEditVector"
+                  @focus="handleVectorLengthFocus"
+                  @blur="handleVectorLengthBlur"
+                  step="0.5"
+                  min="0"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeVectorLength('up')"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  起点{{ v!.p1.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">起点{{ v!.p1.name ?? '' }}</span>
+                <span v-if="isPointCoordinateLocked(v!.p1)" class="lock-badge">🔒</span>
+              </div>
+              <div class="line-editor-head">
+                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                  终点{{ v!.p2.name ?? '' }}(x,y,z)
+                </span>
+                <span v-else class="line-editor-title-short">终点{{ v!.p2.name ?? '' }}</span>
+                <span v-if="isPointCoordinateLocked(v!.p2)" class="lock-badge">🔒</span>
+              </div>
+
+              <div class="line-axis-label">x</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'x', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p1.x', el)"
+                  v-model="editVector.p1.x"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p1', 'x')"
+                  @blur="handleVectorCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'x', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'x', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p2.x', el)"
+                  v-model="editVector.p2.x"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p2', 'x')"
+                  @blur="handleVectorCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'x', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">y</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'y', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p1.y', el)"
+                  v-model="editVector.p1.y"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p1', 'y')"
+                  @blur="handleVectorCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'y', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'y', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p2.y', el)"
+                  v-model="editVector.p2.y"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p2', 'y')"
+                  @blur="handleVectorCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'y', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="line-axis-label">z</div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'z', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p1.z', el)"
+                  v-model="editVector.p1.z"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p1', 'z')"
+                  @blur="handleVectorCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
+                  @click="nudgeVectorCoord('p1', 'z', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
+                >
+                  +
+                </button>
+              </div>
+              <div
+                class="coord-input"
+                :class="{
+                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
+                }"
+              >
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'z', 'down')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('vector.p2.z', el)"
+                  v-model="editVector.p2.z"
+                  @input="applyEditVector"
+                  @focus="handleVectorCoordFocus('p2', 'z')"
+                  @blur="handleVectorCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
+                  @click="nudgeVectorCoord('p2', 'z', 'up')"
+                  :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              向量{{ v!.name ?? '' }}
+              <span v-if="props.editor.isVectorLocked(v!)" class="lock-badge">🔒</span>
+            </div>
+            <div>长度：{{ v!.getLength().toFixed(2) }}</div>
+            <div>
+              起点{{ v!.p1.name ?? '' }}（{{ v!.p1.position.x.toFixed(2) }},
+              {{ v!.p1.position.y.toFixed(2) }}, {{ v!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              终点{{ v!.p2.name ?? '' }}（{{ v!.p2.position.x.toFixed(2) }},
+              {{ v!.p2.position.y.toFixed(2) }}, {{ v!.p2.position.z.toFixed(2) }}）
+            </div>
+            <div>
+              向量（{{ v!.getDirectionVector().x.toFixed(2) }},
+              {{ v!.getDirectionVector().y.toFixed(2) }}, {{ v!.getDirectionVector().z.toFixed(2) }}）
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="c in selectedCircles"
           :key="c!.id"
           class="selectedCircle-info"
@@ -2735,9 +3292,7 @@ onUnmounted(() => {
             </div>
             <div class="face-metric-row">半径：{{ c!.getRadius().toFixed(2) }}</div>
             <div class="face-metric-row">面积：{{ c!.getArea().toFixed(2) }}</div>
-            <div
-              class="line-editor-grid circle-editor-grid line-editor-grid--compact"
-            >
+            <div class="line-editor-grid circle-editor-grid line-editor-grid--compact">
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
@@ -3043,20 +3598,20 @@ onUnmounted(() => {
             <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
             <div>面积：{{ c!.getArea().toFixed(2) }}</div>
             <div>
-              {{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+              点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
               {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              {{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
+              点{{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
               {{ c!.p2.position.y.toFixed(2) }}, {{ c!.p2.position.z.toFixed(2) }}）
             </div>
             <div>
-              {{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
+              点{{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
               {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
             </div>
             <div v-if="getCircleCenterPoint(c!.id)">
               <span class="point-summary-text">
-                {{ getCircleCenterPoint(c!.id)!.name }}（{{
+                点{{ getCircleCenterPoint(c!.id)!.name }}（{{
                   getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
                 }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
                 {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
@@ -3653,6 +4208,50 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="vectorsInScene.length > 0" class="content-group">
+          <button
+            v-if="canCollapseContentGroups"
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.vector"
+            @click="toggleContentGroup('vector')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.vector ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.vector }}</span>
+            <span class="content-group-count">{{ vectorsInScene.length }}</span>
+          </button>
+          <div v-else class="content-group-header content-group-title">
+            <span class="content-group-label">{{ contentGroupLabels.vector }}</span>
+            <span class="content-group-count">{{ vectorsInScene.length }}</span>
+          </div>
+          <div
+            v-show="!collapsedContentGroups.vector || !canCollapseContentGroups"
+            class="content-group-body"
+          >
+            <div
+              v-for="vec in vectorsInScene"
+              :key="vec!.id"
+              class="vector-info selectable-geo"
+              :class="{ 'is-selected': selectedVectorIds.includes(vec!.id) }"
+              @click="selectVectorFromContent(vec!.id)"
+            >
+              <div>
+                向量{{ vec!.name ?? '' }}
+                <span v-if="props.editor.isVectorLocked(vec!)" class="lock-badge">🔒</span>
+              </div>
+              <div>
+                起点{{ vec!.p1.name ?? '' }}（{{ vec!.p1.position.x.toFixed(2) }},
+                {{ vec!.p1.position.y.toFixed(2) }}, {{ vec!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                终点{{ vec!.p2.name ?? '' }}（{{ vec!.p2.position.x.toFixed(2) }},
+                {{ vec!.p2.position.y.toFixed(2) }}, {{ vec!.p2.position.z.toFixed(2) }}）
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="circlesInScene.length > 0" class="content-group">
           <button
             v-if="canCollapseContentGroups"
@@ -3835,11 +4434,13 @@ hr {
 .selectedLine-info,
 .selectedStraightLine-info,
 .selectedRay-info,
+.selectedVector-info,
 .selectedCircle-info,
 .selectedFace-info,
 .line-info,
 .straight-line-info,
 .ray-info,
+.vector-info,
 .circle-info,
 .face-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
@@ -3862,6 +4463,11 @@ hr {
 .ray-info {
   background-color: rgba(80, 136, 194, 0.28);
   border-left-color: #7fc8ff;
+}
+.selectedVector-info,
+.vector-info {
+  background-color: rgba(0, 170, 160, 0.22);
+  border-left-color: #00d4c8;
 }
 .selectedCircle-info,
 .circle-info {
@@ -4301,11 +4907,13 @@ hr {
   .selectedLine-info,
   .selectedFace-info,
   .selectedRay-info,
+  .selectedVector-info,
   .selectedCircle-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
+  .vector-info,
   .circle-info {
     padding: 6px;
     font-size: 12px;
@@ -4376,11 +4984,13 @@ hr {
   .selectedLine-info,
   .selectedFace-info,
   .selectedRay-info,
+  .selectedVector-info,
   .selectedCircle-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
+  .vector-info,
   .circle-info {
     margin-bottom: 4px;
     padding: 5px;
@@ -4584,7 +5194,7 @@ hr {
   max-width: 320px;
 }
 
-.circle-editor-grid.line-editor-grid--compact > .line-editor-head:nth-child(n+2) {
+.circle-editor-grid.line-editor-grid--compact > .line-editor-head:nth-child(n + 2) {
   padding-right: 0;
   padding-left: 0;
   text-align: center;

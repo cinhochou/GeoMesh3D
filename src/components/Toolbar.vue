@@ -1,4 +1,4 @@
-﻿<!-- src/components/ToolBar.vue -->
+<!-- src/components/ToolBar.vue -->
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -261,6 +261,10 @@ const selectCreateRayMode = () => {
   setMode(EditorMode.CreateRay)
 }
 
+const selectCreateVectorMode = () => {
+  setMode(EditorMode.CreateVector)
+}
+
 const selectCreateThreePointCircleMode = () => {
   setMode(EditorMode.CreateCircleThreePoints)
 }
@@ -500,7 +504,8 @@ onUnmounted(() => {
           'is-active':
             currentMode === EditorMode.CreateLine ||
             currentMode === EditorMode.CreateStraightLine ||
-            currentMode === EditorMode.CreateRay,
+            currentMode === EditorMode.CreateRay ||
+            currentMode === EditorMode.CreateVector,
           'is-open': isLineMenuOpen,
         }"
         @click="toggleLineMenu"
@@ -684,6 +689,13 @@ onUnmounted(() => {
         @click="selectCreateRayMode"
       >
         射线
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateVector }"
+        @click="selectCreateVectorMode"
+      >
+        向量
       </button>
     </div>
   </Teleport>
