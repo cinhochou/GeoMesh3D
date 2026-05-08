@@ -12,13 +12,22 @@ import { PlanarFace } from '../../geometry/Plane'
 export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face'
 
 export class AddElementCommand implements Command {
+  private centerPoint: Point3 | null = null
+  private prevCircleId: string | null = null
+  private prevCircleRole: 'center' | null = null
+
   constructor(
     private scene: Scene,
     private element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarFace,
     private type: ElementType,
-  ) {}
+  ) {
+    if (type === 'circle' && (element as Circle3).isNormalCircle()) {
+      this.centerPoint = (element as Circle3).p1
+      this.prevCircleId = this.centerPoint.circleId
+      this.prevCircleRole = this.centerPoint.circleRole
+    }
+  }
 
-  /** 执行：将元素添加到场景 */
   execute() {
     if (this.type === 'point') {
       this.scene.addPoint(this.element as Point3)
@@ -30,6 +39,10 @@ export class AddElementCommand implements Command {
       this.scene.addFace(this.element as PlanarFace)
     } else if (this.type === 'circle') {
       this.scene.addCircle(this.element as Circle3)
+      if (this.centerPoint) {
+        this.centerPoint.circleId = this.element.id
+        this.centerPoint.circleRole = 'center'
+      }
     } else if (this.type === 'vector') {
       this.scene.addVector(this.element as GeoVector3)
     } else {
@@ -37,7 +50,6 @@ export class AddElementCommand implements Command {
     }
   }
 
-  /** 撤销：将元素从场景移除 */
   undo() {
     if (this.type === 'point') {
       this.scene.points.delete(this.element.id)
@@ -53,6 +65,10 @@ export class AddElementCommand implements Command {
     } else if (this.type === 'circle') {
       this.scene.circles.delete(this.element.id)
       this.scene.selection.circles.delete(this.element.id)
+      if (this.centerPoint) {
+        this.centerPoint.circleId = this.prevCircleId
+        this.centerPoint.circleRole = this.prevCircleRole
+      }
     } else if (this.type === 'vector') {
       this.scene.vectors.delete(this.element.id)
       this.scene.selection.vectors.delete(this.element.id)

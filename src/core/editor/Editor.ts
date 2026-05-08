@@ -7,7 +7,7 @@ import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
-import { Circle3 } from '../geometry/Circle3'
+import { Circle3, type DirectionType } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
@@ -35,6 +35,7 @@ import { DeleteRayCommand } from './commands/DeleteRayCommand'
 import { DeleteVectorCommand } from './commands/DeleteVectorCommand'
 import { DeleteStraightLineCommand } from './commands/DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
+import { DeleteCircleCommand } from './commands/DeleteCircleCommand'
 import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
 import { ClearSceneCommand } from './commands/ClearSceneCommand'
 import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
@@ -62,6 +63,7 @@ export enum EditorMode {
   CreateRay,
   CreateVector,
   CreateCircleThreePoints,
+  CreateCircleNormal,
   CreatePlane,
   CreateHexahedron,
   CreateTetrahedron,
@@ -357,8 +359,12 @@ export class Editor {
 
     for (const circle of this.scene.circles.values()) {
       if (!circle.userLocked) continue
-      if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)
-        return true
+      if (circle.isNormalCircle()) {
+        if (circle.p1.id === pointId) return true
+      } else {
+        if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)
+          return true
+      }
     }
 
     return false
@@ -1032,22 +1038,28 @@ export class Editor {
   }
 
   isCircleLocked(circle: Circle3 | null | undefined) {
-    return Boolean(
-      circle &&
-        (circle.userLocked ||
-          (this.isPointCoordinateLocked(circle.p1) &&
-            this.isPointCoordinateLocked(circle.p2) &&
-            this.isPointCoordinateLocked(circle.p3))),
+    if (!circle) return false
+    if (circle.userLocked) return true
+    if (circle.isNormalCircle()) {
+      return this.isPointCoordinateLocked(circle.p1)
+    }
+    return (
+      this.isPointCoordinateLocked(circle.p1) &&
+      this.isPointCoordinateLocked(circle.p2) &&
+      this.isPointCoordinateLocked(circle.p3)
     )
   }
 
   isCircleGeometryLocked(circle: Circle3 | null | undefined) {
-    return Boolean(
-      circle &&
-        (circle.userLocked ||
-          this.isPointCoordinateLocked(circle.p1) ||
-          this.isPointCoordinateLocked(circle.p2) ||
-          this.isPointCoordinateLocked(circle.p3)),
+    if (!circle) return false
+    if (circle.userLocked) return true
+    if (circle.isNormalCircle()) {
+      return this.isPointCoordinateLocked(circle.p1)
+    }
+    return (
+      this.isPointCoordinateLocked(circle.p1) ||
+      this.isPointCoordinateLocked(circle.p2) ||
+      this.isPointCoordinateLocked(circle.p3)
     )
   }
 
@@ -1332,8 +1344,11 @@ export class Editor {
   setCircleLockState(circleId: string, locked: boolean) {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
+    const circlePoints = circle.isNormalCircle()
+      ? [circle.p1]
+      : [circle.p1, circle.p2, circle.p3]
     const endpointTransforms = !locked
-      ? [circle.p1, circle.p2, circle.p3]
+      ? circlePoints
           .filter((point) => !point.locked)
           .map((point) => ({
             point,
@@ -1530,16 +1545,7 @@ export class Editor {
   deleteCircle(circleId: string) {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
-    const centerPoint = [...this.scene.points.values()].find(
-      (p) => p.circleId === circleId && p.circleRole === 'center',
-    )
-    if (centerPoint) {
-      this.scene.points.delete(centerPoint.id)
-      this.scene.selection.points.delete(centerPoint.id)
-    }
-    this.scene.circles.delete(circleId)
-    this.scene.selection.circles.delete(circleId)
-    this.scene.markAllRenderDirty()
+    this.executeCommand(new DeleteCircleCommand(this.scene, circle))
   }
 
   deleteStraightLine(lineId: string) {
@@ -2014,6 +2020,7 @@ export class Editor {
       visible?: boolean
       userLocked?: boolean
       centerVisible?: boolean
+      lockedRadius?: number
     },
   ) {
     const circle = this.scene.circles.get(circleId)
@@ -2027,6 +2034,7 @@ export class Editor {
       visible: circle.visible,
       userLocked: circle.userLocked,
       centerVisible: circle.centerVisible,
+      lockedRadius: circle.lockedRadius,
     }
     const after = {
       name: patch.name ?? circle.name,
@@ -2037,6 +2045,7 @@ export class Editor {
       visible: patch.visible ?? circle.visible,
       userLocked: patch.userLocked ?? circle.userLocked,
       centerVisible: patch.centerVisible ?? circle.centerVisible,
+      lockedRadius: patch.lockedRadius ?? circle.lockedRadius,
     }
     this.executeCommand(new UpdateCircleCommand(circle, before, after))
     this.scene.markAllRenderDirty()
@@ -2605,6 +2614,96 @@ export class Editor {
 
     this.executeCommand(new AddElementCommand(this.scene, circle, 'circle'))
     this.executeCommand(new AddElementCommand(this.scene, centerPoint, 'point'))
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.scene.selection.selectCircle(circle.id)
+  }
+
+  resolveDirectionVector(directionType: DirectionType, directionId: string): Vec3 | null {
+    if (directionType === 'point') {
+      return new Vec3(0, 1, 0)
+    }
+    if (directionType === 'line') {
+      const line = this.scene.lines.get(directionId)
+      if (!line) return null
+      return new Vec3(
+        line.p2.position.x - line.p1.position.x,
+        line.p2.position.y - line.p1.position.y,
+        line.p2.position.z - line.p1.position.z,
+      )
+    }
+    if (directionType === 'straightLine') {
+      const line = this.scene.straightLines.get(directionId)
+      if (!line) return null
+      return new Vec3(
+        line.p2.position.x - line.p1.position.x,
+        line.p2.position.y - line.p1.position.y,
+        line.p2.position.z - line.p1.position.z,
+      )
+    }
+    if (directionType === 'ray') {
+      const ray = this.scene.rays.get(directionId)
+      if (!ray) return null
+      return new Vec3(
+        ray.p2.position.x - ray.p1.position.x,
+        ray.p2.position.y - ray.p1.position.y,
+        ray.p2.position.z - ray.p1.position.z,
+      )
+    }
+    if (directionType === 'vector') {
+      const vector = this.scene.vectors.get(directionId)
+      if (!vector) return null
+      return new Vec3(
+        vector.p2.position.x - vector.p1.position.x,
+        vector.p2.position.y - vector.p1.position.y,
+        vector.p2.position.z - vector.p1.position.z,
+      )
+    }
+    return null
+  }
+
+  tryCreateNormalCircle(
+    centerPoint: Point3,
+    directionType: DirectionType,
+    directionId: string,
+    radius: number,
+  ) {
+    if (radius <= 0) {
+      emitToast('半径必须大于0')
+      return
+    }
+    const directionVector = this.resolveDirectionVector(directionType, directionId)
+    if (!directionVector) {
+      emitToast('无法解析法向量，请检查所选对象')
+      return
+    }
+    const circle = new Circle3(
+      genId('c'),
+      genNextAvailableName(
+        [...this.scene.circles.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'c' : `c${index}`),
+      ),
+      centerPoint,
+      centerPoint,
+      centerPoint,
+      false,
+      true,
+      false,
+      Circle3.DEFAULT_LABEL_OFFSET_X,
+      Circle3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      true,
+      'normal',
+      directionType,
+      directionId,
+      radius,
+    )
+    if (!circle.isValid(directionVector)) {
+      emitToast('无法创建法向圆，请检查法向量和半径')
+      return
+    }
+    this.executeCommand(new AddElementCommand(this.scene, circle, 'circle'))
     this.selectedPoints = []
     this.scene.selection.clear()
     this.scene.selection.selectCircle(circle.id)

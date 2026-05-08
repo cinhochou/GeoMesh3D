@@ -8,6 +8,7 @@ import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { Circle3 } from '../core/geometry/Circle3'
+import type { DirectionType } from '../core/geometry/Circle3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
@@ -44,6 +45,9 @@ export class Interaction {
     startOffsetY: number
   } | null = null
   rubberBandData: { from: THREE.Vector3; to: THREE.Vector3 } | null = null //存储连线预览位置
+  normalCircleCenterPointId: string | null = null
+  normalCircleDirectionType: DirectionType | null = null
+  normalCircleDirectionId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -103,6 +107,8 @@ export class Interaction {
     dom.addEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.addEventListener('pointerup', this.onPointerUp, { capture: true })
     dom.addEventListener('pointercancel', this.onPointerCancel, { capture: true })
+    window.addEventListener('confirm-normal-circle-radius', this.onConfirmNormalCircleRadius)
+    window.addEventListener('cancel-normal-circle-radius', this.onCancelNormalCircleCreation)
   }
 
   unbind(dom: HTMLElement) {
@@ -115,6 +121,8 @@ export class Interaction {
     dom.removeEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.removeEventListener('pointerup', this.onPointerUp, { capture: true })
     dom.removeEventListener('pointercancel', this.onPointerCancel, { capture: true })
+    window.removeEventListener('confirm-normal-circle-radius', this.onConfirmNormalCircleRadius)
+    window.removeEventListener('cancel-normal-circle-radius', this.onCancelNormalCircleCreation)
   }
 
   /** 网格吸附工具函数 */
@@ -625,8 +633,14 @@ export class Interaction {
   }
 
   private getCircleDragReferencePoint(circle: Circle3) {
-    const frame = circle.getFrame()
+    const frame = circle.getFrame(this.editor.resolveDirectionVector(
+      circle.directionType ?? 'point',
+      circle.directionId ?? '',
+    ))
     if (!frame) {
+      if (circle.isNormalCircle()) {
+        return circle.p1.position
+      }
       return new Vec3(
         (circle.p1.position.x + circle.p2.position.x + circle.p3.position.x) / 3,
         (circle.p1.position.y + circle.p2.position.y + circle.p3.position.y) / 3,
@@ -688,8 +702,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -756,8 +772,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -818,8 +836,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -880,8 +900,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -940,8 +962,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -996,15 +1020,19 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(circle.p1.id)
-          toMove.add(circle.p2.id)
-          toMove.add(circle.p3.id)
+          if (!circle.isNormalCircle()) {
+            toMove.add(circle.p2.id)
+            toMove.add(circle.p3.id)
+          }
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -1050,8 +1078,10 @@ export class Interaction {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
               toMove.add(c.p1.id)
-              toMove.add(c.p2.id)
-              toMove.add(c.p3.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -1084,6 +1114,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreateVector ||
         this.editor.mode === EditorMode.CreateCircleThreePoints ||
+        this.editor.mode === EditorMode.CreateCircleNormal ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
@@ -1265,6 +1296,37 @@ export class Interaction {
         } else {
           this.editor.tryCreateThreePointCircleWith(this.editor.scene.points.get(geoId)!)
         }
+      } else if (this.editor.mode === EditorMode.CreateCircleNormal) {
+        if (type === 'point' && !this.normalCircleCenterPointId) {
+          this.normalCircleCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.normalCircleCenterPointId && !this.normalCircleDirectionId) {
+          if (type === 'point') {
+            if (geoId === this.normalCircleCenterPointId) {
+              this.normalCircleDirectionType = 'point'
+              this.normalCircleDirectionId = geoId
+            } else {
+              this.normalCircleDirectionType = 'point'
+              this.normalCircleDirectionId = geoId
+              this.editor.scene.selection.selectPoint(geoId, true)
+            }
+          } else if (type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector') {
+            this.normalCircleDirectionType = type as DirectionType
+            this.normalCircleDirectionId = geoId
+            this.selectGeometry(type as any, geoId)
+          }
+          if (this.normalCircleDirectionId) {
+            window.dispatchEvent(
+              new CustomEvent('show-normal-circle-radius-dialog', {
+                detail: {
+                  centerPointId: this.normalCircleCenterPointId,
+                  directionType: this.normalCircleDirectionType,
+                  directionId: this.normalCircleDirectionId,
+                },
+              }),
+            )
+          }
+        }
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'line') {
@@ -1302,7 +1364,9 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateTetrahedron
       )
         this.editor.scene.selection.clear()
-      else if (this.editor.mode === EditorMode.IntersectionPoint)
+      else if (this.editor.mode === EditorMode.CreateCircleNormal) {
+        this.resetNormalCircleCreation()
+      } else if (this.editor.mode === EditorMode.IntersectionPoint)
         this.editor.clearIntersectionSelection()
     }
   }
@@ -1341,6 +1405,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRay ||
         this.editor.mode === EditorMode.CreateVector ||
         this.editor.mode === EditorMode.CreateCircleThreePoints ||
+        this.editor.mode === EditorMode.CreateCircleNormal ||
         this.editor.mode === EditorMode.CreatePlane ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
@@ -1611,6 +1676,43 @@ export class Interaction {
       e.preventDefault()
       e.stopPropagation()
       this.editor.tryCreateVectorWith(this.editor.scene.points.get(geoId)!)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateCircleNormal) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point' && !this.normalCircleCenterPointId) {
+        this.normalCircleCenterPointId = geoId
+        this.editor.scene.selection.selectPoint(geoId, true)
+      } else if (this.normalCircleCenterPointId && !this.normalCircleDirectionId) {
+        if (type === 'point') {
+          if (geoId === this.normalCircleCenterPointId) {
+            this.normalCircleDirectionType = 'point'
+            this.normalCircleDirectionId = geoId
+          } else {
+            this.normalCircleDirectionType = 'point'
+            this.normalCircleDirectionId = geoId
+            this.editor.scene.selection.selectPoint(geoId, true)
+          }
+        } else if (type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector') {
+          this.normalCircleDirectionType = type as DirectionType
+          this.normalCircleDirectionId = geoId
+          this.selectGeometry(type as any, geoId)
+        }
+        if (this.normalCircleDirectionId) {
+          window.dispatchEvent(
+            new CustomEvent('show-normal-circle-radius-dialog', {
+              detail: {
+                centerPointId: this.normalCircleCenterPointId,
+                directionType: this.normalCircleDirectionType,
+                directionId: this.normalCircleDirectionId,
+              },
+            }),
+          )
+        }
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -2357,6 +2459,42 @@ export class Interaction {
     this.editor.applyPointTransformHistory(transforms)
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
+  }
+
+  resetNormalCircleCreation() {
+    this.normalCircleCenterPointId = null
+    this.normalCircleDirectionType = null
+    this.normalCircleDirectionId = null
+    this.editor.selectedPoints = []
+    this.editor.scene.selection.clear()
+  }
+
+  confirmNormalCircleRadius(radius: number) {
+    if (!this.normalCircleCenterPointId || !this.normalCircleDirectionType || !this.normalCircleDirectionId) return
+    const centerPoint = this.editor.scene.points.get(this.normalCircleCenterPointId)
+    if (!centerPoint) return
+    this.editor.tryCreateNormalCircle(
+      centerPoint,
+      this.normalCircleDirectionType,
+      this.normalCircleDirectionId,
+      radius,
+    )
+    this.resetNormalCircleCreation()
+  }
+
+  cancelNormalCircleCreation() {
+    this.resetNormalCircleCreation()
+  }
+
+  private onConfirmNormalCircleRadius = (e: Event) => {
+    const detail = (e as CustomEvent).detail
+    if (typeof detail?.radius === 'number') {
+      this.confirmNormalCircleRadius(detail.radius)
+    }
+  }
+
+  private onCancelNormalCircleCreation = () => {
+    this.cancelNormalCircleCreation()
   }
 
   clearPreview() {

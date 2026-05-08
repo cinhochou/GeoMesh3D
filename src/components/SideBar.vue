@@ -26,6 +26,16 @@ const { isCompactLineEditor, contentGroupsCollapsed, hasAutoCollapsedContentGrou
   storeToRefs(uiStore)
 const { modeName, modeHint } = storeToRefs(sceneStore)
 const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
+const isAllGroupsCollapsed = ref(false)
+const toggleAllContentGroups = () => {
+  if (isAllGroupsCollapsed.value) {
+    setContentGroupsCollapsed(false)
+    isAllGroupsCollapsed.value = false
+  } else {
+    setContentGroupsCollapsed(true)
+    isAllGroupsCollapsed.value = true
+  }
+}
 
 const commandRevision = computed(() => props.editor.historyIndex)
 
@@ -162,6 +172,115 @@ const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarFace | undefined) => Boolean(face?.cubeId)
 
+const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
+  if (!circle.directionType) return null
+  if (circle.directionType === 'point') return new Vec3(0, 1, 0)
+  const directionId = circle.directionId
+  if (!directionId) return null
+  if (circle.directionType === 'line') {
+    const line = props.scene.lines.get(directionId)
+    if (!line) return null
+    return new Vec3(
+      line.p2.position.x - line.p1.position.x,
+      line.p2.position.y - line.p1.position.y,
+      line.p2.position.z - line.p1.position.z,
+    )
+  } else if (circle.directionType === 'straightLine') {
+    const line = props.scene.straightLines.get(directionId)
+    if (!line) return null
+    return new Vec3(
+      line.p2.position.x - line.p1.position.x,
+      line.p2.position.y - line.p1.position.y,
+      line.p2.position.z - line.p1.position.z,
+    )
+  } else if (circle.directionType === 'ray') {
+    const ray = props.scene.rays.get(directionId)
+    if (!ray) return null
+    return new Vec3(
+      ray.p2.position.x - ray.p1.position.x,
+      ray.p2.position.y - ray.p1.position.y,
+      ray.p2.position.z - ray.p1.position.z,
+    )
+  } else if (circle.directionType === 'vector') {
+    const vector = props.scene.vectors.get(directionId)
+    if (!vector) return null
+    return new Vec3(
+      vector.p2.position.x - vector.p1.position.x,
+      vector.p2.position.y - vector.p1.position.y,
+      vector.p2.position.z - vector.p1.position.z,
+    )
+  }
+  return null
+}
+
+const getDirectionLabel = (circle: Circle3): string => {
+  if (!circle.directionType) return '未知'
+  if (circle.directionType === 'point') {
+    const pt = circle.directionId ? props.scene.points.get(circle.directionId) : null
+    return `点${pt?.name ?? ''} · XOZ平面`
+  }
+  const directionId = circle.directionId
+  let typeName = ''
+  let directionName = ''
+  if (circle.directionType === 'line') {
+    typeName = '线段'
+    const line = props.scene.lines.get(directionId!)
+    directionName = line?.name ?? ''
+  } else if (circle.directionType === 'straightLine') {
+    typeName = '直线'
+    const line = props.scene.straightLines.get(directionId!)
+    directionName = line?.name ?? ''
+  } else if (circle.directionType === 'ray') {
+    typeName = '射线'
+    const ray = props.scene.rays.get(directionId!)
+    directionName = ray?.name ?? ''
+  } else if (circle.directionType === 'vector') {
+    typeName = '向量'
+    const vector = props.scene.vectors.get(directionId!)
+    directionName = vector?.name ?? ''
+  }
+  return `${typeName} ${directionName}`
+}
+
+const getNormalCircleRadius = (circle: Circle3): number => {
+  if (!circle.isNormalCircle()) return circle.getRadius()
+  return circle.getRadius(resolveDirectionVec(circle))
+}
+
+const getNormalCircleArea = (circle: Circle3): number => {
+  if (!circle.isNormalCircle()) return circle.getArea()
+  return circle.getArea(resolveDirectionVec(circle))
+}
+
+const getNormalCircleCircumference = (circle: Circle3): number => {
+  if (!circle.isNormalCircle()) return circle.getCircumference()
+  return circle.getCircumference(resolveDirectionVec(circle))
+}
+
+const formatPiCircumference = (radius: number): string => {
+  const coeff = 2 * radius
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const formatPiArea = (radius: number): string => {
+  const coeff = radius * radius
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const onNormalCircleRadiusChange = (circle: Circle3, event: Event) => {
+  const input = event.target as HTMLInputElement
+  const newRadius = parseFloat(input.value)
+  if (isNaN(newRadius) || newRadius <= 0) {
+    input.value = String(circle.lockedRadius)
+    return
+  }
+  props.editor.updateCircle(circle.id, { lockedRadius: newRadius })
+}
+
 const editPoint = reactive({
   name: '',
   nameVisible: true,
@@ -221,6 +340,11 @@ const editFace = reactive({
   areaLocked: false,
   edgeLengths: [] as string[],
 })
+const circlePiModes = reactive(new Map<string, boolean>())
+const getCirclePiMode = (circleId: string) => circlePiModes.get(circleId) ?? false
+const toggleCirclePiMode = (circleId: string) => {
+  circlePiModes.set(circleId, !getCirclePiMode(circleId))
+}
 const editCircle = reactive({
   name: '',
   nameVisible: true,
@@ -228,6 +352,8 @@ const editCircle = reactive({
   visible: true,
   userLocked: false,
   centerVisible: true,
+  lockedRadius: '',
+  threePointRadius: '',
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
   p3: { x: '', y: '', z: '' },
@@ -279,7 +405,6 @@ const totalContentCount = computed(
     facesInScene.value.length +
     hexahedronsInScene.value.length,
 )
-const canCollapseContentGroups = computed(() => totalContentCount.value > 10)
 const contentGroupLabels: Record<
   'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
   string
@@ -300,7 +425,6 @@ const setContentGroupsCollapsed = (collapsed: boolean) => {
 const toggleContentGroup = (
   type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
 ) => {
-  if (!canCollapseContentGroups.value) return
   uiStore.toggleContentGroup(type)
 }
 
@@ -492,17 +616,43 @@ watch(
 )
 
 watch(
+  contentGroupsCollapsed,
+  (c) => {
+    const activeKeys: (keyof typeof c)[] = []
+    if (pointsInScene.value.length > 0) activeKeys.push('point')
+    if (linesInScene.value.length > 0) activeKeys.push('line')
+    if (straightLinesInScene.value.length > 0) activeKeys.push('straightLine')
+    if (raysInScene.value.length > 0) activeKeys.push('ray')
+    if (vectorsInScene.value.length > 0) activeKeys.push('vector')
+    if (circlesInScene.value.length > 0) activeKeys.push('circle')
+    if (facesInScene.value.length > 0) activeKeys.push('face')
+    if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
+    if (activeKeys.length === 0) return
+    const allCollapsed = activeKeys.every((k) => c[k])
+    const allExpanded = activeKeys.every((k) => !c[k])
+    if (allCollapsed) isAllGroupsCollapsed.value = true
+    else if (allExpanded) isAllGroupsCollapsed.value = false
+  },
+  { deep: true },
+)
+
+watch(
   totalContentCount,
   (count) => {
     if (count > 10) {
-      if (!hasAutoCollapsedContentGroups.value) {
+      if (!hasAutoCollapsedContentGroups.value && !isAllGroupsCollapsed.value) {
         setContentGroupsCollapsed(true)
-        hasAutoCollapsedContentGroups.value = true
+        isAllGroupsCollapsed.value = true
         emitToast('内容区元素数量大于10，已自动折叠')
       }
+      hasAutoCollapsedContentGroups.value = true
       return
     }
-    setContentGroupsCollapsed(false)
+    if (isAllGroupsCollapsed.value) {
+      setContentGroupsCollapsed(true)
+    } else {
+      setContentGroupsCollapsed(false)
+    }
   },
   { immediate: true },
 )
@@ -946,6 +1096,8 @@ const startEditCircle = (c: Circle3 | undefined) => {
   editCircle.visible = c.visible !== false
   editCircle.userLocked = props.editor.isCircleLocked(c)
   editCircle.centerVisible = c.centerVisible !== false
+  editCircle.lockedRadius = c.lockedRadius != null ? String(c.lockedRadius) : ''
+  editCircle.threePointRadius = c.isNormalCircle() ? '' : toFixed2(c.getRadius())
   editCircle.p1.x = toFixed2(c.p1.position.x)
   editCircle.p1.y = toFixed2(c.p1.position.y)
   editCircle.p1.z = toFixed2(c.p1.position.z)
@@ -1246,13 +1398,20 @@ const applyEditCircle = () => {
   if (!editing.value || editing.value.type !== 'circle') return
   const circle = props.scene.circles.get(editing.value.id)
   if (!circle) return
-  props.editor.updateCircle(editing.value.id, {
+  const patch: Parameters<typeof props.editor.updateCircle>[1] = {
     name: editCircle.name,
     nameVisible: editCircle.nameVisible,
     valueVisible: editCircle.valueVisible,
     visible: editCircle.visible,
     centerVisible: editCircle.centerVisible,
-  })
+  }
+  if (circle.isNormalCircle()) {
+    const r = parseFloat(editCircle.lockedRadius)
+    if (!isNaN(r) && r > 0) {
+      patch.lockedRadius = r
+    }
+  }
+  props.editor.updateCircle(editing.value.id, patch)
   if (editCircle.userLocked !== props.editor.isCircleLocked(circle)) {
     props.editor.setCircleLockState(editing.value.id, editCircle.userLocked)
   }
@@ -1302,6 +1461,49 @@ const nudgeCirclePointCoord = (
   if (nextValue === null) return
   editCircle[pointKey][axis] = nextValue
   applyCirclePointCoord(pointKey)
+}
+const nudgeNormalCircleRadius = (direction: 'up' | 'down') => {
+  const state = getEditingCircleState()
+  if (!state) return
+  const current = parseFloat(editCircle.lockedRadius)
+  if (isNaN(current) || current <= 0) return
+  const step = 0.1
+  const next = direction === 'up' ? current + step : Math.max(0.01, current - step)
+  editCircle.lockedRadius = String(Math.round(next * 100) / 100)
+  applyEditCircle()
+}
+const applyThreePointCircleRadius = () => {
+  const state = getEditingCircleState()
+  if (!state) return
+  const circle = state.circle
+  if (circle.isNormalCircle()) return
+  const newRadius = parseFloat(editCircle.threePointRadius)
+  if (isNaN(newRadius) || newRadius <= 0) return
+  const frame = circle.getFrame()
+  if (!frame) return
+  const currentRadius = frame.radius
+  if (Math.abs(currentRadius) < 1e-10) return
+  const scale = newRadius / currentRadius
+  const center = frame.center
+  const points = [circle.p1, circle.p2, circle.p3]
+  for (const p of points) {
+    const dx = p.position.x - center.x
+    const dy = p.position.y - center.y
+    const dz = p.position.z - center.z
+    props.editor.setPointPosition(p.id, new Vec3(
+      center.x + dx * scale,
+      center.y + dy * scale,
+      center.z + dz * scale,
+    ))
+  }
+}
+const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
+  const current = parseFloat(editCircle.threePointRadius)
+  if (isNaN(current) || current <= 0) return
+  const step = 0.1
+  const next = direction === 'up' ? current + step : Math.max(0.01, current - step)
+  editCircle.threePointRadius = String(Math.round(next * 100) / 100)
+  applyThreePointCircleRadius()
 }
 const handleCirclePointCoordFocus = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`circle.${pointKey}.${axis}`, true)
@@ -1661,6 +1863,8 @@ watch(
       visible: circle.visible !== false,
       userLocked: props.editor.isCircleLocked(circle),
       centerVisible: circle.centerVisible !== false,
+      lockedRadius: circle.lockedRadius,
+      radius: circle.isNormalCircle() ? null : circle.getRadius(),
       p1: { x: circle.p1.position.x, y: circle.p1.position.y, z: circle.p1.position.z },
       p2: { x: circle.p2.position.x, y: circle.p2.position.y, z: circle.p2.position.z },
       p3: { x: circle.p3.position.x, y: circle.p3.position.y, z: circle.p3.position.z },
@@ -1674,6 +1878,12 @@ watch(
     editCircle.visible = nextCircle.visible
     editCircle.userLocked = nextCircle.userLocked
     editCircle.centerVisible = nextCircle.centerVisible
+    if (nextCircle.lockedRadius != null) {
+      if (!focusedCoord['circle.lockedRadius']) editCircle.lockedRadius = String(nextCircle.lockedRadius)
+    }
+    if (nextCircle.radius != null) {
+      if (!focusedCoord['circle.threePointRadius']) editCircle.threePointRadius = toFixed2(nextCircle.radius)
+    }
     if (!focusedCoord['circle.p1.x']) editCircle.p1.x = toFixed2(nextCircle.p1.x)
     if (!focusedCoord['circle.p1.y']) editCircle.p1.y = toFixed2(nextCircle.p1.y)
     if (!focusedCoord['circle.p1.z']) editCircle.p1.z = toFixed2(nextCircle.p1.z)
@@ -3290,8 +3500,174 @@ onUnmounted(() => {
                 圆心显示
               </label>
             </div>
-            <div class="face-metric-row">半径：{{ c!.getRadius().toFixed(2) }}</div>
-            <div class="face-metric-row">面积：{{ c!.getArea().toFixed(2) }}</div>
+            <template v-if="c!.isNormalCircle()">
+              <div class="normal-circle-direction-row" style="grid-column: 1 / -1">法向量：{{ getDirectionLabel(c!) }}</div>
+              <div class="normal-circle-info-row">
+                <span class="normal-circle-label">半径</span>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeNormalCircleRadius('down')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.lockedRadius', el)"
+                    v-model="editCircle.lockedRadius"
+                    @input="applyEditCircle"
+                    @focus="focusedCoord['circle.lockedRadius'] = true"
+                    @blur="focusedCoord['circle.lockedRadius'] = false"
+                    min="0.01"
+                    step="0.1"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeNormalCircleRadius('up')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="face-metric-row">周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(getNormalCircleRadius(c!)) : getNormalCircleCircumference(c!).toFixed(2) }}　面积：{{ getCirclePiMode(c!.id) ? formatPiArea(getNormalCircleRadius(c!)) : getNormalCircleArea(c!).toFixed(2) }}<label class="pi-mode-toggle"><input type="checkbox" :checked="getCirclePiMode(c!.id)" @change="toggleCirclePiMode(c!.id)" />π模式</label></div>
+              <div class="line-editor-grid normal-circle-center-grid">
+                <div class="line-editor-head"></div>
+                <div class="line-editor-head">
+                  <span class="line-editor-title-full">圆心点{{ c!.p1.name ?? 'A' }}(x,y,z)</span>
+                  <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
+                </div>
+                <div class="line-axis-label">x</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'x', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.x', el)"
+                    v-model="editCircle.p1.x"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'x')"
+                    @blur="handleCirclePointCoordBlur('p1', 'x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'x', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="line-axis-label">y</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'y', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.y', el)"
+                    v-model="editCircle.p1.y"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'y')"
+                    @blur="handleCirclePointCoordBlur('p1', 'y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'y', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="line-axis-label">z</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'z', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.z', el)"
+                    v-model="editCircle.p1.z"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'z')"
+                    @blur="handleCirclePointCoordBlur('p1', 'z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'z', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </template>
+            <template v-else>
+            <div class="normal-circle-info-row">
+              <span class="normal-circle-label">半径</span>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeThreePointCircleRadius('down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('circle.threePointRadius', el)"
+                  v-model="editCircle.threePointRadius"
+                  @input="applyThreePointCircleRadius"
+                  @focus="focusedCoord['circle.threePointRadius'] = true"
+                  @blur="focusedCoord['circle.threePointRadius'] = false"
+                  min="0.01"
+                  step="0.1"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @pointerdown.prevent
+                  @click="nudgeThreePointCircleRadius('up')"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div class="face-metric-row">周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(c!.getRadius()) : c!.getCircumference().toFixed(2) }}　面积：{{ getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2) }}<label class="pi-mode-toggle"><input type="checkbox" :checked="getCirclePiMode(c!.id)" @change="toggleCirclePiMode(c!.id)" />π模式</label></div>
             <div class="line-editor-grid circle-editor-grid line-editor-grid--compact">
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
@@ -3589,35 +3965,49 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
+            </template>
           </div>
           <div v-else>
             <div>
-              圆{{ c!.name ?? '' }}
+              {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
               <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
             </div>
+            <template v-if="c!.isNormalCircle()">
+              <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
+              <div>周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(getNormalCircleRadius(c!)) : getNormalCircleCircumference(c!).toFixed(2) }}</div>
+              <div>面积：{{ getCirclePiMode(c!.id) ? formatPiArea(getNormalCircleRadius(c!)) : getNormalCircleArea(c!).toFixed(2) }}</div>
+              <div>
+                圆心{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>法向量：{{ getDirectionLabel(c!) }}</div>
+            </template>
+            <template v-else>
             <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
-            <div>面积：{{ c!.getArea().toFixed(2) }}</div>
-            <div>
-              点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
-              {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
-            </div>
-            <div>
-              点{{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
-              {{ c!.p2.position.y.toFixed(2) }}, {{ c!.p2.position.z.toFixed(2) }}）
-            </div>
-            <div>
-              点{{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
-              {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
-            </div>
-            <div v-if="getCircleCenterPoint(c!.id)" class="point-summary-line">
-              <span class="point-summary-text">
-                点{{ getCircleCenterPoint(c!.id)!.name }}（{{
-                  getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
-                }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
-                {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
-              </span>
-              <span class="constraint-badge">圆心约束</span>
-            </div>
+            <div>周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(c!.getRadius()) : c!.getCircumference().toFixed(2) }}</div>
+            <div>面积：{{ getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2) }}</div>
+              <div>
+                点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                点{{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
+                {{ c!.p2.position.y.toFixed(2) }}, {{ c!.p2.position.z.toFixed(2) }}）
+              </div>
+              <div>
+                点{{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
+                {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
+              </div>
+              <div v-if="getCircleCenterPoint(c!.id)" class="point-summary-line">
+                <span class="point-summary-text">
+                  点{{ getCircleCenterPoint(c!.id)!.name }}（{{
+                    getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
+                  }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
+                  {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
+                </span>
+                <span class="constraint-badge">圆心约束</span>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -4013,6 +4403,27 @@ onUnmounted(() => {
       </div>
       <div class="content-heading">
         <h3>内容</h3>
+        <button
+          v-if="totalContentCount > 0"
+          type="button"
+          class="toggle-all-groups-btn"
+          :title="isAllGroupsCollapsed ? '展开全部' : '折叠全部'"
+          @click="toggleAllContentGroups"
+        >
+          <svg
+            class="toggle-all-icon"
+            :class="{ 'is-collapsed': isAllGroupsCollapsed }"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            width="1em"
+            height="1em"
+          >
+            <path
+              class="toggle-all-icon-chevron"
+              d="M4.5 6l3.5 4 3.5-4z"
+            />
+          </svg>
+        </button>
       </div>
       <div class="box content-box" @click.self="clearContentSelection">
         <div
@@ -4029,7 +4440,6 @@ onUnmounted(() => {
         </div>
         <div v-if="pointsInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.point"
@@ -4041,12 +4451,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.point }}</span>
             <span class="content-group-count">{{ pointsInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.point }}</span>
-            <span class="content-group-count">{{ pointsInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.point || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.point"
             class="content-group-body"
           >
             <div
@@ -4075,7 +4481,6 @@ onUnmounted(() => {
         </div>
         <div v-if="linesInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.line"
@@ -4087,12 +4492,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.line }}</span>
             <span class="content-group-count">{{ linesInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.line }}</span>
-            <span class="content-group-count">{{ linesInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.line || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.line"
             class="content-group-body"
           >
             <div
@@ -4121,7 +4522,6 @@ onUnmounted(() => {
         </div>
         <div v-if="straightLinesInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.straightLine"
@@ -4133,12 +4533,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
             <span class="content-group-count">{{ straightLinesInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
-            <span class="content-group-count">{{ straightLinesInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.straightLine || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.straightLine"
             class="content-group-body"
           >
             <div
@@ -4165,7 +4561,6 @@ onUnmounted(() => {
         </div>
         <div v-if="raysInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.ray"
@@ -4177,12 +4572,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
             <span class="content-group-count">{{ raysInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
-            <span class="content-group-count">{{ raysInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.ray || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.ray"
             class="content-group-body"
           >
             <div
@@ -4209,7 +4600,6 @@ onUnmounted(() => {
         </div>
         <div v-if="vectorsInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.vector"
@@ -4221,12 +4611,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.vector }}</span>
             <span class="content-group-count">{{ vectorsInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.vector }}</span>
-            <span class="content-group-count">{{ vectorsInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.vector || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.vector"
             class="content-group-body"
           >
             <div
@@ -4253,7 +4639,6 @@ onUnmounted(() => {
         </div>
         <div v-if="circlesInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.circle"
@@ -4265,12 +4650,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.circle }}</span>
             <span class="content-group-count">{{ circlesInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.circle }}</span>
-            <span class="content-group-count">{{ circlesInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.circle || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.circle"
             class="content-group-body"
           >
             <div
@@ -4281,25 +4662,34 @@ onUnmounted(() => {
               @click="selectCircleFromContent(c!.id)"
             >
               <div>
-                圆{{ c!.name ?? '' }}
+                {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
                 <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
               </div>
-              <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
-              <div>
-                构造点：{{ c!.p1.name ?? '' }}-{{ c!.p2.name ?? '' }}-{{ c!.p3.name ?? '' }}
-              </div>
-              <div v-if="getCircleCenterPoint(c!.id)">
-                <span class="point-summary-text">
-                  圆心：{{ getCircleCenterPoint(c!.id)!.name }}
-                </span>
-                <span class="constraint-badge">圆心约束</span>
-              </div>
+              <template v-if="c!.isNormalCircle()">
+                <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
+                <div>
+                  圆心：{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                  {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
+                </div>
+                <div>法向量：{{ getDirectionLabel(c!) }}</div>
+              </template>
+              <template v-else>
+                <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
+                <div>
+                  构造点：{{ c!.p1.name ?? '' }}-{{ c!.p2.name ?? '' }}-{{ c!.p3.name ?? '' }}
+                </div>
+                <div v-if="getCircleCenterPoint(c!.id)">
+                  <span class="point-summary-text">
+                    圆心：{{ getCircleCenterPoint(c!.id)!.name }}
+                  </span>
+                  <span class="constraint-badge">圆心约束</span>
+                </div>
+              </template>
             </div>
           </div>
         </div>
         <div v-if="hexahedronsInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.hexahedron"
@@ -4311,12 +4701,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
             <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
-            <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.hexahedron || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.hexahedron"
             class="content-group-body"
           >
             <div
@@ -4348,7 +4734,6 @@ onUnmounted(() => {
         </div>
         <div v-if="facesInScene.length > 0" class="content-group">
           <button
-            v-if="canCollapseContentGroups"
             type="button"
             class="content-group-header content-group-toggle"
             :aria-expanded="!collapsedContentGroups.face"
@@ -4360,12 +4745,8 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.face }}</span>
             <span class="content-group-count">{{ facesInScene.length }}</span>
           </button>
-          <div v-else class="content-group-header content-group-title">
-            <span class="content-group-label">{{ contentGroupLabels.face }}</span>
-            <span class="content-group-count">{{ facesInScene.length }}</span>
-          </div>
           <div
-            v-show="!collapsedContentGroups.face || !canCollapseContentGroups"
+            v-show="!collapsedContentGroups.face"
             class="content-group-body"
           >
             <div
@@ -4512,6 +4893,33 @@ hr {
 }
 .content-heading {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.toggle-all-groups-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #9fd8ff;
+  cursor: pointer;
+  font-size: inherit;
+  line-height: 1;
+  border-radius: 3px;
+  transition: background-color 0.15s ease;
+}
+.toggle-all-groups-btn:hover {
+  background-color: rgba(159, 216, 255, 0.12);
+}
+.toggle-all-icon {
+  display: block;
+  transition: transform 0.25s ease;
+}
+.toggle-all-icon.is-collapsed {
+  transform: rotate(-90deg);
 }
 .content-box {
   flex: 1 1 auto;
@@ -4858,6 +5266,45 @@ hr {
   grid-column: 1 / -1;
   margin-top: 4px;
   color: #f3f3f3;
+}
+.pi-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: #8fdc9b;
+  cursor: pointer;
+  user-select: none;
+}
+.pi-mode-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+.normal-circle-direction-row {
+  color: #ddd;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.normal-circle-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.normal-circle-label {
+  color: #8fdc9b;
+  font-size: 11px;
+  min-width: 28px;
+  flex-shrink: 0;
+}
+.normal-circle-value {
+  color: #ddd;
+  font-size: 12px;
+}
+.normal-circle-center-grid {
+  grid-column: 1 / -1;
+  grid-template-columns: 14px max-content !important;
 }
 .face-edge-grid {
   grid-column: 1 / -1;

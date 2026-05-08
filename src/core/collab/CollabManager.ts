@@ -7,7 +7,7 @@ import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { StraightLine3 } from '../geometry/StraightLine3'
-import { Circle3 } from '../geometry/Circle3'
+import { Circle3, type CircleType, type DirectionType } from '../geometry/Circle3'
 import { PlanarFace } from '../geometry/Plane'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -814,6 +814,29 @@ export class CollabManager {
     )
   }
 
+  private isPointReferencedByOtherGeometry(pointId: string, excludeCircleId?: string): boolean {
+    for (const line of this.scene.lines.values()) {
+      if (line.p1.id === pointId || line.p2.id === pointId) return true
+    }
+    for (const ray of this.scene.rays.values()) {
+      if (ray.p1.id === pointId || ray.p2.id === pointId) return true
+    }
+    for (const vec of this.scene.vectors.values()) {
+      if (vec.p1.id === pointId || vec.p2.id === pointId) return true
+    }
+    for (const sl of this.scene.straightLines.values()) {
+      if (sl.p1.id === pointId || sl.p2.id === pointId) return true
+    }
+    for (const circle of this.scene.circles.values()) {
+      if (circle.id !== excludeCircleId &&
+        (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)) return true
+    }
+    for (const face of this.scene.faces.values()) {
+      if (face.includesPoint(pointId)) return true
+    }
+    return false
+  }
+
   private syncCircleCenterPointPosition(circleId: string) {
     const circle = this.scene.circles.get(circleId)
     const centerPoint = this.findCircleCenterPoint(circleId)
@@ -1108,12 +1131,19 @@ export class CollabManager {
   }
 
   private removeCircleFromScene(id: string) {
+    const circle = this.scene.circles.get(id)
+    const isNormal = circle?.isNormalCircle() ?? false
     this.scene.circles.delete(id)
     this.scene.selection.circles.delete(id)
     this.scene.points.forEach((point, pointId) => {
       if (point.circleId === id && point.circleRole === 'center') {
-        this.scene.points.delete(pointId)
-        this.scene.selection.points.delete(pointId)
+        if (isNormal || this.isPointReferencedByOtherGeometry(pointId, id)) {
+          point.circleId = null
+          point.circleRole = null
+        } else {
+          this.scene.points.delete(pointId)
+          this.scene.selection.points.delete(pointId)
+        }
       }
     })
     this.scene.markAllRenderDirty()
@@ -1548,6 +1578,19 @@ export class CollabManager {
     const visible = this.readBoolean(record, 'visible', circle?.visible ?? true)
     const userLocked = this.readBoolean(record, 'userLocked', circle?.userLocked ?? false)
     const centerVisible = this.readBoolean(record, 'centerVisible', circle?.centerVisible ?? true)
+    const circleTypeValue = this.readString(record, 'circleType', circle?.circleType ?? 'threePoint')
+    const circleType: CircleType = circleTypeValue === 'normal' ? 'normal' : 'threePoint'
+    const directionTypeRaw = this.readNullableString(record, 'directionType')
+    const directionType: DirectionType | null =
+      directionTypeRaw === 'line' ||
+      directionTypeRaw === 'straightLine' ||
+      directionTypeRaw === 'ray' ||
+      directionTypeRaw === 'vector' ||
+      directionTypeRaw === 'point'
+        ? directionTypeRaw
+        : null
+    const directionId = this.readNullableString(record, 'directionId')
+    const lockedRadius = this.readNullableNumber(record, 'lockedRadius')
 
     if (circle) {
       circle.name = name
@@ -1558,9 +1601,17 @@ export class CollabManager {
       circle.visible = visible
       circle.userLocked = userLocked
       circle.centerVisible = centerVisible
+      circle.circleType = circleType
+      circle.directionType = directionType
+      circle.directionId = directionId
+      circle.lockedRadius = lockedRadius
       circle.p1 = p1
       circle.p2 = p2
       circle.p3 = p3
+      if (circleType === 'normal') {
+        p1.circleId = id
+        p1.circleRole = 'center'
+      }
       this.syncCircleCenterPointPosition(id)
       this.scene.markAllRenderDirty()
       return
@@ -1580,8 +1631,16 @@ export class CollabManager {
         labelOffsetY,
         valueVisible,
         centerVisible,
+        circleType,
+        directionType,
+        directionId,
+        lockedRadius,
       ),
     )
+    if (circleType === 'normal') {
+      p1.circleId = id
+      p1.circleRole = 'center'
+    }
     this.syncCircleCenterPointPosition(id)
     this.scene.markAllRenderDirty()
   }
@@ -2137,6 +2196,10 @@ export class CollabManager {
     this.setScalarField(record, 'visible', circle.visible)
     this.setScalarField(record, 'userLocked', circle.userLocked)
     this.setScalarField(record, 'centerVisible', circle.centerVisible)
+    this.setScalarField(record, 'circleType', circle.circleType)
+    this.setNullableScalarField(record, 'directionType', circle.directionType)
+    this.setNullableScalarField(record, 'directionId', circle.directionId)
+    this.setNullableScalarField(record, 'lockedRadius', circle.lockedRadius)
   }
 
   private syncIntersectionRecord(record: IntersectionSharedMap, constraint: IntersectionPointConstraint) {

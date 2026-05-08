@@ -10,6 +10,7 @@ type CircleState = {
   visible: boolean
   userLocked: boolean
   centerVisible: boolean
+  lockedRadius: number | null
 }
 
 export class UpdateCircleCommand implements Command {
@@ -36,5 +37,6 @@ export class UpdateCircleCommand implements Command {
     this.circle.visible = state.visible
     this.circle.userLocked = state.userLocked
     this.circle.centerVisible = state.centerVisible
+    this.circle.lockedRadius = state.lockedRadius
   }
 }

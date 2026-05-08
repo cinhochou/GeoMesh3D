@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Scene as GeoScene, type SceneRenderSyncState } from '../core/scene/Scene'
 import { Ray3 } from '../core/geometry/Ray3'
 import { GeoVector3 } from '../core/geometry/GeoVector3'
+import { Vec3 } from '../core/geometry/Vec3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -1100,7 +1101,10 @@ export class ThreeRenderer {
       if (p.circleRole === 'center' && p.circleId) {
         const circle = scene.circles.get(p.circleId)
         if (circle) {
-          const frame = circle.getFrame()
+          const resolvedDirection = circle.isNormalCircle() && circle.directionType && circle.directionId
+            ? this.resolveDirectionVectorForCircle(circle.directionType, circle.directionId)
+            : undefined
+          const frame = circle.getFrame(resolvedDirection)
           if (frame) {
             p.position = frame.center
           }
@@ -1126,10 +1130,16 @@ export class ThreeRenderer {
               : 0xff5555
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
 
-      // 圆心点可见性
+      let pointSpriteVisible = true
       if (isCircleCenterPoint && p.circleId) {
         const circle = scene.circles.get(p.circleId)
-        sprite.visible = circle ? circle.centerVisible && circle.visible : false
+        const circleVisible = circle ? circle.centerVisible && circle.visible : false
+        if (circleVisible) {
+          pointSpriteVisible = true
+        } else {
+          pointSpriteVisible = this.isPointReferencedByOtherVisibleGeometry(p.id, scene, p.circleId)
+        }
+        sprite.visible = pointSpriteVisible
       }
 
       // 点名称标签
@@ -1148,7 +1158,7 @@ export class ThreeRenderer {
         p.valueVisible ||
         (this.activePointValueTarget?.type === 'point' && this.activePointValueTarget.geoId === p.id)
       const combinedPointText = pointValueVisible ? pointValueText : ''
-      if (!p.nameVisible && !pointValueVisible) {
+      if (!pointSpriteVisible || (!p.nameVisible && !pointValueVisible)) {
         if (existingLabel) existingLabel.visible = false
       } else if (!existingLabel) {
         const nameSprite = p.nameVisible
@@ -1543,11 +1553,84 @@ export class ThreeRenderer {
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized)
   }
 
+  private resolveDirectionVectorForCircle(directionType: string, directionId: string): Vec3 | null {
+    if (directionType === 'point') {
+      return new Vec3(0, 1, 0)
+    }
+    if (directionType === 'line') {
+      const line = this.currentSceneRef?.lines.get(directionId)
+      if (!line) return null
+      return new Vec3(
+        line.p2.position.x - line.p1.position.x,
+        line.p2.position.y - line.p1.position.y,
+        line.p2.position.z - line.p1.position.z,
+      )
+    }
+    if (directionType === 'straightLine') {
+      const line = this.currentSceneRef?.straightLines.get(directionId)
+      if (!line) return null
+      return new Vec3(
+        line.p2.position.x - line.p1.position.x,
+        line.p2.position.y - line.p1.position.y,
+        line.p2.position.z - line.p1.position.z,
+      )
+    }
+    if (directionType === 'ray') {
+      const ray = this.currentSceneRef?.rays.get(directionId)
+      if (!ray) return null
+      return new Vec3(
+        ray.p2.position.x - ray.p1.position.x,
+        ray.p2.position.y - ray.p1.position.y,
+        ray.p2.position.z - ray.p1.position.z,
+      )
+    }
+    if (directionType === 'vector') {
+      const vector = this.currentSceneRef?.vectors.get(directionId)
+      if (!vector) return null
+      return new Vec3(
+        vector.p2.position.x - vector.p1.position.x,
+        vector.p2.position.y - vector.p1.position.y,
+        vector.p2.position.z - vector.p1.position.z,
+      )
+    }
+    return null
+  }
+
+  private isPointReferencedByOtherVisibleGeometry(
+    pointId: string,
+    scene: GeoScene,
+    excludeCircleId?: string,
+  ): boolean {
+    for (const line of scene.lines.values()) {
+      if (line.visible && (line.p1.id === pointId || line.p2.id === pointId)) return true
+    }
+    for (const ray of scene.rays.values()) {
+      if (ray.visible && (ray.p1.id === pointId || ray.p2.id === pointId)) return true
+    }
+    for (const vec of scene.vectors.values()) {
+      if (vec.visible && (vec.p1.id === pointId || vec.p2.id === pointId)) return true
+    }
+    for (const sl of scene.straightLines.values()) {
+      if (sl.visible && (sl.p1.id === pointId || sl.p2.id === pointId)) return true
+    }
+    for (const circle of scene.circles.values()) {
+      if (circle.id !== excludeCircleId && circle.visible &&
+        (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)) return true
+    }
+    for (const face of scene.faces.values()) {
+      if (face.visible !== false && face.includesPoint(pointId)) return true
+    }
+    return false
+  }
+
   private syncCircles(scene: GeoScene, dirtyState: SceneRenderSyncState) {
     dirtyState.circleIds.forEach((id) => {
       const circleData = scene.circles.get(id)
       if (!circleData) return
-      const frame = circleData.getFrame()
+      const resolvedDirection = circleData.isNormalCircle() && circleData.directionType && circleData.directionId
+        ? this.resolveDirectionVectorForCircle(circleData.directionType, circleData.directionId)
+        : undefined
+      const frame = circleData.getFrame(resolvedDirection)
       let circle = this.meshMap.get(id) as THREE.LineLoop | undefined
       if (!frame) {
         if (circle) circle.visible = false
@@ -1697,7 +1780,7 @@ export class ThreeRenderer {
         faceMesh,
         faceData.name ?? '',
         faceData.nameVisible && faceData.visible !== false,
-        faceData.valueVisible === true,
+        faceData.valueVisible === true && faceData.visible !== false,
         `=${this.formatMetricNumber(faceData.getArea(scene.points))}`,
         new THREE.Vector3(
           faceData.getCentroid(scene.points).x,

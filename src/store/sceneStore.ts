@@ -45,6 +45,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建向量'
     case EditorMode.CreateCircleThreePoints:
       return '创建三点圆'
+    case EditorMode.CreateCircleNormal:
+      return '法向圆'
     case EditorMode.CreatePlane:
       return '创建面'
     case EditorMode.CreateHexahedron:
@@ -70,6 +72,8 @@ const getModeHint = (mode: EditorMode) => {
       return '点击场景中的两个不同点以创建向量~'
     case EditorMode.CreateCircleThreePoints:
       return '点击场景中的三个不共线的点以创建三点圆~'
+    case EditorMode.CreateCircleNormal:
+      return '先选中一个点作为圆心，再选中一个法向量（线/射线/直线/向量/点）~'
     case EditorMode.CreatePlane:
       return '先选择多个点或闭合线段，再点击空白处确认创建面~'
     case EditorMode.MergePoint:

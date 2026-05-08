@@ -269,6 +269,10 @@ const selectCreateThreePointCircleMode = () => {
   setMode(EditorMode.CreateCircleThreePoints)
 }
 
+const selectCreateNormalCircleMode = () => {
+  setMode(EditorMode.CreateCircleNormal)
+}
+
 const createHexahedron = () => {
   uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
   emit('mode-change', EditorMode.CreateHexahedron)
@@ -521,7 +525,9 @@ onUnmounted(() => {
         ref="circleTriggerRef"
         class="menu-trigger"
         :class="{
-          'is-active': currentMode === EditorMode.CreateCircleThreePoints,
+          'is-active':
+            currentMode === EditorMode.CreateCircleThreePoints ||
+            currentMode === EditorMode.CreateCircleNormal,
           'is-open': isCircleMenuOpen,
         }"
         @click="toggleCircleMenu"
@@ -708,6 +714,13 @@ onUnmounted(() => {
         @click="selectCreateThreePointCircleMode"
       >
         三点圆
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateCircleNormal }"
+        @click="selectCreateNormalCircleMode"
+      >
+        法向圆
       </button>
     </div>
   </Teleport>

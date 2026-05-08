@@ -9,6 +9,10 @@ export type CircleFrame = {
   vAxis: Vec3
 }
 
+export type CircleType = 'threePoint' | 'normal'
+
+export type DirectionType = 'line' | 'straightLine' | 'ray' | 'vector' | 'point'
+
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 const cross = (a: Vec3, b: Vec3) =>
   new Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
@@ -39,6 +43,10 @@ export class Circle3 {
   p1: Point3
   p2: Point3
   p3: Point3
+  circleType: CircleType
+  directionType: DirectionType | null
+  directionId: string | null
+  lockedRadius: number | null
 
   constructor(
     id: string,
@@ -53,6 +61,10 @@ export class Circle3 {
     labelOffsetY: number = Circle3.DEFAULT_LABEL_OFFSET_Y,
     valueVisible: boolean = false,
     centerVisible: boolean = true,
+    circleType: CircleType = 'threePoint',
+    directionType: DirectionType | null = null,
+    directionId: string | null = null,
+    lockedRadius: number | null = null,
   ) {
     this.id = id
     this.name = name
@@ -66,9 +78,47 @@ export class Circle3 {
     this.p1 = p1
     this.p2 = p2
     this.p3 = p3
+    this.circleType = circleType
+    this.directionType = directionType
+    this.directionId = directionId
+    this.lockedRadius = lockedRadius
   }
 
-  getFrame(): CircleFrame | null {
+  getFrame(resolvedDirection?: Vec3 | null): CircleFrame | null {
+    if (this.circleType === 'normal') {
+      return this.getNormalFrame(resolvedDirection)
+    }
+    return this.getThreePointFrame()
+  }
+
+  private getNormalFrame(resolvedDirection?: Vec3 | null): CircleFrame | null {
+    const center = this.p1.position
+    const radius = this.lockedRadius
+    if (radius === null || radius <= 0) return null
+
+    let normalVec: Vec3 | null = resolvedDirection ?? null
+    if (!normalVec && this.directionType === 'point') {
+      normalVec = new Vec3(0, 1, 0)
+    }
+    if (!normalVec) return null
+
+    const normal = normalize(normalVec)
+    if (!normal) return null
+
+    const fallbackAxis =
+      Math.abs(normal.y) < 1 - 1e-6
+        ? new Vec3(0, 1, 0)
+        : new Vec3(1, 0, 0)
+    const uAxisRaw = cross(normal, fallbackAxis)
+    const uAxis = normalize(uAxisRaw)
+    if (!uAxis) return null
+    const vAxis = normalize(cross(normal, uAxis))
+    if (!vAxis) return null
+
+    return { center, radius, normal, uAxis, vAxis }
+  }
+
+  private getThreePointFrame(): CircleFrame | null {
     const a = this.p1.position
     const b = this.p2.position
     const c = this.p3.position
@@ -92,16 +142,24 @@ export class Circle3 {
     return { center, radius, normal, uAxis, vAxis }
   }
 
-  getRadius() {
-    return this.getFrame()?.radius ?? 0
+  getRadius(resolvedDirection?: Vec3 | null) {
+    return this.getFrame(resolvedDirection)?.radius ?? 0
   }
 
-  getArea() {
-    const radius = this.getRadius()
+  getArea(resolvedDirection?: Vec3 | null) {
+    const radius = this.getRadius(resolvedDirection)
     return Math.PI * radius * radius
   }
 
-  isValid() {
-    return Boolean(this.getFrame())
+  getCircumference(resolvedDirection?: Vec3 | null) {
+    return 2 * Math.PI * this.getRadius(resolvedDirection)
+  }
+
+  isValid(resolvedDirection?: Vec3 | null) {
+    return Boolean(this.getFrame(resolvedDirection))
+  }
+
+  isNormalCircle() {
+    return this.circleType === 'normal'
   }
 }

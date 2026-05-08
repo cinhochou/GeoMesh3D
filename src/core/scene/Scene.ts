@@ -329,6 +329,38 @@ export class Scene {
       })
     })
 
+    lineIds.forEach((lineId) => {
+      this.circles.forEach((circle, circleId) => {
+        if (circle.isNormalCircle() && circle.directionType === 'line' && circle.directionId === lineId) {
+          circleIds.add(circleId)
+        }
+      })
+    })
+
+    straightLineIds.forEach((straightLineId) => {
+      this.circles.forEach((circle, circleId) => {
+        if (circle.isNormalCircle() && circle.directionType === 'straightLine' && circle.directionId === straightLineId) {
+          circleIds.add(circleId)
+        }
+      })
+    })
+
+    rayIds.forEach((rayId) => {
+      this.circles.forEach((circle, circleId) => {
+        if (circle.isNormalCircle() && circle.directionType === 'ray' && circle.directionId === rayId) {
+          circleIds.add(circleId)
+        }
+      })
+    })
+
+    vectorIds.forEach((vectorId) => {
+      this.circles.forEach((circle, circleId) => {
+        if (circle.isNormalCircle() && circle.directionType === 'vector' && circle.directionId === vectorId) {
+          circleIds.add(circleId)
+        }
+      })
+    })
+
     this.dirtyPointIds.clear()
     this.dirtyLineIds.clear()
     this.dirtyStraightLineIds.clear()

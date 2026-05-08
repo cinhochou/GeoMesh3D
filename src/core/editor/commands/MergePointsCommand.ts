@@ -6,7 +6,7 @@ import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
-import { Circle3 } from '../../geometry/Circle3'
+import { Circle3, type CircleType, type DirectionType } from '../../geometry/Circle3'
 import { PlanarFace } from '../../geometry/Plane'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 
@@ -48,6 +48,12 @@ type CircleSnapshot = {
   centerCircleId: string | null
   centerCircleRole: string | null
   movedPoints: Array<{ point: Point3; originalPosition: Vec3 }>
+  circleType: CircleType
+  directionType: DirectionType | null
+  directionId: string | null
+  lockedRadius: number | null
+  keepPointCircleId: string | null
+  keepPointCircleRole: string | null
 }
 
 export class MergePointsCommand implements Command {
@@ -157,6 +163,12 @@ export class MergePointsCommand implements Command {
           centerCircleId: centerPoint ? centerPoint.circleId : null,
           centerCircleRole: centerPoint ? centerPoint.circleRole : null,
           movedPoints: [],
+          circleType: circle.circleType,
+          directionType: circle.directionType,
+          directionId: circle.directionId,
+          lockedRadius: circle.lockedRadius,
+          keepPointCircleId: this.keepPoint.circleId,
+          keepPointCircleRole: this.keepPoint.circleRole,
         }
       })
   }
@@ -247,6 +259,18 @@ export class MergePointsCommand implements Command {
       const { circle } = snapshot
       const isRemoveCenter = snapshot.centerPoint?.id === this.removePoint.id
       const isKeepCenter = snapshot.centerPoint?.id === this.keepPoint.id
+
+      if (circle.isNormalCircle()) {
+        if (circle.p1.id === this.removePoint.id) {
+          circle.p1 = this.keepPoint
+          this.keepPoint.circleId = circle.id
+          this.keepPoint.circleRole = 'center'
+        }
+        if (circle.directionType === 'point' && circle.directionId === this.removePoint.id) {
+          circle.directionId = this.keepPoint.id
+        }
+        return
+      }
 
       if (isRemoveCenter) {
         const frame = circle.getFrame()
@@ -348,6 +372,13 @@ export class MergePointsCommand implements Command {
       circle.p2 = snapshot.p2
       circle.p3 = snapshot.p3
 
+      if (circle.isNormalCircle()) {
+        circle.circleType = snapshot.circleType
+        circle.directionType = snapshot.directionType
+        circle.directionId = snapshot.directionId
+        circle.lockedRadius = snapshot.lockedRadius
+      }
+
       snapshot.movedPoints.forEach(({ point, originalPosition }) => {
         point.position = originalPosition
       })
@@ -367,6 +398,11 @@ export class MergePointsCommand implements Command {
         this.keepPoint.circleRole = this.keepPointCircleRole
         this.keepPoint.locked = this.keepPointLocked
         this.keepPoint.userLocked = this.keepPointUserLocked
+      }
+
+      if (circle.isNormalCircle() && circle.p1.id === this.keepPoint.id) {
+        this.keepPoint.circleId = snapshot.keepPointCircleId
+        this.keepPoint.circleRole = snapshot.keepPointCircleRole as 'center' | null
       }
 
       if (this.removedCircles.has(circle.id)) {
