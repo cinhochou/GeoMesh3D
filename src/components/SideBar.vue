@@ -81,9 +81,13 @@ const selectedCircles = computed(() => {
     .map((id) => props.scene.circles.get(id))
     .filter((circle): circle is Circle3 => circle !== undefined)
 })
+const isConstrainedPoint = (point: Point3) =>
+  (point.cubeId !== null && point.cubeRole === 'dependent') ||
+  (point.regularPolygonId !== null && point.regularPolygonRole === 'dependent')
+
 const pointsInScene = computed(() => {
   void commandRevision.value
-  return [...props.scene.points.values()]
+  return [...props.scene.points.values()].filter((p) => !isConstrainedPoint(p))
 })
 const linesInScene = computed(() => {
   void commandRevision.value
