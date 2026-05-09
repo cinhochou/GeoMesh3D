@@ -42,6 +42,7 @@ const {
   toastVisible,
   toastScope,
   mergePointDialog,
+  regularPolygonDialog,
 } = storeToRefs(uiStore)
 const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
 const { user } = storeToRefs(authStore)
@@ -208,6 +209,7 @@ onMounted(() => {
   interaction.setGlobalPointValueMode(isGlobalPointValueMode.value)
   interaction.bind(renderer.renderer.domElement)
   interaction.syncControlLockState()
+  window.addEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // Ensure renderer rebuilds meshes when editor view is mounted again
@@ -449,6 +451,7 @@ onUnmounted(() => {
   solverWorker?.terminate()
   solverWorker = null
   interaction?.unbind(renderer.renderer.domElement)
+  window.removeEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -476,6 +479,7 @@ function onModeChange(mode: EditorMode) {
   editor.setMode(mode)
   sceneStore.setCurrentMode(mode)
   uiStore.closeMergePointDialog()
+  uiStore.closeRegularPolygonDialog()
 }
 
 const mergePointSelection = computed(() =>
@@ -504,6 +508,33 @@ const handleConfirmMergePoints = () => {
 
 const handleCancelMergePoints = () => {
   uiStore.closeMergePointDialog()
+}
+
+const regularPolygonVertexInput = ref<HTMLInputElement | null>(null)
+
+const handleOpenRegularPolygonDialog = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  uiStore.openRegularPolygonDialog(detail.firstPointId, detail.secondPointId)
+  nextTick(() => {
+    regularPolygonVertexInput.value?.focus()
+    regularPolygonVertexInput.value?.select()
+  })
+}
+
+const handleConfirmRegularPolygon = () => {
+  const n = Math.round(regularPolygonDialog.value.vertexCount)
+  if (typeof n !== 'number' || isNaN(n) || n < 3 || !Number.isInteger(n)) return
+  const p1 = scene.points.get(regularPolygonDialog.value.firstPointId)
+  const p2 = scene.points.get(regularPolygonDialog.value.secondPointId)
+  if (!p1 || !p2) return
+  editor.tryCreateRegularPolygon(p1, p2, n)
+  interaction.resetRegularPolygonCreation()
+  uiStore.closeRegularPolygonDialog()
+}
+
+const handleCancelRegularPolygon = () => {
+  interaction.resetRegularPolygonCreation()
+  uiStore.closeRegularPolygonDialog()
 }
 
 const handleClearAll = () => {
@@ -691,6 +722,37 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
               type="button"
               class="merge-point-button merge-point-button-confirm"
               @click="handleConfirmMergePoints"
+            >
+              确认
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="fade-overlay">
+      <div v-if="regularPolygonDialog.visible" class="collab-wait-overlay" @click.self="handleCancelRegularPolygon">
+        <div class="merge-point-dialog">
+          <div class="merge-point-title">正多边形</div>
+          <div class="merge-point-text">请输入顶点数（大于 2 的整数）</div>
+          <input
+            ref="regularPolygonVertexInput"
+            v-model.number="regularPolygonDialog.vertexCount"
+            type="number"
+            min="3"
+            step="1"
+            class="regular-polygon-input"
+            @keydown.enter="handleConfirmRegularPolygon"
+            @keydown.escape="handleCancelRegularPolygon"
+          />
+          <div class="merge-point-actions">
+            <button type="button" class="merge-point-button" @click="handleCancelRegularPolygon">
+              取消
+            </button>
+            <button
+              type="button"
+              class="merge-point-button merge-point-button-confirm"
+              @click="handleConfirmRegularPolygon"
             >
               确认
             </button>
@@ -1063,6 +1125,24 @@ select.axis-control option {
   background: #2c5a34;
   color: #43f260;
   border-color: #43f260;
+}
+
+.regular-polygon-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: #222;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #eee;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.regular-polygon-input:focus {
+  border-color: #43f260;
+  box-shadow: 0 0 0 2px rgba(67, 242, 96, 0.12);
 }
 .toast-container-viewport {
   position: absolute;

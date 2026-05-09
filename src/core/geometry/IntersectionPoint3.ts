@@ -1,4 +1,4 @@
-import type { PlanarFace } from './Plane'
+import type { PlanarPolygon } from './PlanarPolygon'
 import type { Point3 } from './Point3'
 import type { Ray3 } from './Ray3'
 import type { GeoVector3 } from './GeoVector3'
@@ -21,7 +21,7 @@ type IntersectionSceneAccess = {
   straightLines: Map<string, StraightLine3>
   rays: Map<string, Ray3>
   vectors: Map<string, GeoVector3>
-  faces: Map<string, PlanarFace>
+  faces: Map<string, PlanarPolygon>
 }
 
 type LinearData = {

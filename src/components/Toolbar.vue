@@ -52,6 +52,7 @@ const isPointMenuOpen = computed(() => toolbarMenus.value.pointOpen)
 const isLineMenuOpen = computed(() => toolbarMenus.value.lineOpen)
 const isCircleMenuOpen = computed(() => toolbarMenus.value.circleOpen)
 const isSolidMenuOpen = computed(() => toolbarMenus.value.solidOpen)
+const isPolygonMenuOpen = computed(() => toolbarMenus.value.polygonOpen)
 const deleteMenuRef = ref<HTMLElement | null>(null)
 const deleteTriggerRef = ref<HTMLElement | null>(null)
 const deletePanelRef = ref<HTMLElement | null>(null)
@@ -67,6 +68,9 @@ const circlePanelRef = ref<HTMLElement | null>(null)
 const solidMenuRef = ref<HTMLElement | null>(null)
 const solidTriggerRef = ref<HTMLElement | null>(null)
 const solidPanelRef = ref<HTMLElement | null>(null)
+const polygonMenuRef = ref<HTMLElement | null>(null)
+const polygonTriggerRef = ref<HTMLElement | null>(null)
+const polygonPanelRef = ref<HTMLElement | null>(null)
 const deleteMenuStyle = ref({
   top: '0px',
   left: '0px',
@@ -88,6 +92,11 @@ const circleMenuStyle = ref({
   minWidth: '132px',
 })
 const solidMenuStyle = ref({
+  top: '0px',
+  left: '0px',
+  minWidth: '132px',
+})
+const polygonMenuStyle = ref({
   top: '0px',
   left: '0px',
   minWidth: '132px',
@@ -219,6 +228,22 @@ const updateSolidMenuPosition = () => {
   }
 }
 
+const togglePolygonMenu = () => {
+  if (isEditingLocked.value) return
+  uiStore.toggleToolbarMenu('polygonOpen')
+}
+
+const updatePolygonMenuPosition = () => {
+  const trigger = polygonTriggerRef.value
+  if (!trigger) return
+  const rect = trigger.getBoundingClientRect()
+  polygonMenuStyle.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${rect.left}px`,
+    minWidth: `${Math.max(rect.width, 132)}px`,
+  }
+}
+
 const selectDeleteMode = () => {
   setMode(EditorMode.Delete)
 }
@@ -271,6 +296,16 @@ const selectCreateThreePointCircleMode = () => {
 
 const selectCreateNormalCircleMode = () => {
   setMode(EditorMode.CreateCircleNormal)
+}
+
+const selectCreatePolygonMode = () => {
+  uiStore.setToolbarMenuOpen('polygonOpen', false, { exclusive: false })
+  setMode(EditorMode.CreatePlane)
+}
+
+const selectCreateRegularPolygonMode = () => {
+  uiStore.setToolbarMenuOpen('polygonOpen', false, { exclusive: false })
+  setMode(EditorMode.CreateRegularPolygon)
 }
 
 const createHexahedron = () => {
@@ -374,6 +409,13 @@ const handleClickOutside = (event: MouseEvent) => {
     uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
   }
   if (
+    isPolygonMenuOpen.value &&
+    !polygonMenuRef.value?.contains(target) &&
+    !polygonPanelRef.value?.contains(target)
+  ) {
+    uiStore.setToolbarMenuOpen('polygonOpen', false, { exclusive: false })
+  }
+  if (
     profileMenuOpen.value &&
     !profileTriggerRef.value?.contains(target) &&
     !profilePanelRef.value?.contains(target)
@@ -412,6 +454,12 @@ watch(isSolidMenuOpen, async (isOpen) => {
   updateSolidMenuPosition()
 })
 
+watch(isPolygonMenuOpen, async (isOpen) => {
+  if (!isOpen) return
+  await nextTick()
+  updatePolygonMenuPosition()
+})
+
 watch(profileMenuOpen, async (isOpen) => {
   if (!isOpen) return
   await nextTick()
@@ -432,12 +480,14 @@ onMounted(() => {
   window.addEventListener('resize', updatePointMenuPosition)
   window.addEventListener('resize', updateLineMenuPosition)
   window.addEventListener('resize', updateCircleMenuPosition)
+  window.addEventListener('resize', updatePolygonMenuPosition)
   window.addEventListener('resize', updateSolidMenuPosition)
   window.addEventListener('resize', updateProfileMenuPosition)
   document.addEventListener('scroll', updateDeleteMenuPosition, true)
   document.addEventListener('scroll', updatePointMenuPosition, true)
   document.addEventListener('scroll', updateLineMenuPosition, true)
   document.addEventListener('scroll', updateCircleMenuPosition, true)
+  document.addEventListener('scroll', updatePolygonMenuPosition, true)
   document.addEventListener('scroll', updateSolidMenuPosition, true)
   document.addEventListener('scroll', updateProfileMenuPosition, true)
 })
@@ -448,12 +498,14 @@ onUnmounted(() => {
   window.removeEventListener('resize', updatePointMenuPosition)
   window.removeEventListener('resize', updateLineMenuPosition)
   window.removeEventListener('resize', updateCircleMenuPosition)
+  window.removeEventListener('resize', updatePolygonMenuPosition)
   window.removeEventListener('resize', updateSolidMenuPosition)
   window.removeEventListener('resize', updateProfileMenuPosition)
   document.removeEventListener('scroll', updateDeleteMenuPosition, true)
   document.removeEventListener('scroll', updatePointMenuPosition, true)
   document.removeEventListener('scroll', updateLineMenuPosition, true)
   document.removeEventListener('scroll', updateCircleMenuPosition, true)
+  document.removeEventListener('scroll', updatePolygonMenuPosition, true)
   document.removeEventListener('scroll', updateSolidMenuPosition, true)
   document.removeEventListener('scroll', updateProfileMenuPosition, true)
 })
@@ -538,13 +590,21 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <button
-      :class="{ 'is-active': currentMode === EditorMode.CreatePlane }"
-      @click="setMode(EditorMode.CreatePlane)"
-      :disabled="isEditingLocked"
-    >
-      面
-    </button>
+    <div ref="polygonMenuRef" class="menu-wrap">
+      <button
+        ref="polygonTriggerRef"
+        class="menu-trigger"
+        :class="{
+          'is-active': currentMode === EditorMode.CreatePlane || currentMode === EditorMode.CreateRegularPolygon,
+          'is-open': isPolygonMenuOpen,
+        }"
+        @click="togglePolygonMenu"
+        :disabled="isEditingLocked"
+      >
+        <span>面</span>
+        <span class="menu-caret">▾</span>
+      </button>
+    </div>
 
     <div ref="solidMenuRef" class="menu-wrap">
       <button
@@ -721,6 +781,25 @@ onUnmounted(() => {
         @click="selectCreateNormalCircleMode"
       >
         法向圆
+      </button>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="isPolygonMenuOpen" ref="polygonPanelRef" class="menu-panel" :style="polygonMenuStyle">
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreatePlane }"
+        @click="selectCreatePolygonMode"
+      >
+        多边形
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateRegularPolygon }"
+        @click="selectCreateRegularPolygonMode"
+      >
+        正多边形
       </button>
     </div>
   </Teleport>

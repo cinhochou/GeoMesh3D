@@ -7,8 +7,9 @@ import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../../geometry/Circle3'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
+import { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
   item: T
@@ -17,13 +18,15 @@ type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
 }
 
 type FaceSnapshot = {
-  face: PlanarFace
+  face: PlanarPolygon
   boundaryPointIds: string[]
   memberPointIds: string[]
   boundaryLineIds: string[]
   supportPointIds: string[]
   cubeOwnerPointIds: string[]
   cubeDependentPointIds: string[]
+  regularPolygonOwnerPointIds: string[]
+  regularPolygonDependentPointIds: string[]
 }
 
 type CubeSnapshot = {
@@ -36,6 +39,18 @@ type PointCubeSnapshot = {
   point: Point3
   cubeId: string | null
   cubeRole: 'owner' | 'dependent' | null
+}
+
+type RegularPolygonSnapshot = {
+  constraint: RegularPolygonConstraint
+  ownerPointIds: [string, string]
+  dependentLayouts: Array<{ pointId: string; angleIndex: number }>
+}
+
+type PointRegularPolygonSnapshot = {
+  point: Point3
+  regularPolygonId: string | null
+  regularPolygonRole: 'owner' | 'dependent' | null
 }
 
 type CircleSnapshot = {
@@ -64,6 +79,8 @@ export class MergePointsCommand implements Command {
   private faceSnapshots: FaceSnapshot[]
   private cubeSnapshots: CubeSnapshot[]
   private pointCubeSnapshots: PointCubeSnapshot[]
+  private regularPolygonSnapshots: RegularPolygonSnapshot[]
+  private pointRegularPolygonSnapshots: PointRegularPolygonSnapshot[]
   private circleSnapshots: CircleSnapshot[]
   private keepPointCircleId: string | null
   private keepPointCircleRole: 'center' | null
@@ -107,6 +124,8 @@ export class MergePointsCommand implements Command {
         supportPointIds: [...face.supportPointIds],
         cubeOwnerPointIds: [...face.cubeOwnerPointIds],
         cubeDependentPointIds: [...face.cubeDependentPointIds],
+        regularPolygonOwnerPointIds: [...face.regularPolygonOwnerPointIds],
+        regularPolygonDependentPointIds: [...face.regularPolygonDependentPointIds],
       }))
     this.cubeSnapshots = [...scene.cubeConstraints.values()]
       .filter((constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint)
@@ -138,6 +157,38 @@ export class MergePointsCommand implements Command {
       point,
       cubeId: point.cubeId,
       cubeRole: point.cubeRole,
+    }))
+
+    this.regularPolygonSnapshots = [...scene.regularPolygonConstraints.values()]
+      .filter((constraint): constraint is RegularPolygonConstraint => constraint instanceof RegularPolygonConstraint)
+      .filter((constraint) =>
+        [constraint.ownerPointIds[0], constraint.ownerPointIds[1], ...constraint.dependentLayouts.map((item) => item.pointId)].some(
+          (pointId) => pointId === keepPoint.id || pointId === removePoint.id,
+        ),
+      )
+      .map((constraint) => ({
+        constraint,
+        ownerPointIds: [...constraint.ownerPointIds] as [string, string],
+        dependentLayouts: constraint.dependentLayouts.map((item) => ({ ...item })),
+      }))
+    const rpPointsToSnapshot = new Map<string, Point3>([
+      [keepPoint.id, keepPoint],
+      [removePoint.id, removePoint],
+    ])
+    this.regularPolygonSnapshots.forEach(({ constraint }) => {
+      const ownerA = scene.points.get(constraint.ownerPointIds[0])
+      const ownerB = scene.points.get(constraint.ownerPointIds[1])
+      if (ownerA) rpPointsToSnapshot.set(ownerA.id, ownerA)
+      if (ownerB) rpPointsToSnapshot.set(ownerB.id, ownerB)
+      constraint.dependentLayouts.forEach(({ pointId }) => {
+        const point = scene.points.get(pointId)
+        if (point) rpPointsToSnapshot.set(point.id, point)
+      })
+    })
+    this.pointRegularPolygonSnapshots = [...rpPointsToSnapshot.values()].map((point) => ({
+      point,
+      regularPolygonId: point.regularPolygonId,
+      regularPolygonRole: point.regularPolygonRole,
     }))
 
     this.circleSnapshots = [...scene.circles.values()]
@@ -224,6 +275,8 @@ export class MergePointsCommand implements Command {
       face.supportPointIds = this.replacePointId(face.supportPointIds)
       face.cubeOwnerPointIds = this.replacePointId(face.cubeOwnerPointIds)
       face.cubeDependentPointIds = this.replacePointId(face.cubeDependentPointIds)
+      face.regularPolygonOwnerPointIds = this.replacePointId(face.regularPolygonOwnerPointIds)
+      face.regularPolygonDependentPointIds = this.replacePointId(face.regularPolygonDependentPointIds)
       face.boundaryLineIds = face.boundaryLineIds.filter((lineId) => this.scene.lines.has(lineId))
 
       if (face.boundaryPointIds.length < 3 || face.memberPointIds.length < 3) {
@@ -253,6 +306,22 @@ export class MergePointsCommand implements Command {
     if (inheritedCubeSnapshot) {
       this.keepPoint.cubeId = inheritedCubeSnapshot.cubeId
       this.keepPoint.cubeRole = inheritedCubeSnapshot.cubeRole
+    }
+
+    this.regularPolygonSnapshots.forEach(({ constraint }) => {
+      if (constraint.ownerPointIds[0] === this.removePoint.id) constraint.ownerPointIds[0] = this.keepPoint.id
+      if (constraint.ownerPointIds[1] === this.removePoint.id) constraint.ownerPointIds[1] = this.keepPoint.id
+      constraint.dependentLayouts.forEach((layout) => {
+        if (layout.pointId === this.removePoint.id) layout.pointId = this.keepPoint.id
+      })
+    })
+
+    const inheritedRpSnapshot =
+      !this.keepPoint.regularPolygonId &&
+      this.pointRegularPolygonSnapshots.find(({ point }) => point.id === this.removePoint.id && point.regularPolygonId)
+    if (inheritedRpSnapshot) {
+      this.keepPoint.regularPolygonId = inheritedRpSnapshot.regularPolygonId
+      this.keepPoint.regularPolygonRole = inheritedRpSnapshot.regularPolygonRole
     }
 
     this.circleSnapshots.forEach((snapshot) => {
@@ -439,6 +508,8 @@ export class MergePointsCommand implements Command {
       if (snapshot) {
         face.cubeOwnerPointIds = [...snapshot.cubeOwnerPointIds]
         face.cubeDependentPointIds = [...snapshot.cubeDependentPointIds]
+        face.regularPolygonOwnerPointIds = [...snapshot.regularPolygonOwnerPointIds]
+        face.regularPolygonDependentPointIds = [...snapshot.regularPolygonDependentPointIds]
       }
       if (this.removedFaces.has(face.id)) this.scene.addFace(face)
       else face.normalize(this.scene.points)
@@ -456,6 +527,19 @@ export class MergePointsCommand implements Command {
     this.pointCubeSnapshots.forEach(({ point, cubeId, cubeRole }) => {
       point.cubeId = cubeId
       point.cubeRole = cubeRole
+    })
+    this.regularPolygonSnapshots.forEach(({ constraint, ownerPointIds, dependentLayouts }) => {
+      constraint.ownerPointIds[0] = ownerPointIds[0]
+      constraint.ownerPointIds[1] = ownerPointIds[1]
+      constraint.dependentLayouts.splice(
+        0,
+        constraint.dependentLayouts.length,
+        ...dependentLayouts.map((item) => ({ ...item })),
+      )
+    })
+    this.pointRegularPolygonSnapshots.forEach(({ point, regularPolygonId, regularPolygonRole }) => {
+      point.regularPolygonId = regularPolygonId
+      point.regularPolygonRole = regularPolygonRole
     })
     this.scene.markPointDirty(this.keepPoint.id)
     this.scene.markPointDirty(this.removePoint.id)

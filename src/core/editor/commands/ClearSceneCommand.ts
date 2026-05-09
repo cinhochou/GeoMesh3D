@@ -5,7 +5,7 @@ import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { Circle3 } from '../../geometry/Circle3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { Scene, type SceneConstraint } from '../../scene/Scene'
 
 export class ClearSceneCommand implements Command {
@@ -17,7 +17,7 @@ export class ClearSceneCommand implements Command {
     private rays: Ray3[],
     private vectors: GeoVector3[],
     private circles: Circle3[],
-    private faces: PlanarFace[],
+    private faces: PlanarPolygon[],
     private constraints: SceneConstraint[],
   ) {}
 

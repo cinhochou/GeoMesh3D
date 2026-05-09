@@ -9,7 +9,7 @@ import {
   projectPoint2D,
 } from './PlanarUtils'
 
-export class PlanarFace {
+export class PlanarPolygon {
   static readonly DEFAULT_LABEL_OFFSET_X = 0
   static readonly DEFAULT_LABEL_OFFSET_Y = 3
   id: string
@@ -32,6 +32,11 @@ export class PlanarFace {
   memberPointIds: string[]
   boundaryLineIds: string[]
   supportPointIds: string[]
+  isRegularPolygon: boolean
+  regularPolygonVertexCount: number
+  regularPolygonId: string | null
+  regularPolygonOwnerPointIds: string[]
+  regularPolygonDependentPointIds: string[]
 
   constructor(
     id: string,
@@ -46,9 +51,11 @@ export class PlanarFace {
     areaLocked: boolean = false,
     lockedArea: number = 0,
     edgeLengthLocks: Array<number | null> = [],
-    labelOffsetX: number = PlanarFace.DEFAULT_LABEL_OFFSET_X,
-    labelOffsetY: number = PlanarFace.DEFAULT_LABEL_OFFSET_Y,
+    labelOffsetX: number = PlanarPolygon.DEFAULT_LABEL_OFFSET_X,
+    labelOffsetY: number = PlanarPolygon.DEFAULT_LABEL_OFFSET_Y,
     valueVisible: boolean = false,
+    isRegularPolygon: boolean = false,
+    regularPolygonVertexCount: number = 0,
   ) {
     this.id = id
     this.name = name
@@ -65,6 +72,11 @@ export class PlanarFace {
     this.areaLocked = areaLocked
     this.lockedArea = lockedArea
     this.edgeLengthLocks = [...edgeLengthLocks]
+    this.isRegularPolygon = isRegularPolygon
+    this.regularPolygonVertexCount = regularPolygonVertexCount
+    this.regularPolygonId = null
+    this.regularPolygonOwnerPointIds = []
+    this.regularPolygonDependentPointIds = []
     if (this.edgeLengthLocks.length < this.boundaryPointIds.length) {
       this.edgeLengthLocks = [
         ...this.edgeLengthLocks,

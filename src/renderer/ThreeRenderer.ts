@@ -1116,18 +1116,21 @@ export class ThreeRenderer {
       const isSelected = scene.selection.points.has(p.id)
       const isIntersectionPoint = Boolean(scene.getIntersectionConstraint(p.id))
       const isCubeDependentPoint = p.cubeRole === 'dependent'
+      const isRegularPolygonDependentPoint = p.regularPolygonRole === 'dependent'
       const isCircleCenterPoint = p.circleRole === 'center'
       const baseColor = p.locked
-        ? isCircleCenterPoint
+        ? isCircleCenterPoint || isRegularPolygonDependentPoint
           ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
           : 0xffffff
         : isIntersectionPoint
           ? ThreeRenderer.INTERSECTION_POINT_COLOR
           : isCubeDependentPoint
             ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
-            : isCircleCenterPoint
-              ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
-              : 0xff5555
+            : isRegularPolygonDependentPoint
+              ? 0xffffff
+              : isCircleCenterPoint
+                ? ThreeRenderer.CUBE_DEPENDENT_POINT_COLOR
+                : 0xff5555
       ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? 0x43f260 : baseColor)
 
       let pointSpriteVisible = true

@@ -48,6 +48,7 @@ export class Interaction {
   normalCircleCenterPointId: string | null = null
   normalCircleDirectionType: DirectionType | null = null
   normalCircleDirectionId: string | null = null
+  regularPolygonFirstPointId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -1116,6 +1117,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateCircleThreePoints ||
         this.editor.mode === EditorMode.CreateCircleNormal ||
         this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
@@ -1331,6 +1333,21 @@ export class Interaction {
         this.toggleCreateSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreatePlane && type === 'line') {
         this.toggleCreateSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.CreateRegularPolygon && type === 'point') {
+        if (!this.regularPolygonFirstPointId) {
+          this.regularPolygonFirstPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.regularPolygonFirstPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          window.dispatchEvent(
+            new CustomEvent('open-regular-polygon-dialog', {
+              detail: {
+                firstPointId: this.regularPolygonFirstPointId,
+                secondPointId: geoId,
+              },
+            }),
+          )
+        }
       } else if (this.editor.mode === EditorMode.CreateHexahedron && type === 'point') {
         this.commitCreateHexahedronSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateHexahedron && type === 'line') {
@@ -1359,6 +1376,8 @@ export class Interaction {
         this.clearActivePointValueTarget()
       } else if (this.editor.mode === EditorMode.CreatePlane)
         this.editor.tryCreateFaceFromSelection()
+      else if (this.editor.mode === EditorMode.CreateRegularPolygon)
+        this.resetRegularPolygonCreation()
       else if (
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron
@@ -1407,6 +1426,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateCircleThreePoints ||
         this.editor.mode === EditorMode.CreateCircleNormal ||
         this.editor.mode === EditorMode.CreatePlane ||
+        this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.IntersectionPoint)
@@ -1589,6 +1609,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreateRegularPolygon) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetRegularPolygonCreation()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.CreateHexahedron) {
         e.preventDefault()
         e.stopPropagation()
@@ -1723,6 +1750,31 @@ export class Interaction {
       if (type === 'point') this.toggleCreateSelection('point', geoId)
       else if (type === 'line') this.toggleCreateSelection('line', geoId)
       else this.editor.tryCreateFaceFromSelection()
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateRegularPolygon) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') {
+        if (!this.regularPolygonFirstPointId) {
+          this.regularPolygonFirstPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.regularPolygonFirstPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          window.dispatchEvent(
+            new CustomEvent('open-regular-polygon-dialog', {
+              detail: {
+                firstPointId: this.regularPolygonFirstPointId,
+                secondPointId: geoId,
+              },
+            }),
+          )
+        }
+      } else {
+        this.resetRegularPolygonCreation()
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -2469,6 +2521,24 @@ export class Interaction {
     this.editor.scene.selection.clear()
   }
 
+  resetRegularPolygonCreation() {
+    this.regularPolygonFirstPointId = null
+    this.editor.selectedPoints = []
+    this.editor.scene.selection.clear()
+  }
+
+  confirmRegularPolygonVertices(vertexCount: number, firstPointId: string, secondPointId: string) {
+    const p1 = this.editor.scene.points.get(firstPointId)
+    const p2 = this.editor.scene.points.get(secondPointId)
+    if (!p1 || !p2) return
+    this.editor.tryCreateRegularPolygon(p1, p2, vertexCount)
+    this.resetRegularPolygonCreation()
+  }
+
+  cancelRegularPolygon() {
+    this.resetRegularPolygonCreation()
+  }
+
   confirmNormalCircleRadius(radius: number) {
     if (!this.normalCircleCenterPointId || !this.normalCircleDirectionType || !this.normalCircleDirectionId) return
     const centerPoint = this.editor.scene.points.get(this.normalCircleCenterPointId)
@@ -2506,6 +2576,7 @@ export class Interaction {
     this.clearActivePointValueTarget()
     this.syncControlLockState()
     this.renderer.hideAxisGuides()
+    this.regularPolygonFirstPointId = null
   }
 
   private endDrag() {

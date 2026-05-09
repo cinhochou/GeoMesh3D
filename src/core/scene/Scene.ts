@@ -1,11 +1,11 @@
-import { PlanarFaceConstraint } from '../constraints/PlanarFaceConstraint'
+import { PlanarPolygonConstraint } from '../constraints/PlanarFaceConstraint'
 import { Point3 } from '../geometry/Point3'
 import { Line3 } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
-import { PlanarFace } from '../geometry/Plane'
+import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 
@@ -38,13 +38,14 @@ export class Scene {
   rays = new Map<string, Ray3>()
   vectors = new Map<string, GeoVector3>()
   circles = new Map<string, Circle3>()
-  faces = new Map<string, PlanarFace>()
+  faces = new Map<string, PlanarPolygon>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
   faceConstraints = new Map<string, SceneConstraint>()
   intersectionConstraints = new Map<string, SceneConstraint>()
   cubeConstraints = new Map<string, SceneConstraint>()
+  regularPolygonConstraints = new Map<string, SceneConstraint>()
 
   private dirtyConstraints = new Set<SceneConstraint>()
   private dirtyPointIds = new Set<string>()
@@ -95,7 +96,7 @@ export class Scene {
     this.dirtyCircleIds.add(circle.id)
   }
 
-  addFace(face: PlanarFace) {
+  addFace(face: PlanarPolygon) {
     face.normalize(this.points)
     this.faces.set(face.id, face)
     this.dirtyFaceIds.add(face.id)
@@ -105,7 +106,7 @@ export class Scene {
       this.markConstraintDirty(existing)
       return
     }
-    const constraint = new PlanarFaceConstraint(this, face.id)
+    const constraint = new PlanarPolygonConstraint(this, face.id)
     this.faceConstraints.set(face.id, constraint)
     this.constraints.push(constraint)
     this.markConstraintDirty(constraint)
@@ -173,6 +174,37 @@ export class Scene {
     this.dirtyConstraints.delete(existing)
   }
 
+  addRegularPolygonConstraint(c: SceneConstraint & { constraintId: string }) {
+    const existing = this.regularPolygonConstraints.get(c.constraintId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.regularPolygonConstraints.set(c.constraintId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+    this.markConstraintDirty(c)
+  }
+
+  removeRegularPolygonConstraint(constraintId: string) {
+    const existing = this.regularPolygonConstraints.get(constraintId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.regularPolygonConstraints.delete(constraintId)
+    this.dirtyConstraints.delete(existing)
+  }
+
+  getRegularPolygonConstraint(constraintId: string) {
+    const constraint = this.regularPolygonConstraints.get(constraintId)
+    if (!constraint) return null
+    return constraint
+  }
+
+  requestRegularPolygonConstraintSolve(constraintId: string) {
+    this.requestConstraintSolve(this.regularPolygonConstraints.get(constraintId))
+  }
+
   getCubeConstraint(cubeId: string) {
     const constraint = this.cubeConstraints.get(cubeId)
     if (!constraint || !constraint.cubeId) return null
@@ -207,6 +239,7 @@ export class Scene {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
+    this.regularPolygonConstraints.clear()
     this.dirtyConstraints.clear()
   }
 
@@ -214,10 +247,14 @@ export class Scene {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
+    this.regularPolygonConstraints.clear()
     this.constraints.forEach((constraint) => {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
       if (constraint.cubeId) this.cubeConstraints.set(constraint.cubeId, constraint)
+      if ('constraintId' in constraint && typeof (constraint as { constraintId: string }).constraintId === 'string') {
+        this.regularPolygonConstraints.set((constraint as { constraintId: string }).constraintId, constraint)
+      }
       this.markConstraintDirty(constraint)
     })
   }

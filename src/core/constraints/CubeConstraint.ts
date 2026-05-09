@@ -70,6 +70,10 @@ export class CubeConstraint {
     this.vAxisHint.z = nextHint.z
   }
 
+  getVAxisHint() {
+    return this.vAxisHint
+  }
+
   getResolvedAxes() {
     const p1 = this.scene.points.get(this.ownerPointIds[0])
     const p2 = this.scene.points.get(this.ownerPointIds[1])

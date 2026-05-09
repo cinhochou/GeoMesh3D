@@ -9,7 +9,7 @@ const toWorldPoint = (plane: NonNullable<ReturnType<typeof computePlaneBasis>>, 
     plane.origin.z + plane.uAxis.z * x + plane.vAxis.z * y,
   )
 
-export class PlanarFaceConstraint {
+export class PlanarPolygonConstraint {
   constructor(
     private scene: Scene,
     public readonly faceId: string,

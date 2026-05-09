@@ -20,6 +20,13 @@ interface MergePointDialogState {
   targetId: string
 }
 
+interface RegularPolygonDialogState {
+  visible: boolean
+  firstPointId: string
+  secondPointId: string
+  vertexCount: number
+}
+
 interface ContentGroupCollapseState {
   point: boolean
   line: boolean
@@ -66,11 +73,19 @@ export const useUiStore = defineStore('ui', () => {
     targetId: '',
   })
 
+  const regularPolygonDialog = ref<RegularPolygonDialogState>({
+    visible: false,
+    firstPointId: '',
+    secondPointId: '',
+    vertexCount: 5,
+  })
+
   const toolbarMenus = ref({
     deleteOpen: false,
     pointOpen: false,
     lineOpen: false,
     circleOpen: false,
+    polygonOpen: false,
     solidOpen: false,
   })
 
@@ -83,6 +98,7 @@ export const useUiStore = defineStore('ui', () => {
       toolbarMenus.value.pointOpen ||
       toolbarMenus.value.lineOpen ||
       toolbarMenus.value.circleOpen ||
+      toolbarMenus.value.polygonOpen ||
       toolbarMenus.value.solidOpen,
   )
 
@@ -164,6 +180,24 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
+  const openRegularPolygonDialog = (firstPointId: string, secondPointId: string) => {
+    regularPolygonDialog.value = {
+      visible: true,
+      firstPointId,
+      secondPointId,
+      vertexCount: 5,
+    }
+  }
+
+  const closeRegularPolygonDialog = () => {
+    regularPolygonDialog.value = {
+      visible: false,
+      firstPointId: '',
+      secondPointId: '',
+      vertexCount: 5,
+    }
+  }
+
   const setMergePointTargetId = (targetId: string) => {
     mergePointDialog.value = {
       ...mergePointDialog.value,
@@ -177,12 +211,13 @@ export const useUiStore = defineStore('ui', () => {
       pointOpen: false,
       lineOpen: false,
       circleOpen: false,
+      polygonOpen: false,
       solidOpen: false,
     }
   }
 
   const setToolbarMenuOpen = (
-    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'solidOpen',
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'polygonOpen' | 'solidOpen',
     value: boolean,
     options?: { exclusive?: boolean },
   ) => {
@@ -197,7 +232,7 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   const toggleToolbarMenu = (
-    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'solidOpen',
+    menu: 'deleteOpen' | 'pointOpen' | 'lineOpen' | 'circleOpen' | 'polygonOpen' | 'solidOpen',
   ) => {
     const next = !toolbarMenus.value[menu]
     setToolbarMenuOpen(menu, next, { exclusive: true })
@@ -241,6 +276,7 @@ export const useUiStore = defineStore('ui', () => {
     lastModeBeforeCoordinateOff.value = null
     clearToast()
     closeMergePointDialog()
+    closeRegularPolygonDialog()
     closeAllToolbarMenus()
     contentGroupsCollapsed.value = createContentGroupsCollapsed()
     hasAutoCollapsedContentGroups.value = false
@@ -261,6 +297,7 @@ export const useUiStore = defineStore('ui', () => {
     toastVisible,
     toastScope,
     mergePointDialog,
+    regularPolygonDialog,
     toolbarMenus,
     contentGroupsCollapsed,
     hasAutoCollapsedContentGroups,
@@ -282,6 +319,8 @@ export const useUiStore = defineStore('ui', () => {
     setLastModeBeforeCoordinateOff,
     openMergePointDialog,
     closeMergePointDialog,
+    openRegularPolygonDialog,
+    closeRegularPolygonDialog,
     setMergePointTargetId,
     closeAllToolbarMenus,
     setToolbarMenuOpen,

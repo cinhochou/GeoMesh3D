@@ -1,14 +1,14 @@
 import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export class DeleteHexahedronCommand implements Command {
   constructor(
     private scene: Scene,
-    private faces: PlanarFace[],
+    private faces: PlanarPolygon[],
     private dependentPoints: Point3[],
     private constraint: CubeConstraint,
     private dependentIntersectionPoints: Array<{

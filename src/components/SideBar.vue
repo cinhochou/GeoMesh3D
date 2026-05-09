@@ -11,7 +11,7 @@ import type { Circle3 } from '../core/geometry/Circle3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
-import type { PlanarFace } from '../core/geometry/Plane'
+import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 
@@ -73,7 +73,7 @@ const selectedFaces = computed(() => {
   void commandRevision.value
   return [...props.scene.selection.faces]
     .map((id) => props.scene.faces.get(id))
-    .filter((face): face is PlanarFace => face !== undefined)
+    .filter((face): face is PlanarPolygon => face !== undefined)
 })
 const selectedCircles = computed(() => {
   void commandRevision.value
@@ -113,6 +113,10 @@ const hexahedronsInScene = computed(() => {
   void commandRevision.value
   return props.editor.getCubeConstraints()
 })
+const regularPolygonsInScene = computed(() => {
+  void commandRevision.value
+  return props.editor.getRegularPolygonConstraints()
+})
 const fullySelectedHexahedronIds = computed(() => {
   void commandRevision.value
   return hexahedronsInScene.value
@@ -128,14 +132,22 @@ const selectedHexahedrons = computed(() => {
         constraint !== null,
     )
 })
+const selectedRegularPolygons = computed(() => {
+  void commandRevision.value
+  return regularPolygonsInScene.value.filter((constraint) =>
+    props.scene.selection.faces.has(constraint.faceId),
+  )
+})
 const selectedEditableFaces = computed(() =>
   selectedFaces.value.filter(
-    (face) => !face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId),
+    (face) =>
+      (!face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId)) &&
+      !face.regularPolygonId,
   ),
 )
 
 const editing = ref<{
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron' | 'regularPolygon'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -166,11 +178,12 @@ const isLineConstraintLocked = (line: Line3 | undefined) =>
         (isPointCoordinateLocked(line.p1) && isPointCoordinateLocked(line.p2))),
   )
 const hasCubeConstraint = (point: Point3 | undefined) => Boolean(point?.cubeId)
+const hasRegularPolygonConstraint = (point: Point3 | undefined) => Boolean(point?.regularPolygonId)
 const hasCircleConstraint = (point: Point3 | undefined) =>
   Boolean(point?.circleId && point?.circleRole === 'center')
 const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
-const isCubeFace = (face: PlanarFace | undefined) => Boolean(face?.cubeId)
+const isCubeFace = (face: PlanarPolygon | undefined) => Boolean(face?.cubeId)
 
 const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
   if (!circle.directionType) return null
@@ -367,6 +380,15 @@ const editHexahedron = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editRegularPolygon = reactive({
+  nameSuffix: '',
+  valueVisible: false,
+  edgeLength: '',
+  userLocked: false,
+  edgeLengthLocked: false,
+  p1: { x: '', y: '', z: '' },
+  p2: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
@@ -415,7 +437,7 @@ const contentGroupLabels: Record<
   ray: '射线',
   vector: '向量',
   circle: '圆',
-  face: '面',
+  face: '多边形',
   hexahedron: '立体',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
@@ -1068,7 +1090,7 @@ const startEditVector = (v: GeoVector3 | undefined) => {
   editVector.p2.y = toFixed2(v.p2.position.y)
   editVector.p2.z = toFixed2(v.p2.position.z)
 }
-const startEditFace = (face: PlanarFace | undefined) => {
+const startEditFace = (face: PlanarPolygon | undefined) => {
   if (!face) return
   editing.value = { type: 'face', id: face.id }
   expandedLineEditorPoint.value = null
@@ -1138,6 +1160,29 @@ const startEditHexahedron = (cubeId: string) => {
   editHexahedron.p2.x = toFixed2(ownerPoints[1]!.position.x)
   editHexahedron.p2.y = toFixed2(ownerPoints[1]!.position.y)
   editHexahedron.p2.z = toFixed2(ownerPoints[1]!.position.z)
+}
+
+const startEditRegularPolygon = (constraintId: string) => {
+  const constraint = props.editor.getRegularPolygonConstraint(constraintId)
+  if (!constraint) return
+  const ownerPoints = props.editor.getRegularPolygonOwnerPoints(constraintId)
+  if (ownerPoints.length < 2) return
+  editing.value = { type: 'regularPolygon', id: constraintId }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editRegularPolygon.nameSuffix = props.editor.getRegularPolygonNameSuffix(constraintId)
+  editRegularPolygon.valueVisible = constraint.valueVisible === true
+  const face = props.scene.faces.get(constraint.faceId)
+  editRegularPolygon.userLocked = face?.userLocked === true
+  editRegularPolygon.edgeLengthLocked = constraint.edgeLengthLocked
+  editRegularPolygon.edgeLength = toFixed2(constraint.getEdgeLength())
+  editRegularPolygon.p1.x = toFixed2(ownerPoints[0]!.position.x)
+  editRegularPolygon.p1.y = toFixed2(ownerPoints[0]!.position.y)
+  editRegularPolygon.p1.z = toFixed2(ownerPoints[0]!.position.z)
+  editRegularPolygon.p2.x = toFixed2(ownerPoints[1]!.position.x)
+  editRegularPolygon.p2.y = toFixed2(ownerPoints[1]!.position.y)
+  editRegularPolygon.p2.z = toFixed2(ownerPoints[1]!.position.z)
 }
 
 const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string) => {
@@ -1554,6 +1599,98 @@ const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
   }
   props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
 }
+
+const getEditingRegularPolygonState = () => {
+  if (!editing.value || editing.value.type !== 'regularPolygon') return null
+  const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
+  if (!constraint) return null
+  const ownerPoints = props.editor.getRegularPolygonOwnerPoints(editing.value.id)
+  return { constraintId: editing.value.id, constraint, ownerPoints }
+}
+
+const applyRegularPolygonMeta = () => {
+  const state = getEditingRegularPolygonState()
+  if (!state) return
+  props.editor.updateRegularPolygonName(state.constraintId, editRegularPolygon.nameSuffix)
+  props.editor.setRegularPolygonValueVisible(state.constraintId, editRegularPolygon.valueVisible)
+  props.editor.setRegularPolygonLockState(state.constraintId, editRegularPolygon.userLocked)
+  props.editor.setRegularPolygonEdgeLengthLockState(state.constraintId, editRegularPolygon.edgeLengthLocked)
+}
+
+const applyRegularPolygonEdgeLength = () => {
+  const state = getEditingRegularPolygonState()
+  if (!state) return
+  const edgeLength = Number(editRegularPolygon.edgeLength)
+  if (!Number.isFinite(edgeLength)) return
+  props.editor.updateRegularPolygonEdgeLength(state.constraintId, edgeLength)
+}
+
+const applyRegularPolygonOwnerPoint = (pointKey: 'p1' | 'p2') => {
+  const state = getEditingRegularPolygonState()
+  if (!state) return
+  const pointIndex = pointKey === 'p1' ? 0 : 1
+  const point = state.ownerPoints[pointIndex]
+  const nextPosition = {
+    x: Number(editRegularPolygon[pointKey].x),
+    y: Number(editRegularPolygon[pointKey].y),
+    z: Number(editRegularPolygon[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  ) {
+    return
+  }
+  if (
+    Math.abs(nextPosition.x - point.position.x) <= 1e-6 &&
+    Math.abs(nextPosition.y - point.position.y) <= 1e-6 &&
+    Math.abs(nextPosition.z - point.position.z) <= 1e-6
+  ) {
+    return
+  }
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+}
+
+const nudgeRegularPolygonEdgeLength = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('rp.edgeLength', direction)
+  if (nextValue === null) return
+  editRegularPolygon.edgeLength = nextValue
+  applyRegularPolygonEdgeLength()
+}
+
+const isRegularPolygonEdgeLengthInputDisabled = () =>
+  editRegularPolygon.userLocked || editRegularPolygon.edgeLengthLocked
+
+const handleRegularPolygonEdgeLengthFocus = () => {
+  setCoordFocus('rp.edgeLength', true)
+}
+
+const handleRegularPolygonEdgeLengthBlur = () => {
+  editRegularPolygon.edgeLength = normalizeDisplayLength(editRegularPolygon.edgeLength)
+  setCoordFocus('rp.edgeLength', false)
+  applyRegularPolygonEdgeLength()
+}
+
+const nudgeRegularPolygonOwnerCoord = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+  const current = Number(editRegularPolygon[pointKey][axis])
+  if (!Number.isFinite(current)) return
+  const step = 0.5
+  const next = direction === 'up' ? current + step : current - step
+  editRegularPolygon[pointKey][axis] = toFixed2(next)
+  applyRegularPolygonOwnerPoint(pointKey)
+}
+
+const handleRegularPolygonOwnerCoordFocus = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`rp.${pointKey}.${axis}`, true)
+}
+
+const handleRegularPolygonOwnerCoordBlur = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
+  editRegularPolygon[pointKey][axis] = normalizeCoord(editRegularPolygon[pointKey][axis])
+  setCoordFocus(`rp.${pointKey}.${axis}`, false)
+  applyRegularPolygonOwnerPoint(pointKey)
+}
+
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
@@ -1562,9 +1699,9 @@ const getPointIntersectionSummary = (point: Point3 | undefined) =>
   point ? props.editor.getIntersectionSummary(point.id) : null
 const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
   getPointIntersectionSummary(point) !== null
-const getFaceArea = (face: PlanarFace) => face.getArea(props.scene.points)
-const getFaceCentroid = (face: PlanarFace) => face.getCentroid(props.scene.points)
-const getFaceBoundaryPoints = (face: PlanarFace) => face.getBoundaryPoints(props.scene.points)
+const getFaceArea = (face: PlanarPolygon) => face.getArea(props.scene.points)
+const getFaceCentroid = (face: PlanarPolygon) => face.getCentroid(props.scene.points)
+const getFaceBoundaryPoints = (face: PlanarPolygon) => face.getBoundaryPoints(props.scene.points)
 const getHexahedronOwnerPoints = (cubeId: string) => {
   const constraint = props.editor.getCubeConstraint(cubeId)
   if (!constraint) return [] as Point3[]
@@ -1585,6 +1722,13 @@ const getSolidConstraintBadge = (cubeId: string | null | undefined) => {
   const constraint = cubeId ? props.editor.getCubeConstraint(cubeId) : null
   return constraint?.solidType === 'tetrahedron' ? '四面体约束' : '六面体约束'
 }
+const getRegularPolygonConstraintBadge = (regularPolygonId: string | null | undefined, role: 'owner' | 'dependent' | null) => {
+  if (!regularPolygonId) return ''
+  const constraint = props.editor.getRegularPolygonConstraint(regularPolygonId)
+  if (!constraint) return '正多边形约束'
+  const roleLabel = role === 'owner' ? '原始点' : '受约束点'
+  return `正${constraint.vertexCount}边形·${roleLabel}`
+}
 const getHexahedronVolume = (cubeId: string) => {
   const edgeLength = getHexahedronEdgeLength(cubeId)
   const constraint = props.editor.getCubeConstraint(cubeId)
@@ -1593,12 +1737,12 @@ const getHexahedronVolume = (cubeId: string) => {
   }
   return Math.pow(edgeLength, 3)
 }
-const getFaceMemberPointNames = (face: PlanarFace) =>
+const getFaceMemberPointNames = (face: PlanarPolygon) =>
   face
     .getMemberPoints(props.scene.points)
     .map((point) => point.name)
     .join(', ')
-const getFaceEdgeLabel = (face: PlanarFace, edgeIndex: number) => {
+const getFaceEdgeLabel = (face: PlanarPolygon, edgeIndex: number) => {
   const points = getFaceBoundaryPoints(face)
   const current = points[edgeIndex]
   const next = points[(edgeIndex + 1) % points.length]
@@ -1941,6 +2085,50 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'regularPolygon') return null
+    const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
+    if (!constraint) return null
+    const ownerPoints = props.editor.getRegularPolygonOwnerPoints(editing.value.id)
+    if (ownerPoints.length < 2) return null
+    return {
+      nameSuffix: props.editor.getRegularPolygonNameSuffix(editing.value.id),
+      valueVisible: constraint.valueVisible === true,
+      userLocked: props.scene.faces.get(constraint.faceId)?.userLocked === true,
+      edgeLengthLocked: constraint.edgeLengthLocked,
+      edgeLength: constraint.getEdgeLength(),
+      p1: {
+        x: ownerPoints[0]!.position.x,
+        y: ownerPoints[0]!.position.y,
+        z: ownerPoints[0]!.position.z,
+      },
+      p2: {
+        x: ownerPoints[1]!.position.x,
+        y: ownerPoints[1]!.position.y,
+        z: ownerPoints[1]!.position.z,
+      },
+    }
+  },
+  (nextRp) => {
+    if (!nextRp) return
+    editRegularPolygon.nameSuffix = nextRp.nameSuffix
+    editRegularPolygon.valueVisible = nextRp.valueVisible
+    editRegularPolygon.userLocked = nextRp.userLocked
+    editRegularPolygon.edgeLengthLocked = nextRp.edgeLengthLocked
+    if (!focusedCoord['rp.edgeLength']) {
+      editRegularPolygon.edgeLength = toFixed2(nextRp.edgeLength)
+    }
+    if (!focusedCoord['rp.p1.x']) editRegularPolygon.p1.x = toFixed2(nextRp.p1.x)
+    if (!focusedCoord['rp.p1.y']) editRegularPolygon.p1.y = toFixed2(nextRp.p1.y)
+    if (!focusedCoord['rp.p1.z']) editRegularPolygon.p1.z = toFixed2(nextRp.p1.z)
+    if (!focusedCoord['rp.p2.x']) editRegularPolygon.p2.x = toFixed2(nextRp.p2.x)
+    if (!focusedCoord['rp.p2.y']) editRegularPolygon.p2.y = toFixed2(nextRp.p2.y)
+    if (!focusedCoord['rp.p2.z']) editRegularPolygon.p2.z = toFixed2(nextRp.p2.z)
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   syncSplitPaneMode()
   updateCompactLineEditorMode()
@@ -2007,7 +2195,8 @@ onUnmounted(() => {
             selectedVectors.length === 0 &&
             selectedCircles.length === 0 &&
             selectedEditableFaces.length === 0 &&
-            selectedHexahedrons.length === 0
+            selectedHexahedrons.length === 0 &&
+            selectedRegularPolygons.length === 0
           "
         >
           无
@@ -2147,6 +2336,7 @@ onUnmounted(() => {
               <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
                 getSolidConstraintBadge(p!.cubeId)
               }}</span>
+              <span v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'" class="constraint-badge">正多边形约束</span>
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
             </div>
             <div>
@@ -4291,6 +4481,285 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="rp in selectedRegularPolygons"
+          :key="rp.constraintId"
+          class="selectedFace-info"
+          @dblclick="startEditRegularPolygon(rp.constraintId)"
+        >
+          <div
+            v-if="editing?.type === 'regularPolygon' && editing?.id === rp.constraintId"
+            class="edit-grid"
+          >
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editRegularPolygon.nameSuffix" @input="applyRegularPolygonMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editRegularPolygon.userLocked"
+                  @change="applyRegularPolygonMeta"
+                />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editRegularPolygon.valueVisible"
+                  @change="applyRegularPolygonMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editRegularPolygon.edgeLengthLocked"
+                  @change="applyRegularPolygonMeta"
+                />
+                边长锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              面积：{{ props.editor.getRegularPolygonArea(rp.constraintId).toFixed(2) }}
+            </div>
+            <div class="length-row">
+              <label>边长：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonEdgeLength('down')"
+                  :disabled="isRegularPolygonEdgeLengthInputDisabled()"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('rp.edgeLength', el)"
+                  v-model="editRegularPolygon.edgeLength"
+                  @input="applyRegularPolygonEdgeLength"
+                  @focus="handleRegularPolygonEdgeLengthFocus"
+                  @blur="handleRegularPolygonEdgeLengthBlur"
+                  :disabled="isRegularPolygonEdgeLengthInputDisabled()"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonEdgeLength('up')"
+                  :disabled="isRegularPolygonEdgeLengthInputDisabled()"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div class="face-metric-row">原始点坐标</div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                {{ props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0]?.name ?? 'A' }}(x,y,z)
+              </div>
+              <div class="line-editor-head">
+                {{ props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1]?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p1.x', el)"
+                  v-model="editRegularPolygon.p1.x"
+                  @input="applyRegularPolygonOwnerPoint('p1')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p1', 'x')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p1', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p2.x', el)"
+                  v-model="editRegularPolygon.p2.x"
+                  @input="applyRegularPolygonOwnerPoint('p2')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p2', 'x')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p2', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p1.y', el)"
+                  v-model="editRegularPolygon.p1.y"
+                  @input="applyRegularPolygonOwnerPoint('p1')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p1', 'y')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p1', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p2.y', el)"
+                  v-model="editRegularPolygon.p2.y"
+                  @input="applyRegularPolygonOwnerPoint('p2')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p2', 'y')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p2', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p1.z', el)"
+                  v-model="editRegularPolygon.p1.z"
+                  @input="applyRegularPolygonOwnerPoint('p1')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p1', 'z')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p1', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p1', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('rp.p2.z', el)"
+                  v-model="editRegularPolygon.p2.z"
+                  @input="applyRegularPolygonOwnerPoint('p2')"
+                  @focus="handleRegularPolygonOwnerCoordFocus('p2', 'z')"
+                  @blur="handleRegularPolygonOwnerCoordBlur('p2', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeRegularPolygonOwnerCoord('p2', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              {{ rp.name }}
+              <span
+                v-if="props.scene.faces.get(rp.faceId)?.userLocked"
+                class="lock-badge"
+                >🔒</span
+              >
+            </div>
+            <div>边长：{{ rp.getEdgeLength().toFixed(2) }}</div>
+            <div>面积：{{ rp.getArea().toFixed(2) }}</div>
+            <div>
+              原始点：{{
+                props.editor.getRegularPolygonOwnerPoints(rp.constraintId)
+                  .map((point) => point.name)
+                  .join(' - ')
+              }}
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="face in selectedEditableFaces"
           :key="face!.id"
           class="selectedFace-info"
@@ -4302,7 +4771,7 @@ onUnmounted(() => {
               <input type="text" v-model="editFace.name" @input="applyEditFace" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
-                面显示
+                多边形显示
               </label>
               <label class="toggle-label">
                 <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
@@ -4365,7 +4834,8 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div>
-              面{{ face!.name ?? '' }}
+              {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
+              <span v-if="face!.isRegularPolygon" class="constraint-badge">正{{ face!.regularPolygonVertexCount }}边形</span>
               <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
               <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                 getSolidConstraintBadge(face!.cubeId)
@@ -4474,6 +4944,7 @@ onUnmounted(() => {
                 <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
                   getSolidConstraintBadge(p!.cubeId)
                 }}</span>
+                <span v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'" class="constraint-badge">正多边形约束</span>
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
               </div>
             </div>
@@ -4757,7 +5228,8 @@ onUnmounted(() => {
               @click="selectFaceFromContent(face!.id)"
             >
               <div>
-                面{{ face!.name ?? '' }}
+                {{ face!.isRegularPolygon ? '正多边形' : '面' }}{{ face!.name ?? '' }}
+                <span v-if="face!.isRegularPolygon" class="constraint-badge">正{{ face!.regularPolygonVertexCount }}边形</span>
                 <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
                 <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                   getSolidConstraintBadge(face!.cubeId)

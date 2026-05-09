@@ -48,7 +48,9 @@ const getModeName = (mode: EditorMode) => {
     case EditorMode.CreateCircleNormal:
       return '法向圆'
     case EditorMode.CreatePlane:
-      return '创建面'
+      return '创建多边形'
+    case EditorMode.CreateRegularPolygon:
+      return '创建正多边形'
     case EditorMode.CreateHexahedron:
       return '创建正六面体'
     case EditorMode.CreateTetrahedron:
@@ -75,7 +77,9 @@ const getModeHint = (mode: EditorMode) => {
     case EditorMode.CreateCircleNormal:
       return '先选中一个点作为圆心，再选中一个法向量（线/射线/直线/向量/点）~'
     case EditorMode.CreatePlane:
-      return '先选择多个点或闭合线段，再点击空白处确认创建面~'
+      return '先选择多个点或闭合线段，再点击空白处确认创建多边形~'
+    case EditorMode.CreateRegularPolygon:
+      return '选中两个不同的点，再输入顶点数即可创建正多边形~'
     case EditorMode.MergePoint:
       return '先选中两个点，再选择保留哪个点完成合并~'
     case EditorMode.IntersectionPoint:

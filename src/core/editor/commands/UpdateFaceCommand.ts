@@ -1,5 +1,5 @@
 import type { Command } from '../Command'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 
 type FaceState = {
   name: string
@@ -16,7 +16,7 @@ type FaceState = {
 
 export class UpdateFaceCommand implements Command {
   constructor(
-    private face: PlanarFace,
+    private face: PlanarPolygon,
     private before: FaceState,
     private after: FaceState,
   ) {}

@@ -4,7 +4,7 @@ import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { Circle3 } from '../../geometry/Circle3'
 
 type PointLockTransform = {
@@ -38,7 +38,7 @@ type VectorLockTransform = {
 }
 
 type FaceLockTransform = {
-  face: PlanarFace
+  face: PlanarPolygon
   before: boolean
   after: boolean
 }

@@ -8,7 +8,7 @@ import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../geometry/Circle3'
-import { PlanarFace } from '../geometry/Plane'
+import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -36,7 +36,7 @@ type LocalSceneSnapshot = {
   rays: Ray3[]
   vectors: GeoVector3[]
   circles: Circle3[]
-  faces: PlanarFace[]
+  faces: PlanarPolygon[]
   intersections: IntersectionPointConstraint[]
   cubes: CubeConstraint[]
 }
@@ -1263,6 +1263,9 @@ export class CollabManager {
     const circleId = this.readNullableString(record, 'circleId')
     const circleRoleValue = this.readNullableString(record, 'circleRole')
     const circleRole = circleRoleValue === 'center' ? circleRoleValue : null
+    const regularPolygonId = this.readNullableString(record, 'regularPolygonId')
+    const regularPolygonRoleValue = this.readNullableString(record, 'regularPolygonRole')
+    const regularPolygonRole = regularPolygonRoleValue === 'owner' || regularPolygonRoleValue === 'dependent' ? regularPolygonRoleValue : null
 
     if (point) {
       point.name = name
@@ -1275,6 +1278,8 @@ export class CollabManager {
       point.cubeRole = cubeRole
       point.circleId = circleId
       point.circleRole = circleRole
+      point.regularPolygonId = regularPolygonId
+      point.regularPolygonRole = regularPolygonRole
       if (!point.locked) {
         point.setPosition(new Vec3(x, y, z))
       }
@@ -1297,6 +1302,8 @@ export class CollabManager {
     nextPoint.cubeRole = cubeRole
     nextPoint.circleId = circleId
     nextPoint.circleRole = circleRole
+    nextPoint.regularPolygonId = regularPolygonId
+    nextPoint.regularPolygonRole = regularPolygonRole
     this.scene.addPoint(nextPoint)
     this.scene.markAllRenderDirty()
     this.reconcileGeometryForPoint(id)
@@ -1678,12 +1685,12 @@ export class CollabManager {
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
-      face?.labelOffsetX ?? PlanarFace.DEFAULT_LABEL_OFFSET_X,
+      face?.labelOffsetX ?? PlanarPolygon.DEFAULT_LABEL_OFFSET_X,
     )
     const labelOffsetY = this.readNumber(
       record,
       'labelOffsetY',
-      face?.labelOffsetY ?? PlanarFace.DEFAULT_LABEL_OFFSET_Y,
+      face?.labelOffsetY ?? PlanarPolygon.DEFAULT_LABEL_OFFSET_Y,
     )
     const visible = this.readBoolean(record, 'visible', face?.visible ?? true)
     const userLocked = this.readBoolean(record, 'userLocked', face?.userLocked ?? false)
@@ -1694,6 +1701,11 @@ export class CollabManager {
     const cubeId = this.readNullableString(record, 'cubeId')
     const cubeOwnerPointIds = this.readStringArray(record, 'cubeOwnerPointIds')
     const cubeDependentPointIds = this.readStringArray(record, 'cubeDependentPointIds')
+    const isRegularPolygon = this.readBoolean(record, 'isRegularPolygon', face?.isRegularPolygon ?? false)
+    const regularPolygonVertexCount = this.readNumber(record, 'regularPolygonVertexCount', face?.regularPolygonVertexCount ?? 0)
+    const regularPolygonId = this.readNullableString(record, 'regularPolygonId')
+    const regularPolygonOwnerPointIds = this.readStringArray(record, 'regularPolygonOwnerPointIds')
+    const regularPolygonDependentPointIds = this.readStringArray(record, 'regularPolygonDependentPointIds')
 
     if (face) {
       face.name = name
@@ -1715,6 +1727,11 @@ export class CollabManager {
       face.cubeId = cubeId
       face.cubeOwnerPointIds = [...cubeOwnerPointIds]
       face.cubeDependentPointIds = [...cubeDependentPointIds]
+      face.isRegularPolygon = isRegularPolygon
+      face.regularPolygonVertexCount = regularPolygonVertexCount
+      face.regularPolygonId = regularPolygonId
+      face.regularPolygonOwnerPointIds = [...regularPolygonOwnerPointIds]
+      face.regularPolygonDependentPointIds = [...regularPolygonDependentPointIds]
       face.normalize(this.scene.points)
       this.scene.requestFaceConstraintSolve(id)
       this.scene.markAllRenderDirty()
@@ -1723,7 +1740,7 @@ export class CollabManager {
       return
     }
 
-    const nextFace = new PlanarFace(
+    const nextFace = new PlanarPolygon(
       id,
       name,
       [...boundaryPointIds],
@@ -1745,6 +1762,11 @@ export class CollabManager {
     nextFace.cubeId = cubeId
     nextFace.cubeOwnerPointIds = [...cubeOwnerPointIds]
     nextFace.cubeDependentPointIds = [...cubeDependentPointIds]
+    nextFace.isRegularPolygon = isRegularPolygon
+    nextFace.regularPolygonVertexCount = regularPolygonVertexCount
+    nextFace.regularPolygonId = regularPolygonId
+    nextFace.regularPolygonOwnerPointIds = [...regularPolygonOwnerPointIds]
+    nextFace.regularPolygonDependentPointIds = [...regularPolygonDependentPointIds]
     this.scene.addFace(nextFace)
     this.scene.requestFaceConstraintSolve(id)
     this.scene.markAllRenderDirty()
@@ -2130,6 +2152,8 @@ export class CollabManager {
     this.setNullableScalarField(record, 'cubeRole', point.cubeRole)
     this.setNullableScalarField(record, 'circleId', point.circleId)
     this.setNullableScalarField(record, 'circleRole', point.circleRole)
+    this.setNullableScalarField(record, 'regularPolygonId', point.regularPolygonId)
+    this.setNullableScalarField(record, 'regularPolygonRole', point.regularPolygonRole)
   }
 
   private syncLineRecord(record: LineSharedMap, line: Line3) {
@@ -2209,7 +2233,7 @@ export class CollabManager {
     this.setScalarField(record, 'sourceBId', constraint.sourceB.id)
   }
 
-  private syncFaceRecord(record: FaceSharedMap, face: PlanarFace) {
+  private syncFaceRecord(record: FaceSharedMap, face: PlanarPolygon) {
     this.setScalarField(record, 'name', face.name)
     this.setScalarField(record, 'nameVisible', face.nameVisible)
     this.setScalarField(record, 'valueVisible', face.valueVisible)
@@ -2229,6 +2253,11 @@ export class CollabManager {
     this.syncFaceArrayField(record, 'supportPointIds', [...face.supportPointIds])
     this.syncFaceArrayField(record, 'cubeOwnerPointIds', [...face.cubeOwnerPointIds])
     this.syncFaceArrayField(record, 'cubeDependentPointIds', [...face.cubeDependentPointIds])
+    this.setScalarField(record, 'isRegularPolygon', face.isRegularPolygon)
+    this.setScalarField(record, 'regularPolygonVertexCount', face.regularPolygonVertexCount)
+    this.setNullableScalarField(record, 'regularPolygonId', face.regularPolygonId)
+    this.syncFaceArrayField(record, 'regularPolygonOwnerPointIds', [...face.regularPolygonOwnerPointIds])
+    this.syncFaceArrayField(record, 'regularPolygonDependentPointIds', [...face.regularPolygonDependentPointIds])
   }
 
   private syncCubeRecord(record: CubeSharedMap, cube: CubeConstraint) {

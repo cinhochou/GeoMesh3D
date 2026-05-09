@@ -9,7 +9,7 @@ import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3, type DirectionType } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
-import { PlanarFace } from '../geometry/Plane'
+import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import {
   buildConvexHull,
@@ -43,6 +43,8 @@ import { MergePointsCommand } from './commands/MergePointsCommand'
 import { MergeCubePointsCommand } from './commands/MergeCubePointsCommand'
 import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
 import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
+import { AddRegularPolygonCommand } from './commands/AddRegularPolygonCommand'
+import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import {
@@ -65,6 +67,7 @@ export enum EditorMode {
   CreateCircleThreePoints,
   CreateCircleNormal,
   CreatePlane,
+  CreateRegularPolygon,
   CreateHexahedron,
   CreateTetrahedron,
 }
@@ -198,10 +201,10 @@ const getFacesByLineId = (editor: Editor, lineId: string) =>
 const samePosition = (a: Vec3, b: Vec3, epsilon = 1e-6) =>
   Math.abs(a.x - b.x) <= epsilon && Math.abs(a.y - b.y) <= epsilon && Math.abs(a.z - b.z) <= epsilon
 
-const buildFaceUnlockCascade = (editor: Editor, faces: PlanarFace[]) => {
+const buildFaceUnlockCascade = (editor: Editor, faces: PlanarPolygon[]) => {
   const pointTransforms = new Map<string, { point: Point3; before: boolean; after: boolean }>()
   const lineTransforms = new Map<string, { line: Line3; before: boolean; after: boolean }>()
-  const faceTransforms = new Map<string, { face: PlanarFace; before: boolean; after: boolean }>()
+  const faceTransforms = new Map<string, { face: PlanarPolygon; before: boolean; after: boolean }>()
 
   faces.forEach((face) => {
     faceTransforms.set(face.id, {
@@ -396,7 +399,7 @@ export class Editor {
       return ray ? `射线${ray.name}` : '射线(已删除)'
     }
     const face = this.scene.faces.get(target.id)
-    return face ? `面${face.name}` : '面(已删除)'
+    return face ? `多边形${face.name}` : '多边形(已删除)'
   }
 
   getIntersectionSummary(pointId: string) {
@@ -435,7 +438,7 @@ export class Editor {
     const bundles = new Map<
       string,
       {
-        faces: PlanarFace[]
+        faces: PlanarPolygon[]
         dependentPoints: Point3[]
         constraint: CubeConstraint
         dependentIntersectionPoints: Array<{
@@ -455,7 +458,7 @@ export class Editor {
 
       const faces = constraint.faceIds
         .map((faceId) => this.scene.faces.get(faceId))
-        .filter((face): face is PlanarFace => face !== undefined)
+        .filter((face): face is PlanarPolygon => face !== undefined)
       const dependentPoints = constraint.dependentLayouts
         .map((layout) => this.scene.points.get(layout.pointId))
         .filter((point): point is Point3 => point !== undefined)
@@ -478,7 +481,7 @@ export class Editor {
     const bundles = new Map<
       string,
       {
-        faces: PlanarFace[]
+        faces: PlanarPolygon[]
         dependentPoints: Point3[]
         constraint: CubeConstraint
         dependentIntersectionPoints: Array<{
@@ -493,7 +496,7 @@ export class Editor {
       if (constraint.sourceLineId !== lineId) return
       const faces = constraint.faceIds
         .map((faceId) => this.scene.faces.get(faceId))
-        .filter((face): face is PlanarFace => face !== undefined)
+        .filter((face): face is PlanarPolygon => face !== undefined)
       const dependentPoints = constraint.dependentLayouts
         .map((layout) => this.scene.points.get(layout.pointId))
         .filter((point): point is Point3 => point !== undefined)
@@ -522,6 +525,12 @@ export class Editor {
   getCubeConstraints() {
     return [...this.scene.cubeConstraints.values()].filter(
       (constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint,
+    )
+  }
+
+  getRegularPolygonConstraints() {
+    return [...this.scene.regularPolygonConstraints.values()].filter(
+      (constraint): constraint is RegularPolygonConstraint => constraint instanceof RegularPolygonConstraint,
     )
   }
 
@@ -640,6 +649,113 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point?.cubeId) return null
     return this.getCubeConstraint(point.cubeId)
+  }
+
+  private getRegularPolygonConstraintByPointId(pointId: string) {
+    const point = this.scene.points.get(pointId)
+    if (!point?.regularPolygonId) return null
+    return this.getRegularPolygonConstraint(point.regularPolygonId)
+  }
+
+  getRegularPolygonConstraint(constraintId: string) {
+    const constraint = this.scene.getRegularPolygonConstraint(constraintId)
+    return constraint instanceof RegularPolygonConstraint ? constraint : null
+  }
+
+  getRegularPolygonNameSuffix(constraintId: string) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return ''
+    return constraint.name.replace(/^正多边形/, '')
+  }
+
+  updateRegularPolygonName(constraintId: string, suffix: string) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    constraint.name = `正多边形${suffix}`
+  }
+
+  setRegularPolygonValueVisible(constraintId: string, visible: boolean) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint || constraint.valueVisible === visible) return
+    constraint.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setRegularPolygonLockState(constraintId: string, locked: boolean) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    constraint.ownerPointIds.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.userLocked = locked
+    })
+    constraint.dependentLayouts.forEach(({ pointId }) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.userLocked = locked
+    })
+    const face = this.scene.faces.get(constraint.faceId)
+    if (face && face.userLocked !== locked) {
+      face.userLocked = locked
+    }
+  }
+
+  setRegularPolygonEdgeLengthLockState(constraintId: string, locked: boolean) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    constraint.edgeLengthLocked = locked
+    if (!locked) {
+      constraint.lockedEdgeLength = null
+      return
+    }
+    constraint.lockedEdgeLength = constraint.getEdgeLength()
+  }
+
+  updateRegularPolygonEdgeLength(constraintId: string, nextLength: number) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    const p1 = this.scene.points.get(constraint.ownerPointIds[0])
+    const p2 = this.scene.points.get(constraint.ownerPointIds[1])
+    if (!p1 || !p2) return
+    const current = new Vec3(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+    const currentLength = Math.hypot(current.x, current.y, current.z)
+    if (currentLength <= 1e-6) return
+    const normalizedLength = Math.max(0.01, nextLength)
+    this.setPointsPositions([
+      {
+        id: p2.id,
+        position: new Vec3(
+          p1.position.x + (current.x / currentLength) * normalizedLength,
+          p1.position.y + (current.y / currentLength) * normalizedLength,
+          p1.position.z + (current.z / currentLength) * normalizedLength,
+        ),
+      },
+    ])
+    if (constraint.edgeLengthLocked) {
+      constraint.lockedEdgeLength = normalizedLength
+    }
+  }
+
+  getRegularPolygonOwnerPoints(constraintId: string) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return []
+    return constraint.ownerPointIds
+      .map((id) => this.scene.points.get(id))
+      .filter((point): point is Point3 => point !== undefined)
+  }
+
+  getRegularPolygonEdgeLength(constraintId: string) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    return constraint?.getEdgeLength() ?? 0
+  }
+
+  getRegularPolygonArea(constraintId: string) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    return constraint?.getArea() ?? 0
   }
 
   private getCubePointIds(constraint: CubeConstraint) {
@@ -825,6 +941,130 @@ export class Editor {
     this.executeCommand(new TransformPointsCommand(transforms))
   }
 
+  private rotateRegularPolygonByDependentPoint(constraintId: string, pointId: string, position: Vec3) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+
+    const ownerA = this.scene.points.get(constraint.ownerPointIds[0])
+    const ownerB = this.scene.points.get(constraint.ownerPointIds[1])
+    if (!ownerA || !ownerB) return
+
+    const edge = new Vec3(
+      ownerB.position.x - ownerA.position.x,
+      ownerB.position.y - ownerA.position.y,
+      ownerB.position.z - ownerA.position.z,
+    )
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-8) return
+    const uAxis = normalizeVec3(edge)
+    if (!uAxis) return
+
+    const layout = constraint.dependentLayouts.find((item) => item.pointId === pointId)
+    if (!layout) return
+
+    const circumradius = edgeLength / (2 * Math.sin(Math.PI / constraint.vertexCount))
+    const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
+    const cosA = Math.cos(alpha)
+
+    const baseOffset = new Vec3(
+      ownerA.position.x + (edgeLength / 2 + circumradius * cosA) * uAxis.x,
+      ownerA.position.y + (edgeLength / 2 + circumradius * cosA) * uAxis.y,
+      ownerA.position.z + (edgeLength / 2 + circumradius * cosA) * uAxis.z,
+    )
+
+    const relative = new Vec3(
+      position.x - baseOffset.x,
+      position.y - baseOffset.y,
+      position.z - baseOffset.z,
+    )
+    const projected = projectPerpendicularVec3(relative, uAxis)
+    const projectedDir = normalizeVec3(projected)
+    if (!projectedDir) return
+
+    constraint.setAxisHint(projectedDir)
+
+    const axes = constraint.getResolvedAxes()
+    if (!axes) return
+
+    const transforms = constraint.dependentLayouts
+      .map((item) => {
+        const point = this.scene.points.get(item.pointId)
+        if (!point || this.isPointCoordinateLocked(point)) return null
+        const after = constraint.getLayoutPosition(item.angleIndex, axes)
+        if (
+          Math.abs(after.x - point.position.x) <= 1e-6 &&
+          Math.abs(after.y - point.position.y) <= 1e-6 &&
+          Math.abs(after.z - point.position.z) <= 1e-6
+        ) {
+          return null
+        }
+        return {
+          point,
+          before: point.position.clone(),
+          after,
+        }
+      })
+      .filter(
+        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+          transform !== null,
+      )
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      this.executeCommand(new TransformCommand(transforms[0]!.point, transforms[0]!.before, transforms[0]!.after))
+      return
+    }
+    this.executeCommand(new TransformPointsCommand(transforms))
+  }
+
+  private setRegularPolygonOwnerPointPosition(constraintId: string, pointId: string, position: Vec3) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    const point = this.scene.points.get(pointId)
+    if (!point) return
+    const otherId =
+      constraint.ownerPointIds[0] === pointId
+        ? constraint.ownerPointIds[1]
+        : constraint.ownerPointIds[0]
+    const otherPoint = this.scene.points.get(otherId)
+    if (!otherPoint) return
+
+    if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
+      this.setPointsPositions([{ id: pointId, position }])
+      return
+    }
+
+    let direction = new Vec3(
+      position.x - otherPoint.position.x,
+      position.y - otherPoint.position.y,
+      position.z - otherPoint.position.z,
+    )
+    let directionLength = Math.hypot(direction.x, direction.y, direction.z)
+    if (directionLength <= 1e-6) {
+      direction = new Vec3(
+        point.position.x - otherPoint.position.x,
+        point.position.y - otherPoint.position.y,
+        point.position.z - otherPoint.position.z,
+      )
+      directionLength = Math.hypot(direction.x, direction.y, direction.z)
+    }
+    if (directionLength <= 1e-6) {
+      direction = new Vec3(1, 0, 0)
+      directionLength = 1
+    }
+
+    this.setPointsPositions([
+      {
+        id: pointId,
+        position: new Vec3(
+          otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
+          otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
+          otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
+        ),
+      },
+    ])
+  }
+
   private resolveCubeAxesFromPositions(constraint: CubeConstraint, ownerA: Vec3, ownerB: Vec3) {
     const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
     const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
@@ -841,11 +1081,7 @@ export class Editor {
 
     const projectedHint = projectPerpendicularVec3(
       alignmentHint ??
-        new Vec3(
-          (constraint as any).vAxisHint?.x ?? 0,
-          (constraint as any).vAxisHint?.y ?? 1,
-          (constraint as any).vAxisHint?.z ?? 0,
-        ),
+        constraint.getVAxisHint(),
       uAxis,
     )
     const fallbackProjected = projectPerpendicularVec3(chooseFallbackAxisVec3(uAxis), uAxis)
@@ -940,6 +1176,101 @@ export class Editor {
         )
       })
     })
+  }
+
+  private applyRegularPolygonConstraintPositions(positionOverrides: Map<string, Vec3>) {
+    this.getRegularPolygonConstraints().forEach((constraint) => {
+      const ownerA =
+        positionOverrides.get(constraint.ownerPointIds[0]) ??
+        this.scene.points.get(constraint.ownerPointIds[0])?.position
+      const ownerB =
+        positionOverrides.get(constraint.ownerPointIds[1]) ??
+        this.scene.points.get(constraint.ownerPointIds[1])?.position
+      if (!ownerA || !ownerB) return
+
+      const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
+      const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+      if (edgeLength <= 1e-8) return
+      const uAxis = normalizeVec3(edge)
+      if (!uAxis) return
+
+      const draggedDependent = constraint.dependentLayouts.find(
+        ({ pointId }) =>
+          positionOverrides.has(pointId) && this.scene.activeDraggedPointIds.has(pointId),
+      )
+
+      if (draggedDependent) {
+        const desired = positionOverrides.get(draggedDependent.pointId)
+        if (desired && edgeLength > 1e-8) {
+          const circumradius = edgeLength / (2 * Math.sin(Math.PI / constraint.vertexCount))
+          const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * draggedDependent.angleIndex) / constraint.vertexCount
+          const cosA = Math.cos(alpha)
+          const baseOffset = new Vec3(
+            ownerA.x + (edgeLength / 2 + circumradius * cosA) * uAxis.x,
+            ownerA.y + (edgeLength / 2 + circumradius * cosA) * uAxis.y,
+            ownerA.z + (edgeLength / 2 + circumradius * cosA) * uAxis.z,
+          )
+          const relative = new Vec3(
+            desired.x - baseOffset.x,
+            desired.y - baseOffset.y,
+            desired.z - baseOffset.z,
+          )
+          const projected = projectPerpendicularVec3(relative, uAxis)
+          const projectedDir = normalizeVec3(projected)
+          if (projectedDir) {
+            constraint.setAxisHint(projectedDir)
+          }
+        }
+      }
+
+      const axes = this.resolveRegularPolygonAxesFromPositions(constraint, ownerA, ownerB)
+      if (!axes) return
+
+      constraint.dependentLayouts.forEach((layout) => {
+        const point = this.scene.points.get(layout.pointId)
+        if (!point || this.isPointCoordinateLocked(point)) return
+        const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
+        const cosA = Math.cos(alpha)
+        const sinA = Math.sin(alpha)
+        const pos = new Vec3(
+          axes.center.x + axes.circumradius * (axes.uAxis.x * cosA + axes.vAxis.x * sinA),
+          axes.center.y + axes.circumradius * (axes.uAxis.y * cosA + axes.vAxis.y * sinA),
+          axes.center.z + axes.circumradius * (axes.uAxis.z * cosA + axes.vAxis.z * sinA),
+        )
+        positionOverrides.set(layout.pointId, pos)
+      })
+    })
+  }
+
+  private resolveRegularPolygonAxesFromPositions(
+    constraint: RegularPolygonConstraint,
+    ownerA: Vec3,
+    ownerB: Vec3,
+  ) {
+    const edge = new Vec3(ownerB.x - ownerA.x, ownerB.y - ownerA.y, ownerB.z - ownerA.z)
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-8) return null
+
+    const uAxis = normalizeVec3(edge)
+    if (!uAxis) return null
+
+    const projectedHint = projectPerpendicularVec3(
+      constraint.getVAxisHint(),
+      uAxis,
+    )
+    const fallbackProjected = projectPerpendicularVec3(chooseFallbackAxisVec3(uAxis), uAxis)
+    const vAxis = normalizeVec3(projectedHint) ?? normalizeVec3(fallbackProjected)
+    if (!vAxis) return null
+
+    const circumradius = edgeLength / (2 * Math.sin(Math.PI / constraint.vertexCount))
+    const halfTan = edgeLength / (2 * Math.tan(Math.PI / constraint.vertexCount))
+    const center = new Vec3(
+      ownerA.x + (edgeLength / 2) * uAxis.x + halfTan * vAxis.x,
+      ownerA.y + (edgeLength / 2) * uAxis.y + halfTan * vAxis.y,
+      ownerA.z + (edgeLength / 2) * uAxis.z + halfTan * vAxis.z,
+    )
+
+    return { center, circumradius, uAxis, vAxis, edgeLength }
   }
 
   translateCubeByDelta(cubeId: string, delta: Vec3) {
@@ -1090,7 +1421,7 @@ export class Editor {
     )
   }
 
-  isFaceLocked(face: PlanarFace | null | undefined) {
+  isFaceLocked(face: PlanarPolygon | null | undefined) {
     return Boolean(
       face &&
         (face.userLocked ||
@@ -1100,7 +1431,7 @@ export class Editor {
     )
   }
 
-  isFaceGeometryLocked(face: PlanarFace | null | undefined) {
+  isFaceGeometryLocked(face: PlanarPolygon | null | undefined) {
     return Boolean(
       face &&
         (face.userLocked ||
@@ -1566,7 +1897,7 @@ export class Editor {
     if (cubeConstraint) {
       const faces = cubeConstraint.faceIds
         .map((id) => this.scene.faces.get(id))
-        .filter((item): item is PlanarFace => item !== undefined)
+        .filter((item): item is PlanarPolygon => item !== undefined)
       const dependentPoints = cubeConstraint.dependentLayouts
         .map((layout) => this.scene.points.get(layout.pointId))
         .filter((item): item is Point3 => item !== undefined)
@@ -1751,6 +2082,16 @@ export class Editor {
     }
     if (cubeConstraint && point.cubeRole === 'owner') {
       this.setCubeOwnerPointPosition(cubeConstraint.cubeId, pointId, position)
+      return
+    }
+
+    const rpConstraint = this.getRegularPolygonConstraintByPointId(pointId)
+    if (rpConstraint && point.regularPolygonRole === 'dependent') {
+      this.rotateRegularPolygonByDependentPoint(rpConstraint.constraintId, pointId, position)
+      return
+    }
+    if (rpConstraint && point.regularPolygonRole === 'owner') {
+      this.setRegularPolygonOwnerPointPosition(rpConstraint.constraintId, pointId, position)
       return
     }
 
@@ -2367,11 +2708,34 @@ export class Editor {
       }
     }
 
+    const keepRpConstraint = keepPoint.regularPolygonId ? this.getRegularPolygonConstraint(keepPoint.regularPolygonId) : null
+    const removeRpConstraint = removePoint.regularPolygonId ? this.getRegularPolygonConstraint(removePoint.regularPolygonId) : null
+
+    if (keepRpConstraint && removeRpConstraint && keepRpConstraint.constraintId === removeRpConstraint.constraintId) {
+      emitToast('同一正多边形内部的点禁止合并')
+      return
+    }
+
+    if (keepRpConstraint && removeRpConstraint && keepRpConstraint.constraintId !== removeRpConstraint.constraintId) {
+      emitToast('不同正多边形之间的点禁止合并')
+      return
+    }
+
+    if (removePoint.regularPolygonRole === 'dependent') {
+      emitToast('正多边形的受约束点不允许被外部点替换')
+      return
+    }
+
     const keepConstraint = keepPoint.cubeId ? this.getCubeConstraint(keepPoint.cubeId) : null
     const removeConstraint = removePoint.cubeId ? this.getCubeConstraint(removePoint.cubeId) : null
 
     if (keepConstraint && removeConstraint && keepConstraint.cubeId === removeConstraint.cubeId) {
       emitToast('同一正四/六面体内部的点禁止合并')
+      return
+    }
+
+    if (removePoint.cubeRole === 'dependent') {
+      emitToast('正四/六面体的受约束点不允许被外部点替换')
       return
     }
 
@@ -2709,6 +3073,168 @@ export class Editor {
     this.scene.selection.selectCircle(circle.id)
   }
 
+  tryCreateRegularPolygon(p1: Point3, p2: Point3, vertexCount: number) {
+    if (vertexCount < 3) {
+      emitToast('正多边形的顶点数必须大于 2')
+      return
+    }
+    if (p1.id === p2.id) {
+      emitToast('正多边形的两个端点不能相同')
+      return
+    }
+
+    const edge = new Vec3(
+      p2.position.x - p1.position.x,
+      p2.position.y - p1.position.y,
+      p2.position.z - p1.position.z,
+    )
+    const edgeLength = Math.hypot(edge.x, edge.y, edge.z)
+    if (edgeLength <= 1e-6) {
+      emitToast('两点距离过近，无法创建正多边形')
+      return
+    }
+
+    const uAxis = new Vec3(edge.x / edgeLength, edge.y / edgeLength, edge.z / edgeLength)
+
+    const worldAxes = [new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1)]
+    const referenceAxis = worldAxes.reduce((best, candidate) => {
+      const bestDot = Math.abs(best.x * uAxis.x + best.y * uAxis.y + best.z * uAxis.z)
+      const candidateDot = Math.abs(
+        candidate.x * uAxis.x + candidate.y * uAxis.y + candidate.z * uAxis.z,
+      )
+      return candidateDot < bestDot ? candidate : best
+    })
+
+    const projectedReference = new Vec3(
+      referenceAxis.x -
+        uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.y -
+        uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+      referenceAxis.z -
+        uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+    )
+    const projectedLength = Math.hypot(projectedReference.x, projectedReference.y, projectedReference.z)
+    if (projectedLength <= 1e-6) {
+      emitToast('无法确定正多边形所在平面')
+      return
+    }
+
+    const vAxis = new Vec3(
+      projectedReference.x / projectedLength,
+      projectedReference.y / projectedLength,
+      projectedReference.z / projectedLength,
+    )
+
+    const constraintId = genId('rp')
+    p1.regularPolygonId = constraintId
+    p1.regularPolygonRole = 'owner'
+    p2.regularPolygonId = constraintId
+    p2.regularPolygonRole = 'owner'
+
+    const usedPointNames = new Set([...this.scene.points.values()].map((point) => point.name))
+    const nextPointName = () => {
+      const name = genNextAvailableName(usedPointNames, 65)
+      usedPointNames.add(name)
+      return name
+    }
+
+    const boundaryPointIds = [p1.id, p2.id]
+    const newPoints: Point3[] = []
+    const dependentLayouts: Array<{ pointId: string; angleIndex: number }> = []
+
+    const circumradius = edgeLength / (2 * Math.sin(Math.PI / vertexCount))
+    const halfTan = edgeLength / (2 * Math.tan(Math.PI / vertexCount))
+    const center = new Vec3(
+      p1.position.x + (edgeLength / 2) * uAxis.x + halfTan * vAxis.x,
+      p1.position.y + (edgeLength / 2) * uAxis.y + halfTan * vAxis.y,
+      p1.position.z + (edgeLength / 2) * uAxis.z + halfTan * vAxis.z,
+    )
+
+    for (let i = 2; i < vertexCount; i++) {
+      const alpha = -Math.PI / 2 - Math.PI / vertexCount + (2 * Math.PI * i) / vertexCount
+      const cosA = Math.cos(alpha)
+      const sinA = Math.sin(alpha)
+
+      const worldPos = new Vec3(
+        center.x + circumradius * (uAxis.x * cosA + vAxis.x * sinA),
+        center.y + circumradius * (uAxis.y * cosA + vAxis.y * sinA),
+        center.z + circumradius * (uAxis.z * cosA + vAxis.z * sinA),
+      )
+
+      const point = new Point3(
+        genId('p'),
+        nextPointName(),
+        worldPos,
+        false,
+        true,
+      )
+      point.regularPolygonId = constraintId
+      point.regularPolygonRole = 'dependent'
+      newPoints.push(point)
+      boundaryPointIds.push(point.id)
+      dependentLayouts.push({ pointId: point.id, angleIndex: i })
+    }
+
+    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
+    const faceName = genNextAvailableName(usedFaceNames, 0, (index) =>
+      index === 0 ? 'F' : `F${index}`,
+    )
+
+    const supportPointIds = boundaryPointIds.length >= 3
+      ? boundaryPointIds.slice(0, 3)
+      : boundaryPointIds
+
+    const rpName = genNextAvailableName(
+      [...this.scene.regularPolygonConstraints.values()]
+        .map((c) => ('name' in c ? String((c as Record<string, unknown>).name) : ''))
+        .filter(Boolean),
+      0,
+      (index) => `正多边形${index + 1}`,
+    )
+
+    const face = new PlanarPolygon(
+      genId('f'),
+      faceName,
+      boundaryPointIds,
+      boundaryPointIds,
+      [],
+      false,
+      true,
+      false,
+      supportPointIds,
+      false,
+      0,
+      [],
+      PlanarPolygon.DEFAULT_LABEL_OFFSET_X,
+      PlanarPolygon.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      true,
+      vertexCount,
+    )
+
+    face.regularPolygonId = constraintId
+    face.regularPolygonOwnerPointIds = [p1.id, p2.id]
+    face.regularPolygonDependentPointIds = newPoints.map((p) => p.id)
+    face.normalize(this.scene.points)
+
+    const constraint = new RegularPolygonConstraint(
+      this.scene,
+      constraintId,
+      [p1.id, p2.id],
+      dependentLayouts,
+      face.id,
+      vertexCount,
+      vAxis.clone(),
+      rpName,
+    )
+
+    this.executeCommand(new AddRegularPolygonCommand(this.scene, newPoints, face, constraint))
+
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.scene.selection.selectFace(face.id)
+  }
+
   tryCreateFaceFromSelection() {
     if (this.mode !== EditorMode.CreatePlane) return
 
@@ -2722,7 +3248,7 @@ export class Editor {
     const draft = this.buildFaceDraftFromSelection(selectedPoints, selectedLines)
     if (!draft) return
 
-    const face = new PlanarFace(
+    const face = new PlanarPolygon(
       genId('f'),
       genNextAvailableName(
         [...this.scene.faces.values()].map((item) => item.name),
@@ -2806,7 +3332,7 @@ export class Editor {
       (index) => `正六面体${index + 1}`,
     )
     const makeFace = (boundaryPointIds: string[]) => {
-      const face = new PlanarFace(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
+      const face = new PlanarPolygon(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
       face.fillColor = 0xf4a7a7
       face.fillOpacity = 0.22
       face.userLocked = false
@@ -2907,7 +3433,7 @@ export class Editor {
       (index) => `正四面体${index + 1}`,
     )
     const makeFace = (boundaryPointIds: string[]) => {
-      const face = new PlanarFace(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
+      const face = new PlanarPolygon(genId('f'), nextFaceName(), boundaryPointIds, boundaryPointIds)
       face.fillColor = 0xf4a7a7
       face.fillOpacity = 0.22
       face.userLocked = false
@@ -3079,7 +3605,7 @@ export class Editor {
       return null
     }
     if (uniquePoints.length < 3) {
-      if (notify) emitToast('创建面至少需要 3 个点，或一个由线段组成的闭环')
+      if (notify) emitToast('创建多边形至少需要 3 个点，或一个由线段组成的闭环')
       return null
     }
 
@@ -3095,7 +3621,7 @@ export class Editor {
     const allPositions = uniquePoints.map((point) => getPointPosition(point))
     const primaryPlane = computePlaneBasis(allPositions)
     if (!primaryPlane) {
-      if (notify) emitToast('选中的点过于接近共线，无法创建稳定的面')
+      if (notify) emitToast('选中的点过于接近共线，无法创建稳定的多边形')
       return null
     }
 
@@ -3113,9 +3639,9 @@ export class Editor {
           })),
         )
         boundaryPointIds = hull.map((point) => point.id)
-        notices.push('所选线段未形成闭环，已按外轮廓自动建面')
+        notices.push('所选线段未形成闭环，已按外轮廓自动建多边形')
         if (notify && applyAutoAdjustments) {
-          emitToast('所选线段未形成闭环，已按外轮廓自动建面')
+          emitToast('所选线段未形成闭环，已按外轮廓自动建多边形')
         }
       }
     } else {
@@ -3137,7 +3663,7 @@ export class Editor {
       .filter((point): point is Point3 => point !== undefined)
     const plane = computePlaneBasis(boundaryPoints.map((point) => getPointPosition(point)))
     if (!plane) {
-      if (notify) emitToast('面的边界点共线，无法创建面')
+      if (notify) emitToast('多边形的边界点共线，无法创建多边形')
       return null
     }
 
@@ -3153,9 +3679,9 @@ export class Editor {
         optimizedBoundaryIds.some((id) => !boundaryPointIds.includes(id))
       boundaryPointIds = optimizedBoundaryIds
       if (boundaryChanged) {
-        notices.push('已自动优化面的边界轮廓')
+        notices.push('已自动优化多边形的边界轮廓')
         if (notify && applyAutoAdjustments) {
-          emitToast('已自动优化面的边界轮廓')
+          emitToast('已自动优化多边形的边界轮廓')
         }
       }
     }
@@ -3181,7 +3707,7 @@ export class Editor {
         return sum + point.x * next.y - next.x * point.y
       }, 0)
     if (Math.abs(area) * 0.5 <= PLANAR_EPSILON) {
-      if (notify) emitToast('面的面积过小，无法创建')
+      if (notify) emitToast('多边形的面积过小，无法创建')
       return null
     }
 
@@ -3194,7 +3720,7 @@ export class Editor {
         .filter((point): point is Point3 => point !== undefined),
     )
     if (supportPointIds.length < 3) {
-      if (notify) emitToast('无法为该面建立稳定的平面约束')
+      if (notify) emitToast('无法为该多边形建立稳定的平面约束')
       return null
     }
 
@@ -3203,7 +3729,7 @@ export class Editor {
       return face.boundaryPointIds.every((id) => boundaryPointIds.includes(id))
     })
     if (duplicate) {
-      if (notify) emitToast('相同边界的面已存在')
+      if (notify) emitToast('相同边界的多边形已存在')
       return null
     }
 
@@ -3308,6 +3834,7 @@ export class Editor {
       }
 
       this.applyCubeConstraintPositions(nextPositions)
+      this.applyRegularPolygonConstraintPositions(nextPositions)
 
       faceIds.forEach((faceId) => {
         const face = this.scene.faces.get(faceId)
@@ -3328,6 +3855,7 @@ export class Editor {
           if (face.supportPointIds.includes(pointId)) return
           const point = this.scene.points.get(pointId)
           if (!point || this.isPointCoordinateLocked(point)) return
+          if (point.regularPolygonId && point.regularPolygonRole === 'dependent') return
           const position = nextPositions.get(pointId) ?? point.position
           nextPositions.set(pointId, projectPointToPlane(position, plane))
         })
@@ -3400,6 +3928,7 @@ export class Editor {
         face.memberPointIds.forEach((pointId) => {
           const point = this.scene.points.get(pointId)
           if (!point || this.isPointCoordinateLocked(point)) return
+          if (point.regularPolygonId && point.regularPolygonRole === 'dependent') return
           const current = projectPoint2D(nextPositions.get(pointId) ?? point.position, plane)
           nextPositions.set(
             pointId,

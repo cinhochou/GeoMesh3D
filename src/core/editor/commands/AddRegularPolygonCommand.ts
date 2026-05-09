@@ -2,25 +2,25 @@ import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
-import { CubeConstraint } from '../../constraints/CubeConstraint'
+import { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
 
-export class AddHexahedronCommand implements Command {
+export class AddRegularPolygonCommand implements Command {
   constructor(
     private scene: Scene,
     private points: Point3[],
-    private faces: PlanarPolygon[],
-    private constraint: CubeConstraint,
+    private face: PlanarPolygon,
+    private constraint: RegularPolygonConstraint,
   ) {}
 
   execute() {
     this.points.forEach((point) => this.scene.addPoint(point))
-    this.faces.forEach((face) => this.scene.addFace(face))
-    this.scene.addCubeConstraint(this.constraint)
+    this.scene.addFace(this.face)
+    this.scene.addRegularPolygonConstraint(this.constraint)
   }
 
   undo() {
-    this.scene.removeCubeConstraint(this.constraint.cubeId)
-    this.faces.forEach((face) => this.scene.removeFace(face.id))
+    this.scene.removeRegularPolygonConstraint(this.constraint.constraintId)
+    this.scene.removeFace(this.face.id)
     this.points.forEach((point) => {
       this.scene.points.delete(point.id)
       this.scene.selection.points.delete(point.id)

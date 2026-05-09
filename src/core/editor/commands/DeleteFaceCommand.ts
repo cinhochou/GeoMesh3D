@@ -1,13 +1,13 @@
 import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { Point3 } from '../../geometry/Point3'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export class DeleteFaceCommand implements Command {
   constructor(
     private scene: Scene,
-    private face: PlanarFace,
+    private face: PlanarPolygon,
     private dependentIntersectionPoints: Array<{
       point: Point3
       constraint: IntersectionPointConstraint

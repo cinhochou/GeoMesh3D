@@ -3,7 +3,7 @@ import { Scene } from '../../scene/Scene'
 import { Line3 } from '../../geometry/Line3'
 import { Point3 } from '../../geometry/Point3'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 
 export class DeleteLineCommand implements Command {
@@ -15,7 +15,7 @@ export class DeleteLineCommand implements Command {
       constraint: IntersectionPointConstraint
     }> = [],
     private dependentCubes: Array<{
-      faces: PlanarFace[]
+      faces: PlanarPolygon[]
       dependentPoints: Point3[]
       constraint: CubeConstraint
       dependentIntersectionPoints: Array<{

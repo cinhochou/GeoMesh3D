@@ -6,7 +6,7 @@ import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { Circle3 } from '../../geometry/Circle3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
-import { PlanarFace } from '../../geometry/Plane'
+import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import type { SceneConstraint } from '../../scene/Scene'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
@@ -22,14 +22,14 @@ export class DeletePointCommand implements Command {
     private relatedRays: Ray3[],
     private relatedVectors: GeoVector3[],
     private relatedCircles: Circle3[],
-    private relatedFaces: PlanarFace[],
+    private relatedFaces: PlanarPolygon[],
     private pointConstraint: SceneConstraint | null = null,
     private dependentIntersectionPoints: Array<{
       point: Point3
       constraint: IntersectionPointConstraint
     }> = [],
     private dependentCubes: Array<{
-      faces: PlanarFace[]
+      faces: PlanarPolygon[]
       dependentPoints: Point3[]
       constraint: CubeConstraint
       dependentIntersectionPoints: Array<{
