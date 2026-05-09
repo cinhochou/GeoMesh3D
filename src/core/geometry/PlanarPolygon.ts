@@ -1,4 +1,5 @@
 import type { Point3 } from './Point3'
+import type { Line3 } from './Line3'
 import {
   computePlaneBasis,
   computeSupportPointIds,
@@ -177,5 +178,26 @@ export class PlanarPolygon {
     return this.getMemberPoints(points).every(
       (point) => Math.abs(projectPoint2D(point.position, plane).x) < Number.POSITIVE_INFINITY + PLANAR_EPSILON,
     )
+  }
+
+  static findExistingLine(lines: Map<string, Line3>, p1Id: string, p2Id: string): Line3 | null {
+    for (const line of lines.values()) {
+      if ((line.p1.id === p1Id && line.p2.id === p2Id) || (line.p1.id === p2Id && line.p2.id === p1Id)) {
+        return line
+      }
+    }
+    return null
+  }
+
+  static isBoundaryLineUsedByOtherFace(
+    faces: Map<string, PlanarPolygon>,
+    lineId: string,
+    excludeFaceId: string,
+  ): boolean {
+    for (const face of faces.values()) {
+      if (face.id === excludeFaceId) continue
+      if (face.boundaryLineIds.includes(lineId)) return true
+    }
+    return false
   }
 }

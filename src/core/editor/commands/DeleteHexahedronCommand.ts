@@ -1,11 +1,14 @@
 import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
+import { Line3 } from '../../geometry/Line3'
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export class DeleteHexahedronCommand implements Command {
+  private deletedBoundaryLines: Line3[] = []
+
   constructor(
     private scene: Scene,
     private faces: PlanarPolygon[],
@@ -20,6 +23,17 @@ export class DeleteHexahedronCommand implements Command {
   execute() {
     this.scene.removeCubeConstraint(this.constraint.cubeId)
     this.faces.forEach((face) => this.scene.removeFace(face.id))
+
+    const allBoundaryLineIds = new Set(this.faces.flatMap((face) => face.boundaryLineIds))
+    this.deletedBoundaryLines = [...allBoundaryLineIds]
+      .map((lineId) => this.scene.lines.get(lineId))
+      .filter((line): line is Line3 => line !== undefined && line.faceOwned)
+
+    this.deletedBoundaryLines.forEach((line) => {
+      this.scene.lines.delete(line.id)
+      this.scene.selection.lines.delete(line.id)
+    })
+
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.removeIntersectionConstraint(constraint.pointId)
       this.scene.points.delete(point.id)
@@ -33,11 +47,13 @@ export class DeleteHexahedronCommand implements Command {
 
   undo() {
     this.dependentPoints.forEach((point) => this.scene.addPoint(point))
+    this.deletedBoundaryLines.forEach((line) => this.scene.addLine(line))
     this.faces.forEach((face) => this.scene.addFace(face))
     this.scene.addCubeConstraint(this.constraint)
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.addPoint(point)
       this.scene.addIntersectionConstraint(constraint)
     })
+    this.deletedBoundaryLines = []
   }
 }

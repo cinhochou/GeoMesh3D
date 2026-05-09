@@ -3,7 +3,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import { Scene } from '../scene/Scene'
 import { Point3 } from '../geometry/Point3'
-import { Line3 } from '../geometry/Line3'
+import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { StraightLine3 } from '../geometry/StraightLine3'
@@ -1358,26 +1358,29 @@ export class CollabManager {
       line.lockedLength = lockedLength
       line.p1 = p1
       line.p2 = p2
-      this.reconcileIntersectionsForTarget('line', id)
-      return
-    }
+      line.faceOwned = this.readBoolean(record, 'faceOwned', line.faceOwned)
+    line.faceConstraintType = (this.readString(record, 'faceConstraintType', '') || null) as FaceConstraintType | null
+    this.reconcileIntersectionsForTarget('line', id)
+    return
+  }
 
-    this.scene.addLine(
-      new Line3(
-        id,
-        name,
-        p1,
-        p2,
-        nameVisible,
-        visible,
-        lengthLocked,
-        lockedLength,
-        userLocked,
-        labelOffsetX,
-        labelOffsetY,
-        valueVisible,
-      ),
+  const newLine = new Line3(
+      id,
+      name,
+      p1,
+      p2,
+      nameVisible,
+      visible,
+      lengthLocked,
+      lockedLength,
+      userLocked,
+      labelOffsetX,
+      labelOffsetY,
+      valueVisible,
     )
+    newLine.faceOwned = this.readBoolean(record, 'faceOwned', false)
+    newLine.faceConstraintType = (this.readString(record, 'faceConstraintType', '') || null) as FaceConstraintType | null
+    this.scene.addLine(newLine)
     this.reconcileIntersectionsForTarget('line', id)
   }
 
@@ -2168,6 +2171,8 @@ export class CollabManager {
     this.setScalarField(record, 'userLocked', line.userLocked)
     this.setScalarField(record, 'lengthLocked', line.lengthLocked)
     this.setScalarField(record, 'lockedLength', line.lockedLength)
+    this.setScalarField(record, 'faceOwned', line.faceOwned)
+    this.setScalarField(record, 'faceConstraintType', line.faceConstraintType ?? '')
   }
 
   private syncStraightLineRecord(record: StraightLineSharedMap, line: StraightLine3) {

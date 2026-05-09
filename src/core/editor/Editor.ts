@@ -4,7 +4,7 @@ import type { Command } from './Command'
 import { TransformCommand } from './commands/TransformCommand'
 import { AddElementCommand } from './commands/AddElementCommand'
 import { Point3 } from '../geometry/Point3'
-import { Line3 } from '../geometry/Line3'
+import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3, type DirectionType } from '../geometry/Circle3'
@@ -512,6 +512,21 @@ export class Editor {
     })
 
     return [...bundles.values()]
+  }
+
+  collectDependentFacesByLineId(lineId: string): PlanarPolygon[] {
+    const line = this.scene.lines.get(lineId)
+    if (!line || !line.faceOwned) return []
+
+    const cubeFaceIds = new Set<string>()
+    this.scene.cubeConstraints.forEach((constraint) => {
+      if (!(constraint instanceof CubeConstraint)) return
+      constraint.faceIds.forEach((faceId) => cubeFaceIds.add(faceId))
+    })
+
+    return [...this.scene.faces.values()].filter(
+      (face) => face.boundaryLineIds.includes(lineId) && !cubeFaceIds.has(face.id),
+    )
   }
 
   getCubeConstraintByFaceId(faceId: string) {
@@ -1859,8 +1874,9 @@ export class Editor {
       { type: 'line', id: lineId },
     ])
     const dependentCubes = this.collectDependentCubesByLineId(lineId)
+    const dependentFaces = this.collectDependentFacesByLineId(lineId)
     this.executeCommand(
-      new DeleteLineCommand(this.scene, line, dependentIntersectionPoints, dependentCubes),
+      new DeleteLineCommand(this.scene, line, dependentIntersectionPoints, dependentCubes, dependentFaces),
     )
   }
 
@@ -3217,6 +3233,14 @@ export class Editor {
     face.regularPolygonDependentPointIds = newPoints.map((p) => p.id)
     face.normalize(this.scene.points)
 
+    const { newLines, boundaryLineIds } = this.ensureBoundaryLines(
+      face.boundaryPointIds,
+      [],
+      new Map(newPoints.map((p) => [p.id, p])),
+      'regularPolygon',
+    )
+    face.boundaryLineIds = boundaryLineIds
+
     const constraint = new RegularPolygonConstraint(
       this.scene,
       constraintId,
@@ -3228,7 +3252,7 @@ export class Editor {
       rpName,
     )
 
-    this.executeCommand(new AddRegularPolygonCommand(this.scene, newPoints, face, constraint))
+    this.executeCommand(new AddRegularPolygonCommand(this.scene, newPoints, face, constraint, newLines))
 
     this.selectedPoints = []
     this.scene.selection.clear()
@@ -3248,6 +3272,8 @@ export class Editor {
     const draft = this.buildFaceDraftFromSelection(selectedPoints, selectedLines)
     if (!draft) return
 
+    const { newLines, boundaryLineIds } = this.ensureBoundaryLines(draft.boundaryPointIds, draft.boundaryLineIds, new Map(), 'polygon')
+
     const face = new PlanarPolygon(
       genId('f'),
       genNextAvailableName(
@@ -3257,7 +3283,7 @@ export class Editor {
       ),
       draft.boundaryPointIds,
       draft.memberPointIds,
-      draft.boundaryLineIds,
+      boundaryLineIds,
       false,
       true,
       false,
@@ -3268,7 +3294,7 @@ export class Editor {
     )
 
     face.normalize(this.scene.points)
-    this.executeCommand(new AddElementCommand(this.scene, face, 'face'))
+    this.executeCommand(new AddElementCommand(this.scene, face, 'face', newLines))
     this.scene.selection.clear()
     this.scene.selection.selectFace(face.id)
   }
@@ -3352,6 +3378,12 @@ export class Editor {
       makeFace([p3.id, p1.id, p5.id, p8.id]),
     ]
 
+    const allBoundaryLines = this.ensureBoundaryLinesForFaces(
+      faces,
+      new Map(dependentPoints.map((p) => [p.id, p])),
+      'hexahedron',
+    )
+
     const constraint = new CubeConstraint(
       this.scene,
       cubeId,
@@ -3371,7 +3403,7 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint))
+    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines))
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
   }
@@ -3451,6 +3483,12 @@ export class Editor {
       makeFace([p3.id, p1.id, p4.id]),
     ]
 
+    const allBoundaryLines = this.ensureBoundaryLinesForFaces(
+      faces,
+      new Map(dependentPoints.map((p) => [p.id, p])),
+      'tetrahedron',
+    )
+
     const constraint = new CubeConstraint(
       this.scene,
       cubeId,
@@ -3466,7 +3504,7 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint))
+    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines))
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
   }
@@ -3742,6 +3780,123 @@ export class Editor {
       notices,
       adjustedPoints: optimization.adjustedPoints,
     }
+  }
+
+  private ensureBoundaryLines(
+    boundaryPointIds: string[],
+    existingBoundaryLineIds: string[],
+    extraPoints: Map<string, Point3> = new Map(),
+    faceConstraintType?: FaceConstraintType,
+  ): { newLines: Line3[]; boundaryLineIds: string[] } {
+    const usedLineNames = new Set([...this.scene.lines.values()].map((line) => line.name))
+    const nextLineName = () => {
+      const name = genNextAvailableName(usedLineNames, 97)
+      usedLineNames.add(name)
+      return name
+    }
+
+    const getPoint = (id: string): Point3 | undefined => {
+      return this.scene.points.get(id) ?? extraPoints.get(id)
+    }
+
+    const newLines: Line3[] = []
+    const boundaryLineIds: string[] = []
+    const existingLineMap = new Map<string, string>()
+    existingBoundaryLineIds.forEach((lineId) => {
+      const line = this.scene.lines.get(lineId)
+      if (line) {
+        const key = [line.p1.id, line.p2.id].sort().join('|')
+        existingLineMap.set(key, lineId)
+      }
+    })
+
+    for (let i = 0; i < boundaryPointIds.length; i++) {
+      const p1Id = boundaryPointIds[i]!
+      const p2Id = boundaryPointIds[(i + 1) % boundaryPointIds.length]!
+      const key = [p1Id, p2Id].sort().join('|')
+
+      const existingLineId = existingLineMap.get(key)
+      if (existingLineId) {
+        boundaryLineIds.push(existingLineId)
+        continue
+      }
+
+      const foundLine = PlanarPolygon.findExistingLine(this.scene.lines, p1Id, p2Id)
+      if (foundLine) {
+        boundaryLineIds.push(foundLine.id)
+        continue
+      }
+
+      const p1 = getPoint(p1Id)
+      const p2 = getPoint(p2Id)
+      if (!p1 || !p2) continue
+
+      const line = new Line3(genId('l'), nextLineName(), p1, p2)
+      line.faceOwned = true
+      line.faceConstraintType = faceConstraintType ?? null
+      newLines.push(line)
+      boundaryLineIds.push(line.id)
+      existingLineMap.set(key, line.id)
+    }
+
+    return { newLines, boundaryLineIds }
+  }
+
+  private ensureBoundaryLinesForFaces(
+    faces: PlanarPolygon[],
+    extraPoints: Map<string, Point3> = new Map(),
+    faceConstraintType?: FaceConstraintType,
+  ): Line3[] {
+    const usedLineNames = new Set([...this.scene.lines.values()].map((line) => line.name))
+    const nextLineName = () => {
+      const name = genNextAvailableName(usedLineNames, 97)
+      usedLineNames.add(name)
+      return name
+    }
+
+    const allNewLines: Line3[] = []
+    const edgeToLineId = new Map<string, string>()
+
+    const getPoint = (id: string): Point3 | undefined => {
+      return this.scene.points.get(id) ?? extraPoints.get(id)
+    }
+
+    faces.forEach((face) => {
+      const boundaryLineIds: string[] = []
+      for (let i = 0; i < face.boundaryPointIds.length; i++) {
+        const p1Id = face.boundaryPointIds[i]!
+        const p2Id = face.boundaryPointIds[(i + 1) % face.boundaryPointIds.length]!
+        const key = [p1Id, p2Id].sort().join('|')
+
+        const cachedLineId = edgeToLineId.get(key)
+        if (cachedLineId) {
+          boundaryLineIds.push(cachedLineId)
+          continue
+        }
+
+        const foundLine = PlanarPolygon.findExistingLine(this.scene.lines, p1Id, p2Id)
+        if (foundLine) {
+          boundaryLineIds.push(foundLine.id)
+          edgeToLineId.set(key, foundLine.id)
+          continue
+        }
+
+        const p1 = getPoint(p1Id)
+        const p2 = getPoint(p2Id)
+        if (!p1 || !p2) continue
+
+        const line = new Line3(genId('l'), nextLineName(), p1, p2)
+        line.faceOwned = true
+        line.faceConstraintType = faceConstraintType ?? null
+        allNewLines.push(line)
+        boundaryLineIds.push(line.id)
+        edgeToLineId.set(key, line.id)
+      }
+
+      face.boundaryLineIds = boundaryLineIds
+    })
+
+    return allNewLines
   }
 
   getLockedTranslationGroup(pointIds: string[]) {

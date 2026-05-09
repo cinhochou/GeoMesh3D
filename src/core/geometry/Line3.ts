@@ -1,6 +1,8 @@
 import { Point3 } from './Point3'
 import { Vec3 } from './Vec3'
 
+export type FaceConstraintType = 'polygon' | 'regularPolygon' | 'hexahedron' | 'tetrahedron'
+
 export class Line3 {
   static readonly DEFAULT_LABEL_OFFSET_X = 0
   static readonly DEFAULT_LABEL_OFFSET_Y = 3
@@ -14,6 +16,8 @@ export class Line3 {
   userLocked: boolean
   lengthLocked: boolean
   lockedLength: number
+  faceOwned: boolean
+  faceConstraintType: FaceConstraintType | null
   p1: Point3
   p2: Point3
 
@@ -43,6 +47,8 @@ export class Line3 {
     this.p1 = p1
     this.p2 = p2
     this.lockedLength = Line3.normalizeLockedLength(lockedLength ?? this.getLength())
+    this.faceOwned = false
+    this.faceConstraintType = null
   }
 
   static normalizeLockedLength(length: number) {

@@ -7,6 +7,8 @@ import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 
 export class DeleteLineCommand implements Command {
+  private deletedFaceBoundaryLines: Line3[] = []
+
   constructor(
     private scene: Scene,
     private line: Line3,
@@ -23,6 +25,7 @@ export class DeleteLineCommand implements Command {
         constraint: IntersectionPointConstraint
       }>
     }> = [],
+    private dependentFaces: PlanarPolygon[] = [],
   ) {}
 
   execute() {
@@ -39,6 +42,21 @@ export class DeleteLineCommand implements Command {
         this.scene.selection.points.delete(point.id)
       })
     })
+    this.dependentFaces.forEach((face) => {
+      this.scene.removeFace(face.id)
+    })
+    this.deletedFaceBoundaryLines = []
+    this.dependentFaces.forEach((face) => {
+      face.boundaryLineIds.forEach((lineId) => {
+        if (lineId === this.line.id) return
+        const boundaryLine = this.scene.lines.get(lineId)
+        if (!boundaryLine || !boundaryLine.faceOwned) return
+        if (PlanarPolygon.isBoundaryLineUsedByOtherFace(this.scene.faces, lineId, face.id)) return
+        this.scene.lines.delete(lineId)
+        this.scene.selection.lines.delete(lineId)
+        this.deletedFaceBoundaryLines.push(boundaryLine)
+      })
+    })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.removeIntersectionConstraint(constraint.pointId)
       this.scene.points.delete(point.id)
@@ -50,6 +68,9 @@ export class DeleteLineCommand implements Command {
 
   undo() {
     this.scene.addLine(this.line)
+    this.deletedFaceBoundaryLines.forEach((line) => this.scene.addLine(line))
+    this.dependentFaces.forEach((face) => this.scene.addFace(face))
+    this.deletedFaceBoundaryLines = []
     this.dependentCubes.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {
       dependentPoints.forEach((point) => this.scene.addPoint(point))
       faces.forEach((face) => this.scene.addFace(face))

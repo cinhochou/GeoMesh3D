@@ -1,4 +1,3 @@
-// src/core/editor/AddElementCommand.ts
 import type { Command } from '../Command'
 import { Scene } from '../../scene/Scene'
 import { Point3 } from '../../geometry/Point3'
@@ -15,16 +14,21 @@ export class AddElementCommand implements Command {
   private centerPoint: Point3 | null = null
   private prevCircleId: string | null = null
   private prevCircleRole: 'center' | null = null
+  private boundaryLines: Line3[] = []
 
   constructor(
     private scene: Scene,
     private element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarPolygon,
     private type: ElementType,
+    boundaryLines: Line3[] = [],
   ) {
     if (type === 'circle' && (element as Circle3).isNormalCircle()) {
       this.centerPoint = (element as Circle3).p1
       this.prevCircleId = this.centerPoint.circleId
       this.prevCircleRole = this.centerPoint.circleRole
+    }
+    if (type === 'face') {
+      this.boundaryLines = boundaryLines
     }
   }
 
@@ -36,6 +40,7 @@ export class AddElementCommand implements Command {
     } else if (this.type === 'straightLine') {
       this.scene.addStraightLine(this.element as StraightLine3)
     } else if (this.type === 'face') {
+      this.boundaryLines.forEach((line) => this.scene.addLine(line))
       this.scene.addFace(this.element as PlanarPolygon)
     } else if (this.type === 'circle') {
       this.scene.addCircle(this.element as Circle3)
@@ -62,6 +67,10 @@ export class AddElementCommand implements Command {
       this.scene.selection.straightLines.delete(this.element.id)
     } else if (this.type === 'face') {
       this.scene.removeFace(this.element.id)
+      this.boundaryLines.forEach((line) => {
+        this.scene.lines.delete(line.id)
+        this.scene.selection.lines.delete(line.id)
+      })
     } else if (this.type === 'circle') {
       this.scene.circles.delete(this.element.id)
       this.scene.selection.circles.delete(this.element.id)

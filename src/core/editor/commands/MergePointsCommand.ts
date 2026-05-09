@@ -285,6 +285,8 @@ export class MergePointsCommand implements Command {
         return
       }
 
+      this.rebuildBoundaryLineIds(face)
+
       face.normalize(this.scene.points)
       if (face.supportPointIds.length < 3) {
         this.scene.removeFace(face.id)
@@ -547,5 +549,18 @@ export class MergePointsCommand implements Command {
     this.scene.selection.clear()
     this.scene.selection.selectPoint(this.keepPoint.id, true)
     this.scene.selection.selectPoint(this.removePoint.id, true)
+  }
+
+  private rebuildBoundaryLineIds(face: PlanarPolygon) {
+    const boundaryLineIds: string[] = []
+    for (let i = 0; i < face.boundaryPointIds.length; i++) {
+      const p1Id = face.boundaryPointIds[i]!
+      const p2Id = face.boundaryPointIds[(i + 1) % face.boundaryPointIds.length]!
+      const foundLine = PlanarPolygon.findExistingLine(this.scene.lines, p1Id, p2Id)
+      if (foundLine) {
+        boundaryLineIds.push(foundLine.id)
+      }
+    }
+    face.boundaryLineIds = boundaryLineIds
   }
 }

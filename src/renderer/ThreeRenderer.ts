@@ -1294,34 +1294,41 @@ export class ThreeRenderer {
       const points = [new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)]
 
       if (!line) {
-        // 首次创建
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = new THREE.LineBasicMaterial({
           color: ThreeRenderer.LINEAR_COLOR,
           linewidth: ThreeRenderer.LINEAR_WIDTH,
+          depthTest: !lineData.faceOwned,
         })
         line = new THREE.Line(geo, mat)
         line.userData = { geoId: id, type: 'line' }
+        if (lineData.faceOwned) line.renderOrder = 12
         this.world.add(line)
         this.meshMap.set(id, line)
       } else {
-        // 1. 更新顶点数据
         line.geometry.setFromPoints(points)
-
-        // 2. 必须告诉 Three.js 顶点缓冲区需要更新
         line.geometry.attributes.position!.needsUpdate = true
-
-        // 3. 必须重新计算包围盒，否则射线检测（Raycaster）还会去旧地方找线
         line.geometry.computeBoundingBox()
         line.geometry.computeBoundingSphere()
+        const mat = line.material as THREE.LineBasicMaterial
+        mat.depthTest = !lineData.faceOwned
       }
 
       line.visible = lineData.visible !== false
 
       // 选中高亮逻辑
       const isSelected = scene.selection.lines.has(id)
+      let isFaceHighlight = false
+      if (lineData.faceOwned && !isSelected) {
+        for (const face of scene.faces.values()) {
+          if (face.boundaryLineIds.includes(id) && scene.selection.faces.has(face.id)) {
+            isFaceHighlight = true
+            break
+          }
+        }
+      }
       ;(line.material as THREE.LineBasicMaterial).color.set(
-        isSelected ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
+        (isSelected || isFaceHighlight) ? 0x43f260 : ThreeRenderer.LINEAR_COLOR,
       )
 
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
@@ -1737,6 +1744,8 @@ export class ThreeRenderer {
       geometry.computeBoundingSphere()
 
       const outline = faceMesh.children[0] as THREE.LineLoop | undefined
+      const hasBoundaryLines = faceData.boundaryLineIds.length > 0 &&
+        faceData.boundaryLineIds.some((lineId) => scene.lines.has(lineId))
       if (outline) {
         outline.geometry.setFromPoints([
           ...faceData
@@ -1750,7 +1759,7 @@ export class ThreeRenderer {
       }
 
       faceMesh.visible = faceData.visible !== false
-      if (outline) outline.visible = faceData.visible !== false
+      if (outline) outline.visible = faceData.visible !== false && !hasBoundaryLines
 
       const isSelected = scene.selection.faces.has(id)
       const cubeConstraint = faceData.cubeId

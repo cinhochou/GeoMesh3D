@@ -26,6 +26,30 @@ const { isCompactLineEditor, contentGroupsCollapsed, hasAutoCollapsedContentGrou
   storeToRefs(uiStore)
 const { modeName, modeHint } = storeToRefs(sceneStore)
 const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
+const showHiddenPointHint = ref(false)
+const showHiddenLineHint = ref(false)
+const hiddenPointHintTriggerRef = ref<HTMLElement | null>(null)
+const hiddenLineHintTriggerRef = ref<HTMLElement | null>(null)
+const hiddenPointHintStyle = computed(() => {
+  const el = hiddenPointHintTriggerRef.value
+  if (!el) return {}
+  const rect = el.getBoundingClientRect()
+  return {
+    position: 'fixed' as const,
+    top: `${rect.bottom + 4}px`,
+    left: `${rect.left}px`,
+  }
+})
+const hiddenLineHintStyle = computed(() => {
+  const el = hiddenLineHintTriggerRef.value
+  if (!el) return {}
+  const rect = el.getBoundingClientRect()
+  return {
+    position: 'fixed' as const,
+    top: `${rect.bottom + 4}px`,
+    left: `${rect.left}px`,
+  }
+})
 const isAllGroupsCollapsed = ref(false)
 const toggleAllContentGroups = () => {
   if (isAllGroupsCollapsed.value) {
@@ -91,7 +115,15 @@ const pointsInScene = computed(() => {
 })
 const linesInScene = computed(() => {
   void commandRevision.value
-  return [...props.scene.lines.values()]
+  return [...props.scene.lines.values()].filter((l) => !l.faceOwned)
+})
+const hasHiddenConstrainedPoints = computed(() => {
+  void commandRevision.value
+  return [...props.scene.points.values()].some((p) => isConstrainedPoint(p))
+})
+const hasHiddenConstrainedLines = computed(() => {
+  void commandRevision.value
+  return [...props.scene.lines.values()].some((l) => l.faceOwned)
 })
 const straightLinesInScene = computed(() => {
   void commandRevision.value
@@ -181,10 +213,21 @@ const isLineConstraintLocked = (line: Line3 | undefined) =>
       (props.editor.isLineLocked(line) ||
         (isPointCoordinateLocked(line.p1) && isPointCoordinateLocked(line.p2))),
   )
-const hasCubeConstraint = (point: Point3 | undefined) => Boolean(point?.cubeId)
+const hasCubeConstraint = (point: Point3 | undefined) =>
+  Boolean(point?.cubeId && point?.cubeRole === 'dependent')
 const hasRegularPolygonConstraint = (point: Point3 | undefined) => Boolean(point?.regularPolygonId)
 const hasCircleConstraint = (point: Point3 | undefined) =>
   Boolean(point?.circleId && point?.circleRole === 'center')
+const getLineConstraintBadge = (line: Line3 | undefined): string => {
+  if (!line?.faceConstraintType) return ''
+  switch (line.faceConstraintType) {
+    case 'polygon': return '多边形约束'
+    case 'regularPolygon': return '正多边形约束'
+    case 'hexahedron': return '正六面体约束'
+    case 'tetrahedron': return '正四面体约束'
+    default: return ''
+  }
+}
 const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarPolygon | undefined) => Boolean(face?.cubeId)
@@ -286,16 +329,6 @@ const formatPiArea = (radius: number): string => {
   if (Math.abs(coeff) < 1e-10) return '0'
   if (Math.abs(coeff - 1) < 1e-10) return 'π'
   return `${coeff.toFixed(2)}π`
-}
-
-const onNormalCircleRadiusChange = (circle: Circle3, event: Event) => {
-  const input = event.target as HTMLInputElement
-  const newRadius = parseFloat(input.value)
-  if (isNaN(newRadius) || newRadius <= 0) {
-    input.value = String(circle.lockedRadius)
-    return
-  }
-  props.editor.updateCircle(circle.id, { lockedRadius: newRadius })
 }
 
 const editPoint = reactive({
@@ -468,6 +501,7 @@ const selectPointFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectPoint(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectLineFromContent = (id: string) => {
@@ -476,6 +510,7 @@ const selectLineFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectLine(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectStraightLineFromContent = (id: string) => {
@@ -484,6 +519,7 @@ const selectStraightLineFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectStraightLine(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectRayFromContent = (id: string) => {
@@ -492,6 +528,7 @@ const selectRayFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectRay(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectVectorFromContent = (id: string) => {
@@ -500,6 +537,7 @@ const selectVectorFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectVector(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectFaceFromContent = (id: string) => {
@@ -508,6 +546,7 @@ const selectFaceFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectFace(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectCircleFromContent = (id: string) => {
@@ -516,6 +555,7 @@ const selectCircleFromContent = (id: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectCircle(id)
+  props.scene.markAllRenderDirty()
 }
 
 const selectHexahedronFromContent = (cubeId: string) => {
@@ -526,6 +566,7 @@ const selectHexahedronFromContent = (cubeId: string) => {
   const constraint = props.editor.getCubeConstraint(cubeId)
   const firstFaceId = constraint?.faceIds[0]
   if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
+  props.scene.markAllRenderDirty()
 }
 
 const clearContentSelection = () => {
@@ -534,6 +575,7 @@ const clearContentSelection = () => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.clear()
+  props.scene.markAllRenderDirty()
 }
 
 const getSplitPaneMetrics = () => {
@@ -1582,6 +1624,7 @@ const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
   if (!state) return
   const pointIndex = pointKey === 'p1' ? 0 : 1
   const point = state.ownerPoints[pointIndex]
+  if (!point) return
   const nextPosition = {
     x: Number(editHexahedron[pointKey].x),
     y: Number(editHexahedron[pointKey].y),
@@ -1634,6 +1677,7 @@ const applyRegularPolygonOwnerPoint = (pointKey: 'p1' | 'p2') => {
   if (!state) return
   const pointIndex = pointKey === 'p1' ? 0 : 1
   const point = state.ownerPoints[pointIndex]
+  if (!point) return
   const nextPosition = {
     x: Number(editRegularPolygon[pointKey].x),
     y: Number(editRegularPolygon[pointKey].y),
@@ -1725,13 +1769,6 @@ const getHexahedronEdgeLength = (cubeId: string) => {
 const getSolidConstraintBadge = (cubeId: string | null | undefined) => {
   const constraint = cubeId ? props.editor.getCubeConstraint(cubeId) : null
   return constraint?.solidType === 'tetrahedron' ? '四面体约束' : '六面体约束'
-}
-const getRegularPolygonConstraintBadge = (regularPolygonId: string | null | undefined, role: 'owner' | 'dependent' | null) => {
-  if (!regularPolygonId) return ''
-  const constraint = props.editor.getRegularPolygonConstraint(regularPolygonId)
-  if (!constraint) return '正多边形约束'
-  const roleLabel = role === 'owner' ? '原始点' : '受约束点'
-  return `正${constraint.vertexCount}边形·${roleLabel}`
 }
 const getHexahedronVolume = (cubeId: string) => {
   const edgeLength = getHexahedronEdgeLength(cubeId)
@@ -2664,6 +2701,7 @@ onUnmounted(() => {
             <div>
               线段{{ l!.name ?? '' }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
+              <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{ getLineConstraintBadge(l!) }}</span>
             </div>
             <div>
               长度：{{ l!.getLength().toFixed(2) }}
@@ -4923,6 +4961,9 @@ onUnmounted(() => {
               {{ collapsedContentGroups.point ? '▸' : '▾' }}
             </span>
             <span class="content-group-label">{{ contentGroupLabels.point }}</span>
+            <span v-if="hasHiddenConstrainedPoints" class="hidden-hint-wrapper">
+              <button type="button" class="hidden-hint-trigger" :class="{ active: showHiddenPointHint }" :ref="(el: any) => hiddenPointHintTriggerRef = el" @mouseenter="showHiddenPointHint = true" @mouseleave="showHiddenPointHint = false" @click.stop="showHiddenPointHint = !showHiddenPointHint">?</button>
+            </span>
             <span class="content-group-count">{{ pointsInScene.length }}</span>
           </button>
           <div
@@ -4965,6 +5006,9 @@ onUnmounted(() => {
               {{ collapsedContentGroups.line ? '▸' : '▾' }}
             </span>
             <span class="content-group-label">{{ contentGroupLabels.line }}</span>
+            <span v-if="hasHiddenConstrainedLines" class="hidden-hint-wrapper">
+              <button type="button" class="hidden-hint-trigger" :class="{ active: showHiddenLineHint }" :ref="(el: any) => hiddenLineHintTriggerRef = el" @mouseenter="showHiddenLineHint = true" @mouseleave="showHiddenLineHint = false" @click.stop="showHiddenLineHint = !showHiddenLineHint">?</button>
+            </span>
             <span class="content-group-count">{{ linesInScene.length }}</span>
           </button>
           <div
@@ -5252,6 +5296,14 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+  <Teleport to="body">
+    <div v-if="showHiddenPointHint" class="hidden-hint-popover" :style="hiddenPointHintStyle">
+      已隐藏由复杂几何对象约束生成的点（圆心点、交点等除外），但是你仍然可以在选中区查看
+    </div>
+    <div v-if="showHiddenLineHint" class="hidden-hint-popover" :style="hiddenLineHintStyle">
+      已隐藏由复杂几何对象约束生成的线段，但是你仍然可以在选中区查看
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -5522,6 +5574,44 @@ hr {
   color: #a8a8a8;
   font-size: 10px;
 }
+.hidden-hint-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.hidden-hint-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: help;
+  user-select: none;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.hidden-hint-trigger:hover {
+  border-color: rgba(255, 255, 255, 0.9);
+  color: #fff;
+}
+.hidden-hint-trigger:active {
+  transform: scale(0.85);
+}
+.hidden-hint-trigger.active {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
 .content-group-body {
   display: flex;
   flex-direction: column;
@@ -6168,5 +6258,21 @@ hr {
     padding: 4px;
     font-size: 10px;
   }
+}
+</style>
+<style>
+.hidden-hint-popover {
+  padding: 6px 8px;
+  background: #2a2d35;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  width: max-content;
+  max-width: 200px;
+  z-index: 9999;
+  pointer-events: auto;
 }
 </style>
