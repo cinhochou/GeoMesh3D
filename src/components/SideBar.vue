@@ -8,6 +8,7 @@ import { Vec3 } from '../core/geometry/Vec3'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Circle3 } from '../core/geometry/Circle3'
+import type { Sphere3 } from '../core/geometry/Sphere3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
@@ -105,6 +106,12 @@ const selectedCircles = computed(() => {
     .map((id) => props.scene.circles.get(id))
     .filter((circle): circle is Circle3 => circle !== undefined)
 })
+const selectedSpheres = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.spheres]
+    .map((id) => props.scene.spheres.get(id))
+    .filter((sphere): sphere is Sphere3 => sphere !== undefined)
+})
 const isConstrainedPoint = (point: Point3) =>
   (point.cubeId !== null && point.cubeRole === 'dependent') ||
   (point.regularPolygonId !== null && point.regularPolygonRole === 'dependent')
@@ -145,6 +152,10 @@ const circlesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.circles.values()]
 })
+const spheresInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.spheres.values()]
+})
 const hexahedronsInScene = computed(() => {
   void commandRevision.value
   return props.editor.getCubeConstraints()
@@ -183,7 +194,17 @@ const selectedEditableFaces = computed(() =>
 )
 
 const editing = ref<{
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron' | 'regularPolygon'
+  type:
+    | 'point'
+    | 'line'
+    | 'straightLine'
+    | 'ray'
+    | 'vector'
+    | 'circle'
+    | 'face'
+    | 'hexahedron'
+    | 'regularPolygon'
+    | 'sphere'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -196,7 +217,10 @@ const isLineEndpointCoordinateLocked = (line: Line3 | undefined, point: Point3 |
   Boolean(line && point && (props.editor.isLineLocked(line) || isPointCoordinateLocked(point)))
 const isRayEndpointCoordinateLocked = (ray: Ray3 | undefined, point: Point3 | undefined) =>
   Boolean(ray && point && (props.editor.isRayLocked(ray) || isPointCoordinateLocked(point)))
-const isVectorEndpointCoordinateLocked = (vector: GeoVector3 | undefined, point: Point3 | undefined) =>
+const isVectorEndpointCoordinateLocked = (
+  vector: GeoVector3 | undefined,
+  point: Point3 | undefined,
+) =>
   Boolean(
     vector && point && (props.editor.isVectorLocked(vector) || isPointCoordinateLocked(point)),
   )
@@ -221,11 +245,16 @@ const hasCircleConstraint = (point: Point3 | undefined) =>
 const getLineConstraintBadge = (line: Line3 | undefined): string => {
   if (!line?.faceConstraintType) return ''
   switch (line.faceConstraintType) {
-    case 'polygon': return '多边形约束'
-    case 'regularPolygon': return '正多边形约束'
-    case 'hexahedron': return '正六面体约束'
-    case 'tetrahedron': return '正四面体约束'
-    default: return ''
+    case 'polygon':
+      return '多边形约束'
+    case 'regularPolygon':
+      return '正多边形约束'
+    case 'hexahedron':
+      return '正六面体约束'
+    case 'tetrahedron':
+      return '正四面体约束'
+    default:
+      return ''
   }
 }
 const getCircleCenterPoint = (circleId: string) =>
@@ -426,6 +455,15 @@ const editRegularPolygon = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editSphere = reactive({
+  nameSuffix: '',
+  nameVisible: false,
+  valueVisible: false,
+  userLocked: false,
+  radius: '',
+  centerPoint: { x: '', y: '', z: '' },
+  radiusPoint: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
@@ -453,6 +491,7 @@ const selectedEditableFaceIds = computed(() =>
 const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).filter(Boolean))
 const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id).filter(Boolean))
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
+const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
@@ -462,10 +501,19 @@ const totalContentCount = computed(
     vectorsInScene.value.length +
     circlesInScene.value.length +
     facesInScene.value.length +
-    hexahedronsInScene.value.length,
+    hexahedronsInScene.value.length +
+    spheresInScene.value.length,
 )
 const contentGroupLabels: Record<
-  'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
+  | 'point'
+  | 'line'
+  | 'straightLine'
+  | 'ray'
+  | 'vector'
+  | 'circle'
+  | 'face'
+  | 'hexahedron'
+  | 'sphere',
   string
 > = {
   point: '点',
@@ -476,13 +524,23 @@ const contentGroupLabels: Record<
   circle: '圆',
   face: '多边形',
   hexahedron: '立体',
+  sphere: '球体',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
 }
 
 const toggleContentGroup = (
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'hexahedron',
+  type:
+    | 'point'
+    | 'line'
+    | 'straightLine'
+    | 'ray'
+    | 'vector'
+    | 'circle'
+    | 'face'
+    | 'hexahedron'
+    | 'sphere',
 ) => {
   uiStore.toggleContentGroup(type)
 }
@@ -566,6 +624,15 @@ const selectHexahedronFromContent = (cubeId: string) => {
   const constraint = props.editor.getCubeConstraint(cubeId)
   const firstFaceId = constraint?.faceIds[0]
   if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
+  props.scene.markAllRenderDirty()
+}
+
+const selectSphereFromContent = (sphereId: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectSphere(sphereId)
   props.scene.markAllRenderDirty()
 }
 
@@ -668,6 +735,7 @@ watch(
     selectedEditableFaceIds,
     selectedCircleIds,
     selectedHexahedronIds,
+    selectedSphereIds,
   ],
   () => {
     if (!editing.value) return
@@ -680,6 +748,7 @@ watch(
     if (type === 'face' && !selectedEditableFaceIds.value.includes(id)) editing.value = null
     if (type === 'circle' && !selectedCircleIds.value.includes(id)) editing.value = null
     if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
+    if (type === 'sphere' && !selectedSphereIds.value.includes(id)) editing.value = null
   },
 )
 
@@ -695,6 +764,7 @@ watch(
     if (circlesInScene.value.length > 0) activeKeys.push('circle')
     if (facesInScene.value.length > 0) activeKeys.push('face')
     if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
+    if (spheresInScene.value.length > 0) activeKeys.push('sphere')
     if (activeKeys.length === 0) return
     const allCollapsed = activeKeys.every((k) => c[k])
     const allExpanded = activeKeys.every((k) => !c[k])
@@ -1380,15 +1450,20 @@ const applyEditVector = () => {
   const previousLength = updatedVector.getLength()
   const parsedLength = Number(editVector.length)
   const lengthChanged =
-    Number.isFinite(parsedLength) && parsedLength >= 0 && Math.abs(parsedLength - previousLength) > 1e-6
+    Number.isFinite(parsedLength) &&
+    parsedLength >= 0 &&
+    Math.abs(parsedLength - previousLength) > 1e-6
 
   if (isLengthFocused && lengthChanged) {
     if (previousLength > 1e-6) {
       const scale = parsedLength / previousLength
       const newP2 = new Vec3(
-        updatedVector.p1.position.x + (updatedVector.p2.position.x - updatedVector.p1.position.x) * scale,
-        updatedVector.p1.position.y + (updatedVector.p2.position.y - updatedVector.p1.position.y) * scale,
-        updatedVector.p1.position.z + (updatedVector.p2.position.z - updatedVector.p1.position.z) * scale,
+        updatedVector.p1.position.x +
+          (updatedVector.p2.position.x - updatedVector.p1.position.x) * scale,
+        updatedVector.p1.position.y +
+          (updatedVector.p2.position.y - updatedVector.p1.position.y) * scale,
+        updatedVector.p1.position.z +
+          (updatedVector.p2.position.z - updatedVector.p1.position.z) * scale,
       )
       props.editor.setPointPosition(updatedVector.p2.id, newP2)
     } else if (parsedLength > 1e-6) {
@@ -1402,7 +1477,11 @@ const applyEditVector = () => {
     } else {
       props.editor.setPointPosition(
         updatedVector.p2.id,
-        new Vec3(updatedVector.p1.position.x, updatedVector.p1.position.y, updatedVector.p1.position.z),
+        new Vec3(
+          updatedVector.p1.position.x,
+          updatedVector.p1.position.y,
+          updatedVector.p1.position.z,
+        ),
       )
     }
     return
@@ -1581,11 +1660,10 @@ const applyThreePointCircleRadius = () => {
     const dx = p.position.x - center.x
     const dy = p.position.y - center.y
     const dz = p.position.z - center.z
-    props.editor.setPointPosition(p.id, new Vec3(
-      center.x + dx * scale,
-      center.y + dy * scale,
-      center.z + dz * scale,
-    ))
+    props.editor.setPointPosition(
+      p.id,
+      new Vec3(center.x + dx * scale, center.y + dy * scale, center.z + dz * scale),
+    )
   }
 }
 const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
@@ -1607,10 +1685,12 @@ const handleCirclePointCoordBlur = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y
 const applyHexahedronMeta = () => {
   const state = getEditingHexahedronState()
   if (!state) return
-  props.editor.updateCubeName(state.cubeId, editHexahedron.nameSuffix)
-  props.editor.setCubeValueVisible(state.cubeId, editHexahedron.valueVisible)
+  props.editor.updateCube(state.cubeId, {
+    name: `${state.constraint.solidType === 'tetrahedron' ? '正四面体' : '正六面体'}${editHexahedron.nameSuffix.trim()}`,
+    valueVisible: editHexahedron.valueVisible,
+    edgeLengthLocked: editHexahedron.edgeLengthLocked,
+  })
   props.editor.setCubeLockState(state.cubeId, editHexahedron.userLocked)
-  props.editor.setCubeEdgeLengthLockState(state.cubeId, editHexahedron.edgeLengthLocked)
 }
 const applyHexahedronEdgeLength = () => {
   const state = getEditingHexahedronState()
@@ -1658,10 +1738,12 @@ const getEditingRegularPolygonState = () => {
 const applyRegularPolygonMeta = () => {
   const state = getEditingRegularPolygonState()
   if (!state) return
-  props.editor.updateRegularPolygonName(state.constraintId, editRegularPolygon.nameSuffix)
-  props.editor.setRegularPolygonValueVisible(state.constraintId, editRegularPolygon.valueVisible)
+  props.editor.updateRegularPolygon(state.constraintId, {
+    name: `正多边形${editRegularPolygon.nameSuffix.trim()}`,
+    valueVisible: editRegularPolygon.valueVisible,
+    edgeLengthLocked: editRegularPolygon.edgeLengthLocked,
+  })
   props.editor.setRegularPolygonLockState(state.constraintId, editRegularPolygon.userLocked)
-  props.editor.setRegularPolygonEdgeLengthLockState(state.constraintId, editRegularPolygon.edgeLengthLocked)
 }
 
 const applyRegularPolygonEdgeLength = () => {
@@ -1720,7 +1802,11 @@ const handleRegularPolygonEdgeLengthBlur = () => {
   applyRegularPolygonEdgeLength()
 }
 
-const nudgeRegularPolygonOwnerCoord = (pointKey: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+const nudgeRegularPolygonOwnerCoord = (
+  pointKey: 'p1' | 'p2',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
   const current = Number(editRegularPolygon[pointKey][axis])
   if (!Number.isFinite(current)) return
   const step = 0.5
@@ -1737,6 +1823,121 @@ const handleRegularPolygonOwnerCoordBlur = (pointKey: 'p1' | 'p2', axis: 'x' | '
   editRegularPolygon[pointKey][axis] = normalizeCoord(editRegularPolygon[pointKey][axis])
   setCoordFocus(`rp.${pointKey}.${axis}`, false)
   applyRegularPolygonOwnerPoint(pointKey)
+}
+
+const startEditSphere = (sphereId: string) => {
+  const sphere = props.editor.getSphere(sphereId)
+  if (!sphere) return
+  editing.value = { type: 'sphere', id: sphereId }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editSphere.nameSuffix = props.editor.getSphereNameSuffix(sphereId)
+  editSphere.nameVisible = sphere.nameVisible !== false
+  editSphere.valueVisible = sphere.valueVisible === true
+  editSphere.userLocked = props.editor.isSphereGeometryLocked(sphere)
+  editSphere.radius = toFixed2(props.editor.getSphereRadius(sphereId))
+  const centerPoint = props.editor.getSphereCenterPoint(sphereId)
+  const radiusPoint = props.editor.getSphereRadiusPoint(sphereId)
+  editSphere.centerPoint.x = centerPoint ? toFixed2(centerPoint.position.x) : ''
+  editSphere.centerPoint.y = centerPoint ? toFixed2(centerPoint.position.y) : ''
+  editSphere.centerPoint.z = centerPoint ? toFixed2(centerPoint.position.z) : ''
+  editSphere.radiusPoint.x = radiusPoint ? toFixed2(radiusPoint.position.x) : ''
+  editSphere.radiusPoint.y = radiusPoint ? toFixed2(radiusPoint.position.y) : ''
+  editSphere.radiusPoint.z = radiusPoint ? toFixed2(radiusPoint.position.z) : ''
+}
+
+const getEditingSphereState = () => {
+  if (!editing.value || editing.value.type !== 'sphere') return null
+  const sphere = props.editor.getSphere(editing.value.id)
+  if (!sphere) return null
+  return { sphereId: editing.value.id, sphere }
+}
+
+const applyEditSphereMeta = () => {
+  const state = getEditingSphereState()
+  if (!state) return
+  props.editor.updateSphere(state.sphereId, {
+    name: `两点球${editSphere.nameSuffix.trim()}`,
+    nameVisible: editSphere.nameVisible,
+    valueVisible: editSphere.valueVisible,
+  })
+  props.editor.setSphereLockState(state.sphereId, editSphere.userLocked)
+}
+
+const applyEditSphereRadius = () => {
+  const state = getEditingSphereState()
+  if (!state) return
+  const nextRadius = Number(editSphere.radius)
+  if (!Number.isFinite(nextRadius) || nextRadius < 0) return
+  props.editor.updateSphereRadius(state.sphereId, nextRadius)
+}
+
+const applySpherePointCoord = (pointKey: 'centerPoint' | 'radiusPoint') => {
+  const state = getEditingSphereState()
+  if (!state) return
+  const point =
+    pointKey === 'centerPoint'
+      ? props.editor.getSphereCenterPoint(state.sphereId)
+      : props.editor.getSphereRadiusPoint(state.sphereId)
+  if (!point) return
+  const nextPosition = {
+    x: Number(editSphere[pointKey].x),
+    y: Number(editSphere[pointKey].y),
+    z: Number(editSphere[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  )
+    return
+  if (isPointCoordinateLocked(point)) return
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+}
+
+const handleSphereRadiusFocus = () => {
+  setCoordFocus('sphere.radius', true)
+}
+
+const handleSphereRadiusBlur = () => {
+  editSphere.radius = normalizeDisplayLength(editSphere.radius)
+  setCoordFocus('sphere.radius', false)
+  applyEditSphereRadius()
+}
+
+const nudgeSphereRadius = (direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput('sphere.radius', direction)
+  if (nextValue === null) return
+  editSphere.radius = nextValue
+  applyEditSphereRadius()
+}
+
+const handleSpherePointCoordFocus = (
+  pointKey: 'centerPoint' | 'radiusPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  setCoordFocus(`sphere.${pointKey}.${axis}`, true)
+}
+
+const handleSpherePointCoordBlur = (
+  pointKey: 'centerPoint' | 'radiusPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  editSphere[pointKey][axis] = normalizeCoord(editSphere[pointKey][axis])
+  setCoordFocus(`sphere.${pointKey}.${axis}`, false)
+  applySpherePointCoord(pointKey)
+}
+
+const nudgeSpherePointCoord = (
+  pointKey: 'centerPoint' | 'radiusPoint',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`sphere.${pointKey}.${axis}`, direction)
+  if (nextValue === null) return
+  editSphere[pointKey][axis] = nextValue
+  applySpherePointCoord(pointKey)
 }
 
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
@@ -2064,10 +2265,12 @@ watch(
     editCircle.userLocked = nextCircle.userLocked
     editCircle.centerVisible = nextCircle.centerVisible
     if (nextCircle.lockedRadius != null) {
-      if (!focusedCoord['circle.lockedRadius']) editCircle.lockedRadius = String(nextCircle.lockedRadius)
+      if (!focusedCoord['circle.lockedRadius'])
+        editCircle.lockedRadius = String(nextCircle.lockedRadius)
     }
     if (nextCircle.radius != null) {
-      if (!focusedCoord['circle.threePointRadius']) editCircle.threePointRadius = toFixed2(nextCircle.radius)
+      if (!focusedCoord['circle.threePointRadius'])
+        editCircle.threePointRadius = toFixed2(nextCircle.radius)
     }
     if (!focusedCoord['circle.p1.x']) editCircle.p1.x = toFixed2(nextCircle.p1.x)
     if (!focusedCoord['circle.p1.y']) editCircle.p1.y = toFixed2(nextCircle.p1.y)
@@ -2170,6 +2373,54 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'sphere') return null
+    const sphere = props.editor.getSphere(editing.value.id)
+    if (!sphere) return null
+    const centerPoint = props.editor.getSphereCenterPoint(editing.value.id)
+    const radiusPoint = props.editor.getSphereRadiusPoint(editing.value.id)
+    return {
+      nameSuffix: props.editor.getSphereNameSuffix(editing.value.id),
+      nameVisible: sphere.nameVisible !== false,
+      valueVisible: sphere.valueVisible === true,
+      userLocked: props.editor.isSphereGeometryLocked(sphere),
+      radius: props.editor.getSphereRadius(editing.value.id),
+      centerPoint: centerPoint
+        ? { x: centerPoint.position.x, y: centerPoint.position.y, z: centerPoint.position.z }
+        : null,
+      radiusPoint: radiusPoint
+        ? { x: radiusPoint.position.x, y: radiusPoint.position.y, z: radiusPoint.position.z }
+        : null,
+    }
+  },
+  (nextSphere) => {
+    if (!nextSphere) return
+    editSphere.nameSuffix = nextSphere.nameSuffix
+    editSphere.nameVisible = nextSphere.nameVisible
+    editSphere.valueVisible = nextSphere.valueVisible
+    editSphere.userLocked = nextSphere.userLocked
+    if (!focusedCoord['sphere.radius']) editSphere.radius = toFixed2(nextSphere.radius)
+    if (nextSphere.centerPoint) {
+      if (!focusedCoord['sphere.centerPoint.x'])
+        editSphere.centerPoint.x = toFixed2(nextSphere.centerPoint.x)
+      if (!focusedCoord['sphere.centerPoint.y'])
+        editSphere.centerPoint.y = toFixed2(nextSphere.centerPoint.y)
+      if (!focusedCoord['sphere.centerPoint.z'])
+        editSphere.centerPoint.z = toFixed2(nextSphere.centerPoint.z)
+    }
+    if (nextSphere.radiusPoint) {
+      if (!focusedCoord['sphere.radiusPoint.x'])
+        editSphere.radiusPoint.x = toFixed2(nextSphere.radiusPoint.x)
+      if (!focusedCoord['sphere.radiusPoint.y'])
+        editSphere.radiusPoint.y = toFixed2(nextSphere.radiusPoint.y)
+      if (!focusedCoord['sphere.radiusPoint.z'])
+        editSphere.radiusPoint.z = toFixed2(nextSphere.radiusPoint.z)
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   syncSplitPaneMode()
   updateCompactLineEditorMode()
@@ -2220,7 +2471,8 @@ onUnmounted(() => {
         selectedVectors.length > 0 ||
         selectedCircles.length > 0 ||
         selectedEditableFaces.length > 0 ||
-        selectedHexahedrons.length > 0
+        selectedHexahedrons.length > 0 ||
+        selectedSpheres.length > 0
       "
     >
       双击标签以编辑几何元素~
@@ -2237,7 +2489,8 @@ onUnmounted(() => {
             selectedCircles.length === 0 &&
             selectedEditableFaces.length === 0 &&
             selectedHexahedrons.length === 0 &&
-            selectedRegularPolygons.length === 0
+            selectedRegularPolygons.length === 0 &&
+            selectedSpheres.length === 0
           "
         >
           无
@@ -2370,14 +2623,22 @@ onUnmounted(() => {
           <div v-else>
             <div class="point-summary-line">
               点{{ p!.name ?? '' }}
-              <span v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)" class="lock-badge">🔒</span>
+              <span
+                v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)"
+                class="lock-badge"
+                >🔒</span
+              >
               <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                 >交点约束</span
               >
               <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
                 getSolidConstraintBadge(p!.cubeId)
               }}</span>
-              <span v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'" class="constraint-badge">正多边形约束</span>
+              <span
+                v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'"
+                class="constraint-badge"
+                >正多边形约束</span
+              >
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
             </div>
             <div>
@@ -2701,7 +2962,9 @@ onUnmounted(() => {
             <div>
               线段{{ l!.name ?? '' }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
-              <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{ getLineConstraintBadge(l!) }}</span>
+              <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{
+                getLineConstraintBadge(l!)
+              }}</span>
             </div>
             <div>
               长度：{{ l!.getLength().toFixed(2) }}
@@ -3409,13 +3672,7 @@ onUnmounted(() => {
             <div class="name-row length-row">
               <label>长度</label>
               <div class="coord-input compact-length-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeVectorLength('down')"
-                >
-                  -
-                </button>
+                <button type="button" class="step-btn" @click="nudgeVectorLength('down')">-</button>
                 <input
                   type="number"
                   :ref="(el) => setCoordInputRef('vector.length', el)"
@@ -3426,13 +3683,7 @@ onUnmounted(() => {
                   step="0.5"
                   min="0"
                 />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeVectorLength('up')"
-                >
-                  +
-                </button>
+                <button type="button" class="step-btn" @click="nudgeVectorLength('up')">+</button>
               </div>
             </div>
             <div
@@ -3688,7 +3939,8 @@ onUnmounted(() => {
             </div>
             <div>
               向量（{{ v!.getDirectionVector().x.toFixed(2) }},
-              {{ v!.getDirectionVector().y.toFixed(2) }}, {{ v!.getDirectionVector().z.toFixed(2) }}）
+              {{ v!.getDirectionVector().y.toFixed(2) }},
+              {{ v!.getDirectionVector().z.toFixed(2) }}）
             </div>
           </div>
         </div>
@@ -3733,7 +3985,9 @@ onUnmounted(() => {
               </label>
             </div>
             <template v-if="c!.isNormalCircle()">
-              <div class="normal-circle-direction-row" style="grid-column: 1 / -1">法向量：{{ getDirectionLabel(c!) }}</div>
+              <div class="normal-circle-direction-row" style="grid-column: 1 / -1">
+                法向量：{{ getDirectionLabel(c!) }}
+              </div>
               <div class="normal-circle-info-row">
                 <span class="normal-circle-label">半径</span>
                 <div class="coord-input">
@@ -3765,7 +4019,23 @@ onUnmounted(() => {
                   </button>
                 </div>
               </div>
-              <div class="face-metric-row">周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(getNormalCircleRadius(c!)) : getNormalCircleCircumference(c!).toFixed(2) }}　面积：{{ getCirclePiMode(c!.id) ? formatPiArea(getNormalCircleRadius(c!)) : getNormalCircleArea(c!).toFixed(2) }}<label class="pi-mode-toggle"><input type="checkbox" :checked="getCirclePiMode(c!.id)" @change="toggleCirclePiMode(c!.id)" />π模式</label></div>
+              <div class="face-metric-row">
+                周长：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiCircumference(getNormalCircleRadius(c!))
+                    : getNormalCircleCircumference(c!).toFixed(2)
+                }}　面积：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiArea(getNormalCircleRadius(c!))
+                    : getNormalCircleArea(c!).toFixed(2)
+                }}<label class="pi-mode-toggle"
+                  ><input
+                    type="checkbox"
+                    :checked="getCirclePiMode(c!.id)"
+                    @change="toggleCirclePiMode(c!.id)"
+                  />π模式</label
+                >
+              </div>
               <div class="line-editor-grid normal-circle-center-grid">
                 <div class="line-editor-head"></div>
                 <div class="line-editor-head">
@@ -3868,335 +4138,349 @@ onUnmounted(() => {
               </div>
             </template>
             <template v-else>
-            <div class="normal-circle-info-row">
-              <span class="normal-circle-label">半径</span>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeThreePointCircleRadius('down')"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.threePointRadius', el)"
-                  v-model="editCircle.threePointRadius"
-                  @input="applyThreePointCircleRadius"
-                  @focus="focusedCoord['circle.threePointRadius'] = true"
-                  @blur="focusedCoord['circle.threePointRadius'] = false"
-                  min="0.01"
-                  step="0.1"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeThreePointCircleRadius('up')"
-                >
-                  +
-                </button>
+              <div class="normal-circle-info-row">
+                <span class="normal-circle-label">半径</span>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeThreePointCircleRadius('down')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.threePointRadius', el)"
+                    v-model="editCircle.threePointRadius"
+                    @input="applyThreePointCircleRadius"
+                    @focus="focusedCoord['circle.threePointRadius'] = true"
+                    @blur="focusedCoord['circle.threePointRadius'] = false"
+                    min="0.01"
+                    step="0.1"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeThreePointCircleRadius('up')"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-            </div>
-            <div class="face-metric-row">周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(c!.getRadius()) : c!.getCircumference().toFixed(2) }}　面积：{{ getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2) }}<label class="pi-mode-toggle"><input type="checkbox" :checked="getCirclePiMode(c!.id)" @change="toggleCirclePiMode(c!.id)" />π模式</label></div>
-            <div class="line-editor-grid circle-editor-grid line-editor-grid--compact">
-              <div class="line-editor-head"></div>
-              <div class="line-editor-head">
-                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ c!.p1.name ?? 'A' }}(x,y,z)
-                </span>
-                <span v-else class="line-editor-title-short">点{{ c!.p1.name ?? 'A' }}</span>
-                <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
+              <div class="face-metric-row">
+                周长：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiCircumference(c!.getRadius())
+                    : c!.getCircumference().toFixed(2)
+                }}　面积：{{
+                  getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
+                }}<label class="pi-mode-toggle"
+                  ><input
+                    type="checkbox"
+                    :checked="getCirclePiMode(c!.id)"
+                    @change="toggleCirclePiMode(c!.id)"
+                  />π模式</label
+                >
               </div>
-              <div class="line-editor-head">
-                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ c!.p2.name ?? 'B' }}(x,y,z)
-                </span>
-                <span v-else class="line-editor-title-short">点{{ c!.p2.name ?? 'B' }}</span>
-                <span v-if="isPointCoordinateLocked(c!.p2)" class="lock-badge">🔒</span>
+              <div class="line-editor-grid circle-editor-grid line-editor-grid--compact">
+                <div class="line-editor-head"></div>
+                <div class="line-editor-head">
+                  <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                    点{{ c!.p1.name ?? 'A' }}(x,y,z)
+                  </span>
+                  <span v-else class="line-editor-title-short">点{{ c!.p1.name ?? 'A' }}</span>
+                  <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
+                </div>
+                <div class="line-editor-head">
+                  <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                    点{{ c!.p2.name ?? 'B' }}(x,y,z)
+                  </span>
+                  <span v-else class="line-editor-title-short">点{{ c!.p2.name ?? 'B' }}</span>
+                  <span v-if="isPointCoordinateLocked(c!.p2)" class="lock-badge">🔒</span>
+                </div>
+                <div class="line-editor-head">
+                  <span v-if="!isCompactLineEditor" class="line-editor-title-full">
+                    点{{ c!.p3.name ?? 'C' }}(x,y,z)
+                  </span>
+                  <span v-else class="line-editor-title-short">点{{ c!.p3.name ?? 'C' }}</span>
+                  <span v-if="isPointCoordinateLocked(c!.p3)" class="lock-badge">🔒</span>
+                </div>
+                <div class="line-axis-label">x</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'x', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.x', el)"
+                    v-model="editCircle.p1.x"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'x')"
+                    @blur="handleCirclePointCoordBlur('p1', 'x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'x', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'x', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p2.x', el)"
+                    v-model="editCircle.p2.x"
+                    @input="applyCirclePointCoord('p2')"
+                    @focus="handleCirclePointCoordFocus('p2', 'x')"
+                    @blur="handleCirclePointCoordBlur('p2', 'x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'x', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'x', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p3.x', el)"
+                    v-model="editCircle.p3.x"
+                    @input="applyCirclePointCoord('p3')"
+                    @focus="handleCirclePointCoordFocus('p3', 'x')"
+                    @blur="handleCirclePointCoordBlur('p3', 'x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'x', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="line-axis-label">y</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'y', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.y', el)"
+                    v-model="editCircle.p1.y"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'y')"
+                    @blur="handleCirclePointCoordBlur('p1', 'y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'y', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'y', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p2.y', el)"
+                    v-model="editCircle.p2.y"
+                    @input="applyCirclePointCoord('p2')"
+                    @focus="handleCirclePointCoordFocus('p2', 'y')"
+                    @blur="handleCirclePointCoordBlur('p2', 'y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'y', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'y', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p3.y', el)"
+                    v-model="editCircle.p3.y"
+                    @input="applyCirclePointCoord('p3')"
+                    @focus="handleCirclePointCoordFocus('p3', 'y')"
+                    @blur="handleCirclePointCoordBlur('p3', 'y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'y', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="line-axis-label">z</div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'z', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p1.z', el)"
+                    v-model="editCircle.p1.z"
+                    @input="applyCirclePointCoord('p1')"
+                    @focus="handleCirclePointCoordFocus('p1', 'z')"
+                    @blur="handleCirclePointCoordBlur('p1', 'z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p1', 'z', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'z', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p2.z', el)"
+                    v-model="editCircle.p2.z"
+                    @input="applyCirclePointCoord('p2')"
+                    @focus="handleCirclePointCoordFocus('p2', 'z')"
+                    @blur="handleCirclePointCoordBlur('p2', 'z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p2', 'z', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p2)"
+                  >
+                    +
+                  </button>
+                </div>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'z', 'down')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('circle.p3.z', el)"
+                    v-model="editCircle.p3.z"
+                    @input="applyCirclePointCoord('p3')"
+                    @focus="handleCirclePointCoordFocus('p3', 'z')"
+                    @blur="handleCirclePointCoordBlur('p3', 'z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @pointerdown.prevent
+                    @click="nudgeCirclePointCoord('p3', 'z', 'up')"
+                    :disabled="isPointCoordinateLocked(c!.p3)"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-              <div class="line-editor-head">
-                <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ c!.p3.name ?? 'C' }}(x,y,z)
-                </span>
-                <span v-else class="line-editor-title-short">点{{ c!.p3.name ?? 'C' }}</span>
-                <span v-if="isPointCoordinateLocked(c!.p3)" class="lock-badge">🔒</span>
-              </div>
-              <div class="line-axis-label">x</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p1.x', el)"
-                  v-model="editCircle.p1.x"
-                  @input="applyCirclePointCoord('p1')"
-                  @focus="handleCirclePointCoordFocus('p1', 'x')"
-                  @blur="handleCirclePointCoordBlur('p1', 'x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p2.x', el)"
-                  v-model="editCircle.p2.x"
-                  @input="applyCirclePointCoord('p2')"
-                  @focus="handleCirclePointCoordFocus('p2', 'x')"
-                  @blur="handleCirclePointCoordBlur('p2', 'x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p3.x', el)"
-                  v-model="editCircle.p3.x"
-                  @input="applyCirclePointCoord('p3')"
-                  @focus="handleCirclePointCoordFocus('p3', 'x')"
-                  @blur="handleCirclePointCoordBlur('p3', 'x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="line-axis-label">y</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p1.y', el)"
-                  v-model="editCircle.p1.y"
-                  @input="applyCirclePointCoord('p1')"
-                  @focus="handleCirclePointCoordFocus('p1', 'y')"
-                  @blur="handleCirclePointCoordBlur('p1', 'y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p2.y', el)"
-                  v-model="editCircle.p2.y"
-                  @input="applyCirclePointCoord('p2')"
-                  @focus="handleCirclePointCoordFocus('p2', 'y')"
-                  @blur="handleCirclePointCoordBlur('p2', 'y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p3.y', el)"
-                  v-model="editCircle.p3.y"
-                  @input="applyCirclePointCoord('p3')"
-                  @focus="handleCirclePointCoordFocus('p3', 'y')"
-                  @blur="handleCirclePointCoordBlur('p3', 'y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="line-axis-label">z</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p1.z', el)"
-                  v-model="editCircle.p1.z"
-                  @input="applyCirclePointCoord('p1')"
-                  @focus="handleCirclePointCoordFocus('p1', 'z')"
-                  @blur="handleCirclePointCoordBlur('p1', 'z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p1', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p1)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p2.z', el)"
-                  v-model="editCircle.p2.z"
-                  @input="applyCirclePointCoord('p2')"
-                  @focus="handleCirclePointCoordFocus('p2', 'z')"
-                  @blur="handleCirclePointCoordBlur('p2', 'z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p2', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p2)"
-                >
-                  +
-                </button>
-              </div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('circle.p3.z', el)"
-                  v-model="editCircle.p3.z"
-                  @input="applyCirclePointCoord('p3')"
-                  @focus="handleCirclePointCoordFocus('p3', 'z')"
-                  @blur="handleCirclePointCoordBlur('p3', 'z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @pointerdown.prevent
-                  @click="nudgeCirclePointCoord('p3', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(c!.p3)"
-                >
-                  +
-                </button>
-              </div>
-            </div>
             </template>
           </div>
           <div v-else>
@@ -4206,8 +4490,20 @@ onUnmounted(() => {
             </div>
             <template v-if="c!.isNormalCircle()">
               <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
-              <div>周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(getNormalCircleRadius(c!)) : getNormalCircleCircumference(c!).toFixed(2) }}</div>
-              <div>面积：{{ getCirclePiMode(c!.id) ? formatPiArea(getNormalCircleRadius(c!)) : getNormalCircleArea(c!).toFixed(2) }}</div>
+              <div>
+                周长：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiCircumference(getNormalCircleRadius(c!))
+                    : getNormalCircleCircumference(c!).toFixed(2)
+                }}
+              </div>
+              <div>
+                面积：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiArea(getNormalCircleRadius(c!))
+                    : getNormalCircleArea(c!).toFixed(2)
+                }}
+              </div>
               <div>
                 圆心{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
                 {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
@@ -4215,9 +4511,19 @@ onUnmounted(() => {
               <div>法向量：{{ getDirectionLabel(c!) }}</div>
             </template>
             <template v-else>
-            <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
-            <div>周长：{{ getCirclePiMode(c!.id) ? formatPiCircumference(c!.getRadius()) : c!.getCircumference().toFixed(2) }}</div>
-            <div>面积：{{ getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2) }}</div>
+              <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
+              <div>
+                周长：{{
+                  getCirclePiMode(c!.id)
+                    ? formatPiCircumference(c!.getRadius())
+                    : c!.getCircumference().toFixed(2)
+                }}
+              </div>
+              <div>
+                面积：{{
+                  getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
+                }}
+              </div>
               <div>
                 点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
                 {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
@@ -4534,7 +4840,11 @@ onUnmounted(() => {
           >
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editRegularPolygon.nameSuffix" @input="applyRegularPolygonMeta" />
+              <input
+                type="text"
+                v-model="editRegularPolygon.nameSuffix"
+                @input="applyRegularPolygonMeta"
+              />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -4602,10 +4912,14 @@ onUnmounted(() => {
             >
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
-                {{ props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0]?.name ?? 'A' }}(x,y,z)
+                {{
+                  props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0]?.name ?? 'A'
+                }}(x,y,z)
               </div>
               <div class="line-editor-head">
-                {{ props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1]?.name ?? 'B' }}(x,y,z)
+                {{
+                  props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1]?.name ?? 'B'
+                }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
               <div class="coord-input">
@@ -4613,7 +4927,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4625,13 +4943,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p1', 'x')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p1', 'x')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4641,7 +4967,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4653,13 +4983,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p2', 'x')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p2', 'x')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4670,7 +5008,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4682,13 +5024,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p1', 'y')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p1', 'y')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4698,7 +5048,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4710,13 +5064,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p2', 'y')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p2', 'y')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4727,7 +5089,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4739,13 +5105,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p1', 'z')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p1', 'z')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p1', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4755,7 +5129,11 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   -
                 </button>
@@ -4767,13 +5145,21 @@ onUnmounted(() => {
                   @focus="handleRegularPolygonOwnerCoordFocus('p2', 'z')"
                   @blur="handleRegularPolygonOwnerCoordBlur('p2', 'z')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeRegularPolygonOwnerCoord('p2', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1])"
+                  :disabled="
+                    isPointCoordinateLocked(
+                      props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1],
+                    )
+                  "
                 >
                   +
                 </button>
@@ -4783,21 +5169,283 @@ onUnmounted(() => {
           <div v-else>
             <div>
               {{ rp.name }}
-              <span
-                v-if="props.scene.faces.get(rp.faceId)?.userLocked"
-                class="lock-badge"
-                >🔒</span
-              >
+              <span v-if="props.scene.faces.get(rp.faceId)?.userLocked" class="lock-badge">🔒</span>
             </div>
             <div>边长：{{ rp.getEdgeLength().toFixed(2) }}</div>
             <div>面积：{{ rp.getArea().toFixed(2) }}</div>
             <div>
               原始点：{{
-                props.editor.getRegularPolygonOwnerPoints(rp.constraintId)
+                props.editor
+                  .getRegularPolygonOwnerPoints(rp.constraintId)
                   .map((point) => point.name)
                   .join(' - ')
               }}
             </div>
+          </div>
+        </div>
+
+        <div
+          v-for="s in selectedSpheres"
+          :key="s!.id"
+          class="selectedCircle-info"
+          @dblclick="startEditSphere(s!.id)"
+        >
+          <div v-if="editing?.type === 'sphere' && editing?.id === s!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editSphere.nameSuffix" @input="applyEditSphereMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editSphere.nameVisible"
+                  @change="applyEditSphereMeta"
+                />
+                {{ editSphere.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editSphere.valueVisible"
+                  @change="applyEditSphereMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editSphere.userLocked"
+                  @change="applyEditSphereMeta"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              面积：{{ s!.getArea().toFixed(2) }}　体积：{{ s!.getVolume().toFixed(2) }}
+            </div>
+            <div class="length-row">
+              <label>半径：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSphereRadius('down')"
+                  :disabled="editSphere.userLocked"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('sphere.radius', el)"
+                  v-model="editSphere.radius"
+                  @input="applyEditSphereRadius"
+                  @focus="handleSphereRadiusFocus"
+                  @blur="handleSphereRadiusBlur"
+                  :disabled="editSphere.userLocked"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSphereRadius('up')"
+                  :disabled="editSphere.userLocked"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                球心{{ props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A' }}(x,y,z)
+              </div>
+              <div class="line-editor-head">
+                半径{{ props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.centerPoint.x', el)"
+                  v-model="editSphere.centerPoint.x"
+                  @input="applySpherePointCoord('centerPoint')"
+                  @focus="handleSpherePointCoordFocus('centerPoint', 'x')"
+                  @blur="handleSpherePointCoordBlur('centerPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.x', el)"
+                  v-model="editSphere.radiusPoint.x"
+                  @input="applySpherePointCoord('radiusPoint')"
+                  @focus="handleSpherePointCoordFocus('radiusPoint', 'x')"
+                  @blur="handleSpherePointCoordBlur('radiusPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.centerPoint.y', el)"
+                  v-model="editSphere.centerPoint.y"
+                  @input="applySpherePointCoord('centerPoint')"
+                  @focus="handleSpherePointCoordFocus('centerPoint', 'y')"
+                  @blur="handleSpherePointCoordBlur('centerPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.y', el)"
+                  v-model="editSphere.radiusPoint.y"
+                  @input="applySpherePointCoord('radiusPoint')"
+                  @focus="handleSpherePointCoordFocus('radiusPoint', 'y')"
+                  @blur="handleSpherePointCoordBlur('radiusPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.centerPoint.z', el)"
+                  v-model="editSphere.centerPoint.z"
+                  @input="applySpherePointCoord('centerPoint')"
+                  @focus="handleSpherePointCoordFocus('centerPoint', 'z')"
+                  @blur="handleSpherePointCoordBlur('centerPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('centerPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.z', el)"
+                  v-model="editSphere.radiusPoint.z"
+                  @input="applySpherePointCoord('radiusPoint')"
+                  @focus="handleSpherePointCoordFocus('radiusPoint', 'z')"
+                  @blur="handleSpherePointCoordBlur('radiusPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeSpherePointCoord('radiusPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              {{ s!.name ?? '' }}
+              <span v-if="props.editor.isSphereGeometryLocked(s!)" class="lock-badge">🔒</span>
+            </div>
+            <div>半径：{{ props.editor.getSphereRadius(s!.id).toFixed(2) }}</div>
+            <div>面积：{{ s!.getArea().toFixed(2) }}</div>
+            <div>体积：{{ s!.getVolume().toFixed(2) }}</div>
           </div>
         </div>
 
@@ -4877,7 +5525,9 @@ onUnmounted(() => {
           <div v-else>
             <div>
               {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
-              <span v-if="face!.isRegularPolygon" class="constraint-badge">正{{ face!.regularPolygonVertexCount }}边形</span>
+              <span v-if="face!.isRegularPolygon" class="constraint-badge"
+                >正{{ face!.regularPolygonVertexCount }}边形</span
+              >
               <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
               <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                 getSolidConstraintBadge(face!.cubeId)
@@ -4930,10 +5580,7 @@ onUnmounted(() => {
             width="1em"
             height="1em"
           >
-            <path
-              class="toggle-all-icon-chevron"
-              d="M4.5 6l3.5 4 3.5-4z"
-            />
+            <path class="toggle-all-icon-chevron" d="M4.5 6l3.5 4 3.5-4z" />
           </svg>
         </button>
       </div>
@@ -4962,14 +5609,21 @@ onUnmounted(() => {
             </span>
             <span class="content-group-label">{{ contentGroupLabels.point }}</span>
             <span v-if="hasHiddenConstrainedPoints" class="hidden-hint-wrapper">
-              <button type="button" class="hidden-hint-trigger" :class="{ active: showHiddenPointHint }" :ref="(el: any) => hiddenPointHintTriggerRef = el" @mouseenter="showHiddenPointHint = true" @mouseleave="showHiddenPointHint = false" @click.stop="showHiddenPointHint = !showHiddenPointHint">?</button>
+              <button
+                type="button"
+                class="hidden-hint-trigger"
+                :class="{ active: showHiddenPointHint }"
+                :ref="(el: any) => (hiddenPointHintTriggerRef = el)"
+                @mouseenter="showHiddenPointHint = true"
+                @mouseleave="showHiddenPointHint = false"
+                @click.stop="showHiddenPointHint = !showHiddenPointHint"
+              >
+                ?
+              </button>
             </span>
             <span class="content-group-count">{{ pointsInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.point"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.point" class="content-group-body">
             <div
               v-for="p in pointsInScene"
               :key="p!.id"
@@ -4982,14 +5636,22 @@ onUnmounted(() => {
                   点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
                   {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
                 </span>
-                <span v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)" class="lock-badge">🔒</span>
+                <span
+                  v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)"
+                  class="lock-badge"
+                  >🔒</span
+                >
                 <span v-if="hasPointIntersectionConstraint(p!)" class="constraint-badge"
                   >交点约束</span
                 >
                 <span v-if="hasCubeConstraint(p!)" class="constraint-badge">{{
                   getSolidConstraintBadge(p!.cubeId)
                 }}</span>
-                <span v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'" class="constraint-badge">正多边形约束</span>
+                <span
+                  v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'"
+                  class="constraint-badge"
+                  >正多边形约束</span
+                >
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
               </div>
             </div>
@@ -5007,14 +5669,21 @@ onUnmounted(() => {
             </span>
             <span class="content-group-label">{{ contentGroupLabels.line }}</span>
             <span v-if="hasHiddenConstrainedLines" class="hidden-hint-wrapper">
-              <button type="button" class="hidden-hint-trigger" :class="{ active: showHiddenLineHint }" :ref="(el: any) => hiddenLineHintTriggerRef = el" @mouseenter="showHiddenLineHint = true" @mouseleave="showHiddenLineHint = false" @click.stop="showHiddenLineHint = !showHiddenLineHint">?</button>
+              <button
+                type="button"
+                class="hidden-hint-trigger"
+                :class="{ active: showHiddenLineHint }"
+                :ref="(el: any) => (hiddenLineHintTriggerRef = el)"
+                @mouseenter="showHiddenLineHint = true"
+                @mouseleave="showHiddenLineHint = false"
+                @click.stop="showHiddenLineHint = !showHiddenLineHint"
+              >
+                ?
+              </button>
             </span>
             <span class="content-group-count">{{ linesInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.line"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.line" class="content-group-body">
             <div
               v-for="l in linesInScene"
               :key="l!.id"
@@ -5052,10 +5721,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.straightLine }}</span>
             <span class="content-group-count">{{ straightLinesInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.straightLine"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.straightLine" class="content-group-body">
             <div
               v-for="sl in straightLinesInScene"
               :key="sl!.id"
@@ -5091,10 +5757,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.ray }}</span>
             <span class="content-group-count">{{ raysInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.ray"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.ray" class="content-group-body">
             <div
               v-for="r in raysInScene"
               :key="r!.id"
@@ -5130,10 +5793,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.vector }}</span>
             <span class="content-group-count">{{ vectorsInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.vector"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.vector" class="content-group-body">
             <div
               v-for="vec in vectorsInScene"
               :key="vec!.id"
@@ -5169,10 +5829,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.circle }}</span>
             <span class="content-group-count">{{ circlesInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.circle"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.circle" class="content-group-body">
             <div
               v-for="c in circlesInScene"
               :key="c!.id"
@@ -5220,10 +5877,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.hexahedron }}</span>
             <span class="content-group-count">{{ hexahedronsInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.hexahedron"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.hexahedron" class="content-group-body">
             <div
               v-for="cube in hexahedronsInScene"
               :key="cube.cubeId"
@@ -5251,6 +5905,43 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="spheresInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.sphere"
+            @click="toggleContentGroup('sphere')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.sphere ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.sphere }}</span>
+            <span class="content-group-count">{{ spheresInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.sphere" class="content-group-body">
+            <div
+              v-for="sphere in spheresInScene"
+              :key="sphere.id"
+              class="face-info selectable-geo"
+              :class="{ 'is-selected': selectedSphereIds.includes(sphere.id) }"
+              @click="selectSphereFromContent(sphere.id)"
+            >
+              <div>
+                {{ sphere.name ?? '' }}
+                <span v-if="props.editor.isSphereGeometryLocked(sphere)" class="lock-badge"
+                  >🔒</span
+                >
+              </div>
+              <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
+              <div>体积：{{ sphere.getVolume().toFixed(2) }}</div>
+              <div>
+                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? '' }} 　半径点：{{
+                  props.editor.getSphereRadiusPoint(sphere.id)?.name ?? ''
+                }}
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="facesInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -5264,10 +5955,7 @@ onUnmounted(() => {
             <span class="content-group-label">{{ contentGroupLabels.face }}</span>
             <span class="content-group-count">{{ facesInScene.length }}</span>
           </button>
-          <div
-            v-show="!collapsedContentGroups.face"
-            class="content-group-body"
-          >
+          <div v-show="!collapsedContentGroups.face" class="content-group-body">
             <div
               v-for="face in facesInScene"
               :key="face!.id"
@@ -5277,7 +5965,9 @@ onUnmounted(() => {
             >
               <div>
                 {{ face!.isRegularPolygon ? '正多边形' : '面' }}{{ face!.name ?? '' }}
-                <span v-if="face!.isRegularPolygon" class="constraint-badge">正{{ face!.regularPolygonVertexCount }}边形</span>
+                <span v-if="face!.isRegularPolygon" class="constraint-badge"
+                  >正{{ face!.regularPolygonVertexCount }}边形</span
+                >
                 <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
                 <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                   getSolidConstraintBadge(face!.cubeId)
@@ -5308,9 +5998,9 @@ onUnmounted(() => {
 
 <style scoped>
 .sidebar {
-  width: clamp(200px, 21vw, 280px);
-  min-width: 200px;
-  max-width: 280px;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   background: #1a1a1a;
   color: #ddd;
   padding: 12px;
@@ -5597,7 +6287,10 @@ hr {
   padding: 0;
   cursor: help;
   user-select: none;
-  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 .hidden-hint-trigger:hover {
   border-color: rgba(255, 255, 255, 0.9);
@@ -5908,10 +6601,15 @@ hr {
 }
 @media (max-width: 1024px) and (orientation: landscape) {
   .sidebar {
-    width: clamp(156px, 30vw, 216px);
-    min-width: 156px;
     padding: 8px;
+    padding-top: 4px;
     font-size: 12px;
+  }
+
+  .sidebar > p {
+    margin-top: 0;
+    margin-bottom: 2px;
+    font-size: 14px;
   }
 
   .selectedPoint-info,
@@ -5975,13 +6673,22 @@ hr {
 
 @media (max-width: 820px) and (orientation: landscape) {
   .sidebar {
-    width: clamp(132px, 28vw, 172px);
-    min-width: 132px;
-    max-width: 172px;
     display: block;
     padding: 6px;
+    padding-top: 2px;
     font-size: 11px;
     overflow-y: auto;
+  }
+
+  .sidebar > p {
+    margin-top: 0;
+    margin-bottom: 2px;
+    font-size: 13px;
+  }
+
+  .section-divider {
+    margin-top: 2px;
+    margin-bottom: 2px;
   }
 
   .sidebar > p,
@@ -5989,6 +6696,10 @@ hr {
   .section-divider,
   .hint {
     margin-bottom: 4px;
+  }
+
+  .hint {
+    font-size: 9px;
   }
 
   .selectedPoint-info,
@@ -6247,6 +6958,26 @@ hr {
 }
 
 @media (hover: none) and (pointer: coarse) {
+  .sidebar {
+    padding-top: 4px;
+  }
+
+  .sidebar > p {
+    margin-top: 0;
+    margin-bottom: 2px;
+  }
+
+  .section-divider {
+    margin-top: 2px;
+    margin-bottom: 2px;
+  }
+
+  .hint {
+    font-size: 10px;
+    margin-top: -2px;
+    margin-bottom: 2px;
+  }
+
   .selectedPoint-info,
   .selectedLine-info,
   .selectedRay-info,

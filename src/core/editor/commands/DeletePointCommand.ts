@@ -5,6 +5,7 @@ import { Line3 } from '../../geometry/Line3'
 import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { Circle3 } from '../../geometry/Circle3'
+import { Sphere3 } from '../../geometry/Sphere3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import type { SceneConstraint } from '../../scene/Scene'
@@ -37,6 +38,7 @@ export class DeletePointCommand implements Command {
         constraint: IntersectionPointConstraint
       }>
     }> = [],
+    private relatedSpheres: Sphere3[] = [],
   ) {
     this.centerPoints = relatedCircles
       .map((circle) =>
@@ -67,6 +69,13 @@ export class DeletePointCommand implements Command {
     this.relatedCircles.forEach((circle) => {
       this.scene.circles.delete(circle.id)
       this.scene.selection.circles.delete(circle.id)
+    })
+    this.relatedSpheres.forEach((sphere) => {
+      this.scene.removeSphere(sphere.id)
+      sphere.centerPoint.sphereId = null
+      sphere.centerPoint.sphereRole = null
+      sphere.radiusPoint.sphereId = null
+      sphere.radiusPoint.sphereRole = null
     })
     this.centerPoints.forEach((point) => {
       this.scene.points.delete(point.id)
@@ -109,6 +118,13 @@ export class DeletePointCommand implements Command {
     this.relatedRays.forEach((ray) => this.scene.addRay(ray))
     this.relatedVectors.forEach((vector) => this.scene.addVector(vector))
     this.relatedCircles.forEach((circle) => this.scene.addCircle(circle))
+    this.relatedSpheres.forEach((sphere) => {
+      this.scene.addSphere(sphere)
+      sphere.centerPoint.sphereId = sphere.id
+      sphere.centerPoint.sphereRole = 'center'
+      sphere.radiusPoint.sphereId = sphere.id
+      sphere.radiusPoint.sphereRole = 'radius'
+    })
     this.centerPoints.forEach((point) => this.scene.addPoint(point))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))
     this.dependentCubes.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {

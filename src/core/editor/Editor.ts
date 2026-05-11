@@ -8,6 +8,7 @@ import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3, type DirectionType } from '../geometry/Circle3'
+import { Sphere3 } from '../geometry/Sphere3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
@@ -36,6 +37,10 @@ import { DeleteVectorCommand } from './commands/DeleteVectorCommand'
 import { DeleteStraightLineCommand } from './commands/DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
 import { DeleteCircleCommand } from './commands/DeleteCircleCommand'
+import { DeleteSphereCommand } from './commands/DeleteSphereCommand'
+import { UpdateSphereCommand } from './commands/UpdateSphereCommand'
+import { UpdateCubeCommand } from './commands/UpdateCubeCommand'
+import { UpdateRegularPolygonCommand } from './commands/UpdateRegularPolygonCommand'
 import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
 import { ClearSceneCommand } from './commands/ClearSceneCommand'
 import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
@@ -43,6 +48,7 @@ import { MergePointsCommand } from './commands/MergePointsCommand'
 import { MergeCubePointsCommand } from './commands/MergeCubePointsCommand'
 import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
 import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
+import { AddSphereCommand } from './commands/AddSphereCommand'
 import { AddRegularPolygonCommand } from './commands/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -70,6 +76,7 @@ export enum EditorMode {
   CreateRegularPolygon,
   CreateHexahedron,
   CreateTetrahedron,
+  CreateSphereTwoPoints,
 }
 
 export type FacePreviewData = {
@@ -370,6 +377,11 @@ export class Editor {
       }
     }
 
+    for (const sphere of this.scene.spheres.values()) {
+      if (!sphere.userLocked) continue
+      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) return true
+    }
+
     return false
   }
 
@@ -579,6 +591,48 @@ export class Editor {
     return constraint.name.replace(new RegExp(`^${getSolidNamePrefix(constraint.solidType)}`), '')
   }
 
+  updateCube(
+    cubeId: string,
+    patch: {
+      name?: string
+      valueVisible?: boolean
+      edgeLengthLocked?: boolean
+      lockedEdgeLength?: number | null
+    },
+  ) {
+    const constraint = this.getCubeConstraint(cubeId)
+    if (!constraint) return
+    const nextEdgeLengthLocked = patch.edgeLengthLocked ?? constraint.edgeLengthLocked
+    let nextLockedEdgeLength = patch.lockedEdgeLength ?? constraint.lockedEdgeLength
+    if (patch.edgeLengthLocked === true && !constraint.edgeLengthLocked) {
+      const p1 = this.scene.points.get(constraint.ownerPointIds[0])
+      const p2 = this.scene.points.get(constraint.ownerPointIds[1])
+      if (p1 && p2) {
+        nextLockedEdgeLength = Math.hypot(
+          p2.position.x - p1.position.x,
+          p2.position.y - p1.position.y,
+          p2.position.z - p1.position.z,
+        )
+      }
+    } else if (patch.edgeLengthLocked === false) {
+      nextLockedEdgeLength = null
+    }
+    const before = {
+      name: constraint.name,
+      valueVisible: constraint.valueVisible,
+      edgeLengthLocked: constraint.edgeLengthLocked,
+      lockedEdgeLength: constraint.lockedEdgeLength,
+    }
+    const after = {
+      name: patch.name ?? constraint.name,
+      valueVisible: patch.valueVisible ?? constraint.valueVisible,
+      edgeLengthLocked: nextEdgeLengthLocked,
+      lockedEdgeLength: nextLockedEdgeLength,
+    }
+    this.executeCommand(new UpdateCubeCommand(constraint, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
   updateCubeName(cubeId: string, suffix: string) {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return
@@ -672,6 +726,164 @@ export class Editor {
     return this.getRegularPolygonConstraint(point.regularPolygonId)
   }
 
+  getSphere(sphereId: string): Sphere3 | null {
+    return this.scene.spheres.get(sphereId) ?? null
+  }
+
+  getSpheres(): Sphere3[] {
+    return [...this.scene.spheres.values()]
+  }
+
+  getSphereNameSuffix(sphereId: string): string {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return ''
+    return sphere.name.replace(/^两点球/, '')
+  }
+
+  updateSphereName(sphereId: string, suffix: string) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    sphere.name = `两点球${suffix.trim()}`
+    this.scene.markAllRenderDirty()
+  }
+
+  setSphereValueVisible(sphereId: string, visible: boolean) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere || sphere.valueVisible === visible) return
+    sphere.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setSphereNameVisible(sphereId: string, visible: boolean) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere || sphere.nameVisible === visible) return
+    sphere.nameVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setSphereLockState(sphereId: string, locked: boolean) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    sphere.userLocked = locked
+    sphere.centerPoint.userLocked = locked
+    sphere.radiusPoint.userLocked = locked
+  }
+
+  updateSphere(
+    sphereId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      userLocked?: boolean
+    },
+  ) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    const before = {
+      name: sphere.name,
+      nameVisible: sphere.nameVisible,
+      valueVisible: sphere.valueVisible,
+      labelOffsetX: sphere.labelOffsetX,
+      labelOffsetY: sphere.labelOffsetY,
+      visible: sphere.visible,
+      userLocked: sphere.userLocked,
+    }
+    const after = {
+      name: patch.name ?? sphere.name,
+      nameVisible: patch.nameVisible ?? sphere.nameVisible,
+      valueVisible: patch.valueVisible ?? sphere.valueVisible,
+      labelOffsetX: patch.labelOffsetX ?? sphere.labelOffsetX,
+      labelOffsetY: patch.labelOffsetY ?? sphere.labelOffsetY,
+      visible: patch.visible ?? sphere.visible,
+      userLocked: patch.userLocked ?? sphere.userLocked,
+    }
+    this.executeCommand(new UpdateSphereCommand(sphere, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
+  isSphereGeometryLocked(sphere: Sphere3): boolean {
+    return sphere.userLocked ||
+      (this.isPointCoordinateLocked(sphere.centerPoint) && this.isPointCoordinateLocked(sphere.radiusPoint))
+  }
+
+  getSphereRadius(sphereId: string): number {
+    const sphere = this.getSphere(sphereId)
+    return sphere?.getRadius() ?? 0
+  }
+
+  updateSphereRadius(sphereId: string, nextRadius: number) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    const currentRadius = sphere.getRadius()
+    if (currentRadius <= 1e-6) return
+    const normalizedRadius = Math.max(0.01, nextRadius)
+    const center = sphere.centerPoint.position
+    const radius = sphere.radiusPoint.position
+    const direction = new Vec3(
+      radius.x - center.x,
+      radius.y - center.y,
+      radius.z - center.z,
+    )
+    const directionLength = Math.hypot(direction.x, direction.y, direction.z)
+    if (directionLength <= 1e-8) return
+    const newPosition = new Vec3(
+      center.x + (direction.x / directionLength) * normalizedRadius,
+      center.y + (direction.y / directionLength) * normalizedRadius,
+      center.z + (direction.z / directionLength) * normalizedRadius,
+    )
+    this.setPointsPositions([{ id: sphere.radiusPoint.id, position: newPosition }])
+  }
+
+  deleteSphere(sphereId: string) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    this.executeCommand(new DeleteSphereCommand(this.scene, sphere))
+  }
+
+  tryCreateSphereTwoPoints(firstPoint: Point3, secondPoint: Point3) {
+    if (firstPoint.id === secondPoint.id) {
+      emitToast('请选择两个不同的点')
+      return
+    }
+    const exists = [...this.scene.spheres.values()].some(
+      (s) =>
+        (s.centerPoint.id === firstPoint.id && s.radiusPoint.id === secondPoint.id) ||
+        (s.centerPoint.id === secondPoint.id && s.radiusPoint.id === firstPoint.id),
+    )
+    if (exists) {
+      emitToast('这两个点已经创建了球体')
+      return
+    }
+    const sphereName = genNextAvailableName(
+      [...this.scene.spheres.values()].map((s) => s.name),
+      0,
+      (index) => `两点球${index + 1}`,
+    )
+    const sphere = new Sphere3(
+      genId('sph'),
+      sphereName,
+      firstPoint,
+      secondPoint,
+    )
+    this.executeCommand(new AddSphereCommand(this.scene, sphere))
+    this.scene.selection.clear()
+    this.scene.selection.selectSphere(sphere.id)
+  }
+
+  getSphereCenterPoint(sphereId: string): Point3 | undefined {
+    const sphere = this.getSphere(sphereId)
+    return sphere?.centerPoint
+  }
+
+  getSphereRadiusPoint(sphereId: string): Point3 | undefined {
+    const sphere = this.getSphere(sphereId)
+    return sphere?.radiusPoint
+  }
+
   getRegularPolygonConstraint(constraintId: string) {
     const constraint = this.scene.getRegularPolygonConstraint(constraintId)
     return constraint instanceof RegularPolygonConstraint ? constraint : null
@@ -681,6 +893,40 @@ export class Editor {
     const constraint = this.getRegularPolygonConstraint(constraintId)
     if (!constraint) return ''
     return constraint.name.replace(/^正多边形/, '')
+  }
+
+  updateRegularPolygon(
+    constraintId: string,
+    patch: {
+      name?: string
+      valueVisible?: boolean
+      edgeLengthLocked?: boolean
+      lockedEdgeLength?: number | null
+    },
+  ) {
+    const constraint = this.getRegularPolygonConstraint(constraintId)
+    if (!constraint) return
+    const nextEdgeLengthLocked = patch.edgeLengthLocked ?? constraint.edgeLengthLocked
+    let nextLockedEdgeLength = patch.lockedEdgeLength ?? constraint.lockedEdgeLength
+    if (patch.edgeLengthLocked === true && !constraint.edgeLengthLocked) {
+      nextLockedEdgeLength = constraint.getEdgeLength()
+    } else if (patch.edgeLengthLocked === false) {
+      nextLockedEdgeLength = null
+    }
+    const before = {
+      name: constraint.name,
+      valueVisible: constraint.valueVisible,
+      edgeLengthLocked: constraint.edgeLengthLocked,
+      lockedEdgeLength: constraint.lockedEdgeLength,
+    }
+    const after = {
+      name: patch.name ?? constraint.name,
+      valueVisible: patch.valueVisible ?? constraint.valueVisible,
+      edgeLengthLocked: nextEdgeLengthLocked,
+      lockedEdgeLength: nextLockedEdgeLength,
+    }
+    this.executeCommand(new UpdateRegularPolygonCommand(constraint, before, after))
+    this.scene.markAllRenderDirty()
   }
 
   updateRegularPolygonName(constraintId: string, suffix: string) {
@@ -1254,6 +1500,32 @@ export class Editor {
         )
         positionOverrides.set(layout.pointId, pos)
       })
+    })
+  }
+
+  private applySphereConstraintPositions(positionOverrides: Map<string, Vec3>) {
+    this.scene.spheres.forEach((sphere) => {
+      const centerOverride = positionOverrides.get(sphere.centerPoint.id)
+      if (!centerOverride) return
+      if (!this.scene.activeDraggedPointIds.has(sphere.centerPoint.id)) return
+      if (sphere.centerPoint.sphereRole !== 'center') return
+
+      const currentCenter = this.scene.points.get(sphere.centerPoint.id)?.position ?? sphere.centerPoint.position
+      const delta = new Vec3(
+        centerOverride.x - currentCenter.x,
+        centerOverride.y - currentCenter.y,
+        centerOverride.z - currentCenter.z,
+      )
+
+      const radiusPointOverride = positionOverrides.get(sphere.radiusPoint.id)
+      if (radiusPointOverride) return
+
+      const radiusPos = this.scene.points.get(sphere.radiusPoint.id)?.position ?? sphere.radiusPoint.position
+      positionOverrides.set(sphere.radiusPoint.id, new Vec3(
+        radiusPos.x + delta.x,
+        radiusPos.y + delta.y,
+        radiusPos.z + delta.z,
+      ))
     })
   }
 
@@ -1838,6 +2110,9 @@ export class Editor {
     const relatedCircles = [...this.scene.circles.values()].filter(
       (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
+    const relatedSpheres = [...this.scene.spheres.values()].filter(
+      (sphere) => sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId,
+    )
     const relatedFaces = [...this.scene.faces.values()].filter(
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
     )
@@ -1862,6 +2137,7 @@ export class Editor {
         pointConstraint,
         dependentIntersectionPoints,
         dependentCubes,
+        relatedSpheres,
       ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
@@ -1939,13 +2215,14 @@ export class Editor {
 
   clearAll() {
     const points = [...this.scene.points.values()].filter(
-      (point) => !point.locked || point.circleRole === 'center',
+      (point) => !point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius',
     )
     const lines = [...this.scene.lines.values()]
     const straightLines = [...this.scene.straightLines.values()]
     const rays = [...this.scene.rays.values()]
     const vectors = [...this.scene.vectors.values()]
     const circles = [...this.scene.circles.values()]
+    const spheres = [...this.scene.spheres.values()]
     const faces = [...this.scene.faces.values()]
     const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
 
@@ -1956,13 +2233,14 @@ export class Editor {
       rays.length === 0 &&
       vectors.length === 0 &&
       circles.length === 0 &&
+      spheres.length === 0 &&
       faces.length === 0 &&
       constraints.length === 0
     )
       return
 
     this.executeCommand(
-      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, vectors, circles, faces, constraints),
+      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, vectors, circles, spheres, faces, constraints),
     )
     this.selectedPoints = []
   }
@@ -3990,6 +4268,7 @@ export class Editor {
 
       this.applyCubeConstraintPositions(nextPositions)
       this.applyRegularPolygonConstraintPositions(nextPositions)
+      this.applySphereConstraintPositions(nextPositions)
 
       faceIds.forEach((faceId) => {
         const face = this.scene.faces.get(faceId)

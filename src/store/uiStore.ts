@@ -14,6 +14,7 @@ type ContentGroupKey =
   | 'face'
   | 'hexahedron'
   | 'tetrahedron'
+  | 'sphere'
 
 interface MergePointDialogState {
   visible: boolean
@@ -37,6 +38,7 @@ interface ContentGroupCollapseState {
   face: boolean
   hexahedron: boolean
   tetrahedron: boolean
+  sphere: boolean
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
@@ -49,6 +51,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   face: false,
   hexahedron: false,
   tetrahedron: false,
+  sphere: false,
 })
 
 export const useUiStore = defineStore('ui', () => {
@@ -249,6 +252,7 @@ export const useUiStore = defineStore('ui', () => {
       face: collapsed,
       hexahedron: collapsed,
       tetrahedron: collapsed,
+      sphere: collapsed,
     }
   }
 

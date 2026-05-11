@@ -318,6 +318,11 @@ const createTetrahedron = () => {
   emit('mode-change', EditorMode.CreateTetrahedron)
 }
 
+const createSphereTwoPoints = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateSphereTwoPoints)
+}
+
 const toggleProfileMenu = () => {
   profileMenuOpen.value = !profileMenuOpen.value
 }
@@ -613,7 +618,8 @@ onUnmounted(() => {
         :class="{
           'is-active':
             currentMode === EditorMode.CreateHexahedron ||
-            currentMode === EditorMode.CreateTetrahedron,
+            currentMode === EditorMode.CreateTetrahedron ||
+            currentMode === EditorMode.CreateSphereTwoPoints,
           'is-open': isSolidMenuOpen,
         }"
         @click="toggleSolidMenu"
@@ -820,6 +826,13 @@ onUnmounted(() => {
       >
         正六面体
       </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateSphereTwoPoints }"
+        @click="createSphereTwoPoints"
+      >
+        两点球
+      </button>
     </div>
   </Teleport>
 
@@ -977,6 +990,13 @@ button.is-active {
 .menu-item-danger:hover {
   background: #5a2c2c;
   color: #ffb3b3;
+}
+
+.collab-box {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
 }
 
 .room-input {
@@ -1178,6 +1198,49 @@ button.is-active {
 
   .room-input {
     width: 84px;
+  }
+}
+
+@media (max-width: 768px) {
+  .toolbar {
+    gap: 4px;
+    padding: 5px;
+  }
+
+  button {
+    padding: 4px 7px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .room-input {
+    width: 70px;
+    padding: 3px 5px;
+    font-size: 11px;
+  }
+
+  .collab-box {
+    gap: 2px;
+  }
+
+  .divider {
+    margin: 0 2px;
+  }
+
+  .profile-trigger {
+    height: 32px;
+    padding: 3px 8px 3px 3px;
+    gap: 6px;
+  }
+
+  .avatar-ring {
+    width: 24px;
+    height: 24px;
+  }
+
+  .profile-name {
+    max-width: 70px;
+    font-size: 11px;
   }
 }
 </style>

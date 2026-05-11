@@ -6,6 +6,7 @@ import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
+import { Sphere3 } from '../geometry/Sphere3'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 
@@ -27,6 +28,7 @@ export type SceneRenderSyncState = {
   vectorIds: Set<string>
   circleIds: Set<string>
   faceIds: Set<string>
+  sphereIds: Set<string>
 }
 
 export class Scene {
@@ -39,6 +41,7 @@ export class Scene {
   vectors = new Map<string, GeoVector3>()
   circles = new Map<string, Circle3>()
   faces = new Map<string, PlanarPolygon>()
+  spheres = new Map<string, Sphere3>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
@@ -55,6 +58,7 @@ export class Scene {
   private dirtyVectorIds = new Set<string>()
   private dirtyCircleIds = new Set<string>()
   private dirtyFaceIds = new Set<string>()
+  private dirtySphereIds = new Set<string>()
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
 
@@ -94,6 +98,17 @@ export class Scene {
   addCircle(circle: Circle3) {
     this.circles.set(circle.id, circle)
     this.dirtyCircleIds.add(circle.id)
+  }
+
+  addSphere(sphere: Sphere3) {
+    this.spheres.set(sphere.id, sphere)
+    this.dirtySphereIds.add(sphere.id)
+  }
+
+  removeSphere(sphereId: string) {
+    this.spheres.delete(sphereId)
+    this.selection.spheres.delete(sphereId)
+    this.dirtySphereIds.add(sphereId)
   }
 
   addFace(face: PlanarPolygon) {
@@ -277,6 +292,11 @@ export class Scene {
         if (centerPoint) this.dirtyPointIds.add(centerPoint.id)
       }
     })
+    this.spheres.forEach((sphere) => {
+      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) {
+        this.dirtySphereIds.add(sphere.id)
+      }
+    })
     this.constraints.forEach((constraint) => {
       if (constraint.pointId === pointId) {
         this.markConstraintDirty(constraint)
@@ -323,6 +343,7 @@ export class Scene {
       this.dirtyVectorIds.clear()
       this.dirtyCircleIds.clear()
       this.dirtyFaceIds.clear()
+      this.dirtySphereIds.clear()
       return {
         fullSync: true,
         pointIds: new Set(this.points.keys()),
@@ -332,6 +353,7 @@ export class Scene {
         vectorIds: new Set(this.vectors.keys()),
         circleIds: new Set(this.circles.keys()),
         faceIds: new Set(this.faces.keys()),
+        sphereIds: new Set(this.spheres.keys()),
       }
     }
 
@@ -342,6 +364,7 @@ export class Scene {
     const vectorIds = new Set(this.dirtyVectorIds)
     const circleIds = new Set(this.dirtyCircleIds)
     const faceIds = new Set(this.dirtyFaceIds)
+    const sphereIds = new Set(this.dirtySphereIds)
 
     pointIds.forEach((pointId) => {
       this.lines.forEach((line, lineId) => {
@@ -398,6 +421,14 @@ export class Scene {
       })
     })
 
+    pointIds.forEach((pointId) => {
+      this.spheres.forEach((sphere, sphereId) => {
+        if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) {
+          sphereIds.add(sphereId)
+        }
+      })
+    })
+
     this.dirtyPointIds.clear()
     this.dirtyLineIds.clear()
     this.dirtyStraightLineIds.clear()
@@ -405,6 +436,7 @@ export class Scene {
     this.dirtyVectorIds.clear()
     this.dirtyCircleIds.clear()
     this.dirtyFaceIds.clear()
+    this.dirtySphereIds.clear()
 
     if (
       pointIds.size === 0 &&
@@ -413,7 +445,8 @@ export class Scene {
       rayIds.size === 0 &&
       vectorIds.size === 0 &&
       circleIds.size === 0 &&
-      faceIds.size === 0
+      faceIds.size === 0 &&
+      sphereIds.size === 0
     ) {
       return null
     }
@@ -427,6 +460,7 @@ export class Scene {
       vectorIds,
       circleIds,
       faceIds,
+      sphereIds,
     }
   }
 

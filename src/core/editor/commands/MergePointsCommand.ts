@@ -7,6 +7,7 @@ import { Ray3 } from '../../geometry/Ray3'
 import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../../geometry/Circle3'
+import { Sphere3 } from '../../geometry/Sphere3'
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
@@ -68,7 +69,17 @@ type CircleSnapshot = {
   directionId: string | null
   lockedRadius: number | null
   keepPointCircleId: string | null
-  keepPointCircleRole: string | null
+  keepPointCircleRole: 'center' | null
+}
+
+type SphereSnapshot = {
+  sphere: Sphere3
+  centerPoint: Point3
+  radiusPoint: Point3
+  centerSphereId: string | null
+  centerSphereRole: 'center' | 'radius' | null
+  radiusSphereId: string | null
+  radiusSphereRole: 'center' | 'radius' | null
 }
 
 export class MergePointsCommand implements Command {
@@ -82,6 +93,7 @@ export class MergePointsCommand implements Command {
   private regularPolygonSnapshots: RegularPolygonSnapshot[]
   private pointRegularPolygonSnapshots: PointRegularPolygonSnapshot[]
   private circleSnapshots: CircleSnapshot[]
+  private sphereSnapshots: SphereSnapshot[]
   private keepPointCircleId: string | null
   private keepPointCircleRole: 'center' | null
   private keepPointLocked: boolean
@@ -92,6 +104,7 @@ export class MergePointsCommand implements Command {
   private removedVectors = new Set<string>()
   private removedFaces = new Set<string>()
   private removedCircles = new Set<string>()
+  private removedSpheres = new Set<string>()
 
   constructor(
     private scene: Scene,
@@ -222,6 +235,21 @@ export class MergePointsCommand implements Command {
           keepPointCircleRole: this.keepPoint.circleRole,
         }
       })
+
+    this.sphereSnapshots = [...scene.spheres.values()]
+      .filter((sphere) =>
+        sphere.centerPoint.id === keepPoint.id || sphere.radiusPoint.id === keepPoint.id ||
+        sphere.centerPoint.id === removePoint.id || sphere.radiusPoint.id === removePoint.id,
+      )
+      .map((sphere) => ({
+        sphere,
+        centerPoint: sphere.centerPoint,
+        radiusPoint: sphere.radiusPoint,
+        centerSphereId: sphere.centerPoint.sphereId,
+        centerSphereRole: sphere.centerPoint.sphereRole,
+        radiusSphereId: sphere.radiusPoint.sphereId,
+        radiusSphereRole: sphere.radiusPoint.sphereRole,
+      }))
   }
 
   private replacePointId(ids: string[]) {
@@ -428,6 +456,26 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.sphereSnapshots.forEach((snapshot) => {
+      const { sphere } = snapshot
+      if (sphere.centerPoint.id === this.removePoint.id) {
+        sphere.centerPoint = this.keepPoint
+        this.keepPoint.sphereId = sphere.id
+        this.keepPoint.sphereRole = 'center'
+      }
+      if (sphere.radiusPoint.id === this.removePoint.id) {
+        sphere.radiusPoint = this.keepPoint
+        this.keepPoint.sphereId = sphere.id
+        this.keepPoint.sphereRole = 'radius'
+      }
+      if (sphere.centerPoint.id === sphere.radiusPoint.id) {
+        this.scene.removeSphere(sphere.id)
+        this.removedSpheres.add(sphere.id)
+        this.keepPoint.sphereId = null
+        this.keepPoint.sphereRole = null
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
@@ -543,6 +591,20 @@ export class MergePointsCommand implements Command {
       point.regularPolygonId = regularPolygonId
       point.regularPolygonRole = regularPolygonRole
     })
+
+    this.sphereSnapshots.forEach((snapshot) => {
+      const { sphere } = snapshot
+      sphere.centerPoint = snapshot.centerPoint
+      sphere.radiusPoint = snapshot.radiusPoint
+      snapshot.centerPoint.sphereId = snapshot.centerSphereId
+      snapshot.centerPoint.sphereRole = snapshot.centerSphereRole
+      snapshot.radiusPoint.sphereId = snapshot.radiusSphereId
+      snapshot.radiusPoint.sphereRole = snapshot.radiusSphereRole
+      if (this.removedSpheres.has(sphere.id)) {
+        this.scene.addSphere(sphere)
+      }
+    })
+
     this.scene.markPointDirty(this.keepPoint.id)
     this.scene.markPointDirty(this.removePoint.id)
 

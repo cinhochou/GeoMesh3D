@@ -379,6 +379,7 @@ watch(
     () => scene.selection.vectors.size,
     () => scene.selection.circles.size,
     () => scene.selection.faces.size,
+    () => scene.selection.spheres.size,
     () => editor.mode,
     isARMode,
   ],
@@ -403,6 +404,7 @@ watch(
     () => scene.rays.size,
     () => scene.circles.size,
     () => scene.faces.size,
+    () => scene.spheres.size,
   ],
   () => {
     scene.markAllRenderDirty()
@@ -658,7 +660,7 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
       editor.history = []
       editor.historyIndex = -1
       collabStore.closeJoinDialog()
-      showToast(`😉 成功加入房间: ${room}`, 'global')
+      showToast(`成功加入房间: ${room}`, 'global')
     } catch (err) {
       console.error(err)
       collabStore.closeJoinDialog()
@@ -669,7 +671,7 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
 
   collabManager.value?.leaveRoom()
   collabStore.setPeerCount(1)
-  showToast('😶‍🌫️ 已成功退出协作', 'global')
+  showToast('已成功退出协作', 'global')
 }
 
 const handleToast = (e: Event) => {
@@ -731,7 +733,11 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     </Transition>
 
     <Transition name="fade-overlay">
-      <div v-if="regularPolygonDialog.visible" class="collab-wait-overlay" @click.self="handleCancelRegularPolygon">
+      <div
+        v-if="regularPolygonDialog.visible"
+        class="collab-wait-overlay"
+        @click.self="handleCancelRegularPolygon"
+      >
         <div class="merge-point-dialog">
           <div class="merge-point-title">正多边形</div>
           <div class="merge-point-text">请输入顶点数（大于 2 的整数）</div>
@@ -1214,5 +1220,4 @@ select.axis-control option {
     font-size: 14px;
   }
 }
-
 </style>

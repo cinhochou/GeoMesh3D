@@ -7,6 +7,7 @@ export class Selection {
   vectors = new Set<string>()
   circles = new Set<string>()
   faces = new Set<string>()
+  spheres = new Set<string>()
 
   clear() {
     this.points.clear()
@@ -16,6 +17,7 @@ export class Selection {
     this.vectors.clear()
     this.circles.clear()
     this.faces.clear()
+    this.spheres.clear()
   }
 
   selectPoint(id: string, additive = false) {
@@ -81,6 +83,15 @@ export class Selection {
     this.faces.delete(id)
   }
 
+  selectSphere(id: string, additive = false) {
+    if (!additive) this.clear()
+    this.spheres.add(id)
+  }
+
+  deselectSphere(id: string) {
+    this.spheres.delete(id)
+  }
+
   isEmpty() {
     return (
       this.points.size === 0 &&
@@ -89,7 +100,8 @@ export class Selection {
       this.rays.size === 0 &&
       this.vectors.size === 0 &&
       this.circles.size === 0 &&
-      this.faces.size === 0
+      this.faces.size === 0 &&
+      this.spheres.size === 0
     )
   }
 }

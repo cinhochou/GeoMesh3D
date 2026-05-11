@@ -35,9 +35,10 @@ export class Interaction {
   draggingRayId: string | null = null
   draggingVectorId: string | null = null
   draggingCircleId: string | null = null
+  draggingSphereId: string | null = null
   draggingFaceId: string | null = null
   private draggingLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
     geoId: string
     startClientX: number
     startClientY: number
@@ -49,6 +50,7 @@ export class Interaction {
   normalCircleDirectionType: DirectionType | null = null
   normalCircleDirectionId: string | null = null
   regularPolygonFirstPointId: string | null = null
+  sphereTwoPointsFirstPointId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -67,13 +69,13 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
     geoId: string
   } | null = null
   private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
   private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
     geoId: string
   } | null = null
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
@@ -232,6 +234,7 @@ export class Interaction {
     this.draggingRayId = null
     this.draggingVectorId = null
     this.draggingCircleId = null
+    this.draggingSphereId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -297,14 +300,14 @@ export class Interaction {
   }
 
   private isSameActiveLabelTarget(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
     geoId: string,
   ) {
     return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
   }
 
   private deselectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
     geoId: string,
   ) {
     if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
@@ -313,11 +316,12 @@ export class Interaction {
     else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
     else if (type === 'vector') this.editor.scene.selection.deselectVector(geoId)
     else if (type === 'circle') this.editor.scene.selection.deselectCircle(geoId)
+    else if (type === 'sphere') this.editor.scene.selection.deselectSphere(geoId)
     else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
   }
 
   private selectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
     geoId: string,
   ) {
     if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
@@ -326,6 +330,7 @@ export class Interaction {
     else if (type === 'ray') this.editor.scene.selection.selectRay(geoId, true)
     else if (type === 'vector') this.editor.scene.selection.selectVector(geoId, true)
     else if (type === 'circle') this.editor.scene.selection.selectCircle(geoId, true)
+    else if (type === 'sphere') this.editor.scene.selection.selectSphere(geoId, true)
     else if (type === 'face') this.editor.selectCubeByFaceId(geoId, true)
   }
 
@@ -375,6 +380,7 @@ export class Interaction {
       this.draggingRayId !== null ||
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
+      this.draggingSphereId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
@@ -417,6 +423,7 @@ export class Interaction {
     this.draggingRayId = null
     this.draggingVectorId = null
     this.draggingCircleId = null
+    this.draggingSphereId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -550,6 +557,7 @@ export class Interaction {
         type === 'ray' ||
         type === 'vector' ||
         type === 'circle' ||
+        type === 'sphere' ||
         type === 'face'
       )
     })
@@ -709,6 +717,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           toMove.add(this.draggingPointId!)
           this.previewMovePoints([...toMove], delta)
@@ -779,6 +793,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
@@ -841,6 +861,12 @@ export class Interaction {
                 toMove.add(c.p2.id)
                 toMove.add(c.p3.id)
               }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -907,6 +933,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           if (canRotateAroundOrigin) {
@@ -969,6 +1001,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(vector.p1.id)
@@ -1027,6 +1065,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(circle.p1.id)
@@ -1034,6 +1078,30 @@ export class Interaction {
             toMove.add(circle.p2.id)
             toMove.add(circle.p3.id)
           }
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingSphereId) {
+      const sphere = this.editor.scene.spheres.get(this.draggingSphereId)
+      if (!sphere) return
+      if (this.editor.isSphereGeometryLocked(sphere)) return
+
+      this.handleDrag(
+        sphere.centerPoint.position,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(sphere.centerPoint.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -1085,6 +1153,12 @@ export class Interaction {
               }
             }
           })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           face.memberPointIds.forEach((pointId) => toMove.add(pointId))
           this.previewMovePoints([...toMove], delta)
@@ -1120,6 +1194,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -1152,6 +1227,8 @@ export class Interaction {
           this.editor.deleteVector(geoId)
         } else if (type === 'circle') {
           this.editor.deleteCircle(geoId)
+        } else if (type === 'sphere') {
+          this.editor.deleteSphere(geoId)
         } else if (type === 'face') {
           this.editor.deleteFace(geoId)
         }
@@ -1180,6 +1257,18 @@ export class Interaction {
               if (circle && !this.editor.isCircleGeometryLocked(circle)) {
                 this.draggingCircleId = p.circleId
                 this.startDrag(this.getCircleDragReferencePoint(circle))
+              } else {
+                this.draggingPointId = null
+              }
+            } else if (p.sphereRole === 'center' && p.sphereId) {
+              const sphere = this.editor.scene.spheres.get(p.sphereId)
+              if (sphere && !this.editor.isSphereGeometryLocked(sphere)) {
+                this.draggingSphereId = p.sphereId
+                this.startDrag(new THREE.Vector3(
+                  sphere.centerPoint.position.x,
+                  sphere.centerPoint.position.y,
+                  sphere.centerPoint.position.z,
+                ))
               } else {
                 this.draggingPointId = null
               }
@@ -1257,6 +1346,23 @@ export class Interaction {
             } else {
               this.draggingCircleId = geoId
               this.startDrag(this.getCircleDragReferencePoint(circle))
+            }
+          }
+        } else if (type === 'sphere') {
+          const alreadySelected = this.editor.scene.selection.spheres.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+          this.editor.scene.selection.selectSphere(geoId, true)
+          const sphere = this.editor.scene.spheres.get(geoId)
+          if (sphere) {
+            if (this.editor.isSphereGeometryLocked(sphere)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingSphereId = geoId
+              this.startDrag(new THREE.Vector3(
+                sphere.centerPoint.position.x,
+                sphere.centerPoint.position.y,
+                sphere.centerPoint.position.z,
+              ))
             }
           }
         } else if (type === 'face') {
@@ -1356,6 +1462,19 @@ export class Interaction {
         this.commitCreateTetrahedronSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateTetrahedron && type === 'line') {
         this.commitCreateTetrahedronSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.CreateSphereTwoPoints && type === 'point') {
+        if (!this.sphereTwoPointsFirstPointId) {
+          this.sphereTwoPointsFirstPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.sphereTwoPointsFirstPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          const firstPoint = this.editor.scene.points.get(this.sphereTwoPointsFirstPointId)
+          const secondPoint = this.editor.scene.points.get(geoId)
+          if (firstPoint && secondPoint) {
+            this.editor.tryCreateSphereTwoPoints(firstPoint, secondPoint)
+          }
+          this.sphereTwoPointsFirstPointId = null
+        }
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (
@@ -1380,7 +1499,8 @@ export class Interaction {
         this.resetRegularPolygonCreation()
       else if (
         this.editor.mode === EditorMode.CreateHexahedron ||
-        this.editor.mode === EditorMode.CreateTetrahedron
+        this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreateSphereTwoPoints
       )
         this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.CreateCircleNormal) {
@@ -1429,6 +1549,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -1508,6 +1629,7 @@ export class Interaction {
       this.draggingRayId = null
       this.draggingVectorId = null
       this.draggingCircleId = null
+      this.draggingSphereId = null
       this.draggingFaceId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
@@ -1630,6 +1752,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreateSphereTwoPoints) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetSphereTwoPointsCreation()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -1658,6 +1787,8 @@ export class Interaction {
       else if (type === 'straightLine') this.editor.deleteStraightLine(geoId)
       else if (type === 'ray') this.editor.deleteRay(geoId)
       else if (type === 'vector') this.editor.deleteVector(geoId)
+      else if (type === 'circle') this.editor.deleteCircle(geoId)
+      else if (type === 'sphere') this.editor.deleteSphere(geoId)
       else if (type === 'face') this.editor.deleteFace(geoId)
       this.resetMobileInteractionState()
       return
@@ -1744,6 +1875,18 @@ export class Interaction {
       return
     }
 
+    if (this.editor.mode === EditorMode.CreateCircleThreePoints && type === 'point') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (this.editor.scene.selection.points.has(geoId)) {
+        this.toggleCreateSelection('point', geoId)
+      } else {
+        this.editor.tryCreateThreePointCircleWith(this.editor.scene.points.get(geoId)!)
+      }
+      this.resetMobileInteractionState()
+      return
+    }
+
     if (this.editor.mode === EditorMode.CreatePlane) {
       e.preventDefault()
       e.stopPropagation()
@@ -1793,6 +1936,27 @@ export class Interaction {
       e.stopPropagation()
       if (type === 'point') this.commitCreateTetrahedronSelection('point', geoId)
       else if (type === 'line') this.commitCreateTetrahedronSelection('line', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateSphereTwoPoints) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') {
+        if (!this.sphereTwoPointsFirstPointId) {
+          this.sphereTwoPointsFirstPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.sphereTwoPointsFirstPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          const firstPoint = this.editor.scene.points.get(this.sphereTwoPointsFirstPointId)
+          const secondPoint = this.editor.scene.points.get(geoId)
+          if (firstPoint && secondPoint) {
+            this.editor.tryCreateSphereTwoPoints(firstPoint, secondPoint)
+          }
+          this.sphereTwoPointsFirstPointId = null
+        }
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -1861,6 +2025,19 @@ export class Interaction {
         if (circle && !this.editor.isCircleGeometryLocked(circle)) {
           this.draggingCircleId = point.circleId
           this.startDrag(this.getCircleDragReferencePoint(circle))
+        } else {
+          this.syncControlLockState()
+          this.renderer.renderer.domElement.style.cursor = 'default'
+        }
+      } else if (point.sphereRole === 'center' && point.sphereId) {
+        const sphere = this.editor.scene.spheres.get(point.sphereId)
+        if (sphere && !this.editor.isSphereGeometryLocked(sphere)) {
+          this.draggingSphereId = point.sphereId
+          this.startDrag(new THREE.Vector3(
+            sphere.centerPoint.position.x,
+            sphere.centerPoint.position.y,
+            sphere.centerPoint.position.z,
+          ))
         } else {
           this.syncControlLockState()
           this.renderer.renderer.domElement.style.cursor = 'default'
@@ -2020,6 +2197,38 @@ export class Interaction {
       return
     }
 
+    if (type === 'sphere') {
+      const alreadySelected = this.editor.scene.selection.spheres.has(geoId)
+      this.editor.scene.selection.selectSphere(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const sphere = this.editor.scene.spheres.get(geoId)
+      if (!sphere || this.editor.isSphereGeometryLocked(sphere)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingSphereId = geoId
+      this.startDrag(new THREE.Vector3(
+        sphere.centerPoint.position.x,
+        sphere.centerPoint.position.y,
+        sphere.centerPoint.position.z,
+      ))
+      return
+    }
+
     if (type === 'face') {
       const alreadySelected = this.editor.scene.selection.faces.has(geoId)
       this.editor.selectCubeByFaceId(geoId, true)
@@ -2092,6 +2301,7 @@ export class Interaction {
       !this.draggingStraightLineId &&
       !this.draggingRayId &&
       !this.draggingFaceId &&
+      !this.draggingSphereId &&
       !this.draggingLabelTarget
     ) {
       this.updateMobileMoveThreshold(e.clientX, e.clientY)
@@ -2142,6 +2352,7 @@ export class Interaction {
       !this.draggingRayId &&
       !this.draggingVectorId &&
       !this.draggingCircleId &&
+      !this.draggingSphereId &&
       !this.draggingFaceId &&
       !this.draggingLabelTarget
     )
@@ -2217,6 +2428,7 @@ export class Interaction {
       this.draggingRayId !== null ||
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
+      this.draggingSphereId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null
 
@@ -2235,6 +2447,7 @@ export class Interaction {
         this.draggingStraightLineId = null
         this.draggingRayId = null
         this.draggingCircleId = null
+        this.draggingSphereId = null
         this.draggingFaceId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
@@ -2310,7 +2523,8 @@ export class Interaction {
             resolved.userData.type === 'straightLine' ||
             resolved.userData.type === 'ray' ||
             resolved.userData.type === 'vector' ||
-            resolved.userData.type === 'circle'
+            resolved.userData.type === 'circle' ||
+            resolved.userData.type === 'sphere'
         },
       )
       if (lineHit) return resolveObject(lineHit.object)
@@ -2527,6 +2741,11 @@ export class Interaction {
     this.editor.scene.selection.clear()
   }
 
+  private resetSphereTwoPointsCreation() {
+    this.sphereTwoPointsFirstPointId = null
+    this.editor.scene.selection.clear()
+  }
+
   confirmRegularPolygonVertices(vertexCount: number, firstPointId: string, secondPointId: string) {
     const p1 = this.editor.scene.points.get(firstPointId)
     const p2 = this.editor.scene.points.get(secondPointId)
@@ -2577,6 +2796,7 @@ export class Interaction {
     this.syncControlLockState()
     this.renderer.hideAxisGuides()
     this.regularPolygonFirstPointId = null
+    this.sphereTwoPointsFirstPointId = null
   }
 
   private endDrag() {
@@ -2600,6 +2820,7 @@ export class Interaction {
       this.draggingRayId !== null ||
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
+      this.draggingSphereId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
@@ -2725,7 +2946,7 @@ export class Interaction {
     for (const sprite of this.renderer.getNameLabelSprites()) {
       const data = sprite.userData
       const geoId = data?.geoId as string | undefined
-      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'face' | undefined
+      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'sphere' | 'face' | undefined
       if (!sprite.visible || !geoId || !type) continue
 
       const center = this.projectObjectToClient(sprite, rect)
@@ -2780,7 +3001,7 @@ export class Interaction {
   }
 
   private getGeometryByType(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
     geoId: string,
   ) {
     if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
@@ -2789,11 +3010,12 @@ export class Interaction {
     if (type === 'ray') return this.editor.scene.rays.get(geoId) ?? null
     if (type === 'vector') return this.editor.scene.vectors.get(geoId) ?? null
     if (type === 'circle') return this.editor.scene.circles.get(geoId) ?? null
+    if (type === 'sphere') return this.editor.scene.spheres.get(geoId) ?? null
     return this.editor.scene.faces.get(geoId) ?? null
   }
 
   private beginLabelDrag(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
     geoId: string,
     clientX: number,
     clientY: number,
@@ -2862,6 +3084,11 @@ export class Interaction {
       this.editor.updateVector(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
     } else if (target.type === 'circle') {
       this.editor.updateCircle(target.geoId, {
+        labelOffsetX: nextOffsetX,
+        labelOffsetY: nextOffsetY,
+      })
+    } else if (target.type === 'sphere') {
+      this.editor.updateSphere(target.geoId, {
         labelOffsetX: nextOffsetX,
         labelOffsetY: nextOffsetY,
       })

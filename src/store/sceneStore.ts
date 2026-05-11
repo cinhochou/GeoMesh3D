@@ -11,6 +11,7 @@ type CountSummary = {
   vector: number
   circle: number
   face: number
+  sphere: number
 }
 
 const createEmptyCounts = (): CountSummary => ({
@@ -21,6 +22,7 @@ const createEmptyCounts = (): CountSummary => ({
   vector: 0,
   circle: 0,
   face: 0,
+  sphere: 0,
 })
 
 const getModeName = (mode: EditorMode) => {
@@ -55,6 +57,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建正六面体'
     case EditorMode.CreateTetrahedron:
       return '创建正四面体'
+    case EditorMode.CreateSphereTwoPoints:
+      return '创建两点球'
     default:
       return ''
   }
@@ -64,16 +68,18 @@ const getModeHint = (mode: EditorMode) => {
   switch (mode) {
     case EditorMode.Delete:
       return '单击场景中的几何对象即可删除~'
+    case EditorMode.CreatePoint:
+      return 'Tips:旋转或缩放场景可以更好地确定落点位置哦~'
     case EditorMode.CreateLine:
-      return '点击场景中的两个不同点以创建线段~'
+      return '选中场景中的两个不同点以创建线段~'
     case EditorMode.CreateStraightLine:
-      return '点击场景中的两个不同点以创建直线~'
+      return '选中场景中的两个不同点以创建直线~'
     case EditorMode.CreateRay:
-      return '点击场景中的两个不同点以创建射线~'
+      return '选中场景中的两个不同点以创建射线~'
     case EditorMode.CreateVector:
-      return '点击场景中的两个不同点以创建向量~'
+      return '选中场景中的两个不同点以创建向量~'
     case EditorMode.CreateCircleThreePoints:
-      return '点击场景中的三个不共线的点以创建三点圆~'
+      return '选中场景中的三个不共线的点以创建三点圆~'
     case EditorMode.CreateCircleNormal:
       return '先选中一个点作为圆心，再选中一个法向量（线/射线/直线/向量/点）~'
     case EditorMode.CreatePlane:
@@ -88,6 +94,8 @@ const getModeHint = (mode: EditorMode) => {
       return '选中两个点或一条线段以创建正六面体~'
     case EditorMode.CreateTetrahedron:
       return '选中两个点或一条线段以创建正四面体~'
+    case EditorMode.CreateSphereTwoPoints:
+      return '先选中一点作为球心，再选中一点以创建球体~'
     default:
       return ''
   }
@@ -110,7 +118,8 @@ export const useSceneStore = defineStore('scene', () => {
       selectionCounts.value.straightLine +
       selectionCounts.value.ray +
       selectionCounts.value.vector +
-      selectionCounts.value.face,
+      selectionCounts.value.face +
+      selectionCounts.value.sphere,
   )
   const totalSceneElements = computed(
     () =>
@@ -119,7 +128,8 @@ export const useSceneStore = defineStore('scene', () => {
       sceneCounts.value.straightLine +
       sceneCounts.value.ray +
       sceneCounts.value.vector +
-      sceneCounts.value.face,
+      sceneCounts.value.face +
+      sceneCounts.value.sphere,
   )
 
   const setCurrentMode = (mode: EditorMode) => {
@@ -159,6 +169,7 @@ export const useSceneStore = defineStore('scene', () => {
       vector: scene.selection.vectors.size,
       circle: scene.selection.circles.size,
       face: scene.selection.faces.size,
+      sphere: scene.selection.spheres.size,
     }
     sceneCounts.value = {
       point: scene.points.size,
@@ -168,6 +179,7 @@ export const useSceneStore = defineStore('scene', () => {
       vector: scene.vectors.size,
       circle: scene.circles.size,
       face: scene.faces.size,
+      sphere: scene.spheres.size,
     }
   }
 
