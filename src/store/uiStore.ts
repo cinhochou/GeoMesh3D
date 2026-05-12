@@ -28,6 +28,11 @@ interface RegularPolygonDialogState {
   vertexCount: number
 }
 
+interface NormalCircleRadiusDialogState {
+  visible: boolean
+  radius: number
+}
+
 interface ContentGroupCollapseState {
   point: boolean
   line: boolean
@@ -81,6 +86,11 @@ export const useUiStore = defineStore('ui', () => {
     firstPointId: '',
     secondPointId: '',
     vertexCount: 5,
+  })
+
+  const normalCircleRadiusDialog = ref<NormalCircleRadiusDialogState>({
+    visible: false,
+    radius: 1,
   })
 
   const toolbarMenus = ref({
@@ -201,6 +211,20 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
+  const openNormalCircleRadiusDialog = () => {
+    normalCircleRadiusDialog.value = {
+      visible: true,
+      radius: 1,
+    }
+  }
+
+  const closeNormalCircleRadiusDialog = () => {
+    normalCircleRadiusDialog.value = {
+      visible: false,
+      radius: 1,
+    }
+  }
+
   const setMergePointTargetId = (targetId: string) => {
     mergePointDialog.value = {
       ...mergePointDialog.value,
@@ -281,6 +305,7 @@ export const useUiStore = defineStore('ui', () => {
     clearToast()
     closeMergePointDialog()
     closeRegularPolygonDialog()
+    closeNormalCircleRadiusDialog()
     closeAllToolbarMenus()
     contentGroupsCollapsed.value = createContentGroupsCollapsed()
     hasAutoCollapsedContentGroups.value = false
@@ -302,6 +327,7 @@ export const useUiStore = defineStore('ui', () => {
     toastScope,
     mergePointDialog,
     regularPolygonDialog,
+    normalCircleRadiusDialog,
     toolbarMenus,
     contentGroupsCollapsed,
     hasAutoCollapsedContentGroups,
@@ -325,6 +351,8 @@ export const useUiStore = defineStore('ui', () => {
     closeMergePointDialog,
     openRegularPolygonDialog,
     closeRegularPolygonDialog,
+    openNormalCircleRadiusDialog,
+    closeNormalCircleRadiusDialog,
     setMergePointTargetId,
     closeAllToolbarMenus,
     setToolbarMenuOpen,

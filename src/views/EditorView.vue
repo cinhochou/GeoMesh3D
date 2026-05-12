@@ -7,6 +7,7 @@ import * as THREE from 'three'
 import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/TimeLine.vue'
+import InputDialog from '../components/InputDialog.vue'
 
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
@@ -43,6 +44,7 @@ const {
   toastScope,
   mergePointDialog,
   regularPolygonDialog,
+  normalCircleRadiusDialog,
 } = storeToRefs(uiStore)
 const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
 const { user } = storeToRefs(authStore)
@@ -210,6 +212,7 @@ onMounted(() => {
   interaction.bind(renderer.renderer.domElement)
   interaction.syncControlLockState()
   window.addEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
+  window.addEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // Ensure renderer rebuilds meshes when editor view is mounted again
@@ -454,6 +457,7 @@ onUnmounted(() => {
   solverWorker = null
   interaction?.unbind(renderer.renderer.domElement)
   window.removeEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
+  window.removeEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -482,6 +486,7 @@ function onModeChange(mode: EditorMode) {
   sceneStore.setCurrentMode(mode)
   uiStore.closeMergePointDialog()
   uiStore.closeRegularPolygonDialog()
+  uiStore.closeNormalCircleRadiusDialog()
 }
 
 const mergePointSelection = computed(() =>
@@ -512,20 +517,14 @@ const handleCancelMergePoints = () => {
   uiStore.closeMergePointDialog()
 }
 
-const regularPolygonVertexInput = ref<HTMLInputElement | null>(null)
-
 const handleOpenRegularPolygonDialog = (e: Event) => {
   const detail = (e as CustomEvent).detail
   uiStore.openRegularPolygonDialog(detail.firstPointId, detail.secondPointId)
-  nextTick(() => {
-    regularPolygonVertexInput.value?.focus()
-    regularPolygonVertexInput.value?.select()
-  })
 }
 
 const handleConfirmRegularPolygon = () => {
+  if (!canConfirmRegularPolygon.value) return
   const n = Math.round(regularPolygonDialog.value.vertexCount)
-  if (typeof n !== 'number' || isNaN(n) || n < 3 || !Number.isInteger(n)) return
   const p1 = scene.points.get(regularPolygonDialog.value.firstPointId)
   const p2 = scene.points.get(regularPolygonDialog.value.secondPointId)
   if (!p1 || !p2) return
@@ -538,6 +537,49 @@ const handleCancelRegularPolygon = () => {
   interaction.resetRegularPolygonCreation()
   uiStore.closeRegularPolygonDialog()
 }
+
+const handleShowNormalCircleRadiusDialog = () => {
+  uiStore.openNormalCircleRadiusDialog()
+}
+
+const handleConfirmNormalCircleRadius = () => {
+  if (!canConfirmNormalCircleRadius.value) return
+  const r = Math.round(normalCircleRadiusDialog.value.radius * 10) / 10
+  interaction.confirmNormalCircleRadius(r)
+  uiStore.closeNormalCircleRadiusDialog()
+}
+
+const handleCancelNormalCircleRadius = () => {
+  interaction.cancelNormalCircleCreation()
+  uiStore.closeNormalCircleRadiusDialog()
+}
+
+const normalCircleRadiusError = computed(() => {
+  if (!normalCircleRadiusDialog.value.visible) return ''
+  const r = normalCircleRadiusDialog.value.radius
+  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
+  if (r <= 0) return '半径必须大于 0'
+  return ''
+})
+
+const canConfirmNormalCircleRadius = computed(() => {
+  return normalCircleRadiusError.value === ''
+})
+
+const regularPolygonVertexError = computed(() => {
+  if (!regularPolygonDialog.value.visible) return ''
+  const n = regularPolygonDialog.value.vertexCount
+  if (typeof n !== 'number' || isNaN(n)) return '请输入有效的数字'
+  if (!Number.isInteger(n)) return '顶点数必须为整数'
+  if (n < 3) return '顶点数必须大于 2'
+  return ''
+})
+
+const canConfirmRegularPolygon = computed(() => {
+  return regularPolygonVertexError.value === ''
+})
+
+const MIN_STEP_HINT_TEXT = '已减到增减按钮可达的最小值，如需更小值请在输入框输入'
 
 const handleClearAll = () => {
   const confirmed = window.confirm('⚠"清空"会删除场景中的所有对象。确定要继续吗？')
@@ -703,69 +745,66 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       </div>
     </Transition>
 
-    <Transition name="fade-overlay">
-      <div v-if="mergePointDialog.visible" class="collab-wait-overlay">
-        <div class="merge-point-dialog">
-          <div class="merge-point-title">合并点</div>
-          <div class="merge-point-text">请选择要保留为合并结果的点</div>
-          <label v-for="point in mergePointSelection" :key="point.id" class="merge-point-option">
-            <input v-model="mergePointDialog.targetId" type="radio" :value="point.id" />
-            <span
-              >{{ point.name }}（{{ point.position.x.toFixed(2) }},
-              {{ point.position.y.toFixed(2) }}, {{ point.position.z.toFixed(2) }}）</span
-            >
-          </label>
-          <div class="merge-point-warning">{{ mergePointWarning }}</div>
-          <div class="merge-point-actions">
-            <button type="button" class="merge-point-button" @click="handleCancelMergePoints">
-              取消
-            </button>
-            <button
-              type="button"
-              class="merge-point-button merge-point-button-confirm"
-              @click="handleConfirmMergePoints"
-            >
-              确认
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <InputDialog
+      :visible="mergePointDialog.visible"
+      title="合并点"
+      @confirm="handleConfirmMergePoints"
+      @cancel="handleCancelMergePoints"
+    >
+      <div class="dialog-desc">请选择要保留为合并结果的点</div>
+      <label v-for="point in mergePointSelection" :key="point.id" class="merge-point-option">
+        <input v-model="mergePointDialog.targetId" type="radio" :value="point.id" />
+        <span
+          >{{ point.name }}（{{ point.position.x.toFixed(2) }},
+          {{ point.position.y.toFixed(2) }}, {{ point.position.z.toFixed(2) }}）</span
+        >
+      </label>
+      <div class="merge-point-warning">{{ mergePointWarning }}</div>
+    </InputDialog>
 
-    <Transition name="fade-overlay">
-      <div
-        v-if="regularPolygonDialog.visible"
-        class="collab-wait-overlay"
-        @click.self="handleCancelRegularPolygon"
-      >
-        <div class="merge-point-dialog">
-          <div class="merge-point-title">正多边形</div>
-          <div class="merge-point-text">请输入顶点数（大于 2 的整数）</div>
-          <input
-            ref="regularPolygonVertexInput"
-            v-model.number="regularPolygonDialog.vertexCount"
-            type="number"
-            min="3"
-            step="1"
-            class="regular-polygon-input"
-            @keydown.enter="handleConfirmRegularPolygon"
-            @keydown.escape="handleCancelRegularPolygon"
-          />
-          <div class="merge-point-actions">
-            <button type="button" class="merge-point-button" @click="handleCancelRegularPolygon">
-              取消
-            </button>
-            <button
-              type="button"
-              class="merge-point-button merge-point-button-confirm"
-              @click="handleConfirmRegularPolygon"
-            >
-              确认
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <InputDialog
+      :visible="regularPolygonDialog.visible"
+      title="正多边形"
+      :error-message="regularPolygonVertexError"
+      :can-confirm="canConfirmRegularPolygon"
+      :min-step-hint="MIN_STEP_HINT_TEXT"
+      :min-step-value="3"
+      @confirm="handleConfirmRegularPolygon"
+      @cancel="handleCancelRegularPolygon"
+    >
+      <div class="dialog-desc">请输入顶点数</div>
+      <input
+        v-model.number="regularPolygonDialog.vertexCount"
+        type="number"
+        min="3"
+        step="1"
+        class="dialog-input"
+        :class="{ 'dialog-input-error': regularPolygonVertexError }"
+        @keydown.enter="handleConfirmRegularPolygon"
+      />
+    </InputDialog>
+
+    <InputDialog
+      :visible="normalCircleRadiusDialog.visible"
+      title="输入半径"
+      :error-message="normalCircleRadiusError"
+      :can-confirm="canConfirmNormalCircleRadius"
+      :min-step-hint="MIN_STEP_HINT_TEXT"
+      :min-step-value="0.5"
+      @confirm="handleConfirmNormalCircleRadius"
+      @cancel="handleCancelNormalCircleRadius"
+    >
+      <label class="dialog-label">半径</label>
+      <input
+        v-model.number="normalCircleRadiusDialog.radius"
+        type="number"
+        min="0.5"
+        step="0.5"
+        class="dialog-input"
+        :class="{ 'dialog-input-error': normalCircleRadiusError }"
+        @keydown.enter="handleConfirmNormalCircleRadius"
+      />
+    </InputDialog>
 
     <Transition name="toast-fade">
       <div v-if="toastVisible && toastScope === 'global'" class="toast-container">
@@ -1072,30 +1111,6 @@ select.axis-control option {
   font-weight: 600;
   letter-spacing: 0.2px;
 }
-.merge-point-dialog {
-  min-width: 320px;
-  max-width: 420px;
-  padding: 20px 24px;
-  border: 1px solid #ffffff;
-  border-radius: 8px;
-  background: rgba(20, 20, 20, 0.96);
-  color: #ffffff;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-
-.merge-point-title {
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.merge-point-text {
-  font-size: 13px;
-  color: #d4d4d4;
-}
-
 .merge-point-option {
   display: flex;
   align-items: center;
@@ -1105,6 +1120,7 @@ select.axis-control option {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
   font-size: 13px;
+  color: #ffffff;
 }
 
 .merge-point-warning {
@@ -1113,27 +1129,17 @@ select.axis-control option {
   line-height: 1.5;
 }
 
-.merge-point-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+.dialog-desc {
+  color: #a0a0a0;
+  font-size: 13px;
 }
 
-.merge-point-button {
-  border: 1px solid #555;
-  border-radius: 6px;
-  background: #2a2a2a;
-  color: #f2f2f2;
-  padding: 6px 14px;
+.dialog-label {
+  color: #a0a0a0;
+  font-size: 13px;
 }
 
-.merge-point-button-confirm {
-  background: #2c5a34;
-  color: #43f260;
-  border-color: #43f260;
-}
-
-.regular-polygon-input {
+.dialog-input {
   width: 100%;
   padding: 8px 10px;
   background: #222;
@@ -1146,9 +1152,18 @@ select.axis-control option {
   box-sizing: border-box;
 }
 
-.regular-polygon-input:focus {
+.dialog-input:focus {
   border-color: #43f260;
   box-shadow: 0 0 0 2px rgba(67, 242, 96, 0.12);
+}
+
+.dialog-input-error {
+  border-color: #f25c5c !important;
+}
+
+.dialog-input-error:focus {
+  border-color: #f25c5c !important;
+  box-shadow: 0 0 0 2px rgba(242, 92, 92, 0.12) !important;
 }
 .toast-container-viewport {
   position: absolute;

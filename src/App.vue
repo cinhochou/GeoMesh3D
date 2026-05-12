@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useAuthStore } from '@/store/authStore'
-import NormalCircleRadiusDialog from './components/NormalCircleRadiusDialog.vue'
 
 const authStore = useAuthStore()
 const isInitializing = ref(true)
@@ -21,7 +20,6 @@ onMounted(async () => {
     <div class="loading-text">加载中...</div>
   </div>
   <router-view v-else />
-  <NormalCircleRadiusDialog />
 </template>
 
 <style scoped>

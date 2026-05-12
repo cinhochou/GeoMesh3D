@@ -110,8 +110,6 @@ export class Interaction {
     dom.addEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.addEventListener('pointerup', this.onPointerUp, { capture: true })
     dom.addEventListener('pointercancel', this.onPointerCancel, { capture: true })
-    window.addEventListener('confirm-normal-circle-radius', this.onConfirmNormalCircleRadius)
-    window.addEventListener('cancel-normal-circle-radius', this.onCancelNormalCircleCreation)
   }
 
   unbind(dom: HTMLElement) {
@@ -124,8 +122,6 @@ export class Interaction {
     dom.removeEventListener('pointermove', this.onPointerMove, { capture: true })
     dom.removeEventListener('pointerup', this.onPointerUp, { capture: true })
     dom.removeEventListener('pointercancel', this.onPointerCancel, { capture: true })
-    window.removeEventListener('confirm-normal-circle-radius', this.onConfirmNormalCircleRadius)
-    window.removeEventListener('cancel-normal-circle-radius', this.onCancelNormalCircleCreation)
   }
 
   /** 网格吸附工具函数 */
@@ -2773,17 +2769,6 @@ export class Interaction {
 
   cancelNormalCircleCreation() {
     this.resetNormalCircleCreation()
-  }
-
-  private onConfirmNormalCircleRadius = (e: Event) => {
-    const detail = (e as CustomEvent).detail
-    if (typeof detail?.radius === 'number') {
-      this.confirmNormalCircleRadius(detail.radius)
-    }
-  }
-
-  private onCancelNormalCircleCreation = () => {
-    this.cancelNormalCircleCreation()
   }
 
   clearPreview() {
