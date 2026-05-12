@@ -74,8 +74,10 @@ export class DeletePointCommand implements Command {
       this.scene.removeSphere(sphere.id)
       sphere.centerPoint.sphereId = null
       sphere.centerPoint.sphereRole = null
-      sphere.radiusPoint.sphereId = null
-      sphere.radiusPoint.sphereRole = null
+      if (sphere.radiusPoint) {
+        sphere.radiusPoint.sphereId = null
+        sphere.radiusPoint.sphereRole = null
+      }
     })
     this.centerPoints.forEach((point) => {
       this.scene.points.delete(point.id)
@@ -122,8 +124,10 @@ export class DeletePointCommand implements Command {
       this.scene.addSphere(sphere)
       sphere.centerPoint.sphereId = sphere.id
       sphere.centerPoint.sphereRole = 'center'
-      sphere.radiusPoint.sphereId = sphere.id
-      sphere.radiusPoint.sphereRole = 'radius'
+      if (sphere.radiusPoint) {
+        sphere.radiusPoint.sphereId = sphere.id
+        sphere.radiusPoint.sphereRole = 'radius'
+      }
     })
     this.centerPoints.forEach((point) => this.scene.addPoint(point))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))

@@ -6,6 +6,7 @@ import { GeoVector3 } from '../../geometry/GeoVector3'
 import { StraightLine3 } from '../../geometry/StraightLine3'
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import { Circle3 } from '../../geometry/Circle3'
+import { Sphere3 } from '../../geometry/Sphere3'
 
 type PointLockTransform = {
   point: Point3
@@ -49,6 +50,12 @@ type CircleLockTransform = {
   after: boolean
 }
 
+type SphereLockTransform = {
+  sphere: Sphere3
+  before: boolean
+  after: boolean
+}
+
 export class SyncLockStateCommand implements Command {
   constructor(
     private pointTransforms: PointLockTransform[],
@@ -58,6 +65,7 @@ export class SyncLockStateCommand implements Command {
     private vectorTransforms: VectorLockTransform[] = [],
     private faceTransforms: FaceLockTransform[] = [],
     private circleTransforms: CircleLockTransform[] = [],
+    private sphereTransforms: SphereLockTransform[] = [],
   ) {}
 
   execute() {
@@ -82,6 +90,9 @@ export class SyncLockStateCommand implements Command {
     this.circleTransforms.forEach(({ circle, after }) => {
       circle.userLocked = after
     })
+    this.sphereTransforms.forEach(({ sphere, after }) => {
+      sphere.userLocked = after
+    })
   }
 
   undo() {
@@ -105,6 +116,9 @@ export class SyncLockStateCommand implements Command {
     })
     this.circleTransforms.forEach(({ circle, before }) => {
       circle.userLocked = before
+    })
+    this.sphereTransforms.forEach(({ sphere, before }) => {
+      sphere.userLocked = before
     })
   }
 }

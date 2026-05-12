@@ -75,7 +75,7 @@ type CircleSnapshot = {
 type SphereSnapshot = {
   sphere: Sphere3
   centerPoint: Point3
-  radiusPoint: Point3
+  radiusPoint: Point3 | null
   centerSphereId: string | null
   centerSphereRole: 'center' | 'radius' | null
   radiusSphereId: string | null
@@ -238,8 +238,8 @@ export class MergePointsCommand implements Command {
 
     this.sphereSnapshots = [...scene.spheres.values()]
       .filter((sphere) =>
-        sphere.centerPoint.id === keepPoint.id || sphere.radiusPoint.id === keepPoint.id ||
-        sphere.centerPoint.id === removePoint.id || sphere.radiusPoint.id === removePoint.id,
+        sphere.centerPoint.id === keepPoint.id || (sphere.radiusPoint && sphere.radiusPoint.id === keepPoint.id) ||
+        sphere.centerPoint.id === removePoint.id || (sphere.radiusPoint && sphere.radiusPoint.id === removePoint.id),
       )
       .map((sphere) => ({
         sphere,
@@ -247,8 +247,8 @@ export class MergePointsCommand implements Command {
         radiusPoint: sphere.radiusPoint,
         centerSphereId: sphere.centerPoint.sphereId,
         centerSphereRole: sphere.centerPoint.sphereRole,
-        radiusSphereId: sphere.radiusPoint.sphereId,
-        radiusSphereRole: sphere.radiusPoint.sphereRole,
+        radiusSphereId: sphere.radiusPoint?.sphereId ?? null,
+        radiusSphereRole: sphere.radiusPoint?.sphereRole ?? null,
       }))
   }
 
@@ -463,12 +463,12 @@ export class MergePointsCommand implements Command {
         this.keepPoint.sphereId = sphere.id
         this.keepPoint.sphereRole = 'center'
       }
-      if (sphere.radiusPoint.id === this.removePoint.id) {
+      if (sphere.radiusPoint && sphere.radiusPoint.id === this.removePoint.id) {
         sphere.radiusPoint = this.keepPoint
         this.keepPoint.sphereId = sphere.id
         this.keepPoint.sphereRole = 'radius'
       }
-      if (sphere.centerPoint.id === sphere.radiusPoint.id) {
+      if (sphere.radiusPoint && sphere.centerPoint.id === sphere.radiusPoint.id) {
         this.scene.removeSphere(sphere.id)
         this.removedSpheres.add(sphere.id)
         this.keepPoint.sphereId = null
@@ -598,8 +598,10 @@ export class MergePointsCommand implements Command {
       sphere.radiusPoint = snapshot.radiusPoint
       snapshot.centerPoint.sphereId = snapshot.centerSphereId
       snapshot.centerPoint.sphereRole = snapshot.centerSphereRole
-      snapshot.radiusPoint.sphereId = snapshot.radiusSphereId
-      snapshot.radiusPoint.sphereRole = snapshot.radiusSphereRole
+      if (snapshot.radiusPoint) {
+        snapshot.radiusPoint.sphereId = snapshot.radiusSphereId
+        snapshot.radiusPoint.sphereRole = snapshot.radiusSphereRole
+      }
       if (this.removedSpheres.has(sphere.id)) {
         this.scene.addSphere(sphere)
       }

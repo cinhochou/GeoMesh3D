@@ -323,6 +323,11 @@ const createSphereTwoPoints = () => {
   emit('mode-change', EditorMode.CreateSphereTwoPoints)
 }
 
+const createSphereRadius = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateSphereRadius)
+}
+
 const toggleProfileMenu = () => {
   profileMenuOpen.value = !profileMenuOpen.value
 }
@@ -619,7 +624,8 @@ onUnmounted(() => {
           'is-active':
             currentMode === EditorMode.CreateHexahedron ||
             currentMode === EditorMode.CreateTetrahedron ||
-            currentMode === EditorMode.CreateSphereTwoPoints,
+            currentMode === EditorMode.CreateSphereTwoPoints ||
+            currentMode === EditorMode.CreateSphereRadius,
           'is-open': isSolidMenuOpen,
         }"
         @click="toggleSolidMenu"
@@ -832,6 +838,13 @@ onUnmounted(() => {
         @click="createSphereTwoPoints"
       >
         两点球
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateSphereRadius }"
+        @click="createSphereRadius"
+      >
+        半径球
       </button>
     </div>
   </Teleport>

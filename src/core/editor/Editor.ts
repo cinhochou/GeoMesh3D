@@ -49,6 +49,9 @@ import { MergeCubePointsCommand } from './commands/MergeCubePointsCommand'
 import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
 import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
 import { AddSphereCommand } from './commands/AddSphereCommand'
+import { AddRadiusSphereCommand } from './commands/AddRadiusSphereCommand'
+import { DeleteRadiusSphereCommand } from './commands/DeleteRadiusSphereCommand'
+import { UpdateSphereRadiusCommand } from './commands/UpdateSphereRadiusCommand'
 import { AddRegularPolygonCommand } from './commands/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -77,6 +80,7 @@ export enum EditorMode {
   CreateHexahedron,
   CreateTetrahedron,
   CreateSphereTwoPoints,
+  CreateSphereRadius,
 }
 
 export type FacePreviewData = {
@@ -379,7 +383,7 @@ export class Editor {
 
     for (const sphere of this.scene.spheres.values()) {
       if (!sphere.userLocked) continue
-      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) return true
+      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) return true
     }
 
     return false
@@ -737,13 +741,14 @@ export class Editor {
   getSphereNameSuffix(sphereId: string): string {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return ''
-    return sphere.name.replace(/^两点球/, '')
+    return sphere.name.replace(/^(两点球|半径球)/, '')
   }
 
   updateSphereName(sphereId: string, suffix: string) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
-    sphere.name = `两点球${suffix.trim()}`
+    const prefix = sphere.name.startsWith('半径球') ? '半径球' : '两点球'
+    sphere.name = `${prefix}${suffix.trim()}`
     this.scene.markAllRenderDirty()
   }
 
@@ -764,9 +769,34 @@ export class Editor {
   setSphereLockState(sphereId: string, locked: boolean) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
-    sphere.userLocked = locked
-    sphere.centerPoint.userLocked = locked
-    sphere.radiusPoint.userLocked = locked
+    const spherePoints = sphere.radiusPoint
+      ? [sphere.centerPoint, sphere.radiusPoint]
+      : [sphere.centerPoint]
+    const endpointTransforms = !locked
+      ? spherePoints
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : []
+
+    if (sphere.userLocked === locked && endpointTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [{ sphere, before: sphere.userLocked, after: locked }],
+      ),
+    )
   }
 
   updateSphere(
@@ -807,7 +837,7 @@ export class Editor {
 
   isSphereGeometryLocked(sphere: Sphere3): boolean {
     return sphere.userLocked ||
-      (this.isPointCoordinateLocked(sphere.centerPoint) && this.isPointCoordinateLocked(sphere.radiusPoint))
+      (this.isPointCoordinateLocked(sphere.centerPoint) && (!sphere.radiusPoint || this.isPointCoordinateLocked(sphere.radiusPoint)))
   }
 
   getSphereRadius(sphereId: string): number {
@@ -818,11 +848,18 @@ export class Editor {
   updateSphereRadius(sphereId: string, nextRadius: number) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
+    const normalizedRadius = Math.max(0.01, nextRadius)
+    if (sphere.isRadiusSphere()) {
+      const before = { radiusValue: sphere.radiusValue }
+      const after = { radiusValue: normalizedRadius }
+      this.executeCommand(new UpdateSphereRadiusCommand(this.scene, sphere, before, after))
+      this.scene.markAllRenderDirty()
+      return
+    }
     const currentRadius = sphere.getRadius()
     if (currentRadius <= 1e-6) return
-    const normalizedRadius = Math.max(0.01, nextRadius)
     const center = sphere.centerPoint.position
-    const radius = sphere.radiusPoint.position
+    const radius = sphere.radiusPoint!.position
     const direction = new Vec3(
       radius.x - center.x,
       radius.y - center.y,
@@ -835,13 +872,17 @@ export class Editor {
       center.y + (direction.y / directionLength) * normalizedRadius,
       center.z + (direction.z / directionLength) * normalizedRadius,
     )
-    this.setPointsPositions([{ id: sphere.radiusPoint.id, position: newPosition }])
+    this.setPointsPositions([{ id: sphere.radiusPoint!.id, position: newPosition }])
   }
 
   deleteSphere(sphereId: string) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
-    this.executeCommand(new DeleteSphereCommand(this.scene, sphere))
+    if (sphere.name.startsWith('半径球')) {
+      this.executeCommand(new DeleteRadiusSphereCommand(this.scene, sphere))
+    } else {
+      this.executeCommand(new DeleteSphereCommand(this.scene, sphere))
+    }
   }
 
   tryCreateSphereTwoPoints(firstPoint: Point3, secondPoint: Point3) {
@@ -851,8 +892,9 @@ export class Editor {
     }
     const exists = [...this.scene.spheres.values()].some(
       (s) =>
-        (s.centerPoint.id === firstPoint.id && s.radiusPoint.id === secondPoint.id) ||
-        (s.centerPoint.id === secondPoint.id && s.radiusPoint.id === firstPoint.id),
+        s.radiusPoint &&
+        ((s.centerPoint.id === firstPoint.id && s.radiusPoint.id === secondPoint.id) ||
+          (s.centerPoint.id === secondPoint.id && s.radiusPoint.id === firstPoint.id)),
     )
     if (exists) {
       emitToast('这两个点已经创建了球体')
@@ -874,6 +916,34 @@ export class Editor {
     this.scene.selection.selectSphere(sphere.id)
   }
 
+  tryCreateSphereRadius(centerPoint: Point3, radius: number) {
+    if (radius <= 0) {
+      emitToast('半径必须大于0')
+      return
+    }
+    const sphereName = genNextAvailableName(
+      [...this.scene.spheres.values()].map((s) => s.name),
+      0,
+      (index) => `半径球${index + 1}`,
+    )
+    const sphere = new Sphere3(
+      genId('sph'),
+      sphereName,
+      centerPoint,
+      null,
+      false,
+      true,
+      false,
+      Sphere3.DEFAULT_LABEL_OFFSET_X,
+      Sphere3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      radius,
+    )
+    this.executeCommand(new AddRadiusSphereCommand(this.scene, sphere))
+    this.scene.selection.clear()
+    this.scene.selection.selectSphere(sphere.id)
+  }
+
   getSphereCenterPoint(sphereId: string): Point3 | undefined {
     const sphere = this.getSphere(sphereId)
     return sphere?.centerPoint
@@ -881,7 +951,7 @@ export class Editor {
 
   getSphereRadiusPoint(sphereId: string): Point3 | undefined {
     const sphere = this.getSphere(sphereId)
-    return sphere?.radiusPoint
+    return sphere?.radiusPoint ?? undefined
   }
 
   getRegularPolygonConstraint(constraintId: string) {
@@ -1510,6 +1580,8 @@ export class Editor {
       if (!this.scene.activeDraggedPointIds.has(sphere.centerPoint.id)) return
       if (sphere.centerPoint.sphereRole !== 'center') return
 
+      if (!sphere.radiusPoint) return
+
       const currentCenter = this.scene.points.get(sphere.centerPoint.id)?.position ?? sphere.centerPoint.position
       const delta = new Vec3(
         centerOverride.x - currentCenter.x,
@@ -1747,6 +1819,9 @@ export class Editor {
     const relatedCircles = [...this.scene.circles.values()].filter(
       (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
+    const relatedSpheres = [...this.scene.spheres.values()].filter(
+      (sphere) => sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
+    )
     const relatedFaces = getFacesByPointId(this, pointId)
 
     if (!locked && relatedFaces.length > 0) {
@@ -1830,13 +1905,24 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
+    const sphereTransforms = locked
+      ? []
+      : relatedSpheres
+          .map((sphere) => ({
+            sphere,
+            before: sphere.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
     if (
       pointTransforms.length === 0 &&
       lineTransforms.length === 0 &&
       straightLineTransforms.length === 0 &&
       rayTransforms.length === 0 &&
       vectorTransforms.length === 0 &&
-      circleTransforms.length === 0
+      circleTransforms.length === 0 &&
+      sphereTransforms.length === 0
     ) {
       return
     }
@@ -1850,6 +1936,7 @@ export class Editor {
         vectorTransforms,
         [],
         circleTransforms,
+        sphereTransforms,
       ),
     )
   }
@@ -2111,7 +2198,7 @@ export class Editor {
       (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
     const relatedSpheres = [...this.scene.spheres.values()].filter(
-      (sphere) => sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId,
+      (sphere) => sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
     )
     const relatedFaces = [...this.scene.faces.values()].filter(
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),

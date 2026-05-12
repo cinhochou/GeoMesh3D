@@ -33,6 +33,12 @@ interface NormalCircleRadiusDialogState {
   radius: number
 }
 
+interface RadiusSphereDialogState {
+  visible: boolean
+  centerPointId: string
+  radius: number
+}
+
 interface ContentGroupCollapseState {
   point: boolean
   line: boolean
@@ -90,6 +96,12 @@ export const useUiStore = defineStore('ui', () => {
 
   const normalCircleRadiusDialog = ref<NormalCircleRadiusDialogState>({
     visible: false,
+    radius: 1,
+  })
+
+  const radiusSphereDialog = ref<RadiusSphereDialogState>({
+    visible: false,
+    centerPointId: '',
     radius: 1,
   })
 
@@ -225,6 +237,22 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
+  const openRadiusSphereDialog = (centerPointId: string) => {
+    radiusSphereDialog.value = {
+      visible: true,
+      centerPointId,
+      radius: 1,
+    }
+  }
+
+  const closeRadiusSphereDialog = () => {
+    radiusSphereDialog.value = {
+      visible: false,
+      centerPointId: '',
+      radius: 1,
+    }
+  }
+
   const setMergePointTargetId = (targetId: string) => {
     mergePointDialog.value = {
       ...mergePointDialog.value,
@@ -306,6 +334,7 @@ export const useUiStore = defineStore('ui', () => {
     closeMergePointDialog()
     closeRegularPolygonDialog()
     closeNormalCircleRadiusDialog()
+    closeRadiusSphereDialog()
     closeAllToolbarMenus()
     contentGroupsCollapsed.value = createContentGroupsCollapsed()
     hasAutoCollapsedContentGroups.value = false
@@ -328,6 +357,7 @@ export const useUiStore = defineStore('ui', () => {
     mergePointDialog,
     regularPolygonDialog,
     normalCircleRadiusDialog,
+    radiusSphereDialog,
     toolbarMenus,
     contentGroupsCollapsed,
     hasAutoCollapsedContentGroups,
@@ -353,6 +383,8 @@ export const useUiStore = defineStore('ui', () => {
     closeRegularPolygonDialog,
     openNormalCircleRadiusDialog,
     closeNormalCircleRadiusDialog,
+    openRadiusSphereDialog,
+    closeRadiusSphereDialog,
     setMergePointTargetId,
     closeAllToolbarMenus,
     setToolbarMenuOpen,

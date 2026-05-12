@@ -293,7 +293,7 @@ export class Scene {
       }
     })
     this.spheres.forEach((sphere) => {
-      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) {
+      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) {
         this.dirtySphereIds.add(sphere.id)
       }
     })
@@ -423,7 +423,7 @@ export class Scene {
 
     pointIds.forEach((pointId) => {
       this.spheres.forEach((sphere, sphereId) => {
-        if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) {
+        if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) {
           sphereIds.add(sphereId)
         }
       })

@@ -45,6 +45,7 @@ const {
   mergePointDialog,
   regularPolygonDialog,
   normalCircleRadiusDialog,
+  radiusSphereDialog,
 } = storeToRefs(uiStore)
 const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
 const { user } = storeToRefs(authStore)
@@ -213,6 +214,7 @@ onMounted(() => {
   interaction.syncControlLockState()
   window.addEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   window.addEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
+  window.addEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // Ensure renderer rebuilds meshes when editor view is mounted again
@@ -458,6 +460,7 @@ onUnmounted(() => {
   interaction?.unbind(renderer.renderer.domElement)
   window.removeEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   window.removeEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
+  window.removeEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -479,14 +482,16 @@ onUnmounted(() => {
 })
 
 function onModeChange(mode: EditorMode) {
-  // AR 模式下仅允许“选择”功能
+  // AR 模式下仅允许"选择"功能
   if (isARMode.value && mode !== EditorMode.Select) return
   interaction.clearPreview()
+  interaction.radiusSphereCenterPointId = null
   editor.setMode(mode)
   sceneStore.setCurrentMode(mode)
   uiStore.closeMergePointDialog()
   uiStore.closeRegularPolygonDialog()
   uiStore.closeNormalCircleRadiusDialog()
+  uiStore.closeRadiusSphereDialog()
 }
 
 const mergePointSelection = computed(() =>
@@ -553,6 +558,35 @@ const handleCancelNormalCircleRadius = () => {
   interaction.cancelNormalCircleCreation()
   uiStore.closeNormalCircleRadiusDialog()
 }
+
+const handleShowRadiusSphereDialog = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  uiStore.openRadiusSphereDialog(detail.centerPointId)
+}
+
+const handleConfirmRadiusSphereRadius = () => {
+  if (!canConfirmRadiusSphereRadius.value) return
+  const r = Math.round(radiusSphereDialog.value.radius * 10) / 10
+  interaction.confirmRadiusSphereRadius(r)
+  uiStore.closeRadiusSphereDialog()
+}
+
+const handleCancelRadiusSphereRadius = () => {
+  interaction.cancelRadiusSphereCreation()
+  uiStore.closeRadiusSphereDialog()
+}
+
+const radiusSphereRadiusError = computed(() => {
+  if (!radiusSphereDialog.value.visible) return ''
+  const r = radiusSphereDialog.value.radius
+  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
+  if (r <= 0) return '半径必须大于 0'
+  return ''
+})
+
+const canConfirmRadiusSphereRadius = computed(() => {
+  return radiusSphereRadiusError.value === ''
+})
 
 const normalCircleRadiusError = computed(() => {
   if (!normalCircleRadiusDialog.value.visible) return ''
@@ -803,6 +837,28 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         class="dialog-input"
         :class="{ 'dialog-input-error': normalCircleRadiusError }"
         @keydown.enter="handleConfirmNormalCircleRadius"
+      />
+    </InputDialog>
+
+    <InputDialog
+      :visible="radiusSphereDialog.visible"
+      title="输入半径"
+      :error-message="radiusSphereRadiusError"
+      :can-confirm="canConfirmRadiusSphereRadius"
+      :min-step-hint="MIN_STEP_HINT_TEXT"
+      :min-step-value="0.5"
+      @confirm="handleConfirmRadiusSphereRadius"
+      @cancel="handleCancelRadiusSphereRadius"
+    >
+      <label class="dialog-label">半径</label>
+      <input
+        v-model.number="radiusSphereDialog.radius"
+        type="number"
+        min="0.5"
+        step="0.5"
+        class="dialog-input"
+        :class="{ 'dialog-input-error': radiusSphereRadiusError }"
+        @keydown.enter="handleConfirmRadiusSphereRadius"
       />
     </InputDialog>
 

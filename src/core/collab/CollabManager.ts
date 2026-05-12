@@ -835,7 +835,7 @@ export class CollabManager {
       }
     })
     this.scene.spheres.forEach((sphere, id) => {
-      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) {
+      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) {
         this.markSphereDirty(id)
       }
     })
@@ -871,7 +871,7 @@ export class CollabManager {
         (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)) return true
     }
     for (const sphere of this.scene.spheres.values()) {
-      if (sphere.centerPoint.id === pointId || sphere.radiusPoint.id === pointId) return true
+      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) return true
     }
     for (const face of this.scene.faces.values()) {
       if (face.includesPoint(pointId)) return true
@@ -1182,7 +1182,7 @@ export class CollabManager {
       }
     })
     this.scene.spheres.forEach((sphere, sphereId) => {
-      if (sphere.centerPoint.id === id || sphere.radiusPoint.id === id) {
+      if (sphere.centerPoint.id === id || (sphere.radiusPoint && sphere.radiusPoint.id === id)) {
         if (!this.ySpheres.has(sphereId)) {
           this.removeSphereFromScene(sphereId)
         }
@@ -1758,9 +1758,10 @@ export class CollabManager {
   private applySphereRecord(id: string, record: SphereSharedMap) {
     const centerPointId = this.readString(record, 'centerPointId', '')
     const radiusPointId = this.readString(record, 'radiusPointId', '')
+    const radiusValue = this.readNumber(record, 'radiusValue', 0)
     const centerPoint = this.scene.points.get(centerPointId)
-    const radiusPoint = this.scene.points.get(radiusPointId)
-    if (!centerPoint || !radiusPoint) return
+    if (!centerPoint) return
+    const radiusPoint = radiusPointId ? this.scene.points.get(radiusPointId) ?? null : null
 
     const sphere = this.scene.spheres.get(id)
     const name = this.readString(record, 'name', sphere?.name ?? '')
@@ -1789,10 +1790,13 @@ export class CollabManager {
       sphere.userLocked = userLocked
       sphere.centerPoint = centerPoint
       sphere.radiusPoint = radiusPoint
+      sphere.radiusValue = radiusValue
       centerPoint.sphereId = id
       centerPoint.sphereRole = 'center'
-      radiusPoint.sphereId = id
-      radiusPoint.sphereRole = 'radius'
+      if (radiusPoint) {
+        radiusPoint.sphereId = id
+        radiusPoint.sphereRole = 'radius'
+      }
       this.scene.markAllRenderDirty()
       return
     }
@@ -1809,12 +1813,15 @@ export class CollabManager {
         labelOffsetX,
         labelOffsetY,
         valueVisible,
+        radiusValue,
       ),
     )
     centerPoint.sphereId = id
     centerPoint.sphereRole = 'center'
-    radiusPoint.sphereId = id
-    radiusPoint.sphereRole = 'radius'
+    if (radiusPoint) {
+      radiusPoint.sphereId = id
+      radiusPoint.sphereRole = 'radius'
+    }
     this.scene.markAllRenderDirty()
   }
 
@@ -2427,7 +2434,8 @@ export class CollabManager {
 
   private syncSphereRecord(record: SphereSharedMap, sphere: Sphere3) {
     this.setScalarField(record, 'centerPointId', sphere.centerPoint.id)
-    this.setScalarField(record, 'radiusPointId', sphere.radiusPoint.id)
+    this.setScalarField(record, 'radiusPointId', sphere.radiusPoint?.id ?? '')
+    this.setScalarField(record, 'radiusValue', sphere.radiusValue)
     this.setScalarField(record, 'name', sphere.name)
     this.setScalarField(record, 'nameVisible', sphere.nameVisible)
     this.setScalarField(record, 'valueVisible', sphere.valueVisible)

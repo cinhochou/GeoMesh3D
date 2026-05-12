@@ -51,6 +51,7 @@ export class Interaction {
   normalCircleDirectionId: string | null = null
   regularPolygonFirstPointId: string | null = null
   sphereTwoPointsFirstPointId: string | null = null
+  radiusSphereCenterPointId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -1191,6 +1192,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
+        this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -1471,6 +1473,16 @@ export class Interaction {
           }
           this.sphereTwoPointsFirstPointId = null
         }
+      } else if (this.editor.mode === EditorMode.CreateSphereRadius && type === 'point') {
+        if (!this.radiusSphereCenterPointId) {
+          this.radiusSphereCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+          window.dispatchEvent(
+            new CustomEvent('show-radius-sphere-dialog', {
+              detail: { centerPointId: geoId },
+            }),
+          )
+        }
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (
@@ -1499,7 +1511,9 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateSphereTwoPoints
       )
         this.editor.scene.selection.clear()
-      else if (this.editor.mode === EditorMode.CreateCircleNormal) {
+      else if (this.editor.mode === EditorMode.CreateSphereRadius) {
+        this.resetRadiusSphereCreation()
+      } else if (this.editor.mode === EditorMode.CreateCircleNormal) {
         this.resetNormalCircleCreation()
       } else if (this.editor.mode === EditorMode.IntersectionPoint)
         this.editor.clearIntersectionSelection()
@@ -1546,6 +1560,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
+        this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -1755,6 +1770,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreateSphereRadius) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetRadiusSphereCreation()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -1952,6 +1974,22 @@ export class Interaction {
           }
           this.sphereTwoPointsFirstPointId = null
         }
+      }
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateSphereRadius) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point' && !this.radiusSphereCenterPointId) {
+        this.radiusSphereCenterPointId = geoId
+        this.editor.scene.selection.selectPoint(geoId, true)
+        window.dispatchEvent(
+          new CustomEvent('show-radius-sphere-dialog', {
+            detail: { centerPointId: geoId },
+          }),
+        )
       }
       this.resetMobileInteractionState()
       return
@@ -2740,6 +2778,23 @@ export class Interaction {
   private resetSphereTwoPointsCreation() {
     this.sphereTwoPointsFirstPointId = null
     this.editor.scene.selection.clear()
+  }
+
+  resetRadiusSphereCreation() {
+    this.radiusSphereCenterPointId = null
+    this.editor.scene.selection.clear()
+  }
+
+  confirmRadiusSphereRadius(radius: number) {
+    if (!this.radiusSphereCenterPointId) return
+    const centerPoint = this.editor.scene.points.get(this.radiusSphereCenterPointId)
+    if (!centerPoint) return
+    this.radiusSphereCenterPointId = null
+    this.editor.tryCreateSphereRadius(centerPoint, radius)
+  }
+
+  cancelRadiusSphereCreation() {
+    this.resetRadiusSphereCreation()
   }
 
   confirmRegularPolygonVertices(vertexCount: number, firstPointId: string, secondPointId: string) {

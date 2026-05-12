@@ -1857,8 +1857,9 @@ const getEditingSphereState = () => {
 const applyEditSphereMeta = () => {
   const state = getEditingSphereState()
   if (!state) return
+  const prefix = state.sphere.name.startsWith('半径球') ? '半径球' : '两点球'
   props.editor.updateSphere(state.sphereId, {
-    name: `两点球${editSphere.nameSuffix.trim()}`,
+    name: `${prefix}${editSphere.nameSuffix.trim()}`,
     nameVisible: editSphere.nameVisible,
     valueVisible: editSphere.valueVisible,
   })
@@ -5256,13 +5257,16 @@ onUnmounted(() => {
             </div>
             <div
               class="line-editor-grid"
-              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+              :class="{
+                'line-editor-grid--compact': isCompactLineEditor,
+                'line-editor-grid--single-col': !props.editor.getSphereRadiusPoint(s!.id),
+              }"
             >
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 球心{{ props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A' }}(x,y,z)
               </div>
-              <div class="line-editor-head">
+              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="line-editor-head">
                 半径{{ props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B' }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
@@ -5294,7 +5298,7 @@ onUnmounted(() => {
                   +
                 </button>
               </div>
-              <div class="coord-input">
+              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
@@ -5351,7 +5355,7 @@ onUnmounted(() => {
                   +
                 </button>
               </div>
-              <div class="coord-input">
+              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
@@ -5408,7 +5412,7 @@ onUnmounted(() => {
                   +
                 </button>
               </div>
-              <div class="coord-input">
+              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
@@ -5935,9 +5939,9 @@ onUnmounted(() => {
               <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
               <div>体积：{{ sphere.getVolume().toFixed(2) }}</div>
               <div>
-                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? '' }} 　半径点：{{
-                  props.editor.getSphereRadiusPoint(sphere.id)?.name ?? ''
-                }}
+                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? '' }}<template v-if="props.editor.getSphereRadiusPoint(sphere.id)">　半径点：{{
+                  props.editor.getSphereRadiusPoint(sphere.id)!.name
+                }}</template>
               </div>
             </div>
           </div>
@@ -6867,6 +6871,23 @@ hr {
 
 .line-editor-grid--compact > .coord-input:nth-child(3n) {
   margin-left: 2px;
+}
+
+.line-editor-grid--single-col {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+
+.line-editor-grid--compact.line-editor-grid--single-col {
+  grid-template-columns: 12px minmax(0, 1fr);
+}
+
+.line-editor-grid--single-col > .coord-input {
+  width: 100%;
+}
+
+.line-editor-grid--compact.line-editor-grid--single-col > .coord-input {
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .line-editor-grid--compact > .coord-input input[type='number'] {

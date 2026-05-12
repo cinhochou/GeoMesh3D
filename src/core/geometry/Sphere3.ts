@@ -14,19 +14,21 @@ export class Sphere3 {
   visible: boolean
   userLocked: boolean
   centerPoint: Point3
-  radiusPoint: Point3
+  radiusPoint: Point3 | null
+  radiusValue: number
 
   constructor(
     id: string,
     name: string,
     centerPoint: Point3,
-    radiusPoint: Point3,
+    radiusPoint: Point3 | null,
     nameVisible: boolean = false,
     visible: boolean = true,
     userLocked: boolean = false,
     labelOffsetX: number = Sphere3.DEFAULT_LABEL_OFFSET_X,
     labelOffsetY: number = Sphere3.DEFAULT_LABEL_OFFSET_Y,
     valueVisible: boolean = false,
+    radiusValue: number = 0,
   ) {
     this.id = id
     this.name = name
@@ -38,15 +40,19 @@ export class Sphere3 {
     this.userLocked = userLocked
     this.centerPoint = centerPoint
     this.radiusPoint = radiusPoint
+    this.radiusValue = radiusValue
   }
 
   getRadius(): number {
-    const c = this.centerPoint.position
-    const r = this.radiusPoint.position
-    const dx = c.x - r.x
-    const dy = c.y - r.y
-    const dz = c.z - r.z
-    return Math.hypot(dx, dy, dz)
+    if (this.radiusPoint) {
+      const c = this.centerPoint.position
+      const r = this.radiusPoint.position
+      const dx = c.x - r.x
+      const dy = c.y - r.y
+      const dz = c.z - r.z
+      return Math.hypot(dx, dy, dz)
+    }
+    return this.radiusValue
   }
 
   getArea(): number {
@@ -61,5 +67,9 @@ export class Sphere3 {
 
   isValid(): boolean {
     return this.getRadius() > Sphere3.RADIUS_EPSILON
+  }
+
+  isRadiusSphere(): boolean {
+    return this.radiusPoint === null
   }
 }

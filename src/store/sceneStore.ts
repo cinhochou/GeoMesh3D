@@ -59,6 +59,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建正四面体'
     case EditorMode.CreateSphereTwoPoints:
       return '创建两点球'
+    case EditorMode.CreateSphereRadius:
+      return '创建半径球'
     default:
       return ''
   }
@@ -96,6 +98,8 @@ const getModeHint = (mode: EditorMode) => {
       return '选中两个点或一条线段以创建正四面体~'
     case EditorMode.CreateSphereTwoPoints:
       return '先选中一点作为球心，再选中一点以创建球体~'
+    case EditorMode.CreateSphereRadius:
+      return '先选中一点作为球心，输入半径以创建球体~'
     default:
       return ''
   }
