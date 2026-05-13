@@ -60,6 +60,7 @@ export class Interaction {
   private dragDepth: number | null = null
   private dragStartPositions = new Map<string, Vec3>()
   private dragSceneStartPositions: Map<string, Vec3> | null = null
+  private dragStartAxisHints: Array<{ setAxisHint: (v: Vec3) => void; getVAxisHint: () => Vec3; before: Vec3 }> | null = null
   private mobileCreatePointerId: number | null = null
   private mobileCreatePreviewPos: Vec3 | null = null
   private mobileCreateHadPreviewAtPointerDown = false
@@ -2678,6 +2679,21 @@ export class Interaction {
         [...this.editor.scene.points.entries()].map(([id, point]) => [id, point.position.clone()]),
       )
     }
+
+    if (!this.dragStartAxisHints) {
+      this.dragStartAxisHints = [
+        ...this.editor.getCubeConstraints().map((c) => ({
+          setAxisHint: c.setAxisHint.bind(c),
+          getVAxisHint: c.getVAxisHint.bind(c),
+          before: c.getVAxisHint().clone(),
+        })),
+        ...this.editor.getRegularPolygonConstraints().map((c) => ({
+          setAxisHint: c.setAxisHint.bind(c),
+          getVAxisHint: c.getVAxisHint.bind(c),
+          before: c.getVAxisHint().clone(),
+        })),
+      ]
+    }
   }
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
@@ -2756,9 +2772,22 @@ export class Interaction {
         (transform): transform is { id: string; before: Vec3; after: Vec3 } => transform !== null,
       )
 
-    this.editor.applyPointTransformHistory(transforms)
+    const axisHintChanges = this.dragStartAxisHints
+      ?.map((entry) => ({
+        setAxisHint: entry.setAxisHint,
+        before: entry.before,
+        after: entry.getVAxisHint().clone(),
+      }))
+      .filter((change) => {
+        const b = change.before
+        const a = change.after
+        return Math.abs(a.x - b.x) > 1e-6 || Math.abs(a.y - b.y) > 1e-6 || Math.abs(a.z - b.z) > 1e-6
+      }) ?? []
+
+    this.editor.applyPointTransformHistory(transforms, axisHintChanges)
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
+    this.dragStartAxisHints = null
   }
 
   resetNormalCircleCreation() {
@@ -2850,6 +2879,7 @@ export class Interaction {
     this.editor.scene.activeDraggedPointIds.clear()
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
+    this.dragStartAxisHints = null
   }
 
   shouldSyncLiveScene() {

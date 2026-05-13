@@ -75,9 +75,9 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 3D_editor
 ├─ .editorconfig
 ├─ .prettierrc.json
+├─ CodingPlan.txt
 ├─ env.d.ts
 ├─ eslint.config.ts
-├─ idea.txt
 ├─ index.html
 ├─ package-lock.json
 ├─ package.json
@@ -98,6 +98,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  └─ user.ts
 │  ├─ App.vue
 │  ├─ components
+│  │  ├─ InputDialog.vue
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
 │  │  └─ Toolbar.vue
@@ -110,40 +111,64 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ CubeConstraint.ts
 │  │  │  ├─ DistanceConstraint.ts
 │  │  │  ├─ IntersectionPointConstraint.ts
-│  │  │  └─ PlanarFaceConstraint.ts
+│  │  │  ├─ PlanarFaceConstraint.ts
+│  │  │  └─ RegularPolygonConstraint.ts
 │  │  ├─ editor
 │  │  │  ├─ Command.ts
 │  │  │  ├─ commands
-│  │  │  │  ├─ AddElementCommand.ts
-│  │  │  │  ├─ AddHexahedronCommand.ts
-│  │  │  │  ├─ AddIntersectionPointCommand.ts
-│  │  │  │  ├─ ClearSceneCommand.ts
-│  │  │  │  ├─ DeleteFaceCommand.ts
-│  │  │  │  ├─ DeleteHexahedronCommand.ts
-│  │  │  │  ├─ DeleteLineCommand.ts
-│  │  │  │  ├─ DeletePointCommand.ts
-│  │  │  │  ├─ DeleteRayCommand.ts
-│  │  │  │  ├─ DeleteStraightLineCommand.ts
-│  │  │  │  ├─ MergePointsCommand.ts
-│  │  │  │  ├─ SyncLockStateCommand.ts
-│  │  │  │  ├─ TransformCommand.ts
-│  │  │  │  ├─ TransformPointsCommand.ts
-│  │  │  │  ├─ UpdateFaceCommand.ts
-│  │  │  │  ├─ UpdateLineCommand.ts
-│  │  │  │  ├─ UpdatePointCommand.ts
-│  │  │  │  ├─ UpdateRayCommand.ts
-│  │  │  │  └─ UpdateStraightLineCommand.ts
+│  │  │  │  ├─ add
+│  │  │  │  │  ├─ AddElementCommand.ts
+│  │  │  │  │  ├─ AddHexahedronCommand.ts
+│  │  │  │  │  ├─ AddIntersectionPointCommand.ts
+│  │  │  │  │  ├─ AddRadiusSphereCommand.ts
+│  │  │  │  │  ├─ AddRegularPolygonCommand.ts
+│  │  │  │  │  └─ AddSphereCommand.ts
+│  │  │  │  ├─ delete
+│  │  │  │  │  ├─ DeleteCircleCommand.ts
+│  │  │  │  │  ├─ DeleteFaceCommand.ts
+│  │  │  │  │  ├─ DeleteHexahedronCommand.ts
+│  │  │  │  │  ├─ DeleteLineCommand.ts
+│  │  │  │  │  ├─ DeletePointCommand.ts
+│  │  │  │  │  ├─ DeleteRadiusSphereCommand.ts
+│  │  │  │  │  ├─ DeleteRayCommand.ts
+│  │  │  │  │  ├─ DeleteSphereCommand.ts
+│  │  │  │  │  ├─ DeleteStraightLineCommand.ts
+│  │  │  │  │  └─ DeleteVectorCommand.ts
+│  │  │  │  ├─ scene
+│  │  │  │  │  ├─ ClearSceneCommand.ts
+│  │  │  │  │  ├─ MergeCubePointsCommand.ts
+│  │  │  │  │  ├─ MergePointsCommand.ts
+│  │  │  │  │  ├─ SyncLockStateCommand.ts
+│  │  │  │  │  ├─ TransformCommand.ts
+│  │  │  │  │  └─ TransformPointsCommand.ts
+│  │  │  │  └─ update
+│  │  │  │     ├─ UpdateCircleCommand.ts
+│  │  │  │     ├─ UpdateCubeCommand.ts
+│  │  │  │     ├─ UpdateFaceCommand.ts
+│  │  │  │     ├─ UpdateLineCommand.ts
+│  │  │  │     ├─ UpdatePointCommand.ts
+│  │  │  │     ├─ UpdateRayCommand.ts
+│  │  │  │     ├─ UpdateRegularPolygonCommand.ts
+│  │  │  │     ├─ UpdateSphereCommand.ts
+│  │  │  │     ├─ UpdateSphereRadiusCommand.ts
+│  │  │  │     ├─ UpdateStraightLineCommand.ts
+│  │  │  │     └─ UpdateVectorCommand.ts
 │  │  │  ├─ Editor.ts
 │  │  │  └─ editorSession.ts
 │  │  ├─ geometry
+│  │  │  ├─ Circle3.ts
+│  │  │  ├─ GeoVector3.ts
 │  │  │  ├─ IntersectionPoint3.ts
 │  │  │  ├─ Line3.ts
+│  │  │  ├─ PlanarPolygon.ts
 │  │  │  ├─ PlanarUtils.ts
-│  │  │  ├─ Plane.ts
 │  │  │  ├─ Point3.ts
 │  │  │  ├─ Ray3.ts
+│  │  │  ├─ Sphere3.ts
 │  │  │  ├─ StraightLine3.ts
 │  │  │  └─ Vec3.ts
+│  │  ├─ perf
+│  │  │  └─ solverScheduler.worker.ts
 │  │  └─ scene
 │  │     ├─ Scene.ts
 │  │     └─ Selection.ts

@@ -1,8 +1,8 @@
 // src/core/editor/Editor.ts
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
-import { TransformCommand } from './commands/TransformCommand'
-import { AddElementCommand } from './commands/AddElementCommand'
+import { TransformCommand } from './commands/scene/TransformCommand'
+import { AddElementCommand } from './commands/add/AddElementCommand'
 import { Point3 } from '../geometry/Point3'
 import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
@@ -22,37 +22,37 @@ import {
   projectPointToPlane,
   signedDistanceToPlane,
 } from '../geometry/PlanarUtils'
-import { TransformPointsCommand } from './commands/TransformPointsCommand'
-import { UpdatePointCommand } from './commands/UpdatePointCommand'
-import { UpdateLineCommand } from './commands/UpdateLineCommand'
-import { UpdateRayCommand } from './commands/UpdateRayCommand'
-import { UpdateVectorCommand } from './commands/UpdateVectorCommand'
-import { UpdateCircleCommand } from './commands/UpdateCircleCommand'
-import { UpdateStraightLineCommand } from './commands/UpdateStraightLineCommand'
-import { UpdateFaceCommand } from './commands/UpdateFaceCommand'
-import { DeletePointCommand } from './commands/DeletePointCommand'
-import { DeleteLineCommand } from './commands/DeleteLineCommand'
-import { DeleteRayCommand } from './commands/DeleteRayCommand'
-import { DeleteVectorCommand } from './commands/DeleteVectorCommand'
-import { DeleteStraightLineCommand } from './commands/DeleteStraightLineCommand'
-import { DeleteFaceCommand } from './commands/DeleteFaceCommand'
-import { DeleteCircleCommand } from './commands/DeleteCircleCommand'
-import { DeleteSphereCommand } from './commands/DeleteSphereCommand'
-import { UpdateSphereCommand } from './commands/UpdateSphereCommand'
-import { UpdateCubeCommand } from './commands/UpdateCubeCommand'
-import { UpdateRegularPolygonCommand } from './commands/UpdateRegularPolygonCommand'
-import { DeleteHexahedronCommand } from './commands/DeleteHexahedronCommand'
-import { ClearSceneCommand } from './commands/ClearSceneCommand'
-import { SyncLockStateCommand } from './commands/SyncLockStateCommand'
-import { MergePointsCommand } from './commands/MergePointsCommand'
-import { MergeCubePointsCommand } from './commands/MergeCubePointsCommand'
-import { AddIntersectionPointCommand } from './commands/AddIntersectionPointCommand'
-import { AddHexahedronCommand } from './commands/AddHexahedronCommand'
-import { AddSphereCommand } from './commands/AddSphereCommand'
-import { AddRadiusSphereCommand } from './commands/AddRadiusSphereCommand'
-import { DeleteRadiusSphereCommand } from './commands/DeleteRadiusSphereCommand'
-import { UpdateSphereRadiusCommand } from './commands/UpdateSphereRadiusCommand'
-import { AddRegularPolygonCommand } from './commands/AddRegularPolygonCommand'
+import { TransformPointsCommand } from './commands/scene/TransformPointsCommand'
+import { UpdatePointCommand } from './commands/update/UpdatePointCommand'
+import { UpdateLineCommand } from './commands/update/UpdateLineCommand'
+import { UpdateRayCommand } from './commands/update/UpdateRayCommand'
+import { UpdateVectorCommand } from './commands/update/UpdateVectorCommand'
+import { UpdateCircleCommand } from './commands/update/UpdateCircleCommand'
+import { UpdateStraightLineCommand } from './commands/update/UpdateStraightLineCommand'
+import { UpdateFaceCommand } from './commands/update/UpdateFaceCommand'
+import { DeletePointCommand } from './commands/delete/DeletePointCommand'
+import { DeleteLineCommand } from './commands/delete/DeleteLineCommand'
+import { DeleteRayCommand } from './commands/delete/DeleteRayCommand'
+import { DeleteVectorCommand } from './commands/delete/DeleteVectorCommand'
+import { DeleteStraightLineCommand } from './commands/delete/DeleteStraightLineCommand'
+import { DeleteFaceCommand } from './commands/delete/DeleteFaceCommand'
+import { DeleteCircleCommand } from './commands/delete/DeleteCircleCommand'
+import { DeleteSphereCommand } from './commands/delete/DeleteSphereCommand'
+import { UpdateSphereCommand } from './commands/update/UpdateSphereCommand'
+import { UpdateCubeCommand } from './commands/update/UpdateCubeCommand'
+import { UpdateRegularPolygonCommand } from './commands/update/UpdateRegularPolygonCommand'
+import { DeleteHexahedronCommand } from './commands/delete/DeleteHexahedronCommand'
+import { ClearSceneCommand } from './commands/scene/ClearSceneCommand'
+import { SyncLockStateCommand } from './commands/scene/SyncLockStateCommand'
+import { MergePointsCommand } from './commands/scene/MergePointsCommand'
+import { MergeCubePointsCommand } from './commands/scene/MergeCubePointsCommand'
+import { AddIntersectionPointCommand } from './commands/add/AddIntersectionPointCommand'
+import { AddHexahedronCommand } from './commands/add/AddHexahedronCommand'
+import { AddSphereCommand } from './commands/add/AddSphereCommand'
+import { AddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
+import { DeleteRadiusSphereCommand } from './commands/delete/DeleteRadiusSphereCommand'
+import { UpdateSphereRadiusCommand } from './commands/update/UpdateSphereRadiusCommand'
+import { AddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -1236,6 +1236,7 @@ export class Editor {
       (layout.y / yzLength) * projectedDir.y - (layout.z / yzLength) * perpAxis.y,
       (layout.y / yzLength) * projectedDir.z - (layout.z / yzLength) * perpAxis.z,
     )
+    const axisHintBefore = constraint.getVAxisHint().clone()
     constraint.setAxisHint(vAxis)
     const axes = constraint.getResolvedAxes()
     if (!axes) return
@@ -1264,12 +1265,13 @@ export class Editor {
       )
 
     if (transforms.length === 0) return
+    const axisHintChanges = [{ setAxisHint: constraint.setAxisHint.bind(constraint), before: axisHintBefore, after: vAxis }]
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges))
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms))
+    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
   }
 
   private rotateRegularPolygonByDependentPoint(constraintId: string, pointId: string, position: Vec3) {
@@ -1312,6 +1314,7 @@ export class Editor {
     const projectedDir = normalizeVec3(projected)
     if (!projectedDir) return
 
+    const axisHintBefore = constraint.getVAxisHint().clone()
     constraint.setAxisHint(projectedDir)
 
     const axes = constraint.getResolvedAxes()
@@ -1341,11 +1344,12 @@ export class Editor {
       )
 
     if (transforms.length === 0) return
+    const axisHintChanges = [{ setAxisHint: constraint.setAxisHint.bind(constraint), before: axisHintBefore, after: projectedDir }]
     if (transforms.length === 1) {
-      this.executeCommand(new TransformCommand(transforms[0]!.point, transforms[0]!.before, transforms[0]!.after))
+      this.executeCommand(new TransformCommand(transforms[0]!.point, transforms[0]!.before, transforms[0]!.after, axisHintChanges))
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms))
+    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
   }
 
   private setRegularPolygonOwnerPointPosition(constraintId: string, pointId: string, position: Vec3) {
@@ -2519,7 +2523,10 @@ export class Editor {
     this.executeCommand(new TransformPointsCommand(transforms))
   }
 
-  applyPointTransformHistory(transforms: Array<{ id: string; before: Vec3; after: Vec3 }>) {
+  applyPointTransformHistory(
+    transforms: Array<{ id: string; before: Vec3; after: Vec3 }>,
+    axisHintChanges: Array<{ setAxisHint: (v: Vec3) => void; before: Vec3; after: Vec3 }> = [],
+  ) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       transforms.map(({ id, after }) => ({ id, position: after.clone() })),
     )
@@ -2547,14 +2554,14 @@ export class Editor {
           transform !== null,
       )
 
-    if (commandTransforms.length === 0) return
-    if (commandTransforms.length === 1) {
+    if (commandTransforms.length === 0 && axisHintChanges.length === 0) return
+    if (commandTransforms.length === 1 && axisHintChanges.length === 0) {
       const transform = commandTransforms[0]!
       this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(commandTransforms))
+    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges))
   }
 
   updatePoint(
