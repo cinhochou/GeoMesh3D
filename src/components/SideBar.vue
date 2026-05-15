@@ -29,28 +29,83 @@ const { modeName, modeHint } = storeToRefs(sceneStore)
 const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
 const showHiddenPointHint = ref(false)
 const showHiddenLineHint = ref(false)
+const hiddenPointHintPinned = ref(false)
+const hiddenLineHintPinned = ref(false)
 const hiddenPointHintTriggerRef = ref<HTMLElement | null>(null)
 const hiddenLineHintTriggerRef = ref<HTMLElement | null>(null)
-const hiddenPointHintStyle = computed(() => {
-  const el = hiddenPointHintTriggerRef.value
-  if (!el) return {}
-  const rect = el.getBoundingClientRect()
-  return {
-    position: 'fixed' as const,
-    top: `${rect.bottom + 4}px`,
-    left: `${rect.left}px`,
+const hiddenPointHintPopoverRef = ref<HTMLElement | null>(null)
+const hiddenLineHintPopoverRef = ref<HTMLElement | null>(null)
+const hiddenPointHintStyle = ref<Record<string, string>>({})
+const hiddenLineHintStyle = ref<Record<string, string>>({})
+let hintRafId = 0
+
+const isTriggerVisible = (el: HTMLElement | null): boolean => {
+  if (!el) return false
+  const container = el.closest('.content-box')
+  if (!container) return true
+  const elRect = el.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  return elRect.bottom > containerRect.top && elRect.top < containerRect.bottom
+}
+
+const updateHintPositions = () => {
+  if (showHiddenPointHint.value) {
+    const el = hiddenPointHintTriggerRef.value
+    if (el && isTriggerVisible(el)) {
+      const rect = el.getBoundingClientRect()
+      hiddenPointHintStyle.value = {
+        position: 'fixed',
+        top: `${rect.bottom + 4}px`,
+        left: `${rect.left}px`,
+      }
+    } else {
+      showHiddenPointHint.value = false
+      hiddenPointHintPinned.value = false
+    }
+  }
+  if (showHiddenLineHint.value) {
+    const el = hiddenLineHintTriggerRef.value
+    if (el && isTriggerVisible(el)) {
+      const rect = el.getBoundingClientRect()
+      hiddenLineHintStyle.value = {
+        position: 'fixed',
+        top: `${rect.bottom + 4}px`,
+        left: `${rect.left}px`,
+      }
+    } else {
+      showHiddenLineHint.value = false
+      hiddenLineHintPinned.value = false
+    }
+  }
+  if (showHiddenPointHint.value || showHiddenLineHint.value) {
+    hintRafId = requestAnimationFrame(updateHintPositions)
+  }
+}
+
+watch([showHiddenPointHint, showHiddenLineHint], ([showPoint, showLine]) => {
+  if (showPoint || showLine) {
+    cancelAnimationFrame(hintRafId)
+    updateHintPositions()
+    hintRafId = requestAnimationFrame(updateHintPositions)
+  } else {
+    cancelAnimationFrame(hintRafId)
   }
 })
-const hiddenLineHintStyle = computed(() => {
-  const el = hiddenLineHintTriggerRef.value
-  if (!el) return {}
-  const rect = el.getBoundingClientRect()
-  return {
-    position: 'fixed' as const,
-    top: `${rect.bottom + 4}px`,
-    left: `${rect.left}px`,
+
+const dismissHintPopovers = (e: MouseEvent | TouchEvent) => {
+  const target = e.target as HTMLElement | null
+  if (!target) return
+  if (target.closest('.hidden-hint-trigger') || target.closest('.hidden-hint-popover')) return
+  if (hiddenPointHintPinned.value) {
+    hiddenPointHintPinned.value = false
+    showHiddenPointHint.value = false
   }
-})
+  if (hiddenLineHintPinned.value) {
+    hiddenLineHintPinned.value = false
+    showHiddenLineHint.value = false
+  }
+}
+
 const isAllGroupsCollapsed = ref(false)
 const toggleAllContentGroups = () => {
   if (isAllGroupsCollapsed.value) {
@@ -2429,6 +2484,8 @@ onMounted(() => {
   window.addEventListener('resize', syncSplitPaneMode)
   window.addEventListener('resize', syncSelectedPaneHeight)
   document.addEventListener('mousedown', handleGlobalClick)
+  document.addEventListener('mousedown', dismissHintPopovers)
+  document.addEventListener('touchstart', dismissHintPopovers, { passive: true })
   document.addEventListener('pointermove', handleSplitPaneDrag)
   document.addEventListener('pointerup', stopSplitPaneDrag)
   document.addEventListener('pointercancel', stopSplitPaneDrag)
@@ -2436,6 +2493,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelAnimationFrame(hintRafId)
   if (lineCoordCollapseTimer !== null) {
     window.clearTimeout(lineCoordCollapseTimer)
   }
@@ -2449,6 +2507,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', syncSplitPaneMode)
   window.removeEventListener('resize', syncSelectedPaneHeight)
   document.removeEventListener('mousedown', handleGlobalClick)
+  document.removeEventListener('mousedown', dismissHintPopovers)
+  document.removeEventListener('touchstart', dismissHintPopovers)
   document.removeEventListener('pointermove', handleSplitPaneDrag)
   document.removeEventListener('pointerup', stopSplitPaneDrag)
   document.removeEventListener('pointercancel', stopSplitPaneDrag)
@@ -5616,11 +5676,11 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="hidden-hint-trigger"
-                :class="{ active: showHiddenPointHint }"
+                :class="{ active: hiddenPointHintPinned }"
                 :ref="(el: any) => (hiddenPointHintTriggerRef = el)"
-                @mouseenter="showHiddenPointHint = true"
-                @mouseleave="showHiddenPointHint = false"
-                @click.stop="showHiddenPointHint = !showHiddenPointHint"
+                @pointerenter="(e: PointerEvent) => { if (e.pointerType !== 'touch') showHiddenPointHint = true }"
+                @pointerleave="(e: PointerEvent) => { if (e.pointerType !== 'touch' && !hiddenPointHintPinned) showHiddenPointHint = false }"
+                @click.stop="hiddenPointHintPinned = !hiddenPointHintPinned; showHiddenPointHint = hiddenPointHintPinned"
               >
                 ?
               </button>
@@ -5676,11 +5736,11 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="hidden-hint-trigger"
-                :class="{ active: showHiddenLineHint }"
+                :class="{ active: hiddenLineHintPinned }"
                 :ref="(el: any) => (hiddenLineHintTriggerRef = el)"
-                @mouseenter="showHiddenLineHint = true"
-                @mouseleave="showHiddenLineHint = false"
-                @click.stop="showHiddenLineHint = !showHiddenLineHint"
+                @pointerenter="(e: PointerEvent) => { if (e.pointerType !== 'touch') showHiddenLineHint = true }"
+                @pointerleave="(e: PointerEvent) => { if (e.pointerType !== 'touch' && !hiddenLineHintPinned) showHiddenLineHint = false }"
+                @click.stop="hiddenLineHintPinned = !hiddenLineHintPinned; showHiddenLineHint = hiddenLineHintPinned"
               >
                 ?
               </button>
@@ -5991,10 +6051,10 @@ onUnmounted(() => {
     </div>
   </div>
   <Teleport to="body">
-    <div v-if="showHiddenPointHint" class="hidden-hint-popover" :style="hiddenPointHintStyle">
+    <div v-if="showHiddenPointHint" ref="hiddenPointHintPopoverRef" class="hidden-hint-popover" :style="hiddenPointHintStyle" @mousedown.stop @touchstart.stop>
       已隐藏由复杂几何对象约束生成的点（圆心点、交点等除外），但是你仍然可以在选中区查看
     </div>
-    <div v-if="showHiddenLineHint" class="hidden-hint-popover" :style="hiddenLineHintStyle">
+    <div v-if="showHiddenLineHint" ref="hiddenLineHintPopoverRef" class="hidden-hint-popover" :style="hiddenLineHintStyle" @mousedown.stop @touchstart.stop>
       已隐藏由复杂几何对象约束生成的线段，但是你仍然可以在选中区查看
     </div>
   </Teleport>
