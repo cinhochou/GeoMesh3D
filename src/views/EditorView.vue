@@ -47,7 +47,12 @@ const {
   normalCircleRadiusDialog,
   radiusSphereDialog,
 } = storeToRefs(uiStore)
-const { peerCount, status: collabStatus, joinDialog: collabJoinDialog } = storeToRefs(collabStore)
+const {
+  peerCount,
+  latencyMs: collabLatencyMs,
+  status: collabStatus,
+  joinDialog: collabJoinDialog,
+} = storeToRefs(collabStore)
 const { user } = storeToRefs(authStore)
 
 const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = getEditorSession()
@@ -243,6 +248,9 @@ onMounted(() => {
   }
   collabManager.value.onStatusUpdate = (status) => {
     collabStore.setStatus(status)
+  }
+  collabManager.value.onLatencyUpdate = (latencyMs) => {
+    collabStore.setLatencyMs(latencyMs)
   }
   collabManager.value.onSharedWorldRotationUpdate = (state) => {
     if (!isARMode.value) {
@@ -884,9 +892,9 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @toggle-collab="handleToggleCollab"
     />
 
-    <div ref="editorBodyRef" class="editor-body">
+      <div ref="editorBodyRef" class="editor-body">
       <div ref="sidebarShellRef" class="sidebar-shell" :style="sidebarShellStyle">
-        <Sidebar class="editor-sidebar" :scene="scene" :editor="editor" />
+        <Sidebar :scene="scene" :editor="editor" />
       </div>
       <div
         class="sidebar-width-resizer"
@@ -912,7 +920,12 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
             {{ sharedRotationOwnerNotice }}
           </div>
         </Transition>
-        <div class="fps-indicator">FPS: {{ fps }}</div>
+        <div class="performance-indicators">
+          <div class="fps-indicator">FPS: {{ fps }}</div>
+          <div v-if="collabStatus.connected && collabLatencyMs !== null" class="latency-indicator">
+            {{ collabLatencyMs }} ms
+          </div>
+        </div>
         <div v-if="!isARMode" class="viewport-controls">
           <button
             type="button"
@@ -966,7 +979,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   overflow: hidden;
 }
 
-.editor-sidebar {
+.sidebar-shell :deep(.sidebar) {
   width: 100%;
   min-width: 100%;
   max-width: none;
@@ -1025,11 +1038,20 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   background: #5a5a5a;
 }
 
-.fps-indicator {
+.performance-indicators {
   position: absolute;
   top: 12px;
   right: 12px;
   z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.fps-indicator,
+.latency-indicator {
   background: transparent;
   color: #ffffff;
   padding: 6px 10px;
@@ -1037,7 +1059,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   border-radius: 4px;
   font-size: 12px;
   font-family: monospace;
-  pointer-events: none;
+  white-space: nowrap;
 }
 
 .rotation-owner-notice {
@@ -1274,9 +1296,13 @@ select.axis-control option {
 }
 
 @media (max-width: 1024px) and (orientation: landscape) {
-  .fps-indicator {
+  .performance-indicators {
     top: 8px;
     right: 8px;
+  }
+
+  .fps-indicator,
+  .latency-indicator {
     padding: 4px 8px;
     font-size: 11px;
   }
@@ -1289,6 +1315,14 @@ select.axis-control option {
   .toast-content {
     padding: 12px 20px;
     font-size: 14px;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .performance-indicators {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0;
   }
 }
 </style>

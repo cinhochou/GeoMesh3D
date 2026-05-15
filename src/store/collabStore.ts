@@ -13,6 +13,7 @@ const DEFAULT_COLLAB_JOIN_MESSAGE = '正在加入房间中...'
 export const useCollabStore = defineStore('collab', () => {
   const roomName = ref(DEFAULT_ROOM_NAME)
   const peerCount = ref(1)
+  const latencyMs = ref<number | null>(null)
   const status = ref<CollabStatus>({
     room: null,
     connecting: false,
@@ -33,6 +34,10 @@ export const useCollabStore = defineStore('collab', () => {
 
   const setPeerCount = (value: number) => {
     peerCount.value = value
+  }
+
+  const setLatencyMs = (value: number | null) => {
+    latencyMs.value = value
   }
 
   const setStatus = (value: CollabStatus) => {
@@ -63,6 +68,7 @@ export const useCollabStore = defineStore('collab', () => {
   const resetCollabState = () => {
     roomName.value = DEFAULT_ROOM_NAME
     peerCount.value = 1
+    latencyMs.value = null
     status.value = {
       room: null,
       connecting: false,
@@ -74,6 +80,7 @@ export const useCollabStore = defineStore('collab', () => {
   return {
     roomName,
     peerCount,
+    latencyMs,
     status,
     joinDialog,
     isConnected,
@@ -81,6 +88,7 @@ export const useCollabStore = defineStore('collab', () => {
     hasActiveRoom,
     setRoomName,
     setPeerCount,
+    setLatencyMs,
     setStatus,
     openJoinDialog,
     closeJoinDialog,

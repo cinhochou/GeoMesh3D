@@ -78,6 +78,7 @@ export class CollabManager {
   private static readonly LIVE_SYNC_THROTTLE_MS = 33
   private static readonly WORLD_ROTATION_OWNER_TIMEOUT_MS = 1500
   private static readonly WORLD_ROTATION_OWNER_HEARTBEAT_MS = 500
+  private static readonly LATENCY_SAMPLE_INTERVAL_MS = 2000
   // 本地 websocket 服务不可用时，回退到这个公网协作地址。
   private static readonly FALLBACK_SERVER_URL = 'wss://kraig-scarabaeiform-zealously.ngrok-free.dev'
 
@@ -119,11 +120,14 @@ export class CollabManager {
   private roomName: string | null = null
   private connecting = false
   private connected = false
+  private latencyMs: number | null = null
 
   private syncTimer: number | null = null
   private syncPending = false
   private liveSyncTimer: number | null = null
   private liveSyncPending = false
+  private latencyTimer: number | null = null
+  private readonly latencySamples = new Map<string, number>()
   private providerCleanup: Array<() => void> = []
   private readonly serverUrls: string[]
   private localUserLabel: string | null = null
@@ -151,6 +155,7 @@ export class CollabManager {
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
+  public onLatencyUpdate: (latencyMs: number | null) => void = () => {}
   public onSharedWorldRotationUpdate: (state: SharedWorldRotationState) => void = () => {}
 
   constructor(private scene: Scene) {
@@ -486,6 +491,10 @@ export class CollabManager {
     }
   }
 
+  getLatencyMs() {
+    return this.latencyMs
+  }
+
   async joinRoom(roomName: string) {
     const normalizedRoomName = roomName.trim()
     if (!normalizedRoomName) throw new Error('roomName is empty')
@@ -539,6 +548,7 @@ export class CollabManager {
     }
     this.clearProviderBindings()
     this.stopWorldRotationOwnerHeartbeat()
+    this.stopLatencySampling()
 
     if (this.provider) {
       console.log('disconnecting collaboration provider...')
@@ -563,6 +573,7 @@ export class CollabManager {
     this.roomName = null
     this.connecting = false
     this.connected = false
+    this.setLatencyMs(null)
     this.emitStatus()
     this.onSharedWorldRotationUpdate({
       quaternion: { x: 0, y: 0, z: 0, w: 1 },
@@ -582,17 +593,103 @@ export class CollabManager {
     this.onPeersUpdate(count)
   }
 
+  private setLatencyMs(value: number | null) {
+    if (this.latencyMs === value) return
+    this.latencyMs = value
+    this.onLatencyUpdate(value)
+  }
+
   private updateConnectionStateFromProvider(provider: WebsocketProvider) {
     const isRoomOpen = this.roomName !== null
     this.connected = provider.wsconnected && provider.synced
     this.connecting =
       isRoomOpen && (provider.wsconnecting || (provider.wsconnected && !provider.synced))
+    if (this.connected) {
+      this.startLatencySampling(provider)
+    } else {
+      this.stopLatencySampling()
+    }
     this.emitStatus()
   }
 
   private clearProviderBindings() {
     this.providerCleanup.forEach((cleanup) => cleanup())
     this.providerCleanup = []
+  }
+
+  private startLatencySampling(provider: WebsocketProvider) {
+    if (this.latencyTimer !== null) return
+    this.sendLatencyPing(provider)
+    this.latencyTimer = window.setInterval(() => {
+      this.sendLatencyPing(provider)
+    }, CollabManager.LATENCY_SAMPLE_INTERVAL_MS)
+  }
+
+  private stopLatencySampling() {
+    if (this.latencyTimer !== null) {
+      window.clearInterval(this.latencyTimer)
+      this.latencyTimer = null
+    }
+    this.latencySamples.clear()
+    this.setLatencyMs(null)
+  }
+
+  private sendLatencyPing(provider: WebsocketProvider) {
+    if (this.roomName === null || !provider.synced) return
+    const id = `${this.getLocalClientId()}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    this.latencySamples.set(id, performance.now())
+    provider.awareness.setLocalStateField('latencyPing', {
+      id,
+      senderClientId: this.getLocalClientId(),
+      sentAt: Date.now(),
+    })
+  }
+
+  private clearLatencyAwareness(provider: WebsocketProvider) {
+    provider.awareness.setLocalStateField('latencyPing', null)
+    provider.awareness.setLocalStateField('latencyPong', null)
+  }
+
+  private readAwarenessLatencyMessage(value: unknown) {
+    if (!value || typeof value !== 'object') return null
+    const message = value as {
+      id?: unknown
+      senderClientId?: unknown
+      responderClientId?: unknown
+      sentAt?: unknown
+    }
+    if (typeof message.id !== 'string' || typeof message.senderClientId !== 'number') return null
+    return {
+      id: message.id,
+      senderClientId: message.senderClientId,
+      responderClientId:
+        typeof message.responderClientId === 'number' ? message.responderClientId : null,
+      sentAt: typeof message.sentAt === 'number' ? message.sentAt : null,
+    }
+  }
+
+  private handleLatencyAwarenessChange(provider: WebsocketProvider) {
+    const localClientId = this.getLocalClientId()
+    provider.awareness.getStates().forEach((state, clientId) => {
+      if (clientId === localClientId) return
+
+      const ping = this.readAwarenessLatencyMessage(state.latencyPing)
+      if (ping && ping.senderClientId !== localClientId) {
+        provider.awareness.setLocalStateField('latencyPong', {
+          id: ping.id,
+          senderClientId: ping.senderClientId,
+          responderClientId: localClientId,
+          sentAt: Date.now(),
+        })
+      }
+
+      const pong = this.readAwarenessLatencyMessage(state.latencyPong)
+      if (!pong || pong.senderClientId !== localClientId) return
+      const startedAt = this.latencySamples.get(pong.id)
+      if (startedAt === undefined) return
+      this.latencySamples.delete(pong.id)
+      this.setLatencyMs(Math.max(0, Math.round(performance.now() - startedAt)))
+    })
   }
 
   private bindProviderStatus(provider: WebsocketProvider) {
@@ -613,12 +710,14 @@ export class CollabManager {
     }
     const handleAwarenessChange = () => {
       this.emitPeerCount(provider)
+      this.handleLatencyAwarenessChange(provider)
     }
 
     provider.on('status', handleStatus)
     provider.on('sync', handleSync)
     provider.awareness.on('change', handleAwarenessChange)
     this.providerCleanup.push(() => {
+      this.clearLatencyAwareness(provider)
       provider.off('status', handleStatus)
       provider.off('sync', handleSync)
       provider.awareness.off('change', handleAwarenessChange)
