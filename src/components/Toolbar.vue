@@ -28,6 +28,8 @@ const emit = defineEmits<{
   (e: 'clear-all'): void
   (e: 'undo'): void
   (e: 'redo'): void
+  (e: 'export-scene'): void
+  (e: 'import-scene'): void
 }>()
 
 const uiStore = useUiStore()
@@ -71,6 +73,9 @@ const solidPanelRef = ref<HTMLElement | null>(null)
 const polygonMenuRef = ref<HTMLElement | null>(null)
 const polygonTriggerRef = ref<HTMLElement | null>(null)
 const polygonPanelRef = ref<HTMLElement | null>(null)
+const sideMenuOpen = ref(false)
+const sideMenuRef = ref<HTMLElement | null>(null)
+const sideMenuOverlayRef = ref<HTMLElement | null>(null)
 const deleteMenuStyle = ref({
   top: '0px',
   left: '0px',
@@ -328,6 +333,28 @@ const createSphereRadius = () => {
   emit('mode-change', EditorMode.CreateSphereRadius)
 }
 
+const toggleSideMenu = () => {
+  sideMenuOpen.value = !sideMenuOpen.value
+}
+
+const closeSideMenu = () => {
+  sideMenuOpen.value = false
+}
+
+const handleExportScene = () => {
+  closeSideMenu()
+  emit('export-scene')
+}
+
+const handleImportScene = () => {
+  closeSideMenu()
+  emit('import-scene')
+}
+
+const handleSaveScene = () => {
+  closeSideMenu()
+}
+
 const toggleProfileMenu = () => {
   profileMenuOpen.value = !profileMenuOpen.value
 }
@@ -432,6 +459,13 @@ const handleClickOutside = (event: MouseEvent) => {
   ) {
     profileMenuOpen.value = false
   }
+  if (
+    sideMenuOpen.value &&
+    !sideMenuRef.value?.contains(target) &&
+    !sideMenuOverlayRef.value?.contains(target)
+  ) {
+    sideMenuOpen.value = false
+  }
 }
 
 watch(isPointMenuOpen, async (isOpen) => {
@@ -523,6 +557,21 @@ onUnmounted(() => {
 
 <template>
   <div class="toolbar">
+    <button
+      class="hamburger-btn"
+      :class="{ 'is-open': sideMenuOpen }"
+      @click="toggleSideMenu"
+      title="菜单"
+    >
+      <span class="hamburger-icon">
+        <span class="hamburger-line"></span>
+        <span class="hamburger-line"></span>
+        <span class="hamburger-line"></span>
+      </span>
+    </button>
+
+    <div class="divider"></div>
+
     <button
       :class="{ 'is-active': currentMode === EditorMode.Select }"
       @click="setMode(EditorMode.Select)"
@@ -847,6 +896,48 @@ onUnmounted(() => {
         半径球
       </button>
     </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <Transition name="side-menu-overlay">
+      <div
+        v-if="sideMenuOpen"
+        ref="sideMenuOverlayRef"
+        class="side-menu-overlay"
+        @click="closeSideMenu"
+      ></div>
+    </Transition>
+  </Teleport>
+
+  <Teleport to="body">
+    <Transition name="side-menu-slide">
+      <div v-if="sideMenuOpen" ref="sideMenuRef" class="side-menu-panel">
+        <button class="side-menu-item" @click="handleSaveScene">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+          <span>保存</span>
+        </button>
+        <button class="side-menu-item" @click="handleExportScene">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>导出</span>
+        </button>
+        <button class="side-menu-item" @click="handleImportScene">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span>导入</span>
+        </button>
+      </div>
+    </Transition>
   </Teleport>
 
   <Teleport to="body">
@@ -1188,6 +1279,134 @@ button.is-active {
   color: #ffb0b0;
 }
 
+.hamburger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  background: #333;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.hamburger-btn:hover {
+  background: #444;
+}
+
+.hamburger-btn.is-open {
+  background: #43f260;
+}
+
+.hamburger-btn.is-open .hamburger-line {
+  background: #000;
+}
+
+.hamburger-icon {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.hamburger-line {
+  display: block;
+  width: 100%;
+  height: 0.15em;
+  background: #eee;
+  border-radius: 1px;
+  transition: all 0.3s ease;
+  transform-origin: center;
+}
+
+.hamburger-btn.is-open .hamburger-line:nth-child(1) {
+  transform: translateY(calc(0.15em + 3px)) rotate(45deg);
+}
+
+.hamburger-btn.is-open .hamburger-line:nth-child(2) {
+  opacity: 0;
+}
+
+.hamburger-btn.is-open .hamburger-line:nth-child(3) {
+  transform: translateY(calc(-0.15em - 3px)) rotate(-45deg);
+}
+
+.side-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1099;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.side-menu-overlay-enter-active,
+.side-menu-overlay-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.side-menu-overlay-enter-from,
+.side-menu-overlay-leave-to {
+  opacity: 0;
+}
+
+.side-menu-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 1100;
+  width: 180px;
+  background: #1a1a1a;
+  border-right: 1px solid #333;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  padding: 56px 0 0 0;
+  gap: 2px;
+}
+
+.side-menu-slide-enter-active,
+.side-menu-slide-leave-active {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.side-menu-slide-enter-from,
+.side-menu-slide-leave-to {
+  transform: translateX(-100%);
+}
+
+.side-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 20px;
+  background: transparent;
+  color: #ddd;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.side-menu-item:hover {
+  background: #2a2a2a;
+  color: #43f260;
+}
+
+.side-menu-item:active {
+  background: #333;
+}
+
+.side-menu-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 .toolbar::-webkit-scrollbar {
   height: 4px;
 }
@@ -1209,6 +1428,10 @@ button.is-active {
     white-space: nowrap;
   }
 
+  .hamburger-btn {
+    padding: 5px 8px;
+  }
+
   .room-input {
     width: 84px;
   }
@@ -1224,6 +1447,10 @@ button.is-active {
     padding: 4px 7px;
     font-size: 11px;
     white-space: nowrap;
+  }
+
+  .hamburger-btn {
+    padding: 4px 6px;
   }
 
   .room-input {

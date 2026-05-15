@@ -13,6 +13,15 @@ import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
 import type { Point3 } from '../core/geometry/Point3'
 import { getEditorSession } from '../core/editor/editorSession'
+import {
+  downloadSceneAsJson,
+  openJsonFileForImport,
+  validateSerializedScene,
+  importScene,
+  isSceneEmpty,
+  isSerializedSceneEmpty,
+  type SerializedScene,
+} from '../core/editor/SceneSerializer'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager } from '../core/collab/CollabManager'
@@ -631,6 +640,54 @@ const handleClearAll = () => {
   showToast('已清空所有对象', 'global')
 }
 
+const handleExportScene = async () => {
+  if (isSceneEmpty(scene)) {
+    showToast('仅存在原点，无需导出', 'global')
+    return
+  }
+  try {
+    const saved = await downloadSceneAsJson(scene)
+    if (saved) {
+      showToast('导出成功', 'global')
+    }
+  } catch {
+    showToast('导出失败', 'global')
+  }
+}
+
+const handleImportScene = async () => {
+  try {
+    const result = await openJsonFileForImport()
+    if (!result) return
+
+    const validation = validateSerializedScene(result.data)
+    if (!validation.valid) {
+      showToast(`导入失败：${validation.error}`, 'global')
+      return
+    }
+
+    if (isSerializedSceneEmpty(result.data as SerializedScene)) {
+      showToast('仅存在原点，已跳过导入', 'global')
+      return
+    }
+
+    editor.history = []
+    editor.historyIndex = -1
+    editor.selectedPoints = []
+    scene.selection.clear()
+
+    importScene(scene, result.data as SerializedScene)
+
+    sceneStore.syncEditorState(editor)
+    sceneStore.syncSceneState(scene)
+    scene.markAllRenderDirty()
+
+    showToast('导入成功', 'global')
+  } catch {
+    showToast('导入失败：文件读取错误', 'global')
+  }
+}
+
 const handleUndo = () => {
   editor.undo()
 }
@@ -890,6 +947,8 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @toggle-global-point-value="handleToggleGlobalPointValue"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"
+      @export-scene="handleExportScene"
+      @import-scene="handleImportScene"
     />
 
       <div ref="editorBodyRef" class="editor-body">
