@@ -95,6 +95,7 @@ export class ThreeRenderer {
   private static readonly LINE_LABEL_OFFSET_Y = 3
   private static readonly GUIDE_LABEL_OFFSET_X = 12
   private static readonly GUIDE_LABEL_OFFSET_Y = 0
+  private static readonly GUIDE_LABEL_MOBILE_OFFSET_X = 30
   private static readonly AXIS_LABEL_PIXEL = 28
   private static readonly POINT_LABEL_CENTER_X = 0.32
   private static readonly POINT_LABEL_CENTER_Y = 0.32
@@ -189,7 +190,6 @@ export class ThreeRenderer {
   constructor(container: HTMLElement) {
     this.container = container
     this.isMobileDevice =
-      navigator.maxTouchPoints > 0 ||
       window.matchMedia('(pointer: coarse)').matches ||
       window.matchMedia('(hover: none)').matches
     this.scene = new THREE.Scene()
@@ -502,7 +502,11 @@ export class ThreeRenderer {
 
     // 引导浮窗大小也保持稳定
     if (this.guideLabel) {
-      this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+      if (this.isMobileDevice) {
+        this.guideLabel.scale.set(0.1 / this.worldScale, 0.05 / this.worldScale, 1)
+      } else {
+        this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+      }
     }
     if (this.guidePoint) {
       this.guidePoint.scale.set(spriteScale, spriteScale, 1)
@@ -2948,8 +2952,7 @@ export class ThreeRenderer {
       this.isMobileDevice
         ? this.getScreenOffsetPosition(
             pos,
-            ThreeRenderer.POINT_LABEL_OFFSET_X +
-              ThreeRenderer.POINT_VALUE_ONLY_EXTRA_OFFSET_X,
+            ThreeRenderer.GUIDE_LABEL_MOBILE_OFFSET_X,
             ThreeRenderer.POINT_LABEL_OFFSET_Y,
           )
         : this.getScreenOffsetPosition(
