@@ -6,6 +6,7 @@ import { Circle3, type CircleType, type DirectionType } from '../geometry/Circle
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Sphere3 } from '../geometry/Sphere3'
+import { Cone3, type ConeType } from '../geometry/Cone3'
 import { Vec3 } from '../geometry/Vec3'
 import { Scene, type SceneConstraint } from '../scene/Scene'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -34,6 +35,8 @@ type SerializedPoint = {
   regularPolygonRole: 'owner' | 'dependent' | null
   sphereId: string | null
   sphereRole: 'center' | 'radius' | null
+  coneId: string | null
+  coneRole: 'baseCenter' | 'apex' | null
 }
 
 type SerializedLine = {
@@ -155,6 +158,22 @@ type SerializedSphere = {
   radiusValue: number
 }
 
+type SerializedCone = {
+  id: string
+  name: string
+  nameVisible: boolean
+  valueVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
+  visible: boolean
+  userLocked: boolean
+  baseCenterPointId: string
+  apexPointId: string
+  radiusValue: number
+  coneType: ConeType
+  normalCircleId: string | null
+}
+
 type SerializedCubeConstraint = {
   type: 'cube'
   cubeId: string
@@ -213,6 +232,7 @@ type SceneMetadata = {
   circleCount: number
   faceCount: number
   sphereCount: number
+  coneCount: number
   constraintCount: number
 }
 
@@ -227,6 +247,7 @@ export type SerializedScene = {
   circles: SerializedCircle[]
   faces: SerializedFace[]
   spheres: SerializedSphere[]
+  cones: SerializedCone[]
   constraints: SerializedConstraint[]
 }
 
@@ -255,6 +276,8 @@ function serializePoint(p: Point3): SerializedPoint {
     regularPolygonRole: p.regularPolygonRole,
     sphereId: p.sphereId,
     sphereRole: p.sphereRole,
+    coneId: p.coneId,
+    coneRole: p.coneRole,
   }
 }
 
@@ -391,6 +414,24 @@ function serializeSphere(s: Sphere3): SerializedSphere {
   }
 }
 
+function serializeCone(c: Cone3): SerializedCone {
+  return {
+    id: c.id,
+    name: c.name,
+    nameVisible: c.nameVisible,
+    valueVisible: c.valueVisible,
+    labelOffsetX: c.labelOffsetX,
+    labelOffsetY: c.labelOffsetY,
+    visible: c.visible,
+    userLocked: c.userLocked,
+    baseCenterPointId: c.baseCenterPoint.id,
+    apexPointId: c.apexPoint.id,
+    radiusValue: c.radiusValue,
+    coneType: c.coneType,
+    normalCircleId: c.normalCircleId,
+  }
+}
+
 function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
   if (c instanceof CubeConstraint) {
     return {
@@ -457,6 +498,7 @@ export function exportScene(scene: Scene): SerializedScene {
   const circles = [...scene.circles.values()].map(serializeCircle)
   const faces = [...scene.faces.values()].map(serializeFace)
   const spheres = [...scene.spheres.values()].map(serializeSphere)
+  const cones = [...scene.cones.values()].map(serializeCone)
   const constraints = scene.constraints.map(serializeConstraint).filter((c): c is SerializedConstraint => c !== null)
 
   const now = new Date()
@@ -465,7 +507,7 @@ export function exportScene(scene: Scene): SerializedScene {
 
   const metadata: SceneMetadata = {
     exportedAt,
-    totalElements: points.length + lines.length + straightLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length,
+    totalElements: points.length + lines.length + straightLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length,
     pointCount: points.length,
     lineCount: lines.length,
     straightLineCount: straightLines.length,
@@ -474,6 +516,7 @@ export function exportScene(scene: Scene): SerializedScene {
     circleCount: circles.length,
     faceCount: faces.length,
     sphereCount: spheres.length,
+    coneCount: cones.length,
     constraintCount: constraints.length,
   }
 
@@ -488,6 +531,7 @@ export function exportScene(scene: Scene): SerializedScene {
     circles,
     faces,
     spheres,
+    cones,
     constraints,
   }
 }
@@ -512,6 +556,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     'circles',
     'faces',
     'spheres',
+    'cones',
     'constraints',
   ]
 
@@ -577,6 +622,12 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     }
     if (p.sphereRole !== null && p.sphereRole !== 'center' && p.sphereRole !== 'radius') {
       return { valid: false, error: `点 "${p.name}" 的 sphereRole 无效` }
+    }
+    if (p.coneId !== null && typeof p.coneId !== 'string') {
+      return { valid: false, error: `点 "${p.name}" 的 coneId 无效` }
+    }
+    if (p.coneRole !== null && p.coneRole !== 'baseCenter' && p.coneRole !== 'apex') {
+      return { valid: false, error: `点 "${p.name}" 的 coneRole 无效` }
     }
   }
 
@@ -805,6 +856,36 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     }
   }
 
+  const coneIdSet = new Set<string>()
+  const cones = obj.cones as SerializedCone[]
+  for (const c of cones) {
+    if (typeof c.id !== 'string' || c.id === '') {
+      return { valid: false, error: '圆锥数据包含无效或空的 id' }
+    }
+    if (typeof c.name !== 'string') {
+      return { valid: false, error: `圆锥 "${c.id}" 缺少 name 字段` }
+    }
+    if (coneIdSet.has(c.id)) {
+      return { valid: false, error: `圆锥 id 重复：${c.id}` }
+    }
+    coneIdSet.add(c.id)
+    if (typeof c.baseCenterPointId !== 'string' || !pointIdSet.has(c.baseCenterPointId)) {
+      return { valid: false, error: `圆锥 "${c.name}" 引用了不存在的底面中心点` }
+    }
+    if (typeof c.apexPointId !== 'string' || !pointIdSet.has(c.apexPointId)) {
+      return { valid: false, error: `圆锥 "${c.name}" 引用了不存在的顶点` }
+    }
+    if (typeof c.radiusValue !== 'number' || c.radiusValue <= 0 || !Number.isFinite(c.radiusValue)) {
+      return { valid: false, error: `圆锥 "${c.name}" 的 radiusValue 无效` }
+    }
+    if (c.coneType !== 'twoPoint' && c.coneType !== 'normalCircle') {
+      return { valid: false, error: `圆锥 "${c.name}" 的 coneType 无效` }
+    }
+    if (c.normalCircleId !== null && typeof c.normalCircleId !== 'string') {
+      return { valid: false, error: `圆锥 "${c.name}" 的 normalCircleId 无效` }
+    }
+  }
+
   const constraints = obj.constraints as SerializedConstraint[]
   const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar'])
   const constraintPointIds = new Set<string>()
@@ -961,6 +1042,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.circles.clear()
   scene.faces.clear()
   scene.spheres.clear()
+  scene.cones.clear()
 
   const pointMap = new Map<string, Point3>()
 
@@ -988,6 +1070,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       existing.regularPolygonRole = sp.regularPolygonRole
       existing.sphereId = sp.sphereId
       existing.sphereRole = sp.sphereRole
+      existing.coneId = sp.coneId
+      existing.coneRole = sp.coneRole
       continue
     }
 
@@ -1010,6 +1094,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     p.regularPolygonRole = sp.regularPolygonRole
     p.sphereId = sp.sphereId
     p.sphereRole = sp.sphereRole
+    p.coneId = sp.coneId
+    p.coneRole = sp.coneRole
     scene.addPoint(p)
     pointMap.set(p.id, p)
   }
@@ -1173,6 +1259,28 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     scene.addSphere(s)
   }
 
+  for (const sc of data.cones) {
+    const baseCenterPoint = scene.points.get(sc.baseCenterPointId)
+    const apexPoint = scene.points.get(sc.apexPointId)
+    if (!baseCenterPoint || !apexPoint) continue
+    const c = new Cone3(
+      sc.id,
+      sc.name,
+      baseCenterPoint,
+      apexPoint,
+      sc.coneType,
+      sc.nameVisible,
+      sc.visible,
+      sc.userLocked,
+      sc.labelOffsetX,
+      sc.labelOffsetY,
+      sc.valueVisible,
+      sc.radiusValue,
+      sc.normalCircleId,
+    )
+    scene.addCone(c)
+  }
+
   for (const sc of data.constraints) {
     if (sc.type === 'cube') {
       const cc = sc as SerializedCubeConstraint
@@ -1235,6 +1343,7 @@ export function isSceneEmpty(scene: Scene): boolean {
   if (scene.circles.size > 0) return false
   if (scene.faces.size > 0) return false
   if (scene.spheres.size > 0) return false
+  if (scene.cones.size > 0) return false
   return true
 }
 
@@ -1247,6 +1356,7 @@ export function isSerializedSceneEmpty(data: SerializedScene): boolean {
   if (data.circles.length > 0) return false
   if (data.faces.length > 0) return false
   if (data.spheres.length > 0) return false
+  if (data.cones.length > 0) return false
   return true
 }
 

@@ -5,6 +5,7 @@ import { Scene as GeoScene, type SceneRenderSyncState } from '../core/scene/Scen
 import { Ray3 } from '../core/geometry/Ray3'
 import { GeoVector3 } from '../core/geometry/GeoVector3'
 import { Vec3 } from '../core/geometry/Vec3'
+import { Cone3 } from '../core/geometry/Cone3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -29,7 +30,7 @@ type ARToolkitContextLike = {
   update: (sourceElement: HTMLElement) => void
 }
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -182,6 +183,7 @@ export class ThreeRenderer {
 
   /** geoId -> mesh */
   meshMap = new Map<string, THREE.Object3D>()
+  groupMap = new Map<string, THREE.Group>()
   private cubeValueLabels = new Map<string, THREE.Sprite>()
   private currentSceneRef: GeoScene | null = null
   private activeLabelTarget: { type: string; geoId: string } | null = null
@@ -315,12 +317,18 @@ export class ThreeRenderer {
       const valueLabel = this.getRenderUserData(obj).__valueLabelSprite
       if (valueLabel) labels.push(valueLabel)
     })
+    this.groupMap.forEach((obj) => {
+      const label = this.getRenderUserData(obj).__labelSprite
+      if (label) labels.push(label)
+      const valueLabel = this.getRenderUserData(obj).__valueLabelSprite
+      if (valueLabel) labels.push(valueLabel)
+    })
     this.cubeValueLabels.forEach((label) => labels.push(label))
     return labels
   }
 
   previewLabelOffset(geoId: string, offsetX: number, offsetY: number) {
-    const object = this.meshMap.get(geoId)
+    const object = this.meshMap.get(geoId) ?? this.groupMap.get(geoId)
     if (!object) return
     const userData = this.getRenderUserData(object)
     userData.__labelOffsetX = offsetX
@@ -351,6 +359,7 @@ export class ThreeRenderer {
       userData.type === 'vector' ||
       userData.type === 'circle' ||
       userData.type === 'sphere' ||
+      userData.type === 'cone' ||
       userData.type === 'face'
     ) {
       const anchor = userData.__labelAnchor?.clone()
@@ -484,6 +493,7 @@ export class ThreeRenderer {
         userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'sphere' ||
+        userData.type === 'cone' ||
         userData.type === 'face'
       ) {
         const label = userData.__labelSprite
@@ -602,6 +612,7 @@ export class ThreeRenderer {
         userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'sphere' ||
+        userData.type === 'cone' ||
         userData.type === 'face'
       ) {
         const label = userData.__labelSprite
@@ -700,6 +711,7 @@ export class ThreeRenderer {
       this.syncCircles(geoScene, dirtyState)
       this.syncFaces(geoScene, dirtyState)
       this.syncSpheres(geoScene, dirtyState)
+      this.syncCones(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
     }
     this.updateRubberBand(previewData) // 处理虚线
@@ -815,6 +827,17 @@ export class ThreeRenderer {
         if (valueLabel) this.world.remove(valueLabel)
         this.world.remove(obj)
         this.meshMap.delete(id)
+      }
+    })
+    this.groupMap.forEach((obj, id) => {
+      if (!scene.cones.has(id)) {
+        const userData = this.getRenderUserData(obj)
+        const label = userData.__labelSprite
+        if (label) this.world.remove(label)
+        const valueLabel = userData.__valueLabelSprite
+        if (valueLabel) this.world.remove(valueLabel)
+        this.world.remove(obj)
+        this.groupMap.delete(id)
       }
     })
     const activeCubeIds = new Set(
@@ -1685,9 +1708,29 @@ export class ThreeRenderer {
     dirtyState.circleIds.forEach((id) => {
       const circleData = scene.circles.get(id)
       if (!circleData) return
-      const resolvedDirection = circleData.isNormalCircle() && circleData.directionType && circleData.directionId
+      let resolvedDirection = circleData.isNormalCircle() && circleData.directionType && circleData.directionId
         ? this.resolveDirectionVectorForCircle(circleData.directionType, circleData.directionId)
         : undefined
+      let coneForCircle: Cone3 | null = null
+      if (circleData.isNormalCircle()) {
+        const conesMap = scene.cones as unknown as Map<string, Cone3>
+        conesMap.forEach((c) => {
+          if (c.normalCircleId === id) coneForCircle = c
+        })
+        if (coneForCircle) {
+          const cone = coneForCircle as Cone3
+          const center = cone.baseCenterPoint.position
+          const apex = cone.apexPoint.position
+          const axis = new THREE.Vector3(
+            apex.x - center.x,
+            apex.y - center.y,
+            apex.z - center.z,
+          )
+          if (axis.length() > 1e-8) {
+            resolvedDirection = new Vec3(axis.x, axis.y, axis.z)
+          }
+        }
+      }
       const frame = circleData.getFrame(resolvedDirection)
       let circle = this.meshMap.get(id) as THREE.LineLoop | undefined
       if (!frame) {
@@ -1718,6 +1761,7 @@ export class ThreeRenderer {
         })
         circle = new THREE.LineLoop(geo, mat)
         circle.userData = { geoId: id, type: 'circle' }
+        circle.renderOrder = 6
         this.world.add(circle)
         this.meshMap.set(id, circle)
       } else {
@@ -1925,6 +1969,12 @@ export class ThreeRenderer {
   private static readonly SPHERE_SELECTED_COLOR = 0x43f260
   private static readonly SPHERE_SELECTED_OPACITY = 0.7
 
+  private static readonly CONE_FILL_COLOR = 0x74a4ff
+  private static readonly CONE_FILL_OPACITY = 0.6
+  private static readonly CONE_SELECTED_COLOR = 0x43f260
+  private static readonly CONE_SELECTED_OPACITY = 0.7
+  private static readonly CONE_SEGMENTS = 48
+
   private syncSpheres(scene: GeoScene, dirtyState: SceneRenderSyncState) {
     dirtyState.sphereIds.forEach((id) => {
       const sphereData = scene.spheres.get(id)
@@ -1979,6 +2029,128 @@ export class ThreeRenderer {
         `=${this.formatMetricNumber(sphereData.getRadius())}`,
         new THREE.Vector3(center.x, center.y + safeRadius, center.z),
         isLabelActive ? ThreeRenderer.SPHERE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
+      )
+    })
+  }
+
+  private syncCones(scene: GeoScene, dirtyState: SceneRenderSyncState) {
+    dirtyState.coneIds.forEach((id) => {
+      const coneData = scene.cones.get(id)
+      if (!coneData) {
+        const existing = this.meshMap.get(id)
+        if (existing) {
+          this.world.remove(existing)
+          this.meshMap.delete(id)
+        }
+        const existingGroup = this.groupMap.get(id)
+        if (existingGroup) {
+          this.world.remove(existingGroup)
+          this.groupMap.delete(id)
+        }
+        return
+      }
+
+      const frame = coneData.getFrame()
+      if (!frame) {
+        const existingGroup = this.groupMap.get(id)
+        if (existingGroup) {
+          this.world.remove(existingGroup)
+          this.groupMap.delete(id)
+        }
+        return
+      }
+
+      let coneGroup = this.groupMap.get(id) as THREE.Group | undefined
+
+      if (!coneGroup) {
+        coneGroup = new THREE.Group()
+        coneGroup.userData = { geoId: id, type: 'cone' }
+        this.world.add(coneGroup)
+        this.groupMap.set(id, coneGroup)
+      }
+
+      while (coneGroup.children.length > 0) {
+        const child = coneGroup.children[0]
+        if (child) coneGroup.remove(child)
+      }
+
+      const { center, radius, height, normal, apex } = frame
+      const segments = ThreeRenderer.CONE_SEGMENTS
+
+      const sideGeometry = new THREE.ConeGeometry(1, 1, segments, 1, false)
+      const sideMaterial = new THREE.MeshPhongMaterial({
+        color: ThreeRenderer.CONE_FILL_COLOR,
+        transparent: true,
+        opacity: ThreeRenderer.CONE_FILL_OPACITY,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        shininess: 100,
+        specular: 0x666666,
+      })
+      const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
+      sideMesh.userData = { geoId: id, type: 'cone' }
+      sideMesh.renderOrder = 1
+
+      const baseGeometry = new THREE.CircleGeometry(1, segments)
+      const baseMaterial = new THREE.MeshPhongMaterial({
+        color: ThreeRenderer.CONE_FILL_COLOR,
+        transparent: true,
+        opacity: ThreeRenderer.CONE_FILL_OPACITY,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        shininess: 100,
+        specular: 0x666666,
+      })
+      const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
+      baseMesh.userData = { geoId: id, type: 'cone' }
+      baseMesh.renderOrder = 1
+
+      const safeRadius = Math.max(radius, 0.001)
+      const safeHeight = Math.max(height, 0.001)
+
+      sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
+      sideMesh.position.set(0, safeHeight / 2, 0)
+
+      baseMesh.scale.set(safeRadius, safeRadius, 1)
+      baseMesh.rotation.x = -Math.PI / 2
+      baseMesh.position.set(0, 0, 0)
+
+      coneGroup.add(sideMesh)
+      coneGroup.add(baseMesh)
+
+      const yAxis = new THREE.Vector3(0, 1, 0)
+      const targetNormal = new THREE.Vector3(normal.x, normal.y, normal.z)
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(yAxis, targetNormal)
+
+      coneGroup.position.set(center.x, center.y, center.z)
+      coneGroup.quaternion.copy(quaternion)
+      coneGroup.visible = coneData.visible !== false
+
+      const isSelected = scene.selection.cones.has(id)
+      const sideMat = sideMesh.material as THREE.MeshPhongMaterial
+      const baseMat = baseMesh.material as THREE.MeshPhongMaterial
+      const fillColor = isSelected ? ThreeRenderer.CONE_SELECTED_COLOR : ThreeRenderer.CONE_FILL_COLOR
+      const fillOpacity = isSelected ? ThreeRenderer.CONE_SELECTED_OPACITY : ThreeRenderer.CONE_FILL_OPACITY
+      sideMat.color.set(fillColor)
+      sideMat.opacity = fillOpacity
+      baseMat.color.set(fillColor)
+      baseMat.opacity = fillOpacity
+
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'cone' && this.activeLabelTarget.geoId === id
+      const midPoint = new THREE.Vector3(
+        (center.x + apex.x) / 2,
+        (center.y + apex.y) / 2,
+        (center.z + apex.z) / 2,
+      )
+      this.syncLinearLabel(
+        coneGroup,
+        coneData.name ?? '',
+        coneData.nameVisible && coneData.visible !== false,
+        coneData.valueVisible === true && coneData.visible !== false,
+        `V=${this.formatMetricNumber(coneData.getVolume())}`,
+        midPoint,
+        isLabelActive ? ThreeRenderer.CONE_SELECTED_COLOR : ThreeRenderer.LINEAR_COLOR,
       )
     })
   }
@@ -2803,6 +2975,7 @@ export class ThreeRenderer {
         userData.type === 'vector' ||
         userData.type === 'circle' ||
         userData.type === 'sphere' ||
+        userData.type === 'cone' ||
         userData.type === 'face'
       ) {
         const anchor = userData.__labelAnchor?.clone()
@@ -2822,6 +2995,7 @@ export class ThreeRenderer {
     if (type === 'vector') return this.currentSceneRef.vectors.get(geoId) ?? null
     if (type === 'circle') return this.currentSceneRef.circles.get(geoId) ?? null
     if (type === 'sphere') return this.currentSceneRef.spheres.get(geoId) ?? null
+    if (type === 'cone') return this.currentSceneRef.cones.get(geoId) ?? null
     if (type === 'face') return this.currentSceneRef.faces.get(geoId) ?? null
     return null
   }

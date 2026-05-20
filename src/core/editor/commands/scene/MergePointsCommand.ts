@@ -8,6 +8,7 @@ import { GeoVector3 } from '../../../geometry/GeoVector3'
 import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../../../geometry/Circle3'
 import { Sphere3 } from '../../../geometry/Sphere3'
+import { Cone3 } from '../../../geometry/Cone3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
@@ -82,6 +83,16 @@ type SphereSnapshot = {
   radiusSphereRole: 'center' | 'radius' | null
 }
 
+type ConeSnapshot = {
+  cone: Cone3
+  baseCenterPoint: Point3
+  apexPoint: Point3
+  baseCenterConeId: string | null
+  baseCenterConeRole: 'baseCenter' | 'apex' | null
+  apexConeId: string | null
+  apexConeRole: 'baseCenter' | 'apex' | null
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
@@ -94,6 +105,7 @@ export class MergePointsCommand implements Command {
   private pointRegularPolygonSnapshots: PointRegularPolygonSnapshot[]
   private circleSnapshots: CircleSnapshot[]
   private sphereSnapshots: SphereSnapshot[]
+  private coneSnapshots: ConeSnapshot[]
   private keepPointCircleId: string | null
   private keepPointCircleRole: 'center' | null
   private keepPointLocked: boolean
@@ -105,6 +117,7 @@ export class MergePointsCommand implements Command {
   private removedFaces = new Set<string>()
   private removedCircles = new Set<string>()
   private removedSpheres = new Set<string>()
+  private removedCones = new Set<string>()
 
   constructor(
     private scene: Scene,
@@ -249,6 +262,21 @@ export class MergePointsCommand implements Command {
         centerSphereRole: sphere.centerPoint.sphereRole,
         radiusSphereId: sphere.radiusPoint?.sphereId ?? null,
         radiusSphereRole: sphere.radiusPoint?.sphereRole ?? null,
+      }))
+
+    this.coneSnapshots = [...scene.cones.values()]
+      .filter((cone) =>
+        cone.baseCenterPoint.id === keepPoint.id || cone.apexPoint.id === keepPoint.id ||
+        cone.baseCenterPoint.id === removePoint.id || cone.apexPoint.id === removePoint.id,
+      )
+      .map((cone) => ({
+        cone,
+        baseCenterPoint: cone.baseCenterPoint,
+        apexPoint: cone.apexPoint,
+        baseCenterConeId: cone.baseCenterPoint.coneId,
+        baseCenterConeRole: cone.baseCenterPoint.coneRole,
+        apexConeId: cone.apexPoint.coneId,
+        apexConeRole: cone.apexPoint.coneRole,
       }))
   }
 
@@ -476,6 +504,26 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.coneSnapshots.forEach((snapshot) => {
+      const { cone } = snapshot
+      if (cone.baseCenterPoint.id === this.removePoint.id) {
+        cone.baseCenterPoint = this.keepPoint
+        this.keepPoint.coneId = cone.id
+        this.keepPoint.coneRole = 'baseCenter'
+      }
+      if (cone.apexPoint.id === this.removePoint.id) {
+        cone.apexPoint = this.keepPoint
+        this.keepPoint.coneId = cone.id
+        this.keepPoint.coneRole = 'apex'
+      }
+      if (cone.baseCenterPoint.id === cone.apexPoint.id) {
+        this.scene.removeCone(cone.id)
+        this.removedCones.add(cone.id)
+        this.keepPoint.coneId = null
+        this.keepPoint.coneRole = null
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
@@ -604,6 +652,19 @@ export class MergePointsCommand implements Command {
       }
       if (this.removedSpheres.has(sphere.id)) {
         this.scene.addSphere(sphere)
+      }
+    })
+
+    this.coneSnapshots.forEach((snapshot) => {
+      const { cone } = snapshot
+      cone.baseCenterPoint = snapshot.baseCenterPoint
+      cone.apexPoint = snapshot.apexPoint
+      snapshot.baseCenterPoint.coneId = snapshot.baseCenterConeId
+      snapshot.baseCenterPoint.coneRole = snapshot.baseCenterConeRole
+      snapshot.apexPoint.coneId = snapshot.apexConeId
+      snapshot.apexPoint.coneRole = snapshot.apexConeRole
+      if (this.removedCones.has(cone.id)) {
+        this.scene.addCone(cone)
       }
     })
 

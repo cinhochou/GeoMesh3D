@@ -9,6 +9,7 @@ import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Circle3 } from '../core/geometry/Circle3'
 import type { Sphere3 } from '../core/geometry/Sphere3'
+import type { Cone3 } from '../core/geometry/Cone3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
@@ -167,6 +168,12 @@ const selectedSpheres = computed(() => {
     .map((id) => props.scene.spheres.get(id))
     .filter((sphere): sphere is Sphere3 => sphere !== undefined)
 })
+const selectedCones = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.cones]
+    .map((id) => props.scene.cones.get(id))
+    .filter((cone): cone is Cone3 => cone !== undefined)
+})
 const isConstrainedPoint = (point: Point3) =>
   (point.cubeId !== null && point.cubeRole === 'dependent') ||
   (point.regularPolygonId !== null && point.regularPolygonRole === 'dependent')
@@ -210,6 +217,10 @@ const circlesInScene = computed(() => {
 const spheresInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.spheres.values()]
+})
+const conesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.cones.values()]
 })
 const hexahedronsInScene = computed(() => {
   void commandRevision.value
@@ -260,6 +271,7 @@ const editing = ref<{
     | 'hexahedron'
     | 'regularPolygon'
     | 'sphere'
+    | 'cone'
   id: string
 } | null>(null)
 const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
@@ -316,7 +328,21 @@ const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarPolygon | undefined) => Boolean(face?.cubeId)
 
+const getConeForNormalCircle = (circle: Circle3) => {
+  if (!circle.isNormalCircle()) return null
+  for (const cone of props.scene.cones.values()) {
+    if (cone.normalCircleId === circle.id) return cone
+  }
+  return null
+}
+
 const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
+  const cone = getConeForNormalCircle(circle)
+  if (cone) {
+    const center = cone.baseCenterPoint.position
+    const apex = cone.apexPoint.position
+    return new Vec3(apex.x - center.x, apex.y - center.y, apex.z - center.z)
+  }
   if (!circle.directionType) return null
   if (circle.directionType === 'point') return new Vec3(0, 1, 0)
   const directionId = circle.directionId
@@ -358,6 +384,10 @@ const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
 }
 
 const getDirectionLabel = (circle: Circle3): string => {
+  const cone = getConeForNormalCircle(circle)
+  if (cone) {
+    return `点${cone.baseCenterPoint.name ?? ''}-点${cone.apexPoint.name ?? ''}`
+  }
   if (!circle.directionType) return '未知'
   if (circle.directionType === 'point') {
     const pt = circle.directionId ? props.scene.points.get(circle.directionId) : null
@@ -409,6 +439,28 @@ const formatPiCircumference = (radius: number): string => {
 }
 
 const formatPiArea = (radius: number): string => {
+  const coeff = radius * radius
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const formatPiConeVolume = (radius: number, height: number): string => {
+  const coeff = (1 / 3) * radius * radius * height
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const formatPiConeLateralArea = (radius: number, height: number): string => {
+  const slantHeight = Math.hypot(radius, height)
+  const coeff = radius * slantHeight
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const formatPiConeBaseArea = (radius: number): string => {
   const coeff = radius * radius
   if (Math.abs(coeff) < 1e-10) return '0'
   if (Math.abs(coeff - 1) < 1e-10) return 'π'
@@ -479,6 +531,11 @@ const getCirclePiMode = (circleId: string) => circlePiModes.get(circleId) ?? fal
 const toggleCirclePiMode = (circleId: string) => {
   circlePiModes.set(circleId, !getCirclePiMode(circleId))
 }
+const conePiModes = reactive(new Map<string, boolean>())
+const getConePiMode = (coneId: string) => conePiModes.get(coneId) ?? false
+const toggleConePiMode = (coneId: string) => {
+  conePiModes.set(coneId, !getConePiMode(coneId))
+}
 const editCircle = reactive({
   name: '',
   nameVisible: true,
@@ -519,6 +576,16 @@ const editSphere = reactive({
   centerPoint: { x: '', y: '', z: '' },
   radiusPoint: { x: '', y: '', z: '' },
 })
+const editCone = reactive({
+  nameSuffix: '',
+  nameVisible: false,
+  valueVisible: false,
+  userLocked: false,
+  radius: '',
+  height: '',
+  baseCenterPoint: { x: '', y: '', z: '' },
+  apexPoint: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 let lineCoordCollapseTimer: number | null = null
@@ -547,6 +614,7 @@ const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).fil
 const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id).filter(Boolean))
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
+const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).filter(Boolean))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
@@ -557,7 +625,8 @@ const totalContentCount = computed(
     circlesInScene.value.length +
     facesInScene.value.length +
     hexahedronsInScene.value.length +
-    spheresInScene.value.length,
+    spheresInScene.value.length +
+    conesInScene.value.length,
 )
 const contentGroupLabels: Record<
   | 'point'
@@ -568,7 +637,8 @@ const contentGroupLabels: Record<
   | 'circle'
   | 'face'
   | 'hexahedron'
-  | 'sphere',
+  | 'sphere'
+  | 'cone',
   string
 > = {
   point: '点',
@@ -580,6 +650,7 @@ const contentGroupLabels: Record<
   face: '多边形',
   hexahedron: '立体',
   sphere: '球体',
+  cone: '圆锥',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
@@ -595,7 +666,8 @@ const toggleContentGroup = (
     | 'circle'
     | 'face'
     | 'hexahedron'
-    | 'sphere',
+    | 'sphere'
+    | 'cone',
 ) => {
   uiStore.toggleContentGroup(type)
 }
@@ -688,6 +760,15 @@ const selectSphereFromContent = (sphereId: string) => {
   expandedStraightLineEditorPoint.value = null
   expandedRayEditorPoint.value = null
   props.scene.selection.selectSphere(sphereId)
+  props.scene.markAllRenderDirty()
+}
+
+const selectConeFromContent = (coneId: string) => {
+  editing.value = null
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  props.scene.selection.selectCone(coneId)
   props.scene.markAllRenderDirty()
 }
 
@@ -791,6 +872,7 @@ watch(
     selectedCircleIds,
     selectedHexahedronIds,
     selectedSphereIds,
+    selectedConeIds,
   ],
   () => {
     if (!editing.value) return
@@ -804,6 +886,7 @@ watch(
     if (type === 'circle' && !selectedCircleIds.value.includes(id)) editing.value = null
     if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
     if (type === 'sphere' && !selectedSphereIds.value.includes(id)) editing.value = null
+    if (type === 'cone' && !selectedConeIds.value.includes(id)) editing.value = null
   },
 )
 
@@ -820,6 +903,7 @@ watch(
     if (facesInScene.value.length > 0) activeKeys.push('face')
     if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
     if (spheresInScene.value.length > 0) activeKeys.push('sphere')
+    if (conesInScene.value.length > 0) activeKeys.push('cone')
     if (activeKeys.length === 0) return
     const allCollapsed = activeKeys.every((k) => c[k])
     const allExpanded = activeKeys.every((k) => !c[k])
@@ -860,15 +944,15 @@ const normalizeCoord = (value: string) => {
 }
 const normalizeDisplayLength = (value: string) => {
   const n = Number(value)
-  return Number.isFinite(n) ? Math.max(1, n).toFixed(2) : value
+  return Number.isFinite(n) ? Math.max(0.1, n).toFixed(2) : value
 }
 const normalizeVectorLength = (value: string) => {
   const n = Number(value)
-  return Number.isFinite(n) ? Math.max(0, n).toFixed(2) : value
+  return Number.isFinite(n) ? Math.max(0.1, n).toFixed(2) : value
 }
 const normalizeFaceEdgeLength = (value: string) => {
   const n = Number(value)
-  return Number.isFinite(n) ? Math.max(0.01, n).toFixed(2) : value
+  return Number.isFinite(n) ? Math.max(0.1, n).toFixed(2) : value
 }
 const setCoordInputRef = (key: string, el: unknown) => {
   if (el instanceof HTMLInputElement) {
@@ -884,6 +968,44 @@ const stepCoordInput = (key: string, direction: 'up' | 'down') => {
   else input.stepDown()
   return input.value
 }
+
+const LENGTH_MIN = 0.1
+
+const stepLengthValue = (current: number, step: number, direction: 'up' | 'down'): number => {
+  if (direction === 'up') {
+    let next = Math.ceil((current + 1e-9) / step) * step
+    if (next <= current) next += step
+    return next
+  } else {
+    let next = Math.floor((current - 1e-9) / step) * step
+    if (next >= current) next -= step
+    return Math.max(LENGTH_MIN, next)
+  }
+}
+
+const bubbleState = reactive<Record<string, { show: boolean; message: string }>>({})
+const bubbleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const showLengthBubble = (key: string, message: string) => {
+  bubbleState[key] = { show: true, message }
+  const existing = bubbleTimers.get(key)
+  if (existing) clearTimeout(existing)
+  bubbleTimers.set(key, setTimeout(() => {
+    if (bubbleState[key]) bubbleState[key].show = false
+    bubbleTimers.delete(key)
+  }, 3000))
+}
+
+const clampLengthValue = (key: string, value: string, previousValue: string): string => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return previousValue
+  if (n < LENGTH_MIN) {
+    showLengthBubble(key, '非法取值')
+    return previousValue
+  }
+  return value
+}
+
 const handlePointCoordFocus = (axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`point.${axis}`, true)
 }
@@ -993,14 +1115,19 @@ const handleLineLengthFocus = () => {
   setCoordFocus('line.lockedLength', true)
 }
 const handleLineLengthBlur = () => {
+  editLine.lockedLength = clampLengthValue('line.lockedLength', editLine.lockedLength, editLine.lockedLength)
   editLine.lockedLength = normalizeDisplayLength(editLine.lockedLength)
   setCoordFocus('line.lockedLength', false)
   applyEditLine()
 }
 const nudgeLineLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('line.lockedLength', direction)
-  if (nextValue === null) return
-  editLine.lockedLength = nextValue
+  const current = Number(editLine.lockedLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('line.lockedLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editLine.lockedLength = next.toFixed(2)
   applyEditLine()
 }
 const keepRayCoordExpanded = (which: 'p1' | 'p2') => {
@@ -1037,29 +1164,39 @@ const handleRayDisplayLengthFocus = () => {
   setCoordFocus('ray.displayLength', true)
 }
 const handleRayDisplayLengthBlur = () => {
+  editRay.displayLength = clampLengthValue('ray.displayLength', editRay.displayLength, editRay.displayLength)
   editRay.displayLength = normalizeDisplayLength(editRay.displayLength)
   setCoordFocus('ray.displayLength', false)
   applyEditRay()
 }
 const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('ray.displayLength', direction)
-  if (nextValue === null) return
-  editRay.displayLength = nextValue
+  const current = Number(editRay.displayLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('ray.displayLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editRay.displayLength = next.toFixed(2)
   applyEditRay()
 }
 const handleVectorLengthFocus = () => {
   setCoordFocus('vector.length', true)
 }
 const handleVectorLengthBlur = () => {
+  editVector.length = clampLengthValue('vector.length', editVector.length, editVector.length)
   editVector.length = normalizeVectorLength(editVector.length)
   setCoordFocus('vector.length', false)
   applyEditVector()
 }
 const nudgeVectorLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('vector.length', direction)
-  if (nextValue === null) return
+  const current = Number(editVector.length)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('vector.length', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
   setCoordFocus('vector.length', true)
-  editVector.length = nextValue
+  editVector.length = next.toFixed(2)
   applyEditVector()
   setCoordFocus('vector.length', false)
 }
@@ -1106,46 +1243,61 @@ const handleStraightLineDisplayLengthFocus = () => {
   setCoordFocus('straightLine.displayLength', true)
 }
 const handleStraightLineDisplayLengthBlur = () => {
+  editStraightLine.displayLength = clampLengthValue('straightLine.displayLength', editStraightLine.displayLength, editStraightLine.displayLength)
   editStraightLine.displayLength = normalizeDisplayLength(editStraightLine.displayLength)
   setCoordFocus('straightLine.displayLength', false)
   applyEditStraightLine()
 }
 const nudgeStraightLineDisplayLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('straightLine.displayLength', direction)
-  if (nextValue === null) return
-  editStraightLine.displayLength = nextValue
+  const current = Number(editStraightLine.displayLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('straightLine.displayLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editStraightLine.displayLength = next.toFixed(2)
   applyEditStraightLine()
 }
 const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
   setCoordFocus(`face.edge.${edgeIndex}`, true)
 }
 const handleFaceEdgeLengthBlur = (faceId: string, edgeIndex: number) => {
+  const key = `face.edge.${edgeIndex}`
+  const prev = editFace.edgeLengths[edgeIndex] ?? ''
+  editFace.edgeLengths[edgeIndex] = clampLengthValue(key, editFace.edgeLengths[edgeIndex] ?? '', prev)
   editFace.edgeLengths[edgeIndex] = normalizeFaceEdgeLength(editFace.edgeLengths[edgeIndex] ?? '')
-  setCoordFocus(`face.edge.${edgeIndex}`, false)
+  setCoordFocus(key, false)
   applyFaceEdgeLength(faceId, edgeIndex)
 }
 const nudgeFaceEdgeLength = (faceId: string, edgeIndex: number, direction: 'up' | 'down') => {
+  const key = `face.edge.${edgeIndex}`
   const current = Number(editFace.edgeLengths[edgeIndex])
-  const next = Number.isFinite(current)
-    ? direction === 'up'
-      ? Math.max(1, Math.floor(current) + 1)
-      : Math.max(1, Math.ceil(current) - 1)
-    : 1
-  editFace.edgeLengths[edgeIndex] = String(next)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble(key, '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editFace.edgeLengths[edgeIndex] = next.toFixed(2)
   applyFaceEdgeLength(faceId, edgeIndex)
 }
 const handleHexahedronEdgeLengthFocus = () => {
   setCoordFocus('hexa.edgeLength', true)
 }
 const handleHexahedronEdgeLengthBlur = () => {
-  editHexahedron.edgeLength = normalizeDisplayLength(editHexahedron.edgeLength)
+  editHexahedron.edgeLength = clampLengthValue('hexa.edgeLength', editHexahedron.edgeLength, editHexahedron.edgeLength)
+  const n = Number(editHexahedron.edgeLength)
+  editHexahedron.edgeLength = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editHexahedron.edgeLength
   setCoordFocus('hexa.edgeLength', false)
   applyHexahedronEdgeLength()
 }
 const nudgeHexahedronEdgeLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('hexa.edgeLength', direction)
-  if (nextValue === null) return
-  editHexahedron.edgeLength = nextValue
+  const current = Number(editHexahedron.edgeLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('hexa.edgeLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editHexahedron.edgeLength = next.toFixed(2)
   applyHexahedronEdgeLength()
 }
 const isHexahedronEdgeLengthInputDisabled = () =>
@@ -1632,7 +1784,7 @@ const applyEditCircle = () => {
   }
   if (circle.isNormalCircle()) {
     const r = parseFloat(editCircle.lockedRadius)
-    if (!isNaN(r) && r > 0) {
+    if (!isNaN(r) && r >= LENGTH_MIN) {
       patch.lockedRadius = r
     }
   }
@@ -1691,9 +1843,21 @@ const nudgeNormalCircleRadius = (direction: 'up' | 'down') => {
   const state = getEditingCircleState()
   if (!state) return
   const current = parseFloat(editCircle.lockedRadius)
-  if (isNaN(current) || current <= 0) return
+  if (isNaN(current) || current < 0) return
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('circle.lockedRadius', '已减到最小值')
+    return
+  }
   const step = 0.1
-  const next = direction === 'up' ? current + step : Math.max(0.01, current - step)
+  let next: number
+  if (direction === 'up') {
+    next = Math.ceil((current + 1e-9) / step) * step
+    if (next <= current) next += step
+  } else {
+    next = Math.floor((current - 1e-9) / step) * step
+    if (next >= current) next -= step
+  }
+  next = Math.max(LENGTH_MIN, next)
   editCircle.lockedRadius = String(Math.round(next * 100) / 100)
   applyEditCircle()
 }
@@ -1703,7 +1867,7 @@ const applyThreePointCircleRadius = () => {
   const circle = state.circle
   if (circle.isNormalCircle()) return
   const newRadius = parseFloat(editCircle.threePointRadius)
-  if (isNaN(newRadius) || newRadius <= 0) return
+  if (isNaN(newRadius) || newRadius < LENGTH_MIN) return
   const frame = circle.getFrame()
   if (!frame) return
   const currentRadius = frame.radius
@@ -1723,9 +1887,21 @@ const applyThreePointCircleRadius = () => {
 }
 const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
   const current = parseFloat(editCircle.threePointRadius)
-  if (isNaN(current) || current <= 0) return
+  if (isNaN(current) || current < 0) return
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('circle.threePointRadius', '已减到最小值')
+    return
+  }
   const step = 0.1
-  const next = direction === 'up' ? current + step : Math.max(0.01, current - step)
+  let next: number
+  if (direction === 'up') {
+    next = Math.ceil((current + 1e-9) / step) * step
+    if (next <= current) next += step
+  } else {
+    next = Math.floor((current - 1e-9) / step) * step
+    if (next >= current) next -= step
+  }
+  next = Math.max(LENGTH_MIN, next)
   editCircle.threePointRadius = String(Math.round(next * 100) / 100)
   applyThreePointCircleRadius()
 }
@@ -1838,9 +2014,13 @@ const applyRegularPolygonOwnerPoint = (pointKey: 'p1' | 'p2') => {
 }
 
 const nudgeRegularPolygonEdgeLength = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('rp.edgeLength', direction)
-  if (nextValue === null) return
-  editRegularPolygon.edgeLength = nextValue
+  const current = Number(editRegularPolygon.edgeLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('rp.edgeLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editRegularPolygon.edgeLength = next.toFixed(2)
   applyRegularPolygonEdgeLength()
 }
 
@@ -1852,7 +2032,9 @@ const handleRegularPolygonEdgeLengthFocus = () => {
 }
 
 const handleRegularPolygonEdgeLengthBlur = () => {
-  editRegularPolygon.edgeLength = normalizeDisplayLength(editRegularPolygon.edgeLength)
+  editRegularPolygon.edgeLength = clampLengthValue('rp.edgeLength', editRegularPolygon.edgeLength, editRegularPolygon.edgeLength)
+  const n = Number(editRegularPolygon.edgeLength)
+  editRegularPolygon.edgeLength = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editRegularPolygon.edgeLength
   setCoordFocus('rp.edgeLength', false)
   applyRegularPolygonEdgeLength()
 }
@@ -1925,7 +2107,7 @@ const applyEditSphereRadius = () => {
   const state = getEditingSphereState()
   if (!state) return
   const nextRadius = Number(editSphere.radius)
-  if (!Number.isFinite(nextRadius) || nextRadius < 0) return
+  if (!Number.isFinite(nextRadius) || nextRadius < LENGTH_MIN) return
   props.editor.updateSphereRadius(state.sphereId, nextRadius)
 }
 
@@ -1957,15 +2139,21 @@ const handleSphereRadiusFocus = () => {
 }
 
 const handleSphereRadiusBlur = () => {
-  editSphere.radius = normalizeDisplayLength(editSphere.radius)
+  editSphere.radius = clampLengthValue('sphere.radius', editSphere.radius, editSphere.radius)
+  const n = Number(editSphere.radius)
+  editSphere.radius = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editSphere.radius
   setCoordFocus('sphere.radius', false)
   applyEditSphereRadius()
 }
 
 const nudgeSphereRadius = (direction: 'up' | 'down') => {
-  const nextValue = stepCoordInput('sphere.radius', direction)
-  if (nextValue === null) return
-  editSphere.radius = nextValue
+  const current = Number(editSphere.radius)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('sphere.radius', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editSphere.radius = next.toFixed(2)
   applyEditSphereRadius()
 }
 
@@ -1994,6 +2182,158 @@ const nudgeSpherePointCoord = (
   if (nextValue === null) return
   editSphere[pointKey][axis] = nextValue
   applySpherePointCoord(pointKey)
+}
+
+const startEditCone = (coneId: string) => {
+  const cone = props.editor.getCone(coneId)
+  if (!cone) return
+  editing.value = { type: 'cone', id: coneId }
+  expandedLineEditorPoint.value = null
+  expandedStraightLineEditorPoint.value = null
+  expandedRayEditorPoint.value = null
+  editCone.nameSuffix = props.editor.getConeNameSuffix(coneId)
+  editCone.nameVisible = cone.nameVisible !== false
+  editCone.valueVisible = cone.valueVisible === true
+  editCone.userLocked = props.editor.isConeGeometryLocked(cone)
+  editCone.radius = toFixed2(props.editor.getConeRadius(coneId))
+  editCone.height = toFixed2(props.editor.getConeHeight(coneId))
+  const baseCenterPoint = props.editor.getConeBaseCenterPoint(coneId)
+  const apexPoint = props.editor.getConeApexPoint(coneId)
+  editCone.baseCenterPoint.x = baseCenterPoint ? toFixed2(baseCenterPoint.position.x) : ''
+  editCone.baseCenterPoint.y = baseCenterPoint ? toFixed2(baseCenterPoint.position.y) : ''
+  editCone.baseCenterPoint.z = baseCenterPoint ? toFixed2(baseCenterPoint.position.z) : ''
+  editCone.apexPoint.x = apexPoint ? toFixed2(apexPoint.position.x) : ''
+  editCone.apexPoint.y = apexPoint ? toFixed2(apexPoint.position.y) : ''
+  editCone.apexPoint.z = apexPoint ? toFixed2(apexPoint.position.z) : ''
+}
+
+const getEditingConeState = () => {
+  if (!editing.value || editing.value.type !== 'cone') return null
+  const cone = props.editor.getCone(editing.value.id)
+  if (!cone) return null
+  return { coneId: editing.value.id, cone }
+}
+
+const applyEditConeMeta = () => {
+  const state = getEditingConeState()
+  if (!state) return
+  const prefix = state.cone.coneType === 'normalCircle' ? '法向圆锥' : '圆锥'
+  props.editor.updateCone(state.coneId, {
+    name: `${prefix}${editCone.nameSuffix.trim()}`,
+    nameVisible: editCone.nameVisible,
+    valueVisible: editCone.valueVisible,
+  })
+  props.editor.setConeLockState(state.coneId, editCone.userLocked)
+}
+
+const applyEditConeRadius = () => {
+  const state = getEditingConeState()
+  if (!state) return
+  const nextRadius = Number(editCone.radius)
+  if (!Number.isFinite(nextRadius) || nextRadius < LENGTH_MIN) return
+  props.editor.updateConeRadius(state.coneId, nextRadius)
+}
+
+const applyEditConeHeight = () => {
+  const state = getEditingConeState()
+  if (!state) return
+  const nextHeight = Number(editCone.height)
+  if (!Number.isFinite(nextHeight) || nextHeight < LENGTH_MIN) return
+  props.editor.updateConeHeight(state.coneId, nextHeight)
+}
+
+const applyConePointCoord = (pointKey: 'baseCenterPoint' | 'apexPoint') => {
+  const state = getEditingConeState()
+  if (!state) return
+  const point =
+    pointKey === 'baseCenterPoint'
+      ? props.editor.getConeBaseCenterPoint(state.coneId)
+      : props.editor.getConeApexPoint(state.coneId)
+  if (!point) return
+  const nextPosition = {
+    x: Number(editCone[pointKey].x),
+    y: Number(editCone[pointKey].y),
+    z: Number(editCone[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  )
+    return
+  if (isPointCoordinateLocked(point)) return
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+}
+
+const handleConeRadiusFocus = () => {
+  setCoordFocus('cone.radius', true)
+}
+
+const handleConeRadiusBlur = () => {
+  editCone.radius = clampLengthValue('cone.radius', editCone.radius, editCone.radius)
+  editCone.radius = normalizeDisplayLength(editCone.radius)
+  setCoordFocus('cone.radius', false)
+  applyEditConeRadius()
+}
+
+const nudgeConeRadius = (direction: 'up' | 'down') => {
+  const current = Number(editCone.radius)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('cone.radius', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editCone.radius = next.toFixed(2)
+  applyEditConeRadius()
+}
+
+const handleConeHeightFocus = () => {
+  setCoordFocus('cone.height', true)
+}
+
+const handleConeHeightBlur = () => {
+  editCone.height = clampLengthValue('cone.height', editCone.height, editCone.height)
+  editCone.height = normalizeDisplayLength(editCone.height)
+  setCoordFocus('cone.height', false)
+  applyEditConeHeight()
+}
+
+const nudgeConeHeight = (direction: 'up' | 'down') => {
+  const current = Number(editCone.height)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('cone.height', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editCone.height = next.toFixed(2)
+  applyEditConeHeight()
+}
+
+const handleConePointCoordFocus = (
+  pointKey: 'baseCenterPoint' | 'apexPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  setCoordFocus(`cone.${pointKey}.${axis}`, true)
+}
+
+const handleConePointCoordBlur = (
+  pointKey: 'baseCenterPoint' | 'apexPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  editCone[pointKey][axis] = normalizeCoord(editCone[pointKey][axis])
+  setCoordFocus(`cone.${pointKey}.${axis}`, false)
+  applyConePointCoord(pointKey)
+}
+
+const nudgeConePointCoord = (
+  pointKey: 'baseCenterPoint' | 'apexPoint',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`cone.${pointKey}.${axis}`, direction)
+  if (nextValue === null) return
+  editCone[pointKey][axis] = nextValue
+  applyConePointCoord(pointKey)
 }
 
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
@@ -2533,7 +2873,8 @@ onUnmounted(() => {
         selectedCircles.length > 0 ||
         selectedEditableFaces.length > 0 ||
         selectedHexahedrons.length > 0 ||
-        selectedSpheres.length > 0
+        selectedSpheres.length > 0 ||
+        selectedCones.length > 0
       "
     >
       双击标签以编辑几何元素~
@@ -2551,7 +2892,8 @@ onUnmounted(() => {
             selectedEditableFaces.length === 0 &&
             selectedHexahedrons.length === 0 &&
             selectedRegularPolygons.length === 0 &&
-            selectedSpheres.length === 0
+            selectedSpheres.length === 0 &&
+            selectedCones.length === 0
           "
         >
           无
@@ -2760,7 +3102,7 @@ onUnmounted(() => {
                   @focus="handleLineLengthFocus"
                   @blur="handleLineLengthBlur"
                   step="0.5"
-                  min="0"
+                  min="0.1"
                   :disabled="!editLine.lengthLocked || isLineConstraintLocked(l!)"
                 />
                 <button
@@ -2771,6 +3113,9 @@ onUnmounted(() => {
                 >
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['line.lockedLength']?.show" class="length-bubble">{{ bubbleState['line.lockedLength']?.message }}</div>
+                </Transition>
               </div>
               <label class="toggle-label">
                 <input
@@ -3103,7 +3448,7 @@ onUnmounted(() => {
                   @focus="handleStraightLineDisplayLengthFocus"
                   @blur="handleStraightLineDisplayLengthBlur"
                   step="1"
-                  min="2"
+                  min="0.1"
                 />
                 <button
                   type="button"
@@ -3112,6 +3457,9 @@ onUnmounted(() => {
                 >
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['straightLine.displayLength']?.show" class="length-bubble">{{ bubbleState['straightLine.displayLength']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div
@@ -3430,11 +3778,14 @@ onUnmounted(() => {
                   @focus="handleRayDisplayLengthFocus"
                   @blur="handleRayDisplayLengthBlur"
                   step="1"
-                  min="1"
+                  min="0.1"
                 />
                 <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['ray.displayLength']?.show" class="length-bubble">{{ bubbleState['ray.displayLength']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div
@@ -3742,9 +4093,12 @@ onUnmounted(() => {
                   @focus="handleVectorLengthFocus"
                   @blur="handleVectorLengthBlur"
                   step="0.5"
-                  min="0"
+                  min="0.1"
                 />
                 <button type="button" class="step-btn" @click="nudgeVectorLength('up')">+</button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['vector.length']?.show" class="length-bubble">{{ bubbleState['vector.length']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div
@@ -4067,7 +4421,7 @@ onUnmounted(() => {
                     @input="applyEditCircle"
                     @focus="focusedCoord['circle.lockedRadius'] = true"
                     @blur="focusedCoord['circle.lockedRadius'] = false"
-                    min="0.01"
+                    min="0.1"
                     step="0.1"
                   />
                   <button
@@ -4078,6 +4432,9 @@ onUnmounted(() => {
                   >
                     +
                   </button>
+                  <Transition name="bubble-fade">
+                    <div v-if="bubbleState['circle.lockedRadius']?.show" class="length-bubble">{{ bubbleState['circle.lockedRadius']?.message }}</div>
+                  </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
@@ -4217,7 +4574,7 @@ onUnmounted(() => {
                     @input="applyThreePointCircleRadius"
                     @focus="focusedCoord['circle.threePointRadius'] = true"
                     @blur="focusedCoord['circle.threePointRadius'] = false"
-                    min="0.01"
+                    min="0.1"
                     step="0.1"
                   />
                   <button
@@ -4228,6 +4585,9 @@ onUnmounted(() => {
                   >
                     +
                   </button>
+                  <Transition name="bubble-fade">
+                    <div v-if="bubbleState['circle.threePointRadius']?.show" class="length-bubble">{{ bubbleState['circle.threePointRadius']?.message }}</div>
+                  </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
@@ -4548,6 +4908,7 @@ onUnmounted(() => {
             <div>
               {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
               <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
+              <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
             </div>
             <template v-if="c!.isNormalCircle()">
               <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
@@ -4664,7 +5025,7 @@ onUnmounted(() => {
                 </button>
                 <input
                   type="number"
-                  min="1"
+                  min="0.1"
                   step="0.5"
                   :ref="(el) => setCoordInputRef('hexa.edgeLength', el)"
                   v-model="editHexahedron.edgeLength"
@@ -4681,6 +5042,9 @@ onUnmounted(() => {
                 >
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['hexa.edgeLength']?.show" class="length-bubble">{{ bubbleState['hexa.edgeLength']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div class="face-metric-row">原始点坐标</div>
@@ -4947,7 +5311,7 @@ onUnmounted(() => {
                 </button>
                 <input
                   type="number"
-                  min="1"
+                  min="0.1"
                   step="0.5"
                   :ref="(el) => setCoordInputRef('rp.edgeLength', el)"
                   v-model="editRegularPolygon.edgeLength"
@@ -4964,6 +5328,9 @@ onUnmounted(() => {
                 >
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['rp.edgeLength']?.show" class="length-bubble">{{ bubbleState['rp.edgeLength']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div class="face-metric-row">原始点坐标</div>
@@ -5296,7 +5663,7 @@ onUnmounted(() => {
                 </button>
                 <input
                   type="number"
-                  min="0"
+                  min="0.1"
                   step="0.5"
                   :ref="(el) => setCoordInputRef('sphere.radius', el)"
                   v-model="editSphere.radius"
@@ -5313,6 +5680,9 @@ onUnmounted(() => {
                 >
                   +
                 </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['sphere.radius']?.show" class="length-bubble">{{ bubbleState['sphere.radius']?.message }}</div>
+                </Transition>
               </div>
             </div>
             <div
@@ -5514,6 +5884,356 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="c in selectedCones"
+          :key="c!.id"
+          class="selectedCone-info"
+          @dblclick="startEditCone(c!.id)"
+        >
+          <div v-if="editing?.type === 'cone' && editing?.id === c!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editCone.nameSuffix" @input="applyEditConeMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCone.nameVisible"
+                  @change="applyEditConeMeta"
+                />
+                {{ editCone.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCone.valueVisible"
+                  @change="applyEditConeMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCone.userLocked"
+                  @change="applyEditConeMeta"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">侧面积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeLateralArea(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
+                  : c!.getLateralArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">底面积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
+                  : c!.getBaseArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeVolume(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
+                  : c!.getVolume().toFixed(2)
+              }}</span>
+              <label class="pi-mode-toggle"
+                ><input
+                  type="checkbox"
+                  :checked="getConePiMode(c!.id)"
+                  @change="toggleConePiMode(c!.id)"
+                />π模式</label
+              >
+            </div>
+            <div class="length-row">
+              <label>半径：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConeRadius('down')"
+                  :disabled="editCone.userLocked"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('cone.radius', el)"
+                  v-model="editCone.radius"
+                  @input="applyEditConeRadius"
+                  @focus="handleConeRadiusFocus"
+                  @blur="handleConeRadiusBlur"
+                  :disabled="editCone.userLocked"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConeRadius('up')"
+                  :disabled="editCone.userLocked"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['cone.radius']?.show" class="length-bubble">{{ bubbleState['cone.radius']?.message }}</div>
+                </Transition>
+              </div>
+            </div>
+            <div class="length-row">
+              <label>高度：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConeHeight('down')"
+                  :disabled="editCone.userLocked"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('cone.height', el)"
+                  v-model="editCone.height"
+                  @input="applyEditConeHeight"
+                  @focus="handleConeHeightFocus"
+                  @blur="handleConeHeightBlur"
+                  :disabled="editCone.userLocked"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConeHeight('up')"
+                  :disabled="editCone.userLocked"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['cone.height']?.show" class="length-bubble">{{ bubbleState['cone.height']?.message }}</div>
+                </Transition>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                底心{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? 'A' }}(x,y,z)
+              </div>
+              <div class="line-editor-head">
+                顶点{{ props.editor.getConeApexPoint(c!.id)?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.baseCenterPoint.x', el)"
+                  v-model="editCone.baseCenterPoint.x"
+                  @input="applyConePointCoord('baseCenterPoint')"
+                  @focus="handleConePointCoordFocus('baseCenterPoint', 'x')"
+                  @blur="handleConePointCoordBlur('baseCenterPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.apexPoint.x', el)"
+                  v-model="editCone.apexPoint.x"
+                  @input="applyConePointCoord('apexPoint')"
+                  @focus="handleConePointCoordFocus('apexPoint', 'x')"
+                  @blur="handleConePointCoordBlur('apexPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.baseCenterPoint.y', el)"
+                  v-model="editCone.baseCenterPoint.y"
+                  @input="applyConePointCoord('baseCenterPoint')"
+                  @focus="handleConePointCoordFocus('baseCenterPoint', 'y')"
+                  @blur="handleConePointCoordBlur('baseCenterPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.apexPoint.y', el)"
+                  v-model="editCone.apexPoint.y"
+                  @input="applyConePointCoord('apexPoint')"
+                  @focus="handleConePointCoordFocus('apexPoint', 'y')"
+                  @blur="handleConePointCoordBlur('apexPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.baseCenterPoint.z', el)"
+                  v-model="editCone.baseCenterPoint.z"
+                  @input="applyConePointCoord('baseCenterPoint')"
+                  @focus="handleConePointCoordFocus('baseCenterPoint', 'z')"
+                  @blur="handleConePointCoordBlur('baseCenterPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('baseCenterPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeBaseCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cone.apexPoint.z', el)"
+                  v-model="editCone.apexPoint.z"
+                  @input="applyConePointCoord('apexPoint')"
+                  @focus="handleConePointCoordFocus('apexPoint', 'z')"
+                  @blur="handleConePointCoordBlur('apexPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeConePointCoord('apexPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getConeApexPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              {{ c!.name ?? '' }}
+              <span v-if="props.editor.isConeGeometryLocked(c!)" class="lock-badge">🔒</span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">半径：{{ props.editor.getConeRadius(c!.id).toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">高度：{{ props.editor.getConeHeight(c!.id).toFixed(2) }}</span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">体积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeVolume(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
+                  : c!.getVolume().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">表面积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeLateralArea(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
+                  : c!.getLateralArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">底面积：{{
+                getConePiMode(c!.id)
+                  ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
+                  : c!.getBaseArea().toFixed(2)
+              }}</span>
+            </div>
+            <div>
+              来源：点{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(c!.id)?.name ?? '' }}<template v-if="c!.isNormalCircleCone() && c!.normalCircleId">（法向圆{{ props.scene.circles.get(c!.normalCircleId)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(c!.id)?.name ?? '' }}）</template>
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="face in selectedEditableFaces"
           :key="face!.id"
           class="selectedFace-info"
@@ -5563,7 +6283,7 @@ onUnmounted(() => {
                   </button>
                   <input
                     type="number"
-                    min="0.01"
+                    min="0.1"
                     step="1"
                     :value="editFace.edgeLengths[edgeIndex]"
                     :disabled="editFace.areaLocked"
@@ -5582,6 +6302,9 @@ onUnmounted(() => {
                   >
                     +
                   </button>
+                  <Transition name="bubble-fade">
+                    <div v-if="bubbleState[`face.edge.${edgeIndex}`]?.show" class="length-bubble">{{ bubbleState[`face.edge.${edgeIndex}`]?.message }}</div>
+                  </Transition>
                 </div>
               </div>
             </div>
@@ -5904,6 +6627,7 @@ onUnmounted(() => {
               <div>
                 {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
                 <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
+                <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
               </div>
               <template v-if="c!.isNormalCircle()">
                 <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
@@ -6006,6 +6730,63 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="conesInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.cone"
+            @click="toggleContentGroup('cone')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.cone ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.cone }}</span>
+            <span class="content-group-count">{{ conesInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.cone" class="content-group-body">
+            <div
+              v-for="cone in conesInScene"
+              :key="cone.id"
+              class="cone-info selectable-geo"
+              :class="{ 'is-selected': selectedConeIds.includes(cone.id) }"
+              @click="selectConeFromContent(cone.id)"
+            >
+              <div>
+                {{ cone.name ?? '' }}
+                <span v-if="props.editor.isConeGeometryLocked(cone)" class="lock-badge"
+                  >🔒</span
+                >
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">半径：{{ props.editor.getConeRadius(cone.id).toFixed(2) }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">高度：{{ props.editor.getConeHeight(cone.id).toFixed(2) }}</span>
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">体积：{{
+                  getConePiMode(cone.id)
+                    ? formatPiConeVolume(props.editor.getConeRadius(cone.id), props.editor.getConeHeight(cone.id))
+                    : cone.getVolume().toFixed(2)
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">表面积：{{
+                  getConePiMode(cone.id)
+                    ? formatPiConeLateralArea(props.editor.getConeRadius(cone.id), props.editor.getConeHeight(cone.id))
+                    : cone.getLateralArea().toFixed(2)
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">底面积：{{
+                  getConePiMode(cone.id)
+                    ? formatPiConeBaseArea(props.editor.getConeRadius(cone.id))
+                    : cone.getBaseArea().toFixed(2)
+                }}</span>
+              </div>
+              <div>
+                来源：点{{ props.editor.getConeBaseCenterPoint(cone.id)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}<template v-if="cone.isNormalCircleCone() && cone.normalCircleId">（法向圆{{ props.scene.circles.get(cone.normalCircleId)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}）</template>
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="facesInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -6097,12 +6878,14 @@ hr {
 .selectedRay-info,
 .selectedVector-info,
 .selectedCircle-info,
+.selectedCone-info,
 .selectedFace-info,
 .line-info,
 .straight-line-info,
 .ray-info,
 .vector-info,
 .circle-info,
+.cone-info,
 .face-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
@@ -6139,6 +6922,11 @@ hr {
 .face-info {
   background-color: rgba(122, 108, 207, 0.2);
   border-left-color: #d9d0ff;
+}
+.selectedCone-info,
+.cone-info {
+  background-color: rgba(200, 120, 30, 0.22);
+  border-left-color: #f0a030;
 }
 .selectable-geo {
   cursor: pointer;
@@ -6425,6 +7213,7 @@ hr {
   display: inline-flex;
   align-items: stretch;
   min-width: 0;
+  position: relative;
 }
 .axis-field {
   display: grid;
@@ -6456,11 +7245,11 @@ hr {
   line-height: 1;
   touch-action: manipulation;
 }
-.step-btn:first-child {
+.step-btn:first-of-type {
   border-radius: 4px 0 0 4px;
   border-right: none;
 }
-.step-btn:last-child {
+.step-btn:last-of-type {
   border-radius: 0 4px 4px 0;
   border-left: none;
 }
@@ -6504,6 +7293,7 @@ hr {
   justify-content: flex-start;
   flex-wrap: nowrap;
   gap: 4px;
+  grid-column: 1 / -1;
 }
 .length-row > label {
   flex: 0 0 auto;
@@ -6589,6 +7379,16 @@ hr {
   grid-column: 1 / -1;
   margin-top: 4px;
   color: #f3f3f3;
+}
+.metric-item {
+  display: inline-block;
+  white-space: nowrap;
+}
+.metric-sep {
+  display: inline-block;
+  white-space: nowrap;
+  margin: 0 6px;
+  color: #888;
 }
 .pi-mode-toggle {
   display: inline-flex;
@@ -6682,12 +7482,14 @@ hr {
   .selectedRay-info,
   .selectedVector-info,
   .selectedCircle-info,
+  .selectedCone-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
   .vector-info,
-  .circle-info {
+  .circle-info,
+  .cone-info {
     padding: 6px;
     font-size: 12px;
   }
@@ -6772,12 +7574,14 @@ hr {
   .selectedRay-info,
   .selectedVector-info,
   .selectedCircle-info,
+  .selectedCone-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
   .vector-info,
-  .circle-info {
+  .circle-info,
+  .cone-info {
     margin-bottom: 4px;
     padding: 5px;
     font-size: 11px;
@@ -7063,13 +7867,55 @@ hr {
   .selectedLine-info,
   .selectedRay-info,
   .selectedCircle-info,
+  .selectedCone-info,
   .point-info,
   .line-info,
   .ray-info,
-  .circle-info {
+  .circle-info,
+  .cone-info {
     padding: 4px;
     font-size: 10px;
   }
+}
+
+.length-bubble {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  transform: translateX(0);
+  margin-bottom: 6px;
+  background: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: #333333;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  width: max-content;
+}
+
+.length-bubble::after {
+  content: '';
+  position: absolute;
+  right: 16px;
+  bottom: -6px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid #ffffff;
+}
+
+.bubble-fade-enter-active,
+.bubble-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.bubble-fade-enter-from,
+.bubble-fade-leave-to {
+  opacity: 0;
 }
 </style>
 <style>

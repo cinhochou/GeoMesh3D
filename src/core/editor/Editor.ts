@@ -9,6 +9,7 @@ import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
 import { Circle3, type DirectionType } from '../geometry/Circle3'
 import { Sphere3 } from '../geometry/Sphere3'
+import { Cone3 } from '../geometry/Cone3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
@@ -50,8 +51,13 @@ import { AddIntersectionPointCommand } from './commands/add/AddIntersectionPoint
 import { AddHexahedronCommand } from './commands/add/AddHexahedronCommand'
 import { AddSphereCommand } from './commands/add/AddSphereCommand'
 import { AddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
+import { AddConeCommand } from './commands/add/AddConeCommand'
 import { DeleteRadiusSphereCommand } from './commands/delete/DeleteRadiusSphereCommand'
 import { UpdateSphereRadiusCommand } from './commands/update/UpdateSphereRadiusCommand'
+import { DeleteConeCommand } from './commands/delete/DeleteConeCommand'
+import { UpdateConeCommand } from './commands/update/UpdateConeCommand'
+import { UpdateConeRadiusCommand } from './commands/update/UpdateConeRadiusCommand'
+import { UpdateConeHeightCommand } from './commands/update/UpdateConeHeightCommand'
 import { AddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -81,6 +87,7 @@ export enum EditorMode {
   CreateTetrahedron,
   CreateSphereTwoPoints,
   CreateSphereRadius,
+  CreateCone,
 }
 
 export type FacePreviewData = {
@@ -384,6 +391,11 @@ export class Editor {
     for (const sphere of this.scene.spheres.values()) {
       if (!sphere.userLocked) continue
       if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) return true
+    }
+
+    for (const cone of this.scene.cones.values()) {
+      if (!cone.userLocked) continue
+      if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) return true
     }
 
     return false
@@ -702,7 +714,7 @@ export class Editor {
     )
     const currentLength = Math.hypot(current.x, current.y, current.z)
     if (currentLength <= 1e-6) return
-    const normalizedLength = Math.max(0.01, nextLength)
+    const normalizedLength = Math.max(0.1, nextLength)
     this.setPointsPositions([
       {
         id: p2.id,
@@ -848,8 +860,8 @@ export class Editor {
   updateSphereRadius(sphereId: string, nextRadius: number) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
-    const normalizedRadius = Math.max(0.01, nextRadius)
     if (sphere.isRadiusSphere()) {
+      const normalizedRadius = Math.max(0.1, nextRadius)
       const before = { radiusValue: sphere.radiusValue }
       const after = { radiusValue: normalizedRadius }
       this.executeCommand(new UpdateSphereRadiusCommand(this.scene, sphere, before, after))
@@ -858,6 +870,7 @@ export class Editor {
     }
     const currentRadius = sphere.getRadius()
     if (currentRadius <= 1e-6) return
+    const normalizedRadius = Math.max(0.1, nextRadius)
     const center = sphere.centerPoint.position
     const radius = sphere.radiusPoint!.position
     const direction = new Vec3(
@@ -952,6 +965,218 @@ export class Editor {
   getSphereRadiusPoint(sphereId: string): Point3 | undefined {
     const sphere = this.getSphere(sphereId)
     return sphere?.radiusPoint ?? undefined
+  }
+
+  getCone(coneId: string): Cone3 | undefined {
+    return this.scene.cones.get(coneId)
+  }
+
+  getConeNameSuffix(coneId: string): string {
+    const cone = this.getCone(coneId)
+    if (!cone) return ''
+    return cone.name.replace(/^法向圆锥|^圆锥/, '')
+  }
+
+  updateConeName(coneId: string, suffix: string) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    cone.name = `圆锥${suffix.trim()}`
+    this.scene.markAllRenderDirty()
+  }
+
+  setConeValueVisible(coneId: string, visible: boolean) {
+    const cone = this.getCone(coneId)
+    if (!cone || cone.valueVisible === visible) return
+    cone.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setConeNameVisible(coneId: string, visible: boolean) {
+    const cone = this.getCone(coneId)
+    if (!cone || cone.nameVisible === visible) return
+    cone.nameVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setConeLockState(coneId: string, locked: boolean) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    const conePoints = [cone.baseCenterPoint, cone.apexPoint]
+    const endpointTransforms = conePoints
+      .filter((point) => !point.locked)
+      .map((point) => ({
+        point,
+        before: point.userLocked,
+        after: locked,
+      }))
+      .filter((transform) => transform.before !== transform.after)
+
+    if (cone.userLocked === locked && endpointTransforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [{ cone, before: cone.userLocked, after: locked }],
+      ),
+    )
+  }
+
+  updateCone(
+    coneId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      userLocked?: boolean
+    },
+  ) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    const before = {
+      name: cone.name,
+      nameVisible: cone.nameVisible,
+      valueVisible: cone.valueVisible,
+      labelOffsetX: cone.labelOffsetX,
+      labelOffsetY: cone.labelOffsetY,
+      visible: cone.visible,
+      userLocked: cone.userLocked,
+    }
+    const after = {
+      name: patch.name ?? cone.name,
+      nameVisible: patch.nameVisible ?? cone.nameVisible,
+      valueVisible: patch.valueVisible ?? cone.valueVisible,
+      labelOffsetX: patch.labelOffsetX ?? cone.labelOffsetX,
+      labelOffsetY: patch.labelOffsetY ?? cone.labelOffsetY,
+      visible: patch.visible ?? cone.visible,
+      userLocked: patch.userLocked ?? cone.userLocked,
+    }
+    this.executeCommand(new UpdateConeCommand(cone, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
+  isConeGeometryLocked(cone: Cone3): boolean {
+    return cone.userLocked
+  }
+
+  getConeRadius(coneId: string): number {
+    const cone = this.getCone(coneId)
+    return cone?.getRadius() ?? 0
+  }
+
+  getConeHeight(coneId: string): number {
+    const cone = this.getCone(coneId)
+    return cone?.getHeight() ?? 0
+  }
+
+  updateConeRadius(coneId: string, nextRadius: number) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    const normalizedRadius = Math.max(0.1, nextRadius)
+    const before = { radiusValue: cone.radiusValue }
+    const after = { radiusValue: normalizedRadius }
+    this.executeCommand(new UpdateConeRadiusCommand(this.scene, cone, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
+  updateConeHeight(coneId: string, nextHeight: number) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    const normalizedHeight = Math.max(0.1, nextHeight)
+    this.executeCommand(new UpdateConeHeightCommand(cone, cone.apexPoint, normalizedHeight))
+    this.scene.markAllRenderDirty()
+  }
+
+  deleteCone(coneId: string) {
+    const cone = this.getCone(coneId)
+    if (!cone) return
+    this.executeCommand(new DeleteConeCommand(this.scene, cone))
+  }
+
+  tryCreateConeTwoPoint(baseCenterPoint: Point3, apexPoint: Point3, radius: number) {
+    if (baseCenterPoint.id === apexPoint.id) {
+      emitToast('请选择两个不同的点')
+      return
+    }
+    if (radius <= 0) {
+      emitToast('半径必须大于0')
+      return
+    }
+    const coneName = genNextAvailableName(
+      [...this.scene.cones.values()].map((c) => c.name),
+      0,
+      (index) => `圆锥${index + 1}`,
+    )
+    const cone = new Cone3(
+      genId('cone'),
+      coneName,
+      baseCenterPoint,
+      apexPoint,
+      'twoPoint',
+      false,
+      true,
+      false,
+      Cone3.DEFAULT_LABEL_OFFSET_X,
+      Cone3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      radius,
+    )
+    this.executeCommand(new AddConeCommand(this.scene, cone))
+    this.scene.selection.clear()
+    this.scene.selection.selectCone(cone.id)
+  }
+
+  tryCreateConeNormalCircle(normalCircle: Circle3, apexPoint: Point3) {
+    const frame = normalCircle.getFrame(this.resolveDirectionVector(
+      normalCircle.directionType ?? 'point',
+      normalCircle.directionId ?? '',
+    ))
+    if (!frame) {
+      emitToast('法向圆无效，无法创建圆锥')
+      return
+    }
+    const coneName = genNextAvailableName(
+      [...this.scene.cones.values()].map((c) => c.name),
+      0,
+      (index) => `圆锥${index + 1}`,
+    )
+    const cone = new Cone3(
+      genId('cone'),
+      coneName,
+      normalCircle.p1,
+      apexPoint,
+      'normalCircle',
+      false,
+      true,
+      false,
+      Cone3.DEFAULT_LABEL_OFFSET_X,
+      Cone3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      frame.radius,
+      normalCircle.id,
+    )
+    this.executeCommand(new AddConeCommand(this.scene, cone))
+    this.scene.selection.clear()
+    this.scene.selection.selectCone(cone.id)
+  }
+
+  getConeBaseCenterPoint(coneId: string): Point3 | undefined {
+    const cone = this.getCone(coneId)
+    return cone?.baseCenterPoint
+  }
+
+  getConeApexPoint(coneId: string): Point3 | undefined {
+    const cone = this.getCone(coneId)
+    return cone?.apexPoint
   }
 
   getRegularPolygonConstraint(constraintId: string) {
@@ -1055,7 +1280,7 @@ export class Editor {
     )
     const currentLength = Math.hypot(current.x, current.y, current.z)
     if (currentLength <= 1e-6) return
-    const normalizedLength = Math.max(0.01, nextLength)
+    const normalizedLength = Math.max(0.1, nextLength)
     this.setPointsPositions([
       {
         id: p2.id,
@@ -1826,6 +2051,9 @@ export class Editor {
     const relatedSpheres = [...this.scene.spheres.values()].filter(
       (sphere) => sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
     )
+    const relatedCones = [...this.scene.cones.values()].filter(
+      (cone) => cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId,
+    )
     const relatedFaces = getFacesByPointId(this, pointId)
 
     if (!locked && relatedFaces.length > 0) {
@@ -1919,6 +2147,16 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
+    const coneTransforms = locked
+      ? []
+      : relatedCones
+          .map((cone) => ({
+            cone,
+            before: cone.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
     if (
       pointTransforms.length === 0 &&
       lineTransforms.length === 0 &&
@@ -1926,7 +2164,8 @@ export class Editor {
       rayTransforms.length === 0 &&
       vectorTransforms.length === 0 &&
       circleTransforms.length === 0 &&
-      sphereTransforms.length === 0
+      sphereTransforms.length === 0 &&
+      coneTransforms.length === 0
     ) {
       return
     }
@@ -1941,6 +2180,7 @@ export class Editor {
         [],
         circleTransforms,
         sphereTransforms,
+        coneTransforms,
       ),
     )
   }
@@ -2776,7 +3016,7 @@ export class Editor {
       centerVisible: patch.centerVisible ?? circle.centerVisible,
       lockedRadius: patch.lockedRadius ?? circle.lockedRadius,
     }
-    this.executeCommand(new UpdateCircleCommand(circle, before, after))
+    this.executeCommand(new UpdateCircleCommand(circle, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 

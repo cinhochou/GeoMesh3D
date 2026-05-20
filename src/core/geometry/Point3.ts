@@ -22,6 +22,8 @@ export class Point3 {
   regularPolygonRole: 'owner' | 'dependent' | null
   sphereId: string | null
   sphereRole: 'center' | 'radius' | null
+  coneId: string | null
+  coneRole: 'baseCenter' | 'apex' | null
   onPositionChanged: ((point: Point3, previous: Vec3, next: Vec3) => void) | null = null
 
   constructor(
@@ -52,6 +54,8 @@ export class Point3 {
     this.regularPolygonRole = null
     this.sphereId = null
     this.sphereRole = null
+    this.coneId = null
+    this.coneRole = null
   }
 
   setPosition(v: Vec3) {

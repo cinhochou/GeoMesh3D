@@ -7,6 +7,7 @@ import { Circle3 } from '../geometry/Circle3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Sphere3 } from '../geometry/Sphere3'
+import { Cone3 } from '../geometry/Cone3'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 
@@ -29,6 +30,7 @@ export type SceneRenderSyncState = {
   circleIds: Set<string>
   faceIds: Set<string>
   sphereIds: Set<string>
+  coneIds: Set<string>
 }
 
 export class Scene {
@@ -42,6 +44,7 @@ export class Scene {
   circles = new Map<string, Circle3>()
   faces = new Map<string, PlanarPolygon>()
   spheres = new Map<string, Sphere3>()
+  cones = new Map<string, Cone3>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
@@ -59,6 +62,7 @@ export class Scene {
   private dirtyCircleIds = new Set<string>()
   private dirtyFaceIds = new Set<string>()
   private dirtySphereIds = new Set<string>()
+  private dirtyConeIds = new Set<string>()
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
 
@@ -109,6 +113,17 @@ export class Scene {
     this.spheres.delete(sphereId)
     this.selection.spheres.delete(sphereId)
     this.dirtySphereIds.add(sphereId)
+  }
+
+  addCone(cone: Cone3) {
+    this.cones.set(cone.id, cone)
+    this.dirtyConeIds.add(cone.id)
+  }
+
+  removeCone(coneId: string) {
+    this.cones.delete(coneId)
+    this.selection.cones.delete(coneId)
+    this.dirtyConeIds.add(coneId)
   }
 
   addFace(face: PlanarPolygon) {
@@ -297,6 +312,11 @@ export class Scene {
         this.dirtySphereIds.add(sphere.id)
       }
     })
+    this.cones.forEach((cone) => {
+      if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
+        this.dirtyConeIds.add(cone.id)
+      }
+    })
     this.constraints.forEach((constraint) => {
       if (constraint.pointId === pointId) {
         this.markConstraintDirty(constraint)
@@ -344,6 +364,7 @@ export class Scene {
       this.dirtyCircleIds.clear()
       this.dirtyFaceIds.clear()
       this.dirtySphereIds.clear()
+      this.dirtyConeIds.clear()
       return {
         fullSync: true,
         pointIds: new Set(this.points.keys()),
@@ -354,6 +375,7 @@ export class Scene {
         circleIds: new Set(this.circles.keys()),
         faceIds: new Set(this.faces.keys()),
         sphereIds: new Set(this.spheres.keys()),
+        coneIds: new Set(this.cones.keys()),
       }
     }
 
@@ -365,6 +387,7 @@ export class Scene {
     const circleIds = new Set(this.dirtyCircleIds)
     const faceIds = new Set(this.dirtyFaceIds)
     const sphereIds = new Set(this.dirtySphereIds)
+    const coneIds = new Set(this.dirtyConeIds)
 
     pointIds.forEach((pointId) => {
       this.lines.forEach((line, lineId) => {
@@ -427,6 +450,11 @@ export class Scene {
           sphereIds.add(sphereId)
         }
       })
+      this.cones.forEach((cone, coneId) => {
+        if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
+          coneIds.add(coneId)
+        }
+      })
     })
 
     this.dirtyPointIds.clear()
@@ -437,6 +465,14 @@ export class Scene {
     this.dirtyCircleIds.clear()
     this.dirtyFaceIds.clear()
     this.dirtySphereIds.clear()
+    this.dirtyConeIds.clear()
+
+    coneIds.forEach((coneId) => {
+      const cone = this.cones.get(coneId)
+      if (cone?.normalCircleId) {
+        circleIds.add(cone.normalCircleId)
+      }
+    })
 
     if (
       pointIds.size === 0 &&
@@ -446,7 +482,8 @@ export class Scene {
       vectorIds.size === 0 &&
       circleIds.size === 0 &&
       faceIds.size === 0 &&
-      sphereIds.size === 0
+      sphereIds.size === 0 &&
+      coneIds.size === 0
     ) {
       return null
     }
@@ -461,6 +498,7 @@ export class Scene {
       circleIds,
       faceIds,
       sphereIds,
+      coneIds,
     }
   }
 

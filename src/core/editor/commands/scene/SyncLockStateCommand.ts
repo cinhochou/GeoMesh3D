@@ -7,6 +7,7 @@ import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { Circle3 } from '../../../geometry/Circle3'
 import { Sphere3 } from '../../../geometry/Sphere3'
+import { Cone3 } from '../../../geometry/Cone3'
 
 type PointLockTransform = {
   point: Point3
@@ -56,6 +57,12 @@ type SphereLockTransform = {
   after: boolean
 }
 
+type ConeLockTransform = {
+  cone: Cone3
+  before: boolean
+  after: boolean
+}
+
 export class SyncLockStateCommand implements Command {
   constructor(
     private pointTransforms: PointLockTransform[],
@@ -66,6 +73,7 @@ export class SyncLockStateCommand implements Command {
     private faceTransforms: FaceLockTransform[] = [],
     private circleTransforms: CircleLockTransform[] = [],
     private sphereTransforms: SphereLockTransform[] = [],
+    private coneTransforms: ConeLockTransform[] = [],
   ) {}
 
   execute() {
@@ -93,6 +101,9 @@ export class SyncLockStateCommand implements Command {
     this.sphereTransforms.forEach(({ sphere, after }) => {
       sphere.userLocked = after
     })
+    this.coneTransforms.forEach(({ cone, after }) => {
+      cone.userLocked = after
+    })
   }
 
   undo() {
@@ -119,6 +130,9 @@ export class SyncLockStateCommand implements Command {
     })
     this.sphereTransforms.forEach(({ sphere, before }) => {
       sphere.userLocked = before
+    })
+    this.coneTransforms.forEach(({ cone, before }) => {
+      cone.userLocked = before
     })
   }
 }

@@ -36,9 +36,10 @@ export class Interaction {
   draggingVectorId: string | null = null
   draggingCircleId: string | null = null
   draggingSphereId: string | null = null
+  draggingConeId: string | null = null
   draggingFaceId: string | null = null
   private draggingLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
     geoId: string
     startClientX: number
     startClientY: number
@@ -52,6 +53,8 @@ export class Interaction {
   regularPolygonFirstPointId: string | null = null
   sphereTwoPointsFirstPointId: string | null = null
   radiusSphereCenterPointId: string | null = null
+  coneBaseCenterPointId: string | null = null
+  coneNormalCircleId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -71,13 +74,13 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
     geoId: string
   } | null = null
   private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
   private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
     geoId: string
   } | null = null
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
@@ -233,6 +236,7 @@ export class Interaction {
     this.draggingVectorId = null
     this.draggingCircleId = null
     this.draggingSphereId = null
+    this.draggingConeId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -298,14 +302,14 @@ export class Interaction {
   }
 
   private isSameActiveLabelTarget(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
     return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
   }
 
   private deselectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
     if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
@@ -315,11 +319,15 @@ export class Interaction {
     else if (type === 'vector') this.editor.scene.selection.deselectVector(geoId)
     else if (type === 'circle') this.editor.scene.selection.deselectCircle(geoId)
     else if (type === 'sphere') this.editor.scene.selection.deselectSphere(geoId)
+    else if (type === 'cone') {
+      this.editor.scene.selection.deselectCone(geoId)
+      this.editor.scene.markAllRenderDirty()
+    }
     else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
   }
 
   private selectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
     if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
@@ -329,6 +337,7 @@ export class Interaction {
     else if (type === 'vector') this.editor.scene.selection.selectVector(geoId, true)
     else if (type === 'circle') this.editor.scene.selection.selectCircle(geoId, true)
     else if (type === 'sphere') this.editor.scene.selection.selectSphere(geoId, true)
+    else if (type === 'cone') this.editor.scene.selection.selectCone(geoId, true)
     else if (type === 'face') this.editor.selectCubeByFaceId(geoId, true)
   }
 
@@ -379,6 +388,7 @@ export class Interaction {
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
+      this.draggingConeId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
@@ -422,6 +432,7 @@ export class Interaction {
     this.draggingVectorId = null
     this.draggingCircleId = null
     this.draggingSphereId = null
+    this.draggingConeId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -1098,8 +1109,47 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(sphere.centerPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingConeId) {
+      const cone = this.editor.scene.cones.get(this.draggingConeId)
+      if (!cone) return
+      if (this.editor.isConeGeometryLocked(cone)) return
+
+      this.handleDrag(
+        cone.baseCenterPoint.position,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(cone.baseCenterPoint.id)
+          toMove.add(cone.apexPoint.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -1194,6 +1244,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
+        this.editor.mode === EditorMode.CreateCone ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -1228,6 +1279,8 @@ export class Interaction {
           this.editor.deleteCircle(geoId)
         } else if (type === 'sphere') {
           this.editor.deleteSphere(geoId)
+        } else if (type === 'cone') {
+          this.editor.deleteCone(geoId)
         } else if (type === 'face') {
           this.editor.deleteFace(geoId)
         }
@@ -1270,6 +1323,13 @@ export class Interaction {
                 ))
               } else {
                 this.draggingPointId = null
+              }
+            } else if (p.coneId && (p.coneRole === 'baseCenter' || p.coneRole === 'apex')) {
+              if (this.editor.isConeGeometryLocked(this.editor.scene.cones.get(p.coneId)!)) {
+                this.draggingPointId = null
+              } else {
+                this.draggingPointId = geoId
+                this.startDrag(p.position)
               }
             } else if (this.editor.isPointCoordinateLocked(p)) {
               this.draggingPointId = null
@@ -1361,6 +1421,24 @@ export class Interaction {
                 sphere.centerPoint.position.x,
                 sphere.centerPoint.position.y,
                 sphere.centerPoint.position.z,
+              ))
+            }
+          }
+        } else if (type === 'cone') {
+          const alreadySelected = this.editor.scene.selection.cones.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+          this.editor.scene.selection.selectCone(geoId, true)
+          this.editor.scene.markAllRenderDirty()
+          const cone = this.editor.scene.cones.get(geoId)
+          if (cone) {
+            if (this.editor.isConeGeometryLocked(cone)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingConeId = geoId
+              this.startDrag(new THREE.Vector3(
+                cone.baseCenterPoint.position.x,
+                cone.baseCenterPoint.position.y,
+                cone.baseCenterPoint.position.z,
               ))
             }
           }
@@ -1484,6 +1562,38 @@ export class Interaction {
             }),
           )
         }
+      } else if (this.editor.mode === EditorMode.CreateCone && type === 'point') {
+        if (this.coneNormalCircleId) {
+          const normalCircle = this.editor.scene.circles.get(this.coneNormalCircleId)
+          const apexPoint = this.editor.scene.points.get(geoId)
+          if (normalCircle && apexPoint) {
+            this.editor.tryCreateConeNormalCircle(normalCircle, apexPoint)
+          }
+          this.coneNormalCircleId = null
+        } else if (!this.coneBaseCenterPointId) {
+          this.coneBaseCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.coneBaseCenterPointId) {
+          if (this.coneBaseCenterPointId !== geoId) {
+            this.editor.scene.selection.selectPoint(geoId, true)
+            const baseCenterPoint = this.editor.scene.points.get(this.coneBaseCenterPointId)
+            const apexPoint = this.editor.scene.points.get(geoId)
+            if (baseCenterPoint && apexPoint) {
+              window.dispatchEvent(
+                new CustomEvent('show-cone-radius-dialog', {
+                  detail: { baseCenterPointId: this.coneBaseCenterPointId, apexPointId: geoId },
+                }),
+              )
+            }
+          }
+        }
+      } else if (this.editor.mode === EditorMode.CreateCone && type === 'circle') {
+        const circle = this.editor.scene.circles.get(geoId)
+        if (circle && circle.isNormalCircle()) {
+          this.coneNormalCircleId = geoId
+          this.coneBaseCenterPointId = null
+          this.editor.scene.selection.selectCircle(geoId, true)
+        }
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (
@@ -1500,6 +1610,7 @@ export class Interaction {
       }
       if (this.editor.mode === EditorMode.Select) {
         this.editor.scene.selection.clear()
+        this.editor.scene.markAllRenderDirty()
         this.clearActiveLabelTarget()
         this.clearActivePointValueTarget()
       } else if (this.editor.mode === EditorMode.CreatePlane)
@@ -1514,6 +1625,8 @@ export class Interaction {
         this.editor.scene.selection.clear()
       else if (this.editor.mode === EditorMode.CreateSphereRadius) {
         this.resetRadiusSphereCreation()
+      } else if (this.editor.mode === EditorMode.CreateCone) {
+        this.resetConeCreation()
       } else if (this.editor.mode === EditorMode.CreateCircleNormal) {
         this.resetNormalCircleCreation()
       } else if (this.editor.mode === EditorMode.IntersectionPoint)
@@ -1562,6 +1675,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
+        this.editor.mode === EditorMode.CreateCone ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -1620,6 +1734,7 @@ export class Interaction {
       this.resetARMouseRotationCandidate()
       if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
         this.editor.scene.selection.clear()
+        this.editor.scene.markAllRenderDirty()
         this.clearActiveLabelTarget()
         this.clearActivePointValueTarget()
       }
@@ -1642,6 +1757,7 @@ export class Interaction {
       this.draggingVectorId = null
       this.draggingCircleId = null
       this.draggingSphereId = null
+      this.draggingConeId = null
       this.draggingFaceId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
@@ -1775,6 +1891,13 @@ export class Interaction {
         e.preventDefault()
         e.stopPropagation()
         this.resetRadiusSphereCreation()
+        this.resetMobileInteractionState()
+        return
+      }
+      if (this.editor.mode === EditorMode.CreateCone) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetConeCreation()
         this.resetMobileInteractionState()
         return
       }
@@ -1996,6 +2119,44 @@ export class Interaction {
       return
     }
 
+    if (this.editor.mode === EditorMode.CreateCone) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') {
+        if (!this.coneBaseCenterPointId && !this.coneNormalCircleId) {
+          this.coneBaseCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.coneBaseCenterPointId && !this.coneNormalCircleId && this.coneBaseCenterPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          const baseCenterPoint = this.editor.scene.points.get(this.coneBaseCenterPointId)
+          const apexPoint = this.editor.scene.points.get(geoId)
+          if (baseCenterPoint && apexPoint) {
+            window.dispatchEvent(
+              new CustomEvent('show-cone-radius-dialog', {
+                detail: { baseCenterPointId: this.coneBaseCenterPointId, apexPointId: geoId },
+              }),
+            )
+          }
+        } else if (this.coneNormalCircleId && type === 'point') {
+          const normalCircle = this.editor.scene.circles.get(this.coneNormalCircleId)
+          const apexPoint = this.editor.scene.points.get(geoId)
+          if (normalCircle && apexPoint) {
+            this.editor.tryCreateConeNormalCircle(normalCircle, apexPoint)
+          }
+          this.coneNormalCircleId = null
+        }
+      } else if (type === 'circle') {
+        const circle = this.editor.scene.circles.get(geoId)
+        if (circle && circle.isNormalCircle()) {
+          this.coneNormalCircleId = geoId
+          this.coneBaseCenterPointId = null
+          this.editor.scene.selection.selectCircle(geoId, true)
+        }
+      }
+      this.resetMobileInteractionState()
+      return
+    }
+
     if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
@@ -2076,6 +2237,15 @@ export class Interaction {
         } else {
           this.syncControlLockState()
           this.renderer.renderer.domElement.style.cursor = 'default'
+        }
+      } else if (point.coneId && (point.coneRole === 'baseCenter' || point.coneRole === 'apex')) {
+        if (this.editor.isConeGeometryLocked(this.editor.scene.cones.get(point.coneId)!)) {
+          this.draggingPointId = null
+          this.syncControlLockState()
+          this.renderer.renderer.domElement.style.cursor = 'default'
+        } else {
+          this.draggingPointId = geoId
+          this.startDrag(point.position)
         }
       } else if (this.editor.isPointCoordinateLocked(point)) {
         this.draggingPointId = null
@@ -2264,6 +2434,39 @@ export class Interaction {
       return
     }
 
+    if (type === 'cone') {
+      const alreadySelected = this.editor.scene.selection.cones.has(geoId)
+      this.editor.scene.selection.selectCone(geoId, true)
+      this.editor.scene.markAllRenderDirty()
+      const cone = this.editor.scene.cones.get(geoId)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      if (!cone || this.editor.isConeGeometryLocked(cone)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingConeId = geoId
+      this.startDrag(new THREE.Vector3(
+        cone.baseCenterPoint.position.x,
+        cone.baseCenterPoint.position.y,
+        cone.baseCenterPoint.position.z,
+      ))
+      return
+    }
+
     if (type === 'face') {
       const alreadySelected = this.editor.scene.selection.faces.has(geoId)
       this.editor.selectCubeByFaceId(geoId, true)
@@ -2337,6 +2540,7 @@ export class Interaction {
       !this.draggingRayId &&
       !this.draggingFaceId &&
       !this.draggingSphereId &&
+      !this.draggingConeId &&
       !this.draggingLabelTarget
     ) {
       this.updateMobileMoveThreshold(e.clientX, e.clientY)
@@ -2388,6 +2592,7 @@ export class Interaction {
       !this.draggingVectorId &&
       !this.draggingCircleId &&
       !this.draggingSphereId &&
+      !this.draggingConeId &&
       !this.draggingFaceId &&
       !this.draggingLabelTarget
     )
@@ -2464,6 +2669,7 @@ export class Interaction {
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
+      this.draggingConeId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null
 
@@ -2483,6 +2689,7 @@ export class Interaction {
         this.draggingRayId = null
         this.draggingCircleId = null
         this.draggingSphereId = null
+        this.draggingConeId = null
         this.draggingFaceId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
@@ -2499,6 +2706,7 @@ export class Interaction {
       !this.mobileInteractionMoved
     ) {
       this.editor.scene.selection.clear()
+      this.editor.scene.markAllRenderDirty()
     }
 
     this.resetMobileInteractionState()
@@ -2539,7 +2747,8 @@ export class Interaction {
   //统一的拾取函数
   pick(): THREE.Object3D | null {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-    const hits = this.raycaster.intersectObjects([...this.renderer.meshMap.values()], true)
+    const allObjects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+    const hits = this.raycaster.intersectObjects(allObjects, true)
 
     if (hits.length > 0) {
       const resolveObject = (obj: THREE.Object3D): THREE.Object3D => {
@@ -2559,7 +2768,8 @@ export class Interaction {
             resolved.userData.type === 'ray' ||
             resolved.userData.type === 'vector' ||
             resolved.userData.type === 'circle' ||
-            resolved.userData.type === 'sphere'
+            resolved.userData.type === 'sphere' ||
+            resolved.userData.type === 'cone'
         },
       )
       if (lineHit) return resolveObject(lineHit.object)
@@ -2826,6 +3036,24 @@ export class Interaction {
     this.resetRadiusSphereCreation()
   }
 
+  resetConeCreation() {
+    this.coneBaseCenterPointId = null
+    this.coneNormalCircleId = null
+    this.editor.scene.selection.clear()
+  }
+
+  confirmConeRadius(baseCenterPointId: string, apexPointId: string, radius: number) {
+    const baseCenterPoint = this.editor.scene.points.get(baseCenterPointId)
+    const apexPoint = this.editor.scene.points.get(apexPointId)
+    if (!baseCenterPoint || !apexPoint) return
+    this.coneBaseCenterPointId = null
+    this.editor.tryCreateConeTwoPoint(baseCenterPoint, apexPoint, radius)
+  }
+
+  cancelConeCreation() {
+    this.resetConeCreation()
+  }
+
   confirmRegularPolygonVertices(vertexCount: number, firstPointId: string, secondPointId: string) {
     const p1 = this.editor.scene.points.get(firstPointId)
     const p2 = this.editor.scene.points.get(secondPointId)
@@ -2891,6 +3119,7 @@ export class Interaction {
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
+      this.draggingConeId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
@@ -3016,7 +3245,7 @@ export class Interaction {
     for (const sprite of this.renderer.getNameLabelSprites()) {
       const data = sprite.userData
       const geoId = data?.geoId as string | undefined
-      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'sphere' | 'face' | undefined
+      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'sphere' | 'cone' | 'face' | undefined
       if (!sprite.visible || !geoId || !type) continue
 
       const center = this.projectObjectToClient(sprite, rect)
@@ -3071,7 +3300,7 @@ export class Interaction {
   }
 
   private getGeometryByType(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
     if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
@@ -3081,11 +3310,12 @@ export class Interaction {
     if (type === 'vector') return this.editor.scene.vectors.get(geoId) ?? null
     if (type === 'circle') return this.editor.scene.circles.get(geoId) ?? null
     if (type === 'sphere') return this.editor.scene.spheres.get(geoId) ?? null
+    if (type === 'cone') return this.editor.scene.cones.get(geoId) ?? null
     return this.editor.scene.faces.get(geoId) ?? null
   }
 
   private beginLabelDrag(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
     clientX: number,
     clientY: number,
@@ -3159,6 +3389,11 @@ export class Interaction {
       })
     } else if (target.type === 'sphere') {
       this.editor.updateSphere(target.geoId, {
+        labelOffsetX: nextOffsetX,
+        labelOffsetY: nextOffsetY,
+      })
+    } else if (target.type === 'cone') {
+      this.editor.updateCone(target.geoId, {
         labelOffsetX: nextOffsetX,
         labelOffsetY: nextOffsetY,
       })

@@ -333,6 +333,11 @@ const createSphereRadius = () => {
   emit('mode-change', EditorMode.CreateSphereRadius)
 }
 
+const createCone = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateCone)
+}
+
 const toggleSideMenu = () => {
   sideMenuOpen.value = !sideMenuOpen.value
 }
@@ -674,7 +679,8 @@ onUnmounted(() => {
             currentMode === EditorMode.CreateHexahedron ||
             currentMode === EditorMode.CreateTetrahedron ||
             currentMode === EditorMode.CreateSphereTwoPoints ||
-            currentMode === EditorMode.CreateSphereRadius,
+            currentMode === EditorMode.CreateSphereRadius ||
+            currentMode === EditorMode.CreateCone,
           'is-open': isSolidMenuOpen,
         }"
         @click="toggleSolidMenu"
@@ -894,6 +900,13 @@ onUnmounted(() => {
         @click="createSphereRadius"
       >
         半径球
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateCone }"
+        @click="createCone"
+      >
+        圆锥
       </button>
     </div>
   </Teleport>

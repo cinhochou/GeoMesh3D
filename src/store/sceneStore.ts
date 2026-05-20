@@ -12,6 +12,7 @@ type CountSummary = {
   circle: number
   face: number
   sphere: number
+  cone: number
 }
 
 const createEmptyCounts = (): CountSummary => ({
@@ -23,6 +24,7 @@ const createEmptyCounts = (): CountSummary => ({
   circle: 0,
   face: 0,
   sphere: 0,
+  cone: 0,
 })
 
 const getModeName = (mode: EditorMode) => {
@@ -61,6 +63,8 @@ const getModeName = (mode: EditorMode) => {
       return '创建两点球'
     case EditorMode.CreateSphereRadius:
       return '创建半径球'
+    case EditorMode.CreateCone:
+      return '创建圆锥'
     default:
       return ''
   }
@@ -100,6 +104,8 @@ const getModeHint = (mode: EditorMode) => {
       return '先选中一点作为球心，再选中一点以创建球体~'
     case EditorMode.CreateSphereRadius:
       return '先选中一点作为球心，输入半径以创建球体~'
+    case EditorMode.CreateCone:
+      return '1.先选中一点作为底面圆心，再选中顶点，最后输入半径以创建圆锥 2.先选中一个法向圆，再选中一个顶点以创建圆锥'
     default:
       return ''
   }
@@ -123,7 +129,8 @@ export const useSceneStore = defineStore('scene', () => {
       selectionCounts.value.ray +
       selectionCounts.value.vector +
       selectionCounts.value.face +
-      selectionCounts.value.sphere,
+      selectionCounts.value.sphere +
+      selectionCounts.value.cone,
   )
   const totalSceneElements = computed(
     () =>
@@ -133,7 +140,8 @@ export const useSceneStore = defineStore('scene', () => {
       sceneCounts.value.ray +
       sceneCounts.value.vector +
       sceneCounts.value.face +
-      sceneCounts.value.sphere,
+      sceneCounts.value.sphere +
+      sceneCounts.value.cone,
   )
 
   const setCurrentMode = (mode: EditorMode) => {
@@ -174,6 +182,7 @@ export const useSceneStore = defineStore('scene', () => {
       circle: scene.selection.circles.size,
       face: scene.selection.faces.size,
       sphere: scene.selection.spheres.size,
+      cone: scene.selection.cones.size,
     }
     sceneCounts.value = {
       point: scene.points.size,
@@ -184,6 +193,7 @@ export const useSceneStore = defineStore('scene', () => {
       circle: scene.circles.size,
       face: scene.faces.size,
       sphere: scene.spheres.size,
+      cone: scene.cones.size,
     }
   }
 

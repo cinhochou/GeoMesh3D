@@ -55,9 +55,9 @@ const {
   regularPolygonDialog,
   normalCircleRadiusDialog,
   radiusSphereDialog,
+  coneRadiusDialog,
 } = storeToRefs(uiStore)
 const {
-  peerCount,
   latencyMs: collabLatencyMs,
   status: collabStatus,
   joinDialog: collabJoinDialog,
@@ -229,6 +229,7 @@ onMounted(() => {
   window.addEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   window.addEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   window.addEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
+  window.addEventListener('show-cone-radius-dialog', handleShowConeRadiusDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // Ensure renderer rebuilds meshes when editor view is mounted again
@@ -478,6 +479,7 @@ onUnmounted(() => {
   window.removeEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   window.removeEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   window.removeEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
+  window.removeEventListener('show-cone-radius-dialog', handleShowConeRadiusDialog)
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -603,6 +605,35 @@ const radiusSphereRadiusError = computed(() => {
 
 const canConfirmRadiusSphereRadius = computed(() => {
   return radiusSphereRadiusError.value === ''
+})
+
+const handleShowConeRadiusDialog = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  uiStore.openConeRadiusDialog(detail.baseCenterPointId, detail.apexPointId)
+}
+
+const handleConfirmConeRadius = () => {
+  if (!canConfirmConeRadius.value) return
+  const r = Math.round(coneRadiusDialog.value.radius * 10) / 10
+  interaction.confirmConeRadius(coneRadiusDialog.value.baseCenterPointId, coneRadiusDialog.value.apexPointId, r)
+  uiStore.closeConeRadiusDialog()
+}
+
+const handleCancelConeRadius = () => {
+  interaction.cancelConeCreation()
+  uiStore.closeConeRadiusDialog()
+}
+
+const coneRadiusRadiusError = computed(() => {
+  if (!coneRadiusDialog.value.visible) return ''
+  const r = coneRadiusDialog.value.radius
+  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
+  if (r <= 0) return '半径必须大于 0'
+  return ''
+})
+
+const canConfirmConeRadius = computed(() => {
+  return coneRadiusRadiusError.value === ''
 })
 
 const normalCircleRadiusError = computed(() => {
@@ -924,6 +955,28 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         class="dialog-input"
         :class="{ 'dialog-input-error': radiusSphereRadiusError }"
         @keydown.enter="handleConfirmRadiusSphereRadius"
+      />
+    </InputDialog>
+
+    <InputDialog
+      :visible="coneRadiusDialog.visible"
+      title="输入半径"
+      :error-message="coneRadiusRadiusError"
+      :can-confirm="canConfirmConeRadius"
+      :min-step-hint="MIN_STEP_HINT_TEXT"
+      :min-step-value="0.5"
+      @confirm="handleConfirmConeRadius"
+      @cancel="handleCancelConeRadius"
+    >
+      <label class="dialog-label">半径</label>
+      <input
+        v-model.number="coneRadiusDialog.radius"
+        type="number"
+        min="0.5"
+        step="0.5"
+        class="dialog-input"
+        :class="{ 'dialog-input-error': coneRadiusRadiusError }"
+        @keydown.enter="handleConfirmConeRadius"
       />
     </InputDialog>
 
