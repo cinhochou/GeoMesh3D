@@ -77,7 +77,7 @@ if (typeof matrix4Prototype.getInverse !== 'function') {
 }
 export class ThreeRenderer {
   private static readonly POINT_PIXEL = 9
-  private static readonly POINT_SCALE_REFERENCE_DISTANCE = Math.sqrt(15 * 15 * 3)
+  private static readonly POINT_SCALE_REFERENCE_DISTANCE = Math.sqrt(15 * 15 * 3) * (Math.tan(60 / 2 * Math.PI / 180) / Math.tan(30 / 2 * Math.PI / 180))
   private static readonly POINT_SCALE_EXPONENT = 0.72
   private static readonly POINT_MIN_SCALE_FACTOR = 0.45
   private static readonly POINT_MAX_SCALE_FACTOR = 1.08
@@ -120,7 +120,7 @@ export class ThreeRenderer {
   /** 让坐标轴与网格共面，避免放大坐标系后出现明显“分层” */
   private static readonly AXIS_LIFT_Y = 0
   /** AR 模式下点大小缩放系数（相对当前尺寸） */
-  private static readonly AR_POINT_SCALE_FACTOR = 2 / 3
+  private static readonly AR_POINT_SCALE_FACTOR = 0.95
   private static readonly AR_POINT_ZOOM_RESPONSE_EXPONENT = 0.85
   private static readonly AR_POINT_ZOOM_MIN_FACTOR = 0.65
   private static readonly AR_POINT_ZOOM_MAX_FACTOR = 2.4
@@ -129,6 +129,7 @@ export class ThreeRenderer {
   private static readonly AXIS_ARROW_BASE_HEAD_WIDTH = 0.3
   private static readonly AXIS_ARROW_MIN_SCALE_FACTOR = 0.6
   private static readonly AXIS_ARROW_MAX_SCALE_FACTOR = 3.2
+  private static readonly AXIS_ARROW_MOBILE_SCALE_FACTOR = 2.4
 
   scene: THREE.Scene
   /** 承载所有几何物体的分组，便于在 AR 模式下整体缩放 */
@@ -179,7 +180,7 @@ export class ThreeRenderer {
     target: new THREE.Vector3(), // OrbitControls 的聚焦点
     worldQuaternion: new THREE.Quaternion(),
     zoom: 1,
-    fov: 60,
+    fov: 30,
     controlsEnabled: true,
   }
 
@@ -213,8 +214,8 @@ export class ThreeRenderer {
     const w = container.clientWidth
     const h = container.clientHeight
 
-    this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000)
-    this.camera.position.set(15, 15, 15)
+    this.camera = new THREE.PerspectiveCamera(30, w / h, 0.1, 1000)
+    this.camera.position.set(32, 32, 32)
     this.camera.lookAt(0, 0, 0)
 
     this.arCamera = new THREE.PerspectiveCamera()
@@ -244,8 +245,8 @@ export class ThreeRenderer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
-    this.controls.minDistance = 5
-    this.controls.maxDistance = 100
+    this.controls.minDistance = 11
+    this.controls.maxDistance = 215
 
     this.setAxisGridSize(this.axisGridSize)
   }
@@ -261,6 +262,24 @@ export class ThreeRenderer {
   /** 当前用于渲染/拾取的相机（AR 模式下为 arCamera） */
   getActiveCamera(): THREE.Camera {
     return this.isARMode ? this.arCamera : this.camera
+  }
+
+  /** 获取当前相机用于 Sprite 屏幕大小计算的缩放因子：1 / (2 × tan(fov/2)) */
+  getActiveCameraSpriteScaleFactor(): number {
+    const cam = this.getActiveCamera()
+    if (this.isARMode) {
+      const m = cam.projectionMatrix.elements
+      if (m[5] !== 0) return Math.abs(m[5]) / 2
+    }
+    if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const fov = (cam as THREE.PerspectiveCamera).fov
+      if (fov > 0 && isFinite(fov)) {
+        return 1 / (2 * Math.tan((fov / 2) * Math.PI / 180))
+      }
+    }
+    const m = cam.projectionMatrix.elements
+    if (m[5] !== 0) return Math.abs(m[5]) / 2
+    return 1
   }
 
   /** 是否处于 AR 模式（供交互层判断） */
@@ -392,9 +411,9 @@ export class ThreeRenderer {
 
   /** 按不同网格档位优化 AR 下的整体可见性 */
   private getARSceneScaleForAxisSize(size: number) {
-    if (size >= 40) return 0.05
-    if (size >= 20) return 0.095
-    return 0.16
+    if (size >= 40) return 0.025
+    if (size >= 20) return 0.045
+    return 0.08
   }
 
   /** 统一设置世界缩放，同时保持标记点/浮窗等屏幕尺寸不变 */
@@ -507,17 +526,18 @@ export class ThreeRenderer {
     this.cubeValueLabels.forEach((label) => this.setAdaptiveSpriteScale(label, lineLabelScale))
     this.axisGridGroup.children.forEach((obj) => {
       if ((obj as THREE.Sprite).isSprite && obj.userData?.type === 'axisLabel') {
-        const axisLabelScale = ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale
+        const axisLabelScale = (ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale) * this.getFovSpriteScale()
         ;(obj as THREE.Sprite).scale.set(axisLabelScale, axisLabelScale, 1)
       }
     })
 
     // 引导浮窗大小也保持稳定
     if (this.guideLabel) {
+      const fovS = this.getFovSpriteScale()
       if (this.isMobileDevice) {
-        this.guideLabel.scale.set(0.1 / this.worldScale, 0.05 / this.worldScale, 1)
+        this.guideLabel.scale.set(0.1 * fovS / this.worldScale, 0.05 * fovS / this.worldScale, 1)
       } else {
-        this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+        this.guideLabel.scale.set(0.18 * fovS / this.worldScale, 0.1 * fovS / this.worldScale, 1)
       }
     }
     if (this.guidePoint) {
@@ -525,10 +545,33 @@ export class ThreeRenderer {
     }
   }
 
+  private getFovSpriteScale(): number {
+    const cam = this.getActiveCamera()
+    if (this.isARMode) {
+      const m = cam.projectionMatrix.elements
+      const cotHalfFov = Math.abs(m[5])
+      if (cotHalfFov > 0) {
+        return (1 / cotHalfFov) / Math.tan((30 * Math.PI) / 180)
+      }
+    }
+    if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const fov = (cam as THREE.PerspectiveCamera).fov
+      if (fov > 0 && isFinite(fov)) {
+        return Math.tan((fov / 2) * Math.PI / 180) / Math.tan((30 * Math.PI) / 180)
+      }
+    }
+    const m = cam.projectionMatrix.elements
+    const cotHalfFov = Math.abs(m[5])
+    if (cotHalfFov > 0) {
+      return (1 / cotHalfFov) / Math.tan((30 * Math.PI) / 180)
+    }
+    return 1
+  }
+
   /** 点大小随缩放距离变化，但不随绕中心旋转的视角角度变化 */
   private getPointSpriteScale() {
     const h = this.renderer.domElement.clientHeight || 1
-    const baseScale = ThreeRenderer.POINT_PIXEL / h / this.worldScale
+    const baseScale = (ThreeRenderer.POINT_PIXEL / h / this.worldScale) * this.getFovSpriteScale()
     if (this.isARMode) {
       const safeInitialScale = Math.max(this.arInitialWorldScale, 0.0001)
       const zoomRatio = this.worldScale / safeInitialScale
@@ -585,7 +628,7 @@ export class ThreeRenderer {
   /** 标签跟随点缩放，但限制最大/最小范围，避免远处标签压过点或近处过大 */
   private getResponsiveLabelScale(basePixel: number, pointScaleMultiplier: number) {
     const h = this.renderer.domElement.clientHeight || 1
-    const baseScale = basePixel / h / this.worldScale
+    const baseScale = (basePixel / h / this.worldScale) * this.getFovSpriteScale()
     const pointDrivenScale = this.getPointSpriteScale() * pointScaleMultiplier
     const minScale = baseScale * ThreeRenderer.LABEL_MIN_SCALE_FACTOR
     const maxScale = baseScale * ThreeRenderer.LABEL_MAX_SCALE_FACTOR
@@ -682,6 +725,9 @@ export class ThreeRenderer {
         ThreeRenderer.AXIS_ARROW_MAX_SCALE_FACTOR,
         Math.max(ThreeRenderer.AXIS_ARROW_MIN_SCALE_FACTOR, factor),
       )
+      if (this.isMobileDevice) {
+        factor *= ThreeRenderer.AXIS_ARROW_MOBILE_SCALE_FACTOR
+      }
     }
 
     this.axisArrows.forEach((arrow) => {
@@ -700,10 +746,14 @@ export class ThreeRenderer {
       const yOffset = data.__axisYOffset ?? 0
       if (!dir || axisLength === undefined || labelOffset === undefined) return
 
+      const mobileExtra = this.isMobileDevice && !this.isARMode
+        ? (ThreeRenderer.AXIS_ARROW_BASE_LENGTH + ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH * 0.35) *
+          Math.max(0, ThreeRenderer.AXIS_ARROW_MOBILE_SCALE_FACTOR - 1)
+        : 0
       const extra =
         (ThreeRenderer.AXIS_ARROW_BASE_LENGTH + ThreeRenderer.AXIS_ARROW_BASE_HEAD_LENGTH * 0.35) *
         Math.max(0, factor - 1)
-      const labelPos = dir.clone().multiplyScalar(axisLength + labelOffset + extra)
+      const labelPos = dir.clone().multiplyScalar(axisLength + labelOffset + extra + mobileExtra)
       if (Math.abs(dir.y) < 1e-6) {
         labelPos.y = yOffset
       } else {
@@ -1023,7 +1073,7 @@ export class ThreeRenderer {
     if (!context) return
     context.init(() => {
       this.arCamera.projectionMatrix.copy(context.getProjectionMatrix())
-      // Three.js r150+ 需要同步 projectionMatrixInverse，否则 Raycaster 在 AR 模式下会算出错误射线
+      this.adjustARProjectionAspect()
       this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
       this.arCamera.matrix.identity()
       this.arCamera.matrixWorld.identity()
@@ -1044,7 +1094,17 @@ export class ThreeRenderer {
     this.scene.visible = false
   }
 
-  // 强制样式工具函数
+  private adjustARProjectionAspect() {
+    const w = Math.max(this.container.clientWidth, 1)
+    const h = Math.max(this.container.clientHeight, 1)
+    const canvasAspect = w / h
+    const m = this.arCamera.projectionMatrix.elements
+    const cotHalfFovY = Math.abs(m[5])
+    if (cotHalfFovY > 0 && isFinite(canvasAspect) && canvasAspect > 0) {
+      m[0] = cotHalfFovY / canvasAspect
+    }
+  }
+
   private applyVideoForceStyle(video: HTMLVideoElement) {
     video.style.position = 'absolute'
     video.style.top = '0'
@@ -1067,6 +1127,7 @@ export class ThreeRenderer {
       const sourceElement = this.arToolkitSource?.domElement
       if (!sourceElement) return
       this.arToolkitContext.update(sourceElement)
+      this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
       this.arCamera.updateMatrixWorld(true)
       this.syncARAnchorFromMarker()
       this.scene.visible = this.arMarkerRoot.visible || this.shouldRenderPersistentARWorld()
@@ -1138,10 +1199,14 @@ export class ThreeRenderer {
         source.copySizeTo(this.renderer.domElement)
       }
 
-      // 如果使用了 contain，我们要确保渲染器 domElement 也是 absolute 居中的
       this.renderer.domElement.style.width = '100%'
       this.renderer.domElement.style.height = '100%'
+      this.renderer.domElement.style.marginLeft = '0px'
+      this.renderer.domElement.style.marginTop = '0px'
       this.renderer.domElement.style.objectFit = 'contain'
+
+      this.adjustARProjectionAspect()
+      this.arCamera.projectionMatrixInverse.copy(this.arCamera.projectionMatrix).invert()
     }
 
     this.refreshScreenSpaceScales()
@@ -2558,9 +2623,9 @@ export class ThreeRenderer {
   }
 
   private getDefaultCameraPositionForAxisSize(size: number): THREE.Vector3 {
-    if (size === 20) return new THREE.Vector3(25, 25, 25)
-    if (size === 40) return new THREE.Vector3(30, 65, 30)
-    return new THREE.Vector3(15, 15, 15)
+    if (size === 20) return new THREE.Vector3(54, 54, 54)
+    if (size === 40) return new THREE.Vector3(65, 140, 65)
+    return new THREE.Vector3(32, 32, 32)
   }
 
   resetView() {
@@ -2880,7 +2945,7 @@ export class ThreeRenderer {
 
     const sprite = new THREE.Sprite(material)
     const h = this.renderer.domElement.clientHeight || 1
-    const axisLabelScale = ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale
+    const axisLabelScale = (ThreeRenderer.AXIS_LABEL_PIXEL / h / this.worldScale) * this.getFovSpriteScale()
     sprite.scale.set(axisLabelScale, axisLabelScale, 1)
     sprite.userData = { type: 'axisLabel' }
 
@@ -3129,10 +3194,11 @@ export class ThreeRenderer {
         }),
       )
       this.guideLabel.center.set(0, 0)
+      const fovS = this.getFovSpriteScale()
       if (this.isMobileDevice) {
-        this.guideLabel.scale.set(0.1 / this.worldScale, 0.05 / this.worldScale, 1)
+        this.guideLabel.scale.set(0.1 * fovS / this.worldScale, 0.05 * fovS / this.worldScale, 1)
       } else {
-        this.guideLabel.scale.set(0.18 / this.worldScale, 0.1 / this.worldScale, 1)
+        this.guideLabel.scale.set(0.18 * fovS / this.worldScale, 0.1 * fovS / this.worldScale, 1)
       }
       this.projectionGroup.add(this.guideLabel)
 

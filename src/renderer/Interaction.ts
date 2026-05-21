@@ -18,15 +18,44 @@ export class Interaction {
   private static readonly COLLAB_SETTLE_SYNC_MS = 250
   private static readonly TOUCH_MOUSE_GUARD_MS = 500
   private static readonly AR_WHEEL_ZOOM_STEP = 0.0015
+  private static readonly CREATE_POINT_DEPTH_WHEEL_STEP = 0.005
+  private static readonly CREATE_POINT_DEPTH_WHEEL_FINE_STEP = 0.001
+  private static readonly CREATE_POINT_DEPTH_MIN = 0.1
+  private static readonly CREATE_POINT_DEPTH_MAX = 300
   private static readonly AR_PINCH_ZOOM_MIN_DELTA = 0.01
   private static readonly MOBILE_POINT_PICK_RADIUS_PX = 20
   private static readonly MOBILE_ENDPOINT_PROTECTION_RADIUS_PX = 2
   private static readonly MOBILE_LINE_PICK_THRESHOLD = 0.2
+  private static readonly AR_MOUSE_POINT_PICK_RADIUS_PX = 11
+  private static readonly AR_TOUCH_POINT_PICK_RADIUS_PX = 17
+  private static readonly AR_MOUSE_LINE_PICK_THRESHOLD = 0.14
+  private static readonly AR_TOUCH_LINE_PICK_THRESHOLD = 0.18
   private static readonly POINT_LABEL_HITBOX_SCALE = 0.72
   private static readonly POINT_PICK_PROTECTION_RADIUS_PX = 14
   private static readonly POINT_LABEL_OVERLAP_PRIORITY_PX = 18
   private static readonly POINT_LABEL_SAFE_ZONE_PX = 16
   private static readonly POINT_LABEL_POINT_PRIORITY_RADIUS_PX = 16
+  private static readonly LABEL_GEOMETRY_PROTECTION_PX = 12
+  private static readonly LABEL_GEOMETRY_PROTECTION_MOBILE_PX = 18
+  private static readonly LABEL_GEOMETRY_PROTECTION_AR_PX = 10
+  private static readonly LABEL_GEOMETRY_PROTECTION_AR_TOUCH_PX = 15
+  private static readonly LABEL_CLOSE_PRIORITY_PX = 10
+  private static readonly LABEL_CLOSE_PRIORITY_MOBILE_PX = 16
+  private static readonly LABEL_CLOSE_PRIORITY_AR_PX = 9
+  private static readonly LABEL_CLOSE_PRIORITY_AR_TOUCH_PX = 14
+  private static readonly LABEL_HITBOX_PADDING_PX = 8
+  private static readonly LABEL_HITBOX_PADDING_MOBILE_PX = 14
+  private static readonly LABEL_HITBOX_PADDING_AR_PX = 7
+  private static readonly LABEL_HITBOX_PADDING_AR_TOUCH_PX = 11
+  private static readonly GEOMETRY_CORE_HIT_PX = 7
+  private static readonly GEOMETRY_CORE_HIT_MOBILE_PX = 12
+  private static readonly GEOMETRY_CORE_HIT_AR_PX = 6
+  private static readonly GEOMETRY_CORE_HIT_AR_TOUCH_PX = 10
+  private static readonly GEOMETRY_HARD_CORE_HIT_PX = 3
+  private static readonly GEOMETRY_HARD_CORE_HIT_MOBILE_PX = 6
+  private static readonly GEOMETRY_HARD_CORE_HIT_AR_PX = 2.5
+  private static readonly GEOMETRY_HARD_CORE_HIT_AR_TOUCH_PX = 5
+  private static readonly LABEL_CORE_EDGE_RATIO = 0.34
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
@@ -66,6 +95,10 @@ export class Interaction {
   private dragStartAxisHints: Array<{ setAxisHint: (v: Vec3) => void; getVAxisHint: () => Vec3; before: Vec3 }> | null = null
   private mobileCreatePointerId: number | null = null
   private mobileCreatePreviewPos: Vec3 | null = null
+  private createPointDraft: {
+    depth: number
+    position: THREE.Vector3
+  } | null = null
   private mobileCreateHadPreviewAtPointerDown = false
   private mobileCreateMoved = false
   private mobileCreateStartClient = new THREE.Vector2()
@@ -135,15 +168,7 @@ export class Interaction {
   }
 
   private getPointerClientRect() {
-    let rect = this.renderer.renderer.domElement.getBoundingClientRect()
-    if (this.renderer.isARActive()) {
-      const video = this.renderer.getARVideoElement()
-      if (video) {
-        const videoRect = video.getBoundingClientRect()
-        if (videoRect.width > 0 && videoRect.height > 0) rect = videoRect
-      }
-    }
-    return rect
+    return this.renderer.renderer.domElement.getBoundingClientRect()
   }
 
   private updatePointerPosition(clientX: number, clientY: number) {
@@ -154,8 +179,26 @@ export class Interaction {
 
   private getCreatePointPosition(shouldSnap: boolean): THREE.Vector3 {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-    const direction = this.raycaster.ray.direction
-    const worldPos = this.renderer.getActiveCameraWorldPosition().add(direction.multiplyScalar(30))
+
+    const target = this.renderer.isARActive()
+      ? new THREE.Vector3(0, 0, 0)
+      : this.renderer.controls.target.clone()
+    const cameraDir = this.renderer.getActiveCameraWorldDirection()
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, target)
+
+    const hitPoint = new THREE.Vector3()
+    const hasHit = this.raycaster.ray.intersectPlane(plane, hitPoint)
+
+    let worldPos: THREE.Vector3
+    if (hasHit) {
+      worldPos = hitPoint
+    } else {
+      const fallbackDist = this.renderer.isARActive()
+        ? 30
+        : this.renderer.getActiveCameraWorldPosition().distanceTo(target)
+      worldPos = this.raycaster.ray.at(fallbackDist, new THREE.Vector3())
+    }
+
     const pos = this.renderer.toMathLocalPosition(worldPos)
 
     if (shouldSnap) {
@@ -163,6 +206,91 @@ export class Interaction {
     }
 
     return pos
+  }
+
+  private getDefaultCreatePointWorldPosition(): THREE.Vector3 {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+
+    const target = this.renderer.isARActive()
+      ? new THREE.Vector3(0, 0, 0)
+      : this.renderer.controls.target.clone()
+    const cameraDir = this.renderer.getActiveCameraWorldDirection()
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, target)
+
+    const hitPoint = new THREE.Vector3()
+    if (this.raycaster.ray.intersectPlane(plane, hitPoint)) return hitPoint
+
+    const fallbackDist = this.renderer.isARActive()
+      ? 30
+      : this.renderer.getActiveCameraWorldPosition().distanceTo(target)
+    return this.raycaster.ray.at(fallbackDist, new THREE.Vector3())
+  }
+
+  private getSnappedCreatePointPosition(worldPos: THREE.Vector3, shouldSnap: boolean) {
+    const pos = this.renderer.toMathLocalPosition(worldPos)
+    if (shouldSnap) {
+      pos.set(this.snap(pos.x), this.snap(pos.y), this.snap(pos.z))
+    }
+    return pos
+  }
+
+  private beginCreatePointDraft(shouldSnap: boolean) {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const worldPos = this.getDefaultCreatePointWorldPosition()
+    const depth = THREE.MathUtils.clamp(
+      worldPos.clone().sub(this.raycaster.ray.origin).dot(this.raycaster.ray.direction),
+      Interaction.CREATE_POINT_DEPTH_MIN,
+      Interaction.CREATE_POINT_DEPTH_MAX,
+    )
+    const pos = this.getSnappedCreatePointPosition(worldPos, shouldSnap)
+    this.createPointDraft = { depth, position: pos.clone() }
+    this.showCreatePointPreview(pos)
+  }
+
+  private updateCreatePointDraftFromPointer(shouldSnap: boolean) {
+    if (!this.createPointDraft) {
+      this.showCreatePointPreview(this.getCreatePointPosition(shouldSnap))
+      return
+    }
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const worldPos = this.raycaster.ray.at(this.createPointDraft.depth, new THREE.Vector3())
+    const pos = this.getSnappedCreatePointPosition(worldPos, shouldSnap)
+    this.createPointDraft.position.copy(pos)
+    this.showCreatePointPreview(pos)
+  }
+
+  private adjustCreatePointDraftDepth(deltaY: number, shouldSnap: boolean, fine: boolean) {
+    if (!this.createPointDraft) {
+      this.beginCreatePointDraft(shouldSnap)
+    }
+    const draft = this.createPointDraft
+    if (!draft) return
+    const step = fine
+      ? Interaction.CREATE_POINT_DEPTH_WHEEL_FINE_STEP
+      : Interaction.CREATE_POINT_DEPTH_WHEEL_STEP
+    draft.depth = THREE.MathUtils.clamp(
+      draft.depth + deltaY * step,
+      Interaction.CREATE_POINT_DEPTH_MIN,
+      Interaction.CREATE_POINT_DEPTH_MAX,
+    )
+    this.updateCreatePointDraftFromPointer(shouldSnap)
+  }
+
+  private getCurrentCreatePointPosition(shouldSnap: boolean) {
+    if (!this.createPointDraft) {
+      return this.getCreatePointPosition(shouldSnap)
+    }
+    this.updateCreatePointDraftFromPointer(shouldSnap)
+    return this.createPointDraft.position.clone()
+  }
+
+  private commitCurrentCreatePoint(shouldSnap: boolean) {
+    const pos = this.getCurrentCreatePointPosition(shouldSnap)
+    this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+    this.createPointDraft = null
+    this.mobileCreatePreviewPos = null
+    this.renderer.hideAxisGuides()
+    return true
   }
 
   private showCreatePointPreview(pos: THREE.Vector3) {
@@ -379,6 +507,79 @@ export class Interaction {
     )
   }
 
+  private isARCoarsePointer() {
+    return this.renderer.isARActive() && this.isTouchPreferredDevice()
+  }
+
+  private getARPointPickRadiusPx() {
+    return this.isARCoarsePointer()
+      ? Interaction.AR_TOUCH_POINT_PICK_RADIUS_PX
+      : Interaction.AR_MOUSE_POINT_PICK_RADIUS_PX
+  }
+
+  private getARLinePickThreshold() {
+    return (
+      this.isARCoarsePointer()
+        ? Interaction.AR_TOUCH_LINE_PICK_THRESHOLD
+        : Interaction.AR_MOUSE_LINE_PICK_THRESHOLD
+    ) * this.renderer.getWorldScale()
+  }
+
+  private getLabelHitboxPaddingPx() {
+    if (this.renderer.isARActive()) {
+      return this.isARCoarsePointer()
+        ? Interaction.LABEL_HITBOX_PADDING_AR_TOUCH_PX
+        : Interaction.LABEL_HITBOX_PADDING_AR_PX
+    }
+    return this.isTouchPreferredDevice()
+      ? Interaction.LABEL_HITBOX_PADDING_MOBILE_PX
+      : Interaction.LABEL_HITBOX_PADDING_PX
+  }
+
+  private getGeometryProtectionPx() {
+    if (this.renderer.isARActive()) {
+      return this.isARCoarsePointer()
+        ? Interaction.LABEL_GEOMETRY_PROTECTION_AR_TOUCH_PX
+        : Interaction.LABEL_GEOMETRY_PROTECTION_AR_PX
+    }
+    return this.isTouchPreferredDevice()
+      ? Interaction.LABEL_GEOMETRY_PROTECTION_MOBILE_PX
+      : Interaction.LABEL_GEOMETRY_PROTECTION_PX
+  }
+
+  private getLabelClosePriorityPx() {
+    if (this.renderer.isARActive()) {
+      return this.isARCoarsePointer()
+        ? Interaction.LABEL_CLOSE_PRIORITY_AR_TOUCH_PX
+        : Interaction.LABEL_CLOSE_PRIORITY_AR_PX
+    }
+    return this.isTouchPreferredDevice()
+      ? Interaction.LABEL_CLOSE_PRIORITY_MOBILE_PX
+      : Interaction.LABEL_CLOSE_PRIORITY_PX
+  }
+
+  private getGeometryCoreHitPx() {
+    if (this.renderer.isARActive()) {
+      return this.isARCoarsePointer()
+        ? Interaction.GEOMETRY_CORE_HIT_AR_TOUCH_PX
+        : Interaction.GEOMETRY_CORE_HIT_AR_PX
+    }
+    return this.isTouchPreferredDevice()
+      ? Interaction.GEOMETRY_CORE_HIT_MOBILE_PX
+      : Interaction.GEOMETRY_CORE_HIT_PX
+  }
+
+  private getGeometryHardCoreHitPx() {
+    if (this.renderer.isARActive()) {
+      return this.isARCoarsePointer()
+        ? Interaction.GEOMETRY_HARD_CORE_HIT_AR_TOUCH_PX
+        : Interaction.GEOMETRY_HARD_CORE_HIT_AR_PX
+    }
+    return this.isTouchPreferredDevice()
+      ? Interaction.GEOMETRY_HARD_CORE_HIT_MOBILE_PX
+      : Interaction.GEOMETRY_HARD_CORE_HIT_PX
+  }
+
   syncControlLockState() {
     if (
       this.draggingPointId !== null ||
@@ -543,7 +744,10 @@ export class Interaction {
     )
     if (pointHit) return pointHit
 
-    const lineHit = this.pickLinearWithThreshold(Interaction.MOBILE_LINE_PICK_THRESHOLD)
+    const lineThreshold = this.renderer.isARActive()
+      ? this.getARLinePickThreshold()
+      : Interaction.MOBILE_LINE_PICK_THRESHOLD
+    const lineHit = this.pickLinearWithThreshold(lineThreshold)
     if (!lineHit) return this.pick()
 
     const protectedEndpoint = this.getProtectedEndpointHit(
@@ -1226,10 +1430,6 @@ export class Interaction {
         ? this.pickIntersectionTarget()
         : this.pick()
 
-    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
-      return
-    }
-
     if (
       this.renderer.isARActive() &&
       (this.editor.mode === EditorMode.CreateLine ||
@@ -1251,9 +1451,9 @@ export class Interaction {
     }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
+      if (hit) return
       this.renderer.controls.enabled = false
-      const pos = this.getCreatePointPosition(this.editor.isSnappingEnabled && !e.altKey)
-      this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+      this.commitCurrentCreatePoint(this.editor.isSnappingEnabled && !e.altKey)
       return
     }
 
@@ -1656,11 +1856,6 @@ export class Interaction {
       }
     }
 
-    if (this.renderer.isARActive() && this.editor.mode === EditorMode.CreatePoint) {
-      this.renderer.hideAxisGuides()
-      return
-    }
-
     if (
       this.renderer.isARActive() &&
       (this.editor.mode === EditorMode.CreateLine ||
@@ -1684,9 +1879,7 @@ export class Interaction {
 
     // --- 处理创建点模式下的辅助线预览 ---
     if (this.editor.mode === EditorMode.CreatePoint) {
-      this.showCreatePointPreview(
-        this.getCreatePointPosition(this.editor.isSnappingEnabled && !e.altKey),
-      )
+      this.updateCreatePointDraftFromPointer(this.editor.isSnappingEnabled && !e.altKey)
       return // 预览模式下不执行后续拖拽逻辑
     }
 
@@ -1705,10 +1898,18 @@ export class Interaction {
         startPoint!.position.z,
       )
 
-      // 计算鼠标在 3D 空间的投影点
       this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-      // 这里我们假设在以起点为准的水平面上预览，或者简单的距离相机 30 个单位
-      const to = this.renderer.toMathLocalPosition(this.raycaster.ray.at(30, new THREE.Vector3()))
+      const fromWorld = this.renderer.toMathWorldPosition(from.clone())
+      const cameraDir = this.renderer.getActiveCameraWorldDirection()
+      const rubberBandPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, fromWorld)
+      const rubberBandHit = new THREE.Vector3()
+      let to: THREE.Vector3
+      if (this.raycaster.ray.intersectPlane(rubberBandPlane, rubberBandHit)) {
+        to = this.renderer.toMathLocalPosition(rubberBandHit)
+      } else {
+        const fallbackDist = this.renderer.getActiveCameraWorldPosition().distanceTo(fromWorld)
+        to = this.renderer.toMathLocalPosition(this.raycaster.ray.at(fallbackDist, new THREE.Vector3()))
+      }
 
       // 如果有吸附开关，也应用到预览线上
       if (this.editor.isSnappingEnabled && !e.altKey) {
@@ -1781,6 +1982,16 @@ export class Interaction {
   }
 
   onWheel = (e: WheelEvent) => {
+    if (this.editor.mode === EditorMode.CreatePoint) {
+      e.preventDefault()
+      this.updatePointerPosition(e.clientX, e.clientY)
+      this.adjustCreatePointDraftDepth(
+        e.deltaY,
+        this.editor.isSnappingEnabled && !e.altKey,
+        e.shiftKey,
+      )
+      return
+    }
     if (!this.renderer.isARActive()) return
     e.preventDefault()
     const factor = Math.exp(-e.deltaY * Interaction.AR_WHEEL_ZOOM_STEP)
@@ -1812,21 +2023,21 @@ export class Interaction {
         return
       }
 
+      this.updatePointerPosition(e.clientX, e.clientY)
+      if (this.pickTouchTarget(e.clientX, e.clientY)) return
+
       e.preventDefault()
       e.stopPropagation()
       ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
 
       this.renderer.controls.enabled = false
-      this.updatePointerPosition(e.clientX, e.clientY)
 
       this.mobileCreatePointerId = e.pointerId
-      this.mobileCreateHadPreviewAtPointerDown = this.mobileCreatePreviewPos !== null
+      this.mobileCreateHadPreviewAtPointerDown = false
       this.mobileCreateMoved = false
       this.mobileCreateStartClient.set(e.clientX, e.clientY)
 
-      if (!this.mobileCreateHadPreviewAtPointerDown) {
-        this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
-      }
+      this.updateCreatePointDraftFromPointer(this.editor.isSnappingEnabled)
       return
     }
 
@@ -2576,7 +2787,7 @@ export class Interaction {
         this.mobileCreateMoved = true
       }
 
-      this.showCreatePointPreview(this.getCreatePointPosition(this.editor.isSnappingEnabled))
+      this.updateCreatePointDraftFromPointer(this.editor.isSnappingEnabled)
       return
     }
 
@@ -2644,17 +2855,13 @@ export class Interaction {
       e.stopPropagation()
       ;(e.currentTarget as HTMLElement | null)?.releasePointerCapture?.(e.pointerId)
 
-      const shouldConfirm =
-        !this.mobileCreateMoved &&
-        this.mobileCreateHadPreviewAtPointerDown &&
-        this.mobileCreatePreviewPos !== null
+      const shouldConfirm = !this.mobileCreateMoved
 
       this.resetMobileCreatePointerState()
       this.syncControlLockState()
 
       if (shouldConfirm) {
-        const pos = this.mobileCreatePreviewPos!
-        this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+        this.commitCurrentCreatePoint(this.editor.isSnappingEnabled)
       }
       return
     }
@@ -2744,9 +2951,54 @@ export class Interaction {
     this.syncControlLockState()
   }
 
-  //统一的拾取函数
   pick(): THREE.Object3D | null {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+
+    if (this.renderer.isARActive()) {
+      const rect = this.getPointerClientRect()
+      const ndcX = this.mouse.x
+      const ndcY = this.mouse.y
+      const clientX = rect.left + (ndcX + 1) * 0.5 * rect.width
+      const clientY = rect.top + (1 - ndcY) * 0.5 * rect.height
+      const pointHit = this.getTouchPointHit(clientX, clientY, this.getARPointPickRadiusPx())
+      if (pointHit) return pointHit
+
+      const lineThreshold = this.getARLinePickThreshold()
+      const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
+      this.raycaster.params.Line = { threshold: lineThreshold }
+      const allObjects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+      const hits = this.raycaster.intersectObjects(allObjects, true)
+      this.raycaster.params.Line = { threshold: previousThreshold }
+
+      if (hits.length > 0) {
+        const resolveObject = (obj: THREE.Object3D): THREE.Object3D => {
+          if (obj.userData.type) return obj
+          if (obj.parent && obj.parent.userData.type) return obj.parent
+          return obj
+        }
+        const lineHit = hits.find(
+          (h) => {
+            const resolved = resolveObject(h.object)
+            return resolved.userData.type === 'line' ||
+              resolved.userData.type === 'straightLine' ||
+              resolved.userData.type === 'ray' ||
+              resolved.userData.type === 'vector' ||
+              resolved.userData.type === 'circle' ||
+              resolved.userData.type === 'sphere' ||
+              resolved.userData.type === 'cone'
+          },
+        )
+        if (lineHit) return resolveObject(lineHit.object)
+
+        const faceHit = hits.find((h) => resolveObject(h.object).userData.type === 'face')
+        if (faceHit) return resolveObject(faceHit.object)
+
+        const nonPointHit = hits.find((h) => resolveObject(h.object).userData.type !== 'point')
+        if (nonPointHit) return resolveObject(nonPointHit.object)
+      }
+      return null
+    }
+
     const allObjects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
     const hits = this.raycaster.intersectObjects(allObjects, true)
 
@@ -3087,6 +3339,7 @@ export class Interaction {
     this.endARSceneRotation()
     this.rubberBandData = null
     this.mobileCreatePreviewPos = null
+    this.createPointDraft = null
     this.resetMobileCreatePointerState()
     this.clearActiveLabelTarget()
     this.clearActivePointValueTarget()
@@ -3191,6 +3444,150 @@ export class Interaction {
     }
   }
 
+  private distanceToSegment2D(point: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) {
+    const ab = b.clone().sub(a)
+    const lengthSq = ab.lengthSq()
+    if (lengthSq === 0) return point.distanceTo(a)
+    const t = THREE.MathUtils.clamp(point.clone().sub(a).dot(ab) / lengthSq, 0, 1)
+    return point.distanceTo(a.clone().add(ab.multiplyScalar(t)))
+  }
+
+  private getGeometryScreenDistance(
+    object: THREE.Object3D | null,
+    clientX: number,
+    clientY: number,
+    rect: DOMRect,
+  ) {
+    if (!object) return Number.POSITIVE_INFINITY
+    const pointer = new THREE.Vector2(clientX, clientY)
+    const type = object.userData?.type as string | undefined
+    const geoId = object.userData?.geoId as string | undefined
+
+    if (type === 'point' && geoId) {
+      const point = this.editor.scene.points.get(geoId)
+      const center = point ? this.projectMathPositionToClient(point.position, rect) : null
+      return center ? pointer.distanceTo(center) : Number.POSITIVE_INFINITY
+    }
+
+    const getPointScreen = (point: Point3 | undefined) =>
+      point ? this.projectMathPositionToClient(point.position, rect) : null
+
+    if (geoId && (type === 'line' || type === 'vector')) {
+      const linear =
+        type === 'line'
+          ? this.editor.scene.lines.get(geoId)
+          : this.editor.scene.vectors.get(geoId)
+      const p1 = getPointScreen(linear?.p1)
+      const p2 = getPointScreen(linear?.p2)
+      if (p1 && p2) return this.distanceToSegment2D(pointer, p1, p2)
+    }
+
+    if (geoId && (type === 'ray' || type === 'straightLine')) {
+      const linear =
+        type === 'ray'
+          ? this.editor.scene.rays.get(geoId)
+          : this.editor.scene.straightLines.get(geoId)
+      const p1 = getPointScreen(linear?.p1)
+      const p2 = getPointScreen(linear?.p2)
+      if (p1 && p2) return this.distanceToSegment2D(pointer, p1, p2)
+    }
+
+    const anchor = object.userData?.__labelAnchor as THREE.Vector3 | undefined
+    const center = anchor
+      ? this.projectWorldToClient(this.renderer.toMathWorldPosition(anchor.clone()), rect)
+      : this.projectObjectToClient(object, rect)
+    return center ? pointer.distanceTo(center) : Number.POSITIVE_INFINITY
+  }
+
+  private findNearestScreenGeometry(clientX: number, clientY: number, rect: DOMRect) {
+    let best: { object: THREE.Object3D; distance: number } | null = null
+    const objects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+
+    for (const object of objects) {
+      const type = object.userData?.type
+      if (!type || type === 'axisLabel') continue
+      const distance = this.getGeometryScreenDistance(object, clientX, clientY, rect)
+      if (!Number.isFinite(distance)) continue
+      if (!best || distance < best.distance) {
+        best = { object, distance }
+      }
+    }
+
+    return best
+  }
+
+  private getLabelHitMetrics(sprite: THREE.Sprite, clientX: number, clientY: number, rect: DOMRect) {
+    const data = sprite.userData
+    const geoId = data?.geoId as string | undefined
+    const type = data?.geoType as
+      | 'point'
+      | 'line'
+      | 'straightLine'
+      | 'ray'
+      | 'vector'
+      | 'circle'
+      | 'sphere'
+      | 'cone'
+      | 'face'
+      | undefined
+    if (!sprite.visible || !geoId || !type) return null
+
+    const textPixelWidth = Number(data?.textPixelWidth ?? 0)
+    const textPixelHeight = Number(data?.textPixelHeight ?? 0)
+    const canvasPixelWidth = Number(data?.canvasPixelWidth ?? 256)
+    const canvasPixelHeight = Number(data?.canvasPixelHeight ?? 256)
+    const spriteScaleFactor = this.renderer.getActiveCameraSpriteScaleFactor()
+    const worldScale = this.renderer.getWorldScale()
+    const effectiveScaleX = sprite.scale.x * worldScale
+    const effectiveScaleY = sprite.scale.y * worldScale
+    const padding = this.getLabelHitboxPaddingPx()
+    let width =
+      Math.max(
+        30,
+        (effectiveScaleX * rect.height * spriteScaleFactor * Math.max(1, textPixelWidth)) /
+          canvasPixelWidth,
+      ) + padding
+    let height =
+      Math.max(
+        22,
+        (effectiveScaleY * rect.height * spriteScaleFactor * Math.max(1, textPixelHeight)) /
+          canvasPixelHeight,
+      ) + padding
+
+    const anchor = this.projectObjectToClient(sprite, rect)
+    if (!anchor) return null
+    let center = new THREE.Vector2(
+      anchor.x + (0.5 - sprite.center.x) * width,
+      anchor.y - (0.5 - sprite.center.y) * height,
+    )
+
+    if (type === 'point') {
+      const point = this.editor.scene.points.get(geoId)
+      const pointCenter = point ? this.projectMathPositionToClient(point.position, rect) : null
+      if (!pointCenter) return null
+      const separation = pointCenter.distanceTo(center)
+      const pointHitboxScale =
+        separation <= Interaction.POINT_LABEL_SAFE_ZONE_PX
+          ? 0.96
+          : Interaction.POINT_LABEL_HITBOX_SCALE
+      width *= pointHitboxScale
+      height *= pointHitboxScale
+      center = new THREE.Vector2(
+        anchor.x + (0.5 - sprite.center.x) * width,
+        anchor.y - (0.5 - sprite.center.y) * height,
+      )
+    }
+
+    const pointer = new THREE.Vector2(clientX, clientY)
+    const dx = Math.abs(pointer.x - center.x)
+    const dy = Math.abs(pointer.y - center.y)
+    if (dx > width * 0.5 || dy > height * 0.5) return null
+
+    const edgeDistance = Math.max(dx / Math.max(width * 0.5, 1), dy / Math.max(height * 0.5, 1))
+    const centerDistance = pointer.distanceTo(center)
+    return { sprite, center, width, height, edgeDistance, centerDistance, geoId, type }
+  }
+
   private resolvePreferredTarget(
     geometryHit: THREE.Object3D | null,
     labelHit: THREE.Object3D | null,
@@ -3198,101 +3595,70 @@ export class Interaction {
     clientY: number,
   ) {
     if (!labelHit) return geometryHit
-    if (!geometryHit) return labelHit
-    if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
-      return labelHit
-    }
-
-    const labelType = labelHit.userData?.geoType as string | undefined
-    if (labelType !== 'point' || geometryHit.userData?.type !== 'point') {
-      return labelHit
-    }
-
-    const geoId = labelHit.userData?.geoId as string | undefined
-    if (!geoId) return labelHit
 
     const rect = this.getPointerClientRect()
-    const metrics = this.getPointLabelScreenMetrics(geoId, labelHit as THREE.Sprite, rect)
-    if (!metrics) return labelHit
+    const labelMetrics = this.getLabelHitMetrics(labelHit as THREE.Sprite, clientX, clientY, rect)
+    if (!labelMetrics) return geometryHit
 
-    const pointer = new THREE.Vector2(clientX, clientY)
-    const pointDistance = pointer.distanceTo(metrics.pointCenter)
-    const labelDistance = pointer.distanceTo(metrics.labelCenter)
+    const nearestGeometry = this.findNearestScreenGeometry(clientX, clientY, rect)
+    const effectiveGeometryHit =
+      geometryHit ??
+      (nearestGeometry && nearestGeometry.distance <= this.getGeometryCoreHitPx()
+        ? nearestGeometry.object
+        : null)
+    if (!effectiveGeometryHit) return labelHit
 
-    if (pointDistance <= Interaction.POINT_LABEL_POINT_PRIORITY_RADIUS_PX) {
-      return geometryHit
+    const geometryDistance = Math.min(
+      this.getGeometryScreenDistance(effectiveGeometryHit, clientX, clientY, rect),
+      nearestGeometry?.distance ?? Number.POSITIVE_INFINITY,
+    )
+    const geometryProtection = this.getGeometryProtectionPx()
+    const labelClosePriority = this.getLabelClosePriorityPx()
+
+    const geometryCore = this.getGeometryCoreHitPx()
+    const geometryHardCore = this.getGeometryHardCoreHitPx()
+    const labelCore = Interaction.LABEL_CORE_EDGE_RATIO
+
+    if (geometryDistance <= geometryHardCore && labelMetrics.edgeDistance > 0.62) {
+      return effectiveGeometryHit
     }
 
-    if (metrics.separation <= Interaction.POINT_LABEL_OVERLAP_PRIORITY_PX) {
-      return labelDistance + 4 < pointDistance ? labelHit : geometryHit
+    if (labelMetrics.edgeDistance <= 0.82 && geometryDistance > geometryHardCore) {
+      return labelHit
     }
 
-    if (metrics.separation <= Interaction.POINT_LABEL_SAFE_ZONE_PX) {
-      return labelDistance <= pointDistance ? labelHit : geometryHit
+    if (geometryDistance <= geometryCore && labelMetrics.edgeDistance <= labelCore) {
+      const geometryScore = geometryDistance / Math.max(geometryCore, 1)
+      const labelScore = labelMetrics.edgeDistance / Math.max(labelCore, 0.01)
+      return geometryScore <= labelScore ? effectiveGeometryHit : labelHit
     }
 
-    return labelHit
+    if (labelMetrics.centerDistance <= labelClosePriority || labelMetrics.edgeDistance <= labelCore) {
+      return labelHit
+    }
+
+    if (labelMetrics.edgeDistance <= 0.72 && labelMetrics.centerDistance <= geometryDistance + 4) {
+      return labelHit
+    }
+
+    if (geometryDistance <= geometryProtection) return effectiveGeometryHit
+
+    return geometryDistance < labelMetrics.centerDistance ? effectiveGeometryHit : labelHit
   }
 
   private pickLabelAtClient(clientX: number, clientY: number) {
     const rect = this.getPointerClientRect()
-    const pointer = new THREE.Vector2(clientX, clientY)
     let best: {
       sprite: THREE.Sprite
-      distance: number
+      score: number
     } | null = null
 
     for (const sprite of this.renderer.getNameLabelSprites()) {
-      const data = sprite.userData
-      const geoId = data?.geoId as string | undefined
-      const type = data?.geoType as 'point' | 'line' | 'straightLine' | 'ray' | 'circle' | 'sphere' | 'cone' | 'face' | undefined
-      if (!sprite.visible || !geoId || !type) continue
-
-      const center = this.projectObjectToClient(sprite, rect)
-      if (!center) continue
-
-      const textPixelWidth = Number(data?.textPixelWidth ?? 0)
-      const textPixelHeight = Number(data?.textPixelHeight ?? 0)
-      const canvasPixelWidth = Number(data?.canvasPixelWidth ?? 256)
-      const canvasPixelHeight = Number(data?.canvasPixelHeight ?? 256)
-      let width =
-        Math.max(
-          28,
-          (sprite.scale.x * rect.height * Math.max(1, textPixelWidth)) / canvasPixelWidth,
-        ) + 10
-      let height =
-        Math.max(
-          20,
-          (sprite.scale.y * rect.height * Math.max(1, textPixelHeight)) / canvasPixelHeight,
-        ) + 8
-      if (type === 'point') {
-        const metrics = this.getPointLabelScreenMetrics(geoId, sprite, rect)
-        if (!metrics) continue
-        if (
-          metrics.separation > Interaction.POINT_LABEL_SAFE_ZONE_PX &&
-          pointer.distanceTo(metrics.pointCenter) <= Interaction.POINT_PICK_PROTECTION_RADIUS_PX
-        ) {
-          continue
-        }
-
-        const pointHitboxScale =
-          metrics.separation <= Interaction.POINT_LABEL_SAFE_ZONE_PX
-            ? 0.92
-            : Interaction.POINT_LABEL_HITBOX_SCALE
-        width *= pointHitboxScale
-        height *= pointHitboxScale
-      }
-
-      if (
-        Math.abs(pointer.x - center.x) > width * 0.5 ||
-        Math.abs(pointer.y - center.y) > height * 0.5
-      ) {
-        continue
-      }
-
-      const distance = pointer.distanceTo(center)
-      if (!best || distance < best.distance) {
-        best = { sprite, distance }
+      const metrics = this.getLabelHitMetrics(sprite, clientX, clientY, rect)
+      if (!metrics) continue
+      const score = metrics.edgeDistance * 100 + metrics.centerDistance * 0.01
+      if (!best || score < best.score) {
+        best = { sprite, score }
       }
     }
 
