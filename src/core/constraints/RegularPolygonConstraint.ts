@@ -46,6 +46,7 @@ export class RegularPolygonConstraint {
     public name: string = '正多边形1',
     public edgeLengthLocked: boolean = false,
     public lockedEdgeLength: number | null = null,
+    public nameVisible: boolean = false,
     public valueVisible: boolean = false,
   ) {}
 
@@ -125,6 +126,12 @@ export class RegularPolygonConstraint {
     const edgeLength = this.getEdgeLength()
     if (edgeLength <= 0) return 0
     return (this.vertexCount * edgeLength * edgeLength) / (4 * Math.tan(Math.PI / this.vertexCount))
+  }
+
+  getPerimeter() {
+    const edgeLength = this.getEdgeLength()
+    if (edgeLength <= 0) return 0
+    return this.vertexCount * edgeLength
   }
 
   solve() {

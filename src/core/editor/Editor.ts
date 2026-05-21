@@ -1194,6 +1194,7 @@ export class Editor {
     constraintId: string,
     patch: {
       name?: string
+      nameVisible?: boolean
       valueVisible?: boolean
       edgeLengthLocked?: boolean
       lockedEdgeLength?: number | null
@@ -1210,17 +1211,24 @@ export class Editor {
     }
     const before = {
       name: constraint.name,
+      nameVisible: constraint.nameVisible,
       valueVisible: constraint.valueVisible,
       edgeLengthLocked: constraint.edgeLengthLocked,
       lockedEdgeLength: constraint.lockedEdgeLength,
     }
     const after = {
       name: patch.name ?? constraint.name,
+      nameVisible: patch.nameVisible ?? constraint.nameVisible,
       valueVisible: patch.valueVisible ?? constraint.valueVisible,
       edgeLengthLocked: nextEdgeLengthLocked,
       lockedEdgeLength: nextLockedEdgeLength,
     }
     this.executeCommand(new UpdateRegularPolygonCommand(constraint, before, after))
+    const face = this.scene.faces.get(constraint.faceId)
+    if (face) {
+      face.nameVisible = after.nameVisible
+      face.valueVisible = after.valueVisible
+    }
     this.scene.markAllRenderDirty()
   }
 

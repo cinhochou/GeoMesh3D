@@ -13,6 +13,7 @@ import { Cone3, type ConeType } from '../geometry/Cone3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
+import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import {
   canCreateIntersectionFromTargets,
@@ -43,6 +44,7 @@ type LocalSceneSnapshot = {
   faces: PlanarPolygon[]
   intersections: IntersectionPointConstraint[]
   cubes: CubeConstraint[]
+  regularPolygons: RegularPolygonConstraint[]
 }
 
 type ProviderStatusEvent = {
@@ -62,6 +64,7 @@ type FaceSharedArrayValue = string | number | null
 type FaceSharedMapValue = string | number | boolean | Y.Array<FaceSharedArrayValue>
 type FaceSharedMap = Y.Map<FaceSharedMapValue>
 type CubeSharedMap = Y.Map<string | number | boolean>
+type RegularPolygonSharedMap = Y.Map<string | number | boolean>
 type WorldTransformSharedMap = Y.Map<string | number | boolean>
 
 export type SharedWorldRotationState = {
@@ -98,6 +101,7 @@ export class CollabManager {
   private yIntersections: Y.Map<IntersectionSharedMap>
   private yFaces: Y.Map<FaceSharedMap>
   private yCubes: Y.Map<CubeSharedMap>
+  private yRegularPolygons: Y.Map<RegularPolygonSharedMap>
   private yWorldTransform: WorldTransformSharedMap
   private pointsObserver: ((event: Y.YMapEvent<PointSharedMap>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
@@ -110,6 +114,7 @@ export class CollabManager {
   private intersectionsObserver: ((event: Y.YMapEvent<IntersectionSharedMap>) => void) | null = null
   private facesObserver: ((event: Y.YMapEvent<FaceSharedMap>) => void) | null = null
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
+  private regularPolygonsObserver: ((event: Y.YMapEvent<RegularPolygonSharedMap>) => void) | null = null
   private worldTransformObserver: ((event: Y.YMapEvent<string | number | boolean>) => void) | null = null
   private readonly pointRecordCleanup = new Map<string, () => void>()
   private readonly lineRecordCleanup = new Map<string, () => void>()
@@ -122,6 +127,7 @@ export class CollabManager {
   private readonly intersectionRecordCleanup = new Map<string, () => void>()
   private readonly faceRecordCleanup = new Map<string, () => void>()
   private readonly cubeRecordCleanup = new Map<string, () => void>()
+  private readonly regularPolygonRecordCleanup = new Map<string, () => void>()
 
   private roomName: string | null = null
   private connecting = false
@@ -149,6 +155,7 @@ export class CollabManager {
   private readonly dirtyIntersectionIds = new Set<string>()
   private readonly dirtyFaceIds = new Set<string>()
   private readonly dirtyCubeIds = new Set<string>()
+  private readonly dirtyRegularPolygonIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
@@ -160,6 +167,7 @@ export class CollabManager {
   private readonly deletedIntersectionIds = new Set<string>()
   private readonly deletedFaceIds = new Set<string>()
   private readonly deletedCubeIds = new Set<string>()
+  private readonly deletedRegularPolygonIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -179,6 +187,7 @@ export class CollabManager {
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
+    this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
@@ -201,6 +210,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.intersectionRecordCleanup)
     this.cleanupRecordObservers(this.faceRecordCleanup)
     this.cleanupRecordObservers(this.cubeRecordCleanup)
+    this.cleanupRecordObservers(this.regularPolygonRecordCleanup)
   }
 
   private readString<T>(record: Y.Map<T>, key: string, fallback: string) {
@@ -284,6 +294,28 @@ export class CollabManager {
               typeof item?.x === 'number' &&
               typeof item?.y === 'number' &&
               typeof item?.z === 'number',
+          )
+        : []
+    } catch {
+      return []
+    }
+  }
+
+  private readJsonRegularPolygonLayouts<T>(record: Y.Map<T>, key: string) {
+    const raw = record.get(key)
+    if (typeof raw !== 'string') return []
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (
+              item,
+            ): item is {
+              pointId: string
+              angleIndex: number
+            } =>
+              typeof item?.pointId === 'string' &&
+              typeof item?.angleIndex === 'number',
           )
         : []
     } catch {
@@ -474,6 +506,15 @@ export class CollabManager {
     if (!record) {
       record = new Y.Map<string | number | boolean>()
       this.yCubes.set(id, record)
+    }
+    return record
+  }
+
+  private ensureRegularPolygonRecord(id: string) {
+    let record = this.yRegularPolygons.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yRegularPolygons.set(id, record)
     }
     return record
   }
@@ -765,6 +806,10 @@ export class CollabManager {
       cubes: [...this.scene.cubeConstraints.values()].filter(
         (constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint,
       ),
+      regularPolygons: [...this.scene.regularPolygonConstraints.values()].filter(
+        (constraint): constraint is RegularPolygonConstraint =>
+          constraint instanceof RegularPolygonConstraint,
+      ),
     }
   }
 
@@ -796,6 +841,7 @@ export class CollabManager {
     snapshot.faces.forEach((face) => this.scene.addFace(face))
     snapshot.intersections.forEach((constraint) => this.scene.addIntersectionConstraint(constraint))
     snapshot.cubes.forEach((cube) => this.scene.addCubeConstraint(cube))
+    snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
   }
 
   private clearDirtyState() {
@@ -820,7 +866,9 @@ export class CollabManager {
     this.deletedFaceIds.clear()
     this.deletedIntersectionIds.clear()
     this.dirtyCubeIds.clear()
+    this.dirtyRegularPolygonIds.clear()
     this.deletedCubeIds.clear()
+    this.deletedRegularPolygonIds.clear()
   }
 
   private markPointDirty(id: string) {
@@ -931,6 +979,16 @@ export class CollabManager {
   private markCubeDeleted(id: string) {
     this.dirtyCubeIds.delete(id)
     this.deletedCubeIds.add(id)
+  }
+
+  private markRegularPolygonDirty(id: string) {
+    this.deletedRegularPolygonIds.delete(id)
+    this.dirtyRegularPolygonIds.add(id)
+  }
+
+  private markRegularPolygonDeleted(id: string) {
+    this.dirtyRegularPolygonIds.delete(id)
+    this.deletedRegularPolygonIds.add(id)
   }
 
   private markLinkedGeometryDirtyForPoint(pointId: string) {
@@ -1054,6 +1112,9 @@ export class CollabManager {
     this.scene.cubeConstraints.forEach((constraint, id) => {
       if (constraint instanceof CubeConstraint) this.markCubeDirty(id)
     })
+    this.scene.regularPolygonConstraints.forEach((constraint, id) => {
+      if (constraint instanceof RegularPolygonConstraint) this.markRegularPolygonDirty(id)
+    })
 
     for (const id of [...this.yPoints.keys()]) {
       if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
@@ -1087,6 +1148,9 @@ export class CollabManager {
     }
     for (const id of [...this.yCubes.keys()]) {
       if (!this.scene.cubeConstraints.has(id)) this.markCubeDeleted(id)
+    }
+    for (const id of [...this.yRegularPolygons.keys()]) {
+      if (!this.scene.regularPolygonConstraints.has(id)) this.markRegularPolygonDeleted(id)
     }
   }
 
@@ -1148,7 +1212,8 @@ export class CollabManager {
       this.yCones.size > 0 ||
       this.yIntersections.size > 0 ||
       this.yFaces.size > 0 ||
-      this.yCubes.size > 0
+      this.yCubes.size > 0 ||
+      this.yRegularPolygons.size > 0
     )
   }
 
@@ -1165,7 +1230,8 @@ export class CollabManager {
       localSnapshot.cones.length === 0 &&
       localSnapshot.intersections.length === 0 &&
       localSnapshot.faces.length === 0 &&
-      localSnapshot.cubes.length === 0
+      localSnapshot.cubes.length === 0 &&
+      localSnapshot.regularPolygons.length === 0
     ) {
       return
     }
@@ -1259,6 +1325,7 @@ export class CollabManager {
     if (this.intersectionsObserver) this.yIntersections.unobserve(this.intersectionsObserver)
     if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
+    if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     this.cleanupAllRecordObservers()
 
@@ -1274,6 +1341,7 @@ export class CollabManager {
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
+    this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.setupObservers()
   }
@@ -1315,6 +1383,9 @@ export class CollabManager {
 
     this.scene.faces.forEach((face, faceId) => {
       if (face.includesPoint(id)) {
+        if (face.regularPolygonId) {
+          this.scene.removeRegularPolygonConstraint(face.regularPolygonId)
+        }
         this.scene.removeFace(faceId)
       }
     })
@@ -1480,6 +1551,16 @@ export class CollabManager {
         this.applyCubeRecord(id, record)
       }
     })
+    this.yRegularPolygons.forEach((record, id) => {
+      const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+      const dependentLayouts = this.readJsonRegularPolygonLayouts(record, 'dependentLayouts')
+      if (
+        ownerPointIds.includes(pointId) ||
+        dependentLayouts.some((layout) => layout.pointId === pointId)
+      ) {
+        this.applyRegularPolygonRecord(id, record)
+      }
+    })
     const intersectionRecord = this.yIntersections.get(pointId)
     if (intersectionRecord) this.applyIntersectionRecord(pointId, intersectionRecord)
   }
@@ -1488,6 +1569,12 @@ export class CollabManager {
     if (!cubeId) return
     const cubeRecord = this.yCubes.get(cubeId)
     if (cubeRecord) this.applyCubeRecord(cubeId, cubeRecord)
+  }
+
+  private reconcileRegularPolygonForFace(regularPolygonId: string | null) {
+    if (!regularPolygonId) return
+    const rpRecord = this.yRegularPolygons.get(regularPolygonId)
+    if (rpRecord) this.applyRegularPolygonRecord(regularPolygonId, rpRecord)
   }
 
   private readIntersectionTarget(
@@ -2182,6 +2269,7 @@ export class CollabManager {
       this.scene.markAllRenderDirty()
       this.reconcileIntersectionsForTarget('face', id)
       this.reconcileCubeForFace(cubeId)
+      this.reconcileRegularPolygonForFace(regularPolygonId)
       return
     }
 
@@ -2217,6 +2305,7 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
     this.reconcileIntersectionsForTarget('face', id)
     this.reconcileCubeForFace(cubeId)
+    this.reconcileRegularPolygonForFace(regularPolygonId)
   }
 
   private applyCubeRecord(id: string, record: CubeSharedMap) {
@@ -2302,6 +2391,94 @@ export class CollabManager {
       ),
     )
     this.scene.requestCubeConstraintSolve(id)
+    this.scene.markAllRenderDirty()
+  }
+
+  private applyRegularPolygonRecord(id: string, record: RegularPolygonSharedMap) {
+    const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+    const dependentLayouts = this.readJsonRegularPolygonLayouts(record, 'dependentLayouts')
+    if (ownerPointIds.length !== 2) return
+    const ownerPointA = ownerPointIds[0]
+    const ownerPointB = ownerPointIds[1]
+    if (!ownerPointA || !ownerPointB) return
+    if ([ownerPointA, ownerPointB].some((pointId) => !this.scene.points.has(pointId))) return
+    if (dependentLayouts.some((layout) => !this.scene.points.has(layout.pointId))) return
+
+    const faceId = this.readString(record, 'faceId', '')
+    if (!this.scene.faces.has(faceId)) return
+
+    const vertexCount = this.readNumber(record, 'vertexCount', 0)
+    if (vertexCount < 3) return
+
+    const vAxisHint = new Vec3(
+      this.readNumber(record, 'vAxisHintX', 0),
+      this.readNumber(record, 'vAxisHintY', 1),
+      this.readNumber(record, 'vAxisHintZ', 0),
+    )
+    const name = this.readString(record, 'name', '正多边形1')
+    const edgeLengthLocked = this.readBoolean(record, 'edgeLengthLocked', false)
+    const lockedEdgeLength = this.readNullableNumber(record, 'lockedEdgeLength')
+    const nameVisible = this.readBoolean(record, 'nameVisible', false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', false)
+
+    ;[ownerPointA, ownerPointB].forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.regularPolygonId = id
+      point.regularPolygonRole = 'owner'
+    })
+    dependentLayouts.forEach(({ pointId }) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.regularPolygonId = id
+      point.regularPolygonRole = 'dependent'
+    })
+    const face = this.scene.faces.get(faceId)
+    if (face) {
+      face.regularPolygonId = id
+      face.regularPolygonVertexCount = vertexCount
+      face.regularPolygonOwnerPointIds = [...ownerPointIds]
+      face.regularPolygonDependentPointIds = dependentLayouts.map((layout) => layout.pointId)
+      face.isRegularPolygon = true
+    }
+
+    const existing = this.scene.regularPolygonConstraints.get(id)
+    if (existing instanceof RegularPolygonConstraint) {
+      existing.ownerPointIds[0] = ownerPointA
+      existing.ownerPointIds[1] = ownerPointB
+      existing.dependentLayouts.splice(
+        0,
+        existing.dependentLayouts.length,
+        ...dependentLayouts.map((layout) => ({ ...layout })),
+      )
+      existing.setAxisHint(vAxisHint)
+      existing.name = name
+      existing.edgeLengthLocked = edgeLengthLocked
+      existing.lockedEdgeLength = lockedEdgeLength
+      existing.nameVisible = nameVisible
+      existing.valueVisible = valueVisible
+      this.scene.requestConstraintSolve(this.scene.regularPolygonConstraints.get(id))
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    this.scene.addRegularPolygonConstraint(
+      new RegularPolygonConstraint(
+        this.scene,
+        id,
+        [ownerPointA, ownerPointB],
+        dependentLayouts.map((layout) => ({ ...layout })),
+        faceId,
+        vertexCount,
+        vAxisHint,
+        name,
+        edgeLengthLocked,
+        lockedEdgeLength,
+        nameVisible,
+        valueVisible,
+      ),
+    )
+    this.scene.requestConstraintSolve(this.scene.regularPolygonConstraints.get(id))
     this.scene.markAllRenderDirty()
   }
 
@@ -2402,6 +2579,15 @@ export class CollabManager {
     }
     record.observe(handler)
     this.cubeRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
+  private observeRegularPolygonRecord(id: string, record: RegularPolygonSharedMap) {
+    this.releaseRecordObserver(id, this.regularPolygonRecordCleanup)
+    const handler = () => {
+      this.applyRegularPolygonRecord(id, record)
+    }
+    record.observe(handler)
+    this.regularPolygonRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
   private setupObservers() {
@@ -2594,6 +2780,10 @@ export class CollabManager {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.faceRecordCleanup)
+          const face = this.scene.faces.get(id)
+          if (face?.regularPolygonId) {
+            this.scene.removeRegularPolygonConstraint(face.regularPolygonId)
+          }
           this.scene.removeFace(id)
           return
         }
@@ -2629,6 +2819,27 @@ export class CollabManager {
     this.yCubes.forEach((record, id) => {
       this.observeCubeRecord(id, record)
       this.applyCubeRecord(id, record)
+    })
+
+    this.regularPolygonsObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.regularPolygonRecordCleanup)
+          this.scene.removeRegularPolygonConstraint(id)
+          this.scene.markAllRenderDirty()
+          return
+        }
+
+        const record = this.yRegularPolygons.get(id)
+        if (!record) return
+        this.observeRegularPolygonRecord(id, record)
+        this.applyRegularPolygonRecord(id, record)
+      })
+    }
+    this.yRegularPolygons.observe(this.regularPolygonsObserver)
+    this.yRegularPolygons.forEach((record, id) => {
+      this.observeRegularPolygonRecord(id, record)
+      this.applyRegularPolygonRecord(id, record)
     })
 
     this.worldTransformObserver = () => {
@@ -2814,6 +3025,22 @@ export class CollabManager {
     this.setNullableScalarField(record, 'lockedEdgeLength', cube.lockedEdgeLength)
   }
 
+  private syncRegularPolygonRecord(record: RegularPolygonSharedMap, constraint: RegularPolygonConstraint) {
+    this.setScalarField(record, 'ownerPointIds', JSON.stringify([...constraint.ownerPointIds]))
+    this.setScalarField(record, 'dependentLayouts', JSON.stringify(constraint.dependentLayouts))
+    this.setScalarField(record, 'faceId', constraint.faceId)
+    this.setScalarField(record, 'vertexCount', constraint.vertexCount)
+    const axisHint = constraint.getVAxisHint()
+    this.setScalarField(record, 'vAxisHintX', axisHint.x)
+    this.setScalarField(record, 'vAxisHintY', axisHint.y)
+    this.setScalarField(record, 'vAxisHintZ', axisHint.z)
+    this.setScalarField(record, 'name', constraint.name)
+    this.setScalarField(record, 'edgeLengthLocked', constraint.edgeLengthLocked)
+    this.setNullableScalarField(record, 'lockedEdgeLength', constraint.lockedEdgeLength)
+    this.setScalarField(record, 'nameVisible', constraint.nameVisible)
+    this.setScalarField(record, 'valueVisible', constraint.valueVisible)
+  }
+
   getSharedWorldRotationState() {
     return this.readSharedWorldRotationState()
   }
@@ -2922,6 +3149,7 @@ export class CollabManager {
     const intersectionIds = [...this.dirtyIntersectionIds]
     const faceIds = [...this.dirtyFaceIds]
     const cubeIds = [...this.dirtyCubeIds]
+    const regularPolygonIds = [...this.dirtyRegularPolygonIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
@@ -2933,6 +3161,7 @@ export class CollabManager {
     const deletedIntersectionIds = [...this.deletedIntersectionIds]
     const deletedFaceIds = [...this.deletedFaceIds]
     const deletedCubeIds = [...this.deletedCubeIds]
+    const deletedRegularPolygonIds = [...this.deletedRegularPolygonIds]
 
     if (
       pointIds.length === 0 &&
@@ -2946,6 +3175,7 @@ export class CollabManager {
       intersectionIds.length === 0 &&
       faceIds.length === 0 &&
       cubeIds.length === 0 &&
+      regularPolygonIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
@@ -2956,7 +3186,8 @@ export class CollabManager {
       deletedConeIds.length === 0 &&
       deletedIntersectionIds.length === 0 &&
       deletedFaceIds.length === 0 &&
-      deletedCubeIds.length === 0
+      deletedCubeIds.length === 0 &&
+      deletedRegularPolygonIds.length === 0
     ) {
       return
     }
@@ -2994,6 +3225,9 @@ export class CollabManager {
       })
       deletedCubeIds.forEach((id) => {
         this.yCubes.delete(id)
+      })
+      deletedRegularPolygonIds.forEach((id) => {
+        this.yRegularPolygons.delete(id)
       })
 
       pointIds.forEach((id) => {
@@ -3094,6 +3328,15 @@ export class CollabManager {
         }
         this.syncCubeRecord(this.ensureCubeRecord(id), cube)
       })
+
+      regularPolygonIds.forEach((id) => {
+        const constraint = this.scene.regularPolygonConstraints.get(id)
+        if (!(constraint instanceof RegularPolygonConstraint)) {
+          this.yRegularPolygons.delete(id)
+          return
+        }
+        this.syncRegularPolygonRecord(this.ensureRegularPolygonRecord(id), constraint)
+      })
     })
 
     pointIds.forEach((id) => this.dirtyPointIds.delete(id))
@@ -3107,6 +3350,7 @@ export class CollabManager {
     intersectionIds.forEach((id) => this.dirtyIntersectionIds.delete(id))
     faceIds.forEach((id) => this.dirtyFaceIds.delete(id))
     cubeIds.forEach((id) => this.dirtyCubeIds.delete(id))
+    regularPolygonIds.forEach((id) => this.dirtyRegularPolygonIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
@@ -3118,5 +3362,6 @@ export class CollabManager {
     deletedIntersectionIds.forEach((id) => this.deletedIntersectionIds.delete(id))
     deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))
     deletedCubeIds.forEach((id) => this.deletedCubeIds.delete(id))
+    deletedRegularPolygonIds.forEach((id) => this.deletedRegularPolygonIds.delete(id))
   }
 }

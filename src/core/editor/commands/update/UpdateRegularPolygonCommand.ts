@@ -3,6 +3,7 @@ import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonCon
 
 type RegularPolygonState = {
   name: string
+  nameVisible: boolean
   valueVisible: boolean
   edgeLengthLocked: boolean
   lockedEdgeLength: number | null
@@ -25,6 +26,7 @@ export class UpdateRegularPolygonCommand implements Command {
 
   private apply(state: RegularPolygonState) {
     this.constraint.name = state.name
+    this.constraint.nameVisible = state.nameVisible
     this.constraint.valueVisible = state.valueVisible
     this.constraint.edgeLengthLocked = state.edgeLengthLocked
     this.constraint.lockedEdgeLength = state.lockedEdgeLength

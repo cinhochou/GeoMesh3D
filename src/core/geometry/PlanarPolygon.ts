@@ -149,6 +149,22 @@ export class PlanarPolygon {
     return polygonArea2D(boundaryPoints.map((point) => projectPoint2D(point.position, plane)))
   }
 
+  getPerimeter(points: Map<string, Point3>) {
+    const boundaryPoints = this.getBoundaryPoints(points)
+    if (boundaryPoints.length < 2) return 0
+    let perimeter = 0
+    for (let i = 0; i < boundaryPoints.length; i++) {
+      const current = boundaryPoints[i]!
+      const next = boundaryPoints[(i + 1) % boundaryPoints.length]!
+      perimeter += Math.hypot(
+        next.position.x - current.position.x,
+        next.position.y - current.position.y,
+        next.position.z - current.position.z,
+      )
+    }
+    return perimeter
+  }
+
   getEdgeLength(points: Map<string, Point3>, edgeIndex: number) {
     const boundaryPoints = this.getBoundaryPoints(points)
     if (boundaryPoints.length < 2) return 0

@@ -97,6 +97,7 @@ const handleSubmit = async () => {
 
 <template>
   <div class="auth-page">
+    <button type="button" class="back-link" @click="router.push({ name: 'login', query: route.query })">&lt;返回</button>
     <Transition name="fade-overlay">
       <div v-if="isRedirecting" class="collab-wait-overlay">
         <div class="collab-wait-dialog">
@@ -219,12 +220,36 @@ const handleSubmit = async () => {
 
 <style scoped>
 .auth-page {
+  position: relative;
+  height: 100%;
   min-height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
   background:
     radial-gradient(circle at top left, rgba(67, 242, 96, 0.08), transparent 22%),
     radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.04), transparent 18%),
     linear-gradient(180deg, #141414 0%, #101010 100%);
   color: #ddd;
+}
+
+.back-link {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 20;
+  border: 1px solid #3f3f3f;
+  border-radius: 999px;
+  background: rgba(24, 24, 24, 0.88);
+  color: #dcdcdc;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.back-link:hover {
+  border-color: #43f260;
+  color: #a6f3b5;
 }
 
 .auth-layout {
@@ -235,6 +260,29 @@ const handleSubmit = async () => {
   grid-template-columns: minmax(320px, 1fr) minmax(360px, 430px);
   gap: 56px;
   align-items: center;
+}
+
+@media (max-width: 920px) {
+  .auth-layout {
+    width: min(560px, calc(100% - 24px));
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 28px 0;
+    align-items: start;
+  }
+
+  .side-title {
+    max-width: none;
+    font-size: 40px;
+  }
+
+  .auth-side {
+    display: none;
+  }
+
+  .auth-main {
+    width: 100%;
+  }
 }
 
 .auth-side {
@@ -526,17 +574,73 @@ const handleSubmit = async () => {
   }
 }
 
-@media (max-width: 920px) {
-  .auth-layout {
-    width: min(560px, calc(100% - 24px));
-    grid-template-columns: 1fr;
-    gap: 28px;
-    padding: 28px 0;
+@media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
+  .auth-page {
+    min-height: 100dvh;
   }
 
-  .side-title {
-    max-width: none;
-    font-size: 40px;
+  .auth-layout {
+    width: calc(100% - 20px);
+    min-height: unset;
+    gap: 16px;
+    padding: 52px 0 20px;
+    align-items: start;
+  }
+
+  .auth-side {
+    display: none;
+  }
+
+  .auth-main {
+    width: 100%;
+    order: -1;
+  }
+
+  .auth-card {
+    padding: 24px 18px 22px;
+    border-radius: 16px;
+  }
+
+  .card-title {
+    margin: 14px 0 6px;
+    font-size: 24px;
+  }
+
+  .card-text {
+    margin: 0 0 18px;
+    font-size: 13px;
+  }
+
+  .auth-form {
+    gap: 14px;
+  }
+
+  .field-input {
+    padding: 12px 13px;
+    font-size: 16px;
+    border-radius: 10px;
+  }
+
+  .submit-button {
+    padding: 13px 16px;
+    font-size: 16px;
+    border-radius: 10px;
+  }
+
+  .back-link {
+    top: 10px;
+    left: 10px;
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  .links {
+    gap: 10px;
+  }
+
+  .secondary-link,
+  .primary-link {
+    font-size: 14px;
   }
 }
 </style>

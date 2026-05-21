@@ -156,7 +156,10 @@ const handleBack = async () => {
 <style scoped>
 .auth-page {
   position: relative;
+  height: 100%;
   min-height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
   background:
     radial-gradient(circle at top left, rgba(67, 242, 96, 0.08), transparent 22%),
     radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.04), transparent 18%),
@@ -192,6 +195,29 @@ const handleBack = async () => {
   grid-template-columns: minmax(320px, 1fr) minmax(360px, 430px);
   gap: 56px;
   align-items: center;
+}
+
+@media (max-width: 920px) {
+  .auth-layout {
+    width: min(560px, calc(100% - 24px));
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 28px 0;
+    align-items: start;
+  }
+
+  .side-title {
+    max-width: none;
+    font-size: 40px;
+  }
+
+  .auth-side {
+    display: none;
+  }
+
+  .auth-main {
+    width: 100%;
+  }
 }
 
 .auth-side {
@@ -457,17 +483,73 @@ const handleBack = async () => {
   }
 }
 
-@media (max-width: 920px) {
-  .auth-layout {
-    width: min(560px, calc(100% - 24px));
-    grid-template-columns: 1fr;
-    gap: 28px;
-    padding: 28px 0;
+@media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
+  .auth-page {
+    min-height: 100dvh;
   }
 
-  .side-title {
-    max-width: none;
-    font-size: 40px;
+  .auth-layout {
+    width: calc(100% - 20px);
+    min-height: unset;
+    gap: 16px;
+    padding: 52px 0 20px;
+    align-items: start;
+  }
+
+  .auth-side {
+    display: none;
+  }
+
+  .auth-main {
+    width: 100%;
+    order: -1;
+  }
+
+  .auth-card {
+    padding: 24px 18px 22px;
+    border-radius: 16px;
+  }
+
+  .card-title {
+    margin: 14px 0 6px;
+    font-size: 24px;
+  }
+
+  .card-text {
+    margin: 0 0 18px;
+    font-size: 13px;
+  }
+
+  .auth-form {
+    gap: 14px;
+  }
+
+  .field-input {
+    padding: 12px 13px;
+    font-size: 16px;
+    border-radius: 10px;
+  }
+
+  .submit-button {
+    padding: 13px 16px;
+    font-size: 16px;
+    border-radius: 10px;
+  }
+
+  .back-link {
+    top: 10px;
+    left: 10px;
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  .links {
+    gap: 10px;
+  }
+
+  .secondary-link,
+  .primary-link {
+    font-size: 14px;
   }
 }
 </style>

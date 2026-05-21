@@ -702,6 +702,11 @@ const handleImportScene = async () => {
       return
     }
 
+    if (!isSceneEmpty(scene)) {
+      const confirmed = window.confirm('场景中已有创作内容，若继续导入将覆盖原内容，且无法恢复')
+      if (!confirmed) return
+    }
+
     editor.history = []
     editor.historyIndex = -1
     editor.selectedPoints = []

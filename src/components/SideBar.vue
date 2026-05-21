@@ -274,10 +274,7 @@ const editing = ref<{
     | 'cone'
   id: string
 } | null>(null)
-const expandedLineEditorPoint = ref<'p1' | 'p2' | null>(null)
-const expandedStraightLineEditorPoint = ref<'p1' | 'p2' | null>(null)
-const expandedRayEditorPoint = ref<'p1' | 'p2' | null>(null)
-const expandedVectorEditorPoint = ref<'p1' | 'p2' | null>(null)
+
 const isPointCoordinateLocked = (point: Point3 | undefined) =>
   Boolean(point && props.editor.isPointCoordinateLocked(point))
 const isLineEndpointCoordinateLocked = (line: Line3 | undefined, point: Point3 | undefined) =>
@@ -467,6 +464,20 @@ const formatPiConeBaseArea = (radius: number): string => {
   return `${coeff.toFixed(2)}π`
 }
 
+const formatPiSphereArea = (radius: number): string => {
+  const coeff = 4 * radius * radius
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
+const formatPiSphereVolume = (radius: number): string => {
+  const coeff = (4 / 3) * radius * radius * radius
+  if (Math.abs(coeff) < 1e-10) return '0'
+  if (Math.abs(coeff - 1) < 1e-10) return 'π'
+  return `${coeff.toFixed(2)}π`
+}
+
 const editPoint = reactive({
   name: '',
   nameVisible: true,
@@ -536,6 +547,11 @@ const getConePiMode = (coneId: string) => conePiModes.get(coneId) ?? false
 const toggleConePiMode = (coneId: string) => {
   conePiModes.set(coneId, !getConePiMode(coneId))
 }
+const spherePiModes = reactive(new Map<string, boolean>())
+const getSpherePiMode = (sphereId: string) => spherePiModes.get(sphereId) ?? false
+const toggleSpherePiMode = (sphereId: string) => {
+  spherePiModes.set(sphereId, !getSpherePiMode(sphereId))
+}
 const editCircle = reactive({
   name: '',
   nameVisible: true,
@@ -560,6 +576,7 @@ const editHexahedron = reactive({
 })
 const editRegularPolygon = reactive({
   nameSuffix: '',
+  nameVisible: false,
   valueVisible: false,
   edgeLength: '',
   userLocked: false,
@@ -588,10 +605,6 @@ const editCone = reactive({
 })
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
-let lineCoordCollapseTimer: number | null = null
-let straightLineCoordCollapseTimer: number | null = null
-let rayCoordCollapseTimer: number | null = null
-let vectorCoordCollapseTimer: number | null = null
 const splitPaneRef = ref<HTMLElement | null>(null)
 const splitPaneDividerRef = ref<HTMLElement | null>(null)
 const selectedPaneHeight = ref(240)
@@ -682,72 +695,48 @@ const emitToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 
 const selectPointFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectPoint(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectLineFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectLine(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectStraightLineFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectStraightLine(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectRayFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectRay(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectVectorFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectVector(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectFaceFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectFace(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectCircleFromContent = (id: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectCircle(id)
   props.scene.markAllRenderDirty()
 }
 
 const selectHexahedronFromContent = (cubeId: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   const constraint = props.editor.getCubeConstraint(cubeId)
   const firstFaceId = constraint?.faceIds[0]
   if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
@@ -756,27 +745,18 @@ const selectHexahedronFromContent = (cubeId: string) => {
 
 const selectSphereFromContent = (sphereId: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectSphere(sphereId)
   props.scene.markAllRenderDirty()
 }
 
 const selectConeFromContent = (coneId: string) => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.selectCone(coneId)
   props.scene.markAllRenderDirty()
 }
 
 const clearContentSelection = () => {
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   props.scene.selection.clear()
   props.scene.markAllRenderDirty()
 }
@@ -1015,95 +995,34 @@ const handlePointCoordBlur = (axis: 'x' | 'y' | 'z') => {
   applyEditPoint()
 }
 const handleLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
-  if (lineCoordCollapseTimer !== null) {
-    window.clearTimeout(lineCoordCollapseTimer)
-    lineCoordCollapseTimer = null
-  }
-  expandedLineEditorPoint.value = which
   setCoordFocus(`line.${which}.${axis}`, true)
 }
 const handleLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editLine[which][axis] = normalizeCoord(editLine[which][axis])
   setCoordFocus(`line.${which}.${axis}`, false)
   applyEditLine()
-  if (lineCoordCollapseTimer !== null) {
-    window.clearTimeout(lineCoordCollapseTimer)
-  }
-  lineCoordCollapseTimer = window.setTimeout(() => {
-    const stillFocused =
-      focusedCoord[`line.${which}.x`] ||
-      focusedCoord[`line.${which}.y`] ||
-      focusedCoord[`line.${which}.z`]
-    if (!stillFocused && expandedLineEditorPoint.value === which) {
-      expandedLineEditorPoint.value = null
-    }
-    lineCoordCollapseTimer = null
-  }, 0)
 }
 const handleRayCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
-  if (rayCoordCollapseTimer !== null) {
-    window.clearTimeout(rayCoordCollapseTimer)
-    rayCoordCollapseTimer = null
-  }
-  expandedRayEditorPoint.value = which
   setCoordFocus(`ray.${which}.${axis}`, true)
 }
 const handleRayCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editRay[which][axis] = normalizeCoord(editRay[which][axis])
   setCoordFocus(`ray.${which}.${axis}`, false)
   applyEditRay()
-  if (rayCoordCollapseTimer !== null) {
-    window.clearTimeout(rayCoordCollapseTimer)
-  }
-  rayCoordCollapseTimer = window.setTimeout(() => {
-    const stillFocused =
-      focusedCoord[`ray.${which}.x`] ||
-      focusedCoord[`ray.${which}.y`] ||
-      focusedCoord[`ray.${which}.z`]
-    if (!stillFocused && expandedRayEditorPoint.value === which) {
-      expandedRayEditorPoint.value = null
-    }
-    rayCoordCollapseTimer = null
-  }, 0)
 }
 const handleStraightLineCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
-  if (straightLineCoordCollapseTimer !== null) {
-    window.clearTimeout(straightLineCoordCollapseTimer)
-    straightLineCoordCollapseTimer = null
-  }
-  expandedStraightLineEditorPoint.value = which
   setCoordFocus(`straightLine.${which}.${axis}`, true)
 }
 const handleStraightLineCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editStraightLine[which][axis] = normalizeCoord(editStraightLine[which][axis])
   setCoordFocus(`straightLine.${which}.${axis}`, false)
   applyEditStraightLine()
-  if (straightLineCoordCollapseTimer !== null) {
-    window.clearTimeout(straightLineCoordCollapseTimer)
-  }
-  straightLineCoordCollapseTimer = window.setTimeout(() => {
-    const stillFocused =
-      focusedCoord[`straightLine.${which}.x`] ||
-      focusedCoord[`straightLine.${which}.y`] ||
-      focusedCoord[`straightLine.${which}.z`]
-    if (!stillFocused && expandedStraightLineEditorPoint.value === which) {
-      expandedStraightLineEditorPoint.value = null
-    }
-    straightLineCoordCollapseTimer = null
-  }, 0)
 }
 const nudgePointCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`point.${axis}`, direction)
   if (nextValue === null) return
   editPoint[axis] = nextValue
   applyEditPoint()
-}
-const keepLineCoordExpanded = (which: 'p1' | 'p2') => {
-  if (lineCoordCollapseTimer !== null) {
-    window.clearTimeout(lineCoordCollapseTimer)
-    lineCoordCollapseTimer = null
-  }
-  expandedLineEditorPoint.value = which
 }
 const nudgeLineCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`line.${which}.${axis}`, direction)
@@ -1129,20 +1048,6 @@ const nudgeLineLength = (direction: 'up' | 'down') => {
   const next = stepLengthValue(current, 0.5, direction)
   editLine.lockedLength = next.toFixed(2)
   applyEditLine()
-}
-const keepRayCoordExpanded = (which: 'p1' | 'p2') => {
-  if (rayCoordCollapseTimer !== null) {
-    window.clearTimeout(rayCoordCollapseTimer)
-    rayCoordCollapseTimer = null
-  }
-  expandedRayEditorPoint.value = which
-}
-const keepStraightLineCoordExpanded = (which: 'p1' | 'p2') => {
-  if (straightLineCoordCollapseTimer !== null) {
-    window.clearTimeout(straightLineCoordCollapseTimer)
-    straightLineCoordCollapseTimer = null
-  }
-  expandedStraightLineEditorPoint.value = which
 }
 const nudgeRayCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`ray.${which}.${axis}`, direction)
@@ -1201,37 +1106,12 @@ const nudgeVectorLength = (direction: 'up' | 'down') => {
   setCoordFocus('vector.length', false)
 }
 const handleVectorCoordFocus = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
-  if (vectorCoordCollapseTimer !== null) {
-    window.clearTimeout(vectorCoordCollapseTimer)
-    vectorCoordCollapseTimer = null
-  }
-  expandedVectorEditorPoint.value = which
   setCoordFocus(`vector.${which}.${axis}`, true)
 }
 const handleVectorCoordBlur = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z') => {
   editVector[which][axis] = normalizeCoord(editVector[which][axis])
   setCoordFocus(`vector.${which}.${axis}`, false)
   applyEditVector()
-  if (vectorCoordCollapseTimer !== null) {
-    window.clearTimeout(vectorCoordCollapseTimer)
-  }
-  vectorCoordCollapseTimer = window.setTimeout(() => {
-    const stillFocused =
-      focusedCoord[`vector.${which}.x`] ||
-      focusedCoord[`vector.${which}.y`] ||
-      focusedCoord[`vector.${which}.z`]
-    if (!stillFocused && expandedVectorEditorPoint.value === which) {
-      expandedVectorEditorPoint.value = null
-    }
-    vectorCoordCollapseTimer = null
-  }, 0)
-}
-const keepVectorCoordExpanded = (which: 'p1' | 'p2') => {
-  if (vectorCoordCollapseTimer !== null) {
-    window.clearTimeout(vectorCoordCollapseTimer)
-    vectorCoordCollapseTimer = null
-  }
-  expandedVectorEditorPoint.value = which
 }
 const nudgeVectorCoord = (which: 'p1' | 'p2', axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`vector.${which}.${axis}`, direction)
@@ -1325,8 +1205,6 @@ const startEditPoint = (p: Point3 | undefined) => {
   if (!p) return
   if (p.id === Scene.ORIGIN_ID) return
   editing.value = { type: 'point', id: p.id }
-  expandedLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
   editPoint.valueVisible = p.valueVisible === true
@@ -1339,8 +1217,6 @@ const startEditPoint = (p: Point3 | undefined) => {
 const startEditLine = (l: Line3 | undefined) => {
   if (!l) return
   editing.value = { type: 'line', id: l.id }
-  expandedLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editLine.name = l.name ?? ''
   editLine.nameVisible = l.nameVisible !== false
   editLine.valueVisible = l.valueVisible === true
@@ -1358,9 +1234,6 @@ const startEditLine = (l: Line3 | undefined) => {
 const startEditStraightLine = (l: StraightLine3 | undefined) => {
   if (!l) return
   editing.value = { type: 'straightLine', id: l.id }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editStraightLine.name = l.name ?? ''
   editStraightLine.nameVisible = l.nameVisible !== false
   editStraightLine.valueVisible = l.valueVisible === true
@@ -1377,9 +1250,6 @@ const startEditStraightLine = (l: StraightLine3 | undefined) => {
 const startEditRay = (r: Ray3 | undefined) => {
   if (!r) return
   editing.value = { type: 'ray', id: r.id }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editRay.name = r.name ?? ''
   editRay.nameVisible = r.nameVisible !== false
   editRay.valueVisible = r.valueVisible === true
@@ -1396,10 +1266,6 @@ const startEditRay = (r: Ray3 | undefined) => {
 const startEditVector = (v: GeoVector3 | undefined) => {
   if (!v) return
   editing.value = { type: 'vector', id: v.id }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
-  expandedVectorEditorPoint.value = null
   editVector.name = v.name ?? ''
   editVector.nameVisible = v.nameVisible !== false
   editVector.valueVisible = v.valueVisible === true
@@ -1416,9 +1282,6 @@ const startEditVector = (v: GeoVector3 | undefined) => {
 const startEditFace = (face: PlanarPolygon | undefined) => {
   if (!face) return
   editing.value = { type: 'face', id: face.id }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editFace.name = face.name ?? ''
   editFace.nameVisible = face.nameVisible !== false
   editFace.valueVisible = face.valueVisible === true
@@ -1432,9 +1295,6 @@ const startEditFace = (face: PlanarPolygon | undefined) => {
 const startEditCircle = (c: Circle3 | undefined) => {
   if (!c) return
   editing.value = { type: 'circle', id: c.id }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editCircle.name = c.name ?? ''
   editCircle.nameVisible = c.nameVisible !== false
   editCircle.valueVisible = c.valueVisible === true
@@ -1461,9 +1321,6 @@ const startEditHexahedron = (cubeId: string) => {
     .filter((point): point is Point3 => point !== undefined)
   if (ownerPoints.length < 2) return
   editing.value = { type: 'hexahedron', id: cubeId }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editHexahedron.nameSuffix = props.editor.getCubeNameSuffix(cubeId)
   editHexahedron.valueVisible = constraint.valueVisible === true
   editHexahedron.userLocked = constraint.faceIds.every(
@@ -1491,10 +1348,8 @@ const startEditRegularPolygon = (constraintId: string) => {
   const ownerPoints = props.editor.getRegularPolygonOwnerPoints(constraintId)
   if (ownerPoints.length < 2) return
   editing.value = { type: 'regularPolygon', id: constraintId }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editRegularPolygon.nameSuffix = props.editor.getRegularPolygonNameSuffix(constraintId)
+  editRegularPolygon.nameVisible = constraint.nameVisible === true
   editRegularPolygon.valueVisible = constraint.valueVisible === true
   const face = props.scene.faces.get(constraint.faceId)
   editRegularPolygon.userLocked = face?.userLocked === true
@@ -1971,6 +1826,7 @@ const applyRegularPolygonMeta = () => {
   if (!state) return
   props.editor.updateRegularPolygon(state.constraintId, {
     name: `正多边形${editRegularPolygon.nameSuffix.trim()}`,
+    nameVisible: editRegularPolygon.nameVisible,
     valueVisible: editRegularPolygon.valueVisible,
     edgeLengthLocked: editRegularPolygon.edgeLengthLocked,
   })
@@ -2066,9 +1922,6 @@ const startEditSphere = (sphereId: string) => {
   const sphere = props.editor.getSphere(sphereId)
   if (!sphere) return
   editing.value = { type: 'sphere', id: sphereId }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editSphere.nameSuffix = props.editor.getSphereNameSuffix(sphereId)
   editSphere.nameVisible = sphere.nameVisible !== false
   editSphere.valueVisible = sphere.valueVisible === true
@@ -2188,9 +2041,6 @@ const startEditCone = (coneId: string) => {
   const cone = props.editor.getCone(coneId)
   if (!cone) return
   editing.value = { type: 'cone', id: coneId }
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
   editCone.nameSuffix = props.editor.getConeNameSuffix(coneId)
   editCone.nameVisible = cone.nameVisible !== false
   editCone.valueVisible = cone.valueVisible === true
@@ -2415,9 +2265,6 @@ const handleGlobalClick = (e: MouseEvent) => {
   // 点击 3D 视口区域（viewport）→ 不退出
   if (target.closest('.viewport')) return
   editing.value = null
-  expandedLineEditorPoint.value = null
-  expandedStraightLineEditorPoint.value = null
-  expandedRayEditorPoint.value = null
 }
 
 // 监听当前编辑的点位置变化
@@ -2834,15 +2681,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   cancelAnimationFrame(hintRafId)
-  if (lineCoordCollapseTimer !== null) {
-    window.clearTimeout(lineCoordCollapseTimer)
-  }
-  if (straightLineCoordCollapseTimer !== null) {
-    window.clearTimeout(straightLineCoordCollapseTimer)
-  }
-  if (rayCoordCollapseTimer !== null) {
-    window.clearTimeout(rayCoordCollapseTimer)
-  }
   window.removeEventListener('resize', updateCompactLineEditorMode)
   window.removeEventListener('resize', syncSplitPaneMode)
   window.removeEventListener('resize', syncSelectedPaneHeight)
@@ -2873,6 +2711,7 @@ onUnmounted(() => {
         selectedCircles.length > 0 ||
         selectedEditableFaces.length > 0 ||
         selectedHexahedrons.length > 0 ||
+        selectedRegularPolygons.length > 0 ||
         selectedSpheres.length > 0 ||
         selectedCones.length > 0
       "
@@ -3148,16 +2987,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">x</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'x', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
@@ -3176,23 +3009,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'x', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'x', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3211,7 +3037,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'x', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3220,16 +3045,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">y</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'y', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
@@ -3248,23 +3067,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'y', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'y', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3283,7 +3095,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'y', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3292,16 +3103,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">z</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'z', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
@@ -3320,23 +3125,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p1')"
                   @click="nudgeLineCoord('p1', 'z', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'z', 'down')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3355,7 +3153,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepLineCoordExpanded('p2')"
                   @click="nudgeLineCoord('p2', 'z', 'up')"
                   :disabled="isLineEndpointCoordinateLocked(l!, l!.p2)"
                 >
@@ -3430,9 +3227,9 @@ onUnmounted(() => {
                 锁定
               </label>
             </div>
-            <div class="name-row">
+            <div class="name-row length-row">
               <label>显示长度</label>
-              <div class="coord-input">
+              <div class="coord-input compact-length-input">
                 <button
                   type="button"
                   class="step-btn"
@@ -3483,17 +3280,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">x</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'x', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
@@ -3512,24 +3302,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'x', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'x', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3548,7 +3330,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'x', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3557,17 +3338,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">y</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'y', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
@@ -3586,24 +3360,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'y', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'y', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3622,7 +3388,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'y', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3631,17 +3396,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">z</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'z', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
@@ -3660,24 +3418,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p1')"
                   @click="nudgeStraightLineCoord('p1', 'z', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed':
-                    isCompactLineEditor && expandedStraightLineEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'z', 'down')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3696,7 +3446,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepStraightLineCoordExpanded('p2')"
                   @click="nudgeStraightLineCoord('p2', 'z', 'up')"
                   :disabled="isStraightLineEndpointCoordinateLocked(sl!, sl!.p2)"
                 >
@@ -3764,9 +3513,9 @@ onUnmounted(() => {
                 锁定
               </label>
             </div>
-            <div class="name-row">
+            <div class="name-row length-row">
               <label>长度</label>
-              <div class="coord-input">
+              <div class="coord-input compact-length-input">
                 <button type="button" class="step-btn" @click="nudgeRayDisplayLength('down')">
                   -
                 </button>
@@ -3809,16 +3558,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">x</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'x', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
@@ -3837,23 +3580,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'x', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'x', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -3872,7 +3608,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'x', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -3881,16 +3616,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">y</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'y', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
@@ -3909,23 +3638,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'y', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'y', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -3944,7 +3666,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'y', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -3953,16 +3674,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">z</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'z', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
@@ -3981,23 +3696,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p1')"
                   @click="nudgeRayCoord('p1', 'z', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedRayEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'z', 'down')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -4016,7 +3724,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepRayCoordExpanded('p2')"
                   @click="nudgeRayCoord('p2', 'z', 'up')"
                   :disabled="isRayEndpointCoordinateLocked(r!, r!.p2)"
                 >
@@ -4122,16 +3829,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">x</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'x', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
@@ -4150,23 +3851,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'x', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'x', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4185,7 +3879,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'x', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4194,16 +3887,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">y</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'y', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
@@ -4222,23 +3909,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'y', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'y', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4257,7 +3937,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'y', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4266,16 +3945,10 @@ onUnmounted(() => {
               </div>
 
               <div class="line-axis-label">z</div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p1',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'z', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
@@ -4294,23 +3967,16 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p1')"
                   @click="nudgeVectorCoord('p1', 'z', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p1)"
                 >
                   +
                 </button>
               </div>
-              <div
-                class="coord-input"
-                :class="{
-                  'line-point-collapsed': isCompactLineEditor && expandedVectorEditorPoint !== 'p2',
-                }"
-              >
+              <div class="coord-input">
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'z', 'down')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4329,7 +3995,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="step-btn"
-                  @pointerdown.prevent="keepVectorCoordExpanded('p2')"
                   @click="nudgeVectorCoord('p2', 'z', 'up')"
                   :disabled="isVectorEndpointCoordinateLocked(v!, v!.p2)"
                 >
@@ -4403,9 +4068,9 @@ onUnmounted(() => {
               <div class="normal-circle-direction-row" style="grid-column: 1 / -1">
                 法向量：{{ getDirectionLabel(c!) }}
               </div>
-              <div class="normal-circle-info-row">
-                <span class="normal-circle-label">半径</span>
-                <div class="coord-input">
+              <div class="length-row">
+                <label>半径</label>
+                <div class="coord-input compact-length-input">
                   <button
                     type="button"
                     class="step-btn"
@@ -4438,15 +4103,18 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="face-metric-row">
-                周长：{{
+                <span class="metric-item">周长：{{
                   getCirclePiMode(c!.id)
                     ? formatPiCircumference(getNormalCircleRadius(c!))
                     : getNormalCircleCircumference(c!).toFixed(2)
-                }}　面积：{{
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">面积：{{
                   getCirclePiMode(c!.id)
                     ? formatPiArea(getNormalCircleRadius(c!))
                     : getNormalCircleArea(c!).toFixed(2)
-                }}<label class="pi-mode-toggle"
+                }}</span>
+                <label class="pi-mode-toggle"
                   ><input
                     type="checkbox"
                     :checked="getCirclePiMode(c!.id)"
@@ -4556,9 +4224,9 @@ onUnmounted(() => {
               </div>
             </template>
             <template v-else>
-              <div class="normal-circle-info-row">
-                <span class="normal-circle-label">半径</span>
-                <div class="coord-input">
+              <div class="length-row">
+                <label>半径</label>
+                <div class="coord-input compact-length-input">
                   <button
                     type="button"
                     class="step-btn"
@@ -4591,13 +4259,16 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="face-metric-row">
-                周长：{{
+                <span class="metric-item">周长：{{
                   getCirclePiMode(c!.id)
                     ? formatPiCircumference(c!.getRadius())
                     : c!.getCircumference().toFixed(2)
-                }}　面积：{{
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">面积：{{
                   getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
-                }}<label class="pi-mode-toggle"
+                }}</span>
+                <label class="pi-mode-toggle"
                   ><input
                     type="checkbox"
                     :checked="getCirclePiMode(c!.id)"
@@ -4911,20 +4582,21 @@ onUnmounted(() => {
               <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
             </div>
             <template v-if="c!.isNormalCircle()">
-              <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
-              <div>
-                周长：{{
+              <div class="face-metric-row">
+                <span class="metric-item">半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</span>
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">周长：{{
                   getCirclePiMode(c!.id)
                     ? formatPiCircumference(getNormalCircleRadius(c!))
                     : getNormalCircleCircumference(c!).toFixed(2)
-                }}
-              </div>
-              <div>
-                面积：{{
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">面积：{{
                   getCirclePiMode(c!.id)
                     ? formatPiArea(getNormalCircleRadius(c!))
                     : getNormalCircleArea(c!).toFixed(2)
-                }}
+                }}</span>
               </div>
               <div>
                 圆心{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
@@ -4933,18 +4605,19 @@ onUnmounted(() => {
               <div>法向量：{{ getDirectionLabel(c!) }}</div>
             </template>
             <template v-else>
-              <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
-              <div>
-                周长：{{
+              <div class="face-metric-row">
+                <span class="metric-item">半径：{{ c!.getRadius().toFixed(2) }}</span>
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">周长：{{
                   getCirclePiMode(c!.id)
                     ? formatPiCircumference(c!.getRadius())
                     : c!.getCircumference().toFixed(2)
-                }}
-              </div>
-              <div>
-                面积：{{
+                }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">面积：{{
                   getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
-                }}
+                }}</span>
               </div>
               <div>
                 点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
@@ -5010,7 +4683,9 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}
+              <span class="metric-item">表面积：{{ props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span>
             </div>
             <div class="length-row">
               <label>边长：</label>
@@ -5242,7 +4917,11 @@ onUnmounted(() => {
               >
             </div>
             <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-            <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
+            <div class="face-metric-row">
+              <span class="metric-item">表面积：{{ props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span>
+            </div>
             <div>
               原始点：{{
                 getHexahedronOwnerPoints(cube.cubeId)
@@ -5273,6 +4952,14 @@ onUnmounted(() => {
               <label class="toggle-label">
                 <input
                   type="checkbox"
+                  v-model="editRegularPolygon.nameVisible"
+                  @change="applyRegularPolygonMeta"
+                />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
                   v-model="editRegularPolygon.userLocked"
                   @change="applyRegularPolygonMeta"
                 />
@@ -5296,7 +4983,9 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              面积：{{ props.editor.getRegularPolygonArea(rp.constraintId).toFixed(2) }}
+              <span class="metric-item">周长：{{ props.editor.getRegularPolygonConstraint(rp.constraintId)?.getPerimeter().toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ props.editor.getRegularPolygonArea(rp.constraintId).toFixed(2) }}</span>
             </div>
             <div class="length-row">
               <label>边长：</label>
@@ -5600,7 +5289,11 @@ onUnmounted(() => {
               <span v-if="props.scene.faces.get(rp.faceId)?.userLocked" class="lock-badge">🔒</span>
             </div>
             <div>边长：{{ rp.getEdgeLength().toFixed(2) }}</div>
-            <div>面积：{{ rp.getArea().toFixed(2) }}</div>
+            <div class="face-metric-row">
+              <span class="metric-item">周长：{{ rp.getPerimeter().toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ rp.getArea().toFixed(2) }}</span>
+            </div>
             <div>
               原始点：{{
                 props.editor
@@ -5643,12 +5336,30 @@ onUnmounted(() => {
                   type="checkbox"
                   v-model="editSphere.userLocked"
                   @change="applyEditSphereMeta"
+                  :disabled="s!.centerPoint.id === Scene.ORIGIN_ID"
                 />
                 锁定
               </label>
             </div>
             <div class="face-metric-row">
-              面积：{{ s!.getArea().toFixed(2) }}　体积：{{ s!.getVolume().toFixed(2) }}
+              <span class="metric-item">表面积：{{
+                getSpherePiMode(s!.id)
+                  ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
+                  : s!.getArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{
+                getSpherePiMode(s!.id)
+                  ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
+                  : s!.getVolume().toFixed(2)
+              }}</span>
+              <label class="pi-mode-toggle"
+                ><input
+                  type="checkbox"
+                  :checked="getSpherePiMode(s!.id)"
+                  @change="toggleSpherePiMode(s!.id)"
+                />π模式</label
+              >
             </div>
             <div class="length-row">
               <label>半径：</label>
@@ -5657,7 +5368,7 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeSphereRadius('down')"
-                  :disabled="editSphere.userLocked"
+                  :disabled="!s!.isRadiusSphere() && editSphere.userLocked"
                 >
                   -
                 </button>
@@ -5670,13 +5381,13 @@ onUnmounted(() => {
                   @input="applyEditSphereRadius"
                   @focus="handleSphereRadiusFocus"
                   @blur="handleSphereRadiusBlur"
-                  :disabled="editSphere.userLocked"
+                  :disabled="!s!.isRadiusSphere() && editSphere.userLocked"
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeSphereRadius('up')"
-                  :disabled="editSphere.userLocked"
+                  :disabled="!s!.isRadiusSphere() && editSphere.userLocked"
                 >
                   +
                 </button>
@@ -5877,9 +5588,22 @@ onUnmounted(() => {
               {{ s!.name ?? '' }}
               <span v-if="props.editor.isSphereGeometryLocked(s!)" class="lock-badge">🔒</span>
             </div>
-            <div>半径：{{ props.editor.getSphereRadius(s!.id).toFixed(2) }}</div>
-            <div>面积：{{ s!.getArea().toFixed(2) }}</div>
-            <div>体积：{{ s!.getVolume().toFixed(2) }}</div>
+            <div class="face-metric-row">
+              <span class="metric-item">半径：{{ props.editor.getSphereRadius(s!.id).toFixed(2) }}</span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">表面积：{{
+                getSpherePiMode(s!.id)
+                  ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
+                  : s!.getArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{
+                getSpherePiMode(s!.id)
+                  ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
+                  : s!.getVolume().toFixed(2)
+              }}</span>
+            </div>
           </div>
         </div>
 
@@ -6264,15 +5988,19 @@ onUnmounted(() => {
                 面积锁定
               </label>
             </div>
-            <div class="face-metric-row">面积：{{ getFaceArea(face!).toFixed(2) }}</div>
+            <div class="face-metric-row">
+              <span class="metric-item">周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
+            </div>
             <div class="face-edge-grid">
               <div
                 v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
                 :key="`${face!.id}-edge-${edgeIndex}`"
-                class="face-edge-row axis-field"
+                class="face-edge-row length-row axis-field"
               >
                 <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
-                <div class="coord-input">
+                <div class="coord-input compact-length-input">
                   <button
                     type="button"
                     class="step-btn"
@@ -6320,8 +6048,10 @@ onUnmounted(() => {
                 getSolidConstraintBadge(face!.cubeId)
               }}</span>
             </div>
-            <div>
-              面积：{{ getFaceArea(face!).toFixed(2) }}
+            <div class="face-metric-row">
+              <span class="metric-item">周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
               <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
             </div>
             <div>
@@ -6682,7 +6412,6 @@ onUnmounted(() => {
                 >
               </div>
               <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
-              <div>体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</div>
               <div>
                 原始点：{{
                   getHexahedronOwnerPoints(cube.cubeId)
@@ -6721,7 +6450,6 @@ onUnmounted(() => {
                 >
               </div>
               <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
-              <div>体积：{{ sphere.getVolume().toFixed(2) }}</div>
               <div>
                 球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? '' }}<template v-if="props.editor.getSphereRadiusPoint(sphere.id)">　半径点：{{
                   props.editor.getSphereRadiusPoint(sphere.id)!.name
@@ -6761,25 +6489,6 @@ onUnmounted(() => {
                 <span class="metric-item">半径：{{ props.editor.getConeRadius(cone.id).toFixed(2) }}</span>
                 <span class="metric-sep">/</span>
                 <span class="metric-item">高度：{{ props.editor.getConeHeight(cone.id).toFixed(2) }}</span>
-              </div>
-              <div class="face-metric-row">
-                <span class="metric-item">体积：{{
-                  getConePiMode(cone.id)
-                    ? formatPiConeVolume(props.editor.getConeRadius(cone.id), props.editor.getConeHeight(cone.id))
-                    : cone.getVolume().toFixed(2)
-                }}</span>
-                <span class="metric-sep">/</span>
-                <span class="metric-item">表面积：{{
-                  getConePiMode(cone.id)
-                    ? formatPiConeLateralArea(props.editor.getConeRadius(cone.id), props.editor.getConeHeight(cone.id))
-                    : cone.getLateralArea().toFixed(2)
-                }}</span>
-                <span class="metric-sep">/</span>
-                <span class="metric-item">底面积：{{
-                  getConePiMode(cone.id)
-                    ? formatPiConeBaseArea(props.editor.getConeRadius(cone.id))
-                    : cone.getBaseArea().toFixed(2)
-                }}</span>
               </div>
               <div>
                 来源：点{{ props.editor.getConeBaseCenterPoint(cone.id)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}<template v-if="cone.isNormalCircleCone() && cone.normalCircleId">（法向圆{{ props.scene.circles.get(cone.normalCircleId)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}）</template>
@@ -7537,159 +7246,6 @@ hr {
   }
 }
 
-@media (max-width: 820px) and (orientation: landscape) {
-  .sidebar {
-    display: block;
-    padding: 6px;
-    padding-top: 2px;
-    font-size: 11px;
-    overflow-y: auto;
-  }
-
-  .sidebar > p {
-    margin-top: 0;
-    margin-bottom: 2px;
-    font-size: 13px;
-  }
-
-  .section-divider {
-    margin-top: 2px;
-    margin-bottom: 2px;
-  }
-
-  .sidebar > p,
-  h3,
-  .section-divider,
-  .hint {
-    margin-bottom: 4px;
-  }
-
-  .hint {
-    font-size: 9px;
-  }
-
-  .selectedPoint-info,
-  .selectedLine-info,
-  .selectedFace-info,
-  .selectedRay-info,
-  .selectedVector-info,
-  .selectedCircle-info,
-  .selectedCone-info,
-  .point-info,
-  .line-info,
-  .face-info,
-  .ray-info,
-  .vector-info,
-  .circle-info,
-  .cone-info {
-    margin-bottom: 4px;
-    padding: 5px;
-    font-size: 11px;
-  }
-
-  .split-pane {
-    display: flex;
-  }
-
-  .box,
-  .selected-box,
-  .content-box {
-    min-height: 96px;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  .panel-resizer {
-    display: flex;
-  }
-
-  .edit-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .edit-grid input[type='text'],
-  .edit-grid input[type='number'] {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .coord-input {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) 36px;
-  }
-
-  .coord-input input[type='number'] {
-    flex: 1;
-    width: auto;
-  }
-
-  .compact-length-input {
-    width: 84px;
-    justify-self: start;
-    grid-template-columns: 22px minmax(0, 1fr) 22px;
-  }
-
-  .compact-length-input .step-btn {
-    min-width: 22px;
-    min-height: 24px;
-    padding: 0;
-    font-size: 12px;
-  }
-
-  .step-btn {
-    min-width: 36px;
-    min-height: 36px;
-    font-size: 18px;
-  }
-
-  .name-row {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 4px;
-    align-items: center;
-  }
-
-  .length-row {
-    display: flex;
-    grid-template-columns: auto minmax(0, auto);
-    justify-content: start;
-    align-items: center;
-    gap: 3px;
-    flex-wrap: nowrap;
-  }
-
-  .length-row .toggle-label {
-    flex: 0 1 auto;
-    min-width: 0;
-    margin-left: auto;
-    font-size: 10px;
-    gap: 2px;
-  }
-
-  .toggle-label {
-    grid-column: 1 / -1;
-  }
-
-  .line-editor-grid {
-    grid-template-columns: 14px max-content max-content;
-  }
-
-  .compact-axis {
-    grid-column: 1 / -1;
-  }
-
-  .face-edge-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .face-edge-row {
-    grid-template-columns: 22px minmax(0, 1fr);
-  }
-}
-
 .line-editor-grid--compact {
   grid-template-columns: 12px minmax(0, 1fr) minmax(0, 1fr);
   column-gap: 10px;
@@ -7760,20 +7316,6 @@ hr {
   padding-left: 2px;
   padding-right: 2px;
   font-size: 11px;
-}
-
-.line-editor-grid--compact > .coord-input.line-point-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr) 0;
-}
-
-.line-editor-grid--compact > .coord-input.line-point-collapsed .step-btn {
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
 }
 
 .line-editor-grid--compact > .coord-input .step-btn {
@@ -7916,6 +7458,238 @@ hr {
 .bubble-fade-enter-from,
 .bubble-fade-leave-to {
   opacity: 0;
+}
+
+@media (max-width: 820px) and (orientation: landscape) {
+  .sidebar {
+    display: block;
+    padding: 6px;
+    padding-top: 2px;
+    font-size: 11px;
+    overflow-y: auto;
+  }
+
+  .sidebar > p {
+    margin-top: 0;
+    margin-bottom: 2px;
+    font-size: 13px;
+  }
+
+  .section-divider {
+    margin-top: 2px;
+    margin-bottom: 2px;
+  }
+
+  .sidebar > p,
+  h3,
+  .section-divider,
+  .hint {
+    margin-bottom: 4px;
+  }
+
+  .hint {
+    font-size: 9px;
+  }
+
+  .selectedPoint-info,
+  .selectedLine-info,
+  .selectedFace-info,
+  .selectedRay-info,
+  .selectedVector-info,
+  .selectedCircle-info,
+  .selectedCone-info,
+  .point-info,
+  .line-info,
+  .face-info,
+  .ray-info,
+  .vector-info,
+  .circle-info,
+  .cone-info {
+    margin-bottom: 4px;
+    padding: 5px;
+    font-size: 11px;
+  }
+
+  .split-pane {
+    display: flex;
+  }
+
+  .box,
+  .selected-box,
+  .content-box {
+    min-height: 96px;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .panel-resizer {
+    display: flex;
+  }
+
+  .edit-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: start;
+  }
+
+  .edit-grid input[type='text'] {
+    width: 48px;
+    flex: 0 0 auto;
+  }
+
+  .edit-grid input[type='number'] {
+    width: 40px;
+  }
+
+  .coord-input input[type='number'] {
+    width: 40px;
+  }
+
+  .step-btn {
+    min-width: 28px;
+    min-height: 28px;
+    font-size: 14px;
+    padding: 0 4px;
+  }
+
+  .compact-length-input {
+    width: 92px;
+  }
+
+  .compact-length-input .step-btn {
+    min-width: 22px;
+    min-height: 22px;
+    font-size: 12px;
+  }
+
+  .name-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .length-row {
+    display: flex;
+    justify-content: start;
+    align-items: center;
+    gap: 3px;
+    flex-wrap: nowrap;
+    width: fit-content;
+  }
+
+  .length-row .toggle-label {
+    flex: 0 0 auto;
+    min-width: 0;
+    font-size: 10px;
+    gap: 2px;
+  }
+
+  .toggle-label {
+    white-space: nowrap;
+  }
+
+  .line-editor-grid {
+    grid-template-columns: 14px max-content max-content;
+  }
+
+  .compact-axis {
+    grid-column: 1 / -1;
+  }
+
+  .face-edge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .face-edge-row {
+    grid-template-columns: 22px minmax(0, 1fr);
+    width: fit-content;
+  }
+
+  .face-edge-row .coord-input {
+    width: auto;
+  }
+
+  .line-editor-grid--single-col {
+    grid-template-columns: 14px max-content;
+  }
+
+  .edit-grid .line-editor-grid--single-col > .coord-input {
+    width: auto !important;
+  }
+
+  .edit-grid .line-editor-grid--single-col > .coord-input input[type='number'] {
+    width: 40px;
+  }
+
+  .line-editor-grid--compact.line-editor-grid--single-col {
+    grid-template-columns: 12px max-content;
+  }
+
+  .edit-grid .line-editor-grid--compact > .coord-input input[type='number'] {
+    width: 40px;
+  }
+
+  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) {
+    grid-template-columns: 12px max-content max-content;
+  }
+
+  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input {
+    width: auto !important;
+    grid-template-columns: 22px 36px 22px;
+  }
+
+  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input .step-btn {
+    min-width: 22px;
+    min-height: 22px;
+    font-size: 12px;
+    padding: 0 2px;
+  }
+
+  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input input[type='number'] {
+    width: 36px;
+    padding-left: 2px;
+    padding-right: 2px;
+    font-size: 11px;
+  }
+
+  .normal-circle-center-grid {
+    grid-template-columns: 14px max-content;
+  }
+
+  .edit-grid .normal-circle-center-grid > .coord-input {
+    width: auto !important;
+    display: inline-flex;
+  }
+
+  .edit-grid .normal-circle-center-grid > .coord-input input[type='number'] {
+    width: 36px;
+    padding-left: 2px;
+    padding-right: 2px;
+    font-size: 11px;
+  }
+
+  .edit-grid .normal-circle-center-grid > .coord-input .step-btn {
+    min-width: 22px;
+    min-height: 22px;
+    font-size: 12px;
+    padding: 0 2px;
+  }
+
+  .edit-grid .line-editor-grid--single-col > .coord-input .step-btn {
+    min-width: 22px;
+    min-height: 22px;
+    font-size: 12px;
+    padding: 0 2px;
+  }
+
+  .edit-grid .line-editor-grid--single-col > .coord-input input[type='number'] {
+    width: 36px;
+    padding-left: 2px;
+    padding-right: 2px;
+    font-size: 11px;
+  }
 }
 </style>
 <style>

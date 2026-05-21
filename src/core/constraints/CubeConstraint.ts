@@ -163,6 +163,14 @@ export class CubeConstraint {
       : edgeLength ** 3
   }
 
+  getArea() {
+    const edgeLength = this.getEdgeLength()
+    if (edgeLength <= 0) return 0
+    return this.solidType === 'tetrahedron'
+      ? Math.sqrt(3) * edgeLength ** 2
+      : 6 * edgeLength ** 2
+  }
+
   solve() {
     const axes = this.getResolvedAxes()
     if (!axes) return
