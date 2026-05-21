@@ -115,6 +115,8 @@ export class ThreeRenderer {
   private static readonly FACE_PREVIEW_OPACITY = 0.16
   private static readonly RAY_HEAD_LENGTH = 0.7
   private static readonly RAY_HEAD_RADIUS = 0.22
+  private static readonly LINEAR_ARROW_PHONE_BREAKPOINT = 640
+  private static readonly LINEAR_ARROW_PHONE_SCALE_FACTOR = 1.8
   /** 让坐标轴与网格共面，避免放大坐标系后出现明显“分层” */
   private static readonly AXIS_LIFT_Y = 0
   /** AR 模式下点大小缩放系数（相对当前尺寸） */
@@ -559,6 +561,20 @@ export class ThreeRenderer {
     )
   }
 
+  private getLinearArrowScale() {
+    const w = this.renderer.domElement.clientWidth || window.innerWidth || 1
+    const h = this.renderer.domElement.clientHeight || window.innerHeight || 1
+    const isPhone = Math.min(w, h) <= ThreeRenderer.LINEAR_ARROW_PHONE_BREAKPOINT
+    if (!isPhone) return 1
+
+    if (this.isARMode) {
+      const safeWorldScale = Math.max(this.worldScale, 0.0001)
+      return ThreeRenderer.LINEAR_ARROW_PHONE_SCALE_FACTOR / safeWorldScale
+    }
+
+    return ThreeRenderer.LINEAR_ARROW_PHONE_SCALE_FACTOR
+  }
+
   private getLineLabelScale() {
     return this.getResponsiveLabelScale(
       ThreeRenderer.LINE_LABEL_BASE_PIXEL,
@@ -627,7 +643,30 @@ export class ThreeRenderer {
       this.guidePoint.scale.set(spriteScale, spriteScale, 1)
     }
 
+    this.updateLinearArrowHeadScales()
     this.updateAxisArrowScales()
+  }
+
+  private updateLinearArrowHeadScales() {
+    const scene = this.currentSceneRef
+    if (!scene) return
+
+    this.meshMap.forEach((obj) => {
+      const userData = this.getRenderUserData(obj)
+      if (userData.type === 'ray' && userData.geoId) {
+        const ray = scene.rays.get(userData.geoId)
+        if (ray) this.updateRayArrowHead(obj as THREE.Line, ray, scene.selection.rays.has(userData.geoId))
+      } else if (userData.type === 'vector' && userData.geoId) {
+        const vector = scene.vectors.get(userData.geoId)
+        if (vector) {
+          this.updateVectorArrowHead(
+            obj as THREE.Line,
+            vector,
+            scene.selection.vectors.has(userData.geoId),
+          )
+        }
+      }
+    })
   }
 
   /** 让坐标轴箭头在透视相机下保持接近恒定屏幕尺寸 */
@@ -1532,7 +1571,8 @@ export class ThreeRenderer {
       const end = new THREE.Vector3(p2.x, p2.y, p2.z)
       const direction = end.clone().sub(start)
       const length = direction.length()
-      const headLen = ThreeRenderer.RAY_HEAD_LENGTH
+      const headScale = this.getLinearArrowScale()
+      const headLen = ThreeRenderer.RAY_HEAD_LENGTH * headScale
       const shortEnough = length <= headLen
       const lineEnd = shortEnough
         ? end.clone()
@@ -1623,12 +1663,22 @@ export class ThreeRenderer {
     }
 
     const normalized = direction.clone().normalize()
-    const headLen = ThreeRenderer.RAY_HEAD_LENGTH
+    const headScale = this.getLinearArrowScale()
+    const headLen = ThreeRenderer.RAY_HEAD_LENGTH * headScale
+    const lineEnd =
+      length <= headLen
+        ? end.clone()
+        : end.clone().sub(normalized.clone().multiplyScalar(headLen))
+    vector.geometry.setFromPoints([start.clone(), lineEnd])
+    vector.geometry.attributes.position!.needsUpdate = true
+    vector.geometry.computeBoundingBox()
+    vector.geometry.computeBoundingSphere()
+
     if (length <= headLen) {
       const scale = length / headLen
-      arrowHead.scale.set(1, scale, 1)
+      arrowHead.scale.set(headScale, headScale * scale, headScale)
     } else {
-      arrowHead.scale.set(1, 1, 1)
+      arrowHead.scale.set(headScale, headScale, headScale)
     }
     arrowHead.position.copy(end.clone().sub(normalized.clone().multiplyScalar(headLen / 2)))
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized)
@@ -2332,6 +2382,8 @@ export class ThreeRenderer {
     }
 
     direction.normalize()
+    const headScale = this.getLinearArrowScale()
+    arrowHead.scale.set(headScale, headScale, headScale)
     arrowHead.position.copy(end)
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction)
   }

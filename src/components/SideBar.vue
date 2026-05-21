@@ -6869,6 +6869,7 @@ hr {
 .content-group-body {
   display: flex;
   flex-direction: column;
+  padding-top: 6px;
 }
 .box::-webkit-scrollbar {
   width: 5px;
