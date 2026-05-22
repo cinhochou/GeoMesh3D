@@ -47,10 +47,6 @@ type LocalSceneSnapshot = {
   regularPolygons: RegularPolygonConstraint[]
 }
 
-type ProviderStatusEvent = {
-  status: 'connecting' | 'connected' | 'disconnected'
-}
-
 type PointSharedMap = Y.Map<string | number | boolean>
 type LineSharedMap = Y.Map<string | number | boolean>
 type StraightLineSharedMap = Y.Map<string | number | boolean>
@@ -574,7 +570,6 @@ export class CollabManager {
     let lastError: unknown = null
 
     for (const serverUrl of this.serverUrls) {
-      console.log(`joining room: ${normalizedRoomName} via ${serverUrl}`)
       this.provider = new WebsocketProvider(serverUrl, normalizedRoomName, this.ydoc)
 
       try {
@@ -593,7 +588,6 @@ export class CollabManager {
         this.connected = false
         this.connecting = true
         this.emitStatus()
-        console.warn(`collab room: ${normalizedRoomName}, failed to connect via ${serverUrl}`, err)
       }
     }
 
@@ -611,7 +605,6 @@ export class CollabManager {
     this.stopLatencySampling()
 
     if (this.provider) {
-      console.log('disconnecting collaboration provider...')
       this.provider.disconnect()
       this.provider.destroy()
       this.provider = null
@@ -1283,32 +1276,21 @@ export class CollabManager {
         fail(new Error(`connect timeout after ${timeoutMs}ms`))
       }, timeoutMs)
 
-      const handleStatus = ({ status }: ProviderStatusEvent) => {
-        if (status === 'connected') {
-          console.log(`collab room: ${roomName}, y-websocket connected`)
-        }
+      const handleStatus = () => {
         this.updateConnectionStateFromProvider(provider)
         scheduleSettle()
       }
 
       const handleSync = (isSynced: boolean) => {
         if (isSynced) {
-          console.log(`collab room: ${roomName}, initial room sync completed`)
           scheduleSettle()
         }
       }
 
       provider.on('status', handleStatus)
       provider.on('sync', handleSync)
-      console.log(`collab room: ${roomName}, waiting for y-websocket server...`)
 
-      handleStatus({
-        status: provider.wsconnecting
-          ? 'connecting'
-          : provider.wsconnected
-            ? 'connected'
-            : 'disconnected',
-      })
+      handleStatus()
       handleSync(provider.synced)
     })
   }

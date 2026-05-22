@@ -56,6 +56,70 @@ export class Interaction {
   private static readonly GEOMETRY_HARD_CORE_HIT_AR_PX = 2.5
   private static readonly GEOMETRY_HARD_CORE_HIT_AR_TOUCH_PX = 5
   private static readonly LABEL_CORE_EDGE_RATIO = 0.34
+
+  private static readonly deselectByType: Record<
+    string,
+    (editor: Editor, geoId: string) => void
+  > = {
+    point: (e, id) => e.scene.selection.deselectPoint(id),
+    line: (e, id) => e.scene.selection.deselectLine(id),
+    straightLine: (e, id) => e.scene.selection.deselectStraightLine(id),
+    ray: (e, id) => e.scene.selection.deselectRay(id),
+    vector: (e, id) => e.scene.selection.deselectVector(id),
+    circle: (e, id) => e.scene.selection.deselectCircle(id),
+    sphere: (e, id) => e.scene.selection.deselectSphere(id),
+    cone: (e, id) => {
+      e.scene.selection.deselectCone(id)
+      e.scene.markAllRenderDirty()
+    },
+    face: (e, id) => e.deselectCubeByFaceId(id),
+  }
+
+  private static readonly selectByType: Record<
+    string,
+    (editor: Editor, geoId: string) => void
+  > = {
+    point: (e, id) => e.scene.selection.selectPoint(id, true),
+    line: (e, id) => e.scene.selection.selectLine(id, true),
+    straightLine: (e, id) => e.scene.selection.selectStraightLine(id, true),
+    ray: (e, id) => e.scene.selection.selectRay(id, true),
+    vector: (e, id) => e.scene.selection.selectVector(id, true),
+    circle: (e, id) => e.scene.selection.selectCircle(id, true),
+    sphere: (e, id) => e.scene.selection.selectSphere(id, true),
+    cone: (e, id) => e.scene.selection.selectCone(id, true),
+    face: (e, id) => e.selectCubeByFaceId(id, true),
+  }
+
+  private static readonly deleteByType: Record<
+    string,
+    (editor: Editor, geoId: string) => void
+  > = {
+    point: (e, id) => e.deletePoint(id),
+    line: (e, id) => e.deleteLine(id),
+    straightLine: (e, id) => e.deleteStraightLine(id),
+    ray: (e, id) => e.deleteRay(id),
+    vector: (e, id) => e.deleteVector(id),
+    circle: (e, id) => e.deleteCircle(id),
+    sphere: (e, id) => e.deleteSphere(id),
+    cone: (e, id) => e.deleteCone(id),
+    face: (e, id) => e.deleteFace(id),
+  }
+
+  private static readonly updateLabelOffsetByType: Record<
+    string,
+    (editor: Editor, geoId: string, offset: { labelOffsetX: number; labelOffsetY: number }) => void
+  > = {
+    point: (e, id, o) => e.updatePoint(id, o),
+    line: (e, id, o) => e.updateLine(id, o),
+    straightLine: (e, id, o) => e.updateStraightLine(id, o),
+    ray: (e, id, o) => e.updateRay(id, o),
+    vector: (e, id, o) => e.updateVector(id, o),
+    circle: (e, id, o) => e.updateCircle(id, o),
+    sphere: (e, id, o) => e.updateSphere(id, o),
+    cone: (e, id, o) => e.updateCone(id, o),
+    face: (e, id, o) => e.updateFace(id, o),
+  }
+
   raycaster = new THREE.Raycaster()
   mouse = new THREE.Vector2()
   draggingPointId: string | null = null
@@ -356,7 +420,7 @@ export class Interaction {
     this.onARSceneRotateEnd?.()
   }
 
-  private cancelActiveMobileDrag() {
+  private clearDraggingIds() {
     this.draggingPointId = null
     this.draggingLineId = null
     this.draggingStraightLineId = null
@@ -368,6 +432,10 @@ export class Interaction {
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
+  }
+
+  private cancelActiveMobileDrag() {
+    this.clearDraggingIds()
     this.endDrag()
     this.resetARMouseRotationCandidate()
     this.endARSceneRotation()
@@ -440,33 +508,14 @@ export class Interaction {
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
-    if (type === 'point') this.editor.scene.selection.deselectPoint(geoId)
-    else if (type === 'line') this.editor.scene.selection.deselectLine(geoId)
-    else if (type === 'straightLine') this.editor.scene.selection.deselectStraightLine(geoId)
-    else if (type === 'ray') this.editor.scene.selection.deselectRay(geoId)
-    else if (type === 'vector') this.editor.scene.selection.deselectVector(geoId)
-    else if (type === 'circle') this.editor.scene.selection.deselectCircle(geoId)
-    else if (type === 'sphere') this.editor.scene.selection.deselectSphere(geoId)
-    else if (type === 'cone') {
-      this.editor.scene.selection.deselectCone(geoId)
-      this.editor.scene.markAllRenderDirty()
-    }
-    else if (type === 'face') this.editor.deselectCubeByFaceId(geoId)
+    Interaction.deselectByType[type]?.(this.editor, geoId)
   }
 
   private selectGeometry(
     type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
     geoId: string,
   ) {
-    if (type === 'point') this.editor.scene.selection.selectPoint(geoId, true)
-    else if (type === 'line') this.editor.scene.selection.selectLine(geoId, true)
-    else if (type === 'straightLine') this.editor.scene.selection.selectStraightLine(geoId, true)
-    else if (type === 'ray') this.editor.scene.selection.selectRay(geoId, true)
-    else if (type === 'vector') this.editor.scene.selection.selectVector(geoId, true)
-    else if (type === 'circle') this.editor.scene.selection.selectCircle(geoId, true)
-    else if (type === 'sphere') this.editor.scene.selection.selectSphere(geoId, true)
-    else if (type === 'cone') this.editor.scene.selection.selectCone(geoId, true)
-    else if (type === 'face') this.editor.selectCubeByFaceId(geoId, true)
+    Interaction.selectByType[type]?.(this.editor, geoId)
   }
 
   private toggleCreateSelection(type: 'point' | 'line', geoId: string) {
@@ -525,63 +574,68 @@ export class Interaction {
     ) * this.renderer.getWorldScale()
   }
 
-  private getLabelHitboxPaddingPx() {
+  private static readonly DEVICE_PARAM_PRESETS = {
+    labelHitboxPadding: {
+      arTouch: Interaction.LABEL_HITBOX_PADDING_AR_TOUCH_PX,
+      arMouse: Interaction.LABEL_HITBOX_PADDING_AR_PX,
+      mobile: Interaction.LABEL_HITBOX_PADDING_MOBILE_PX,
+      desktop: Interaction.LABEL_HITBOX_PADDING_PX,
+    },
+    geometryProtection: {
+      arTouch: Interaction.LABEL_GEOMETRY_PROTECTION_AR_TOUCH_PX,
+      arMouse: Interaction.LABEL_GEOMETRY_PROTECTION_AR_PX,
+      mobile: Interaction.LABEL_GEOMETRY_PROTECTION_MOBILE_PX,
+      desktop: Interaction.LABEL_GEOMETRY_PROTECTION_PX,
+    },
+    labelClosePriority: {
+      arTouch: Interaction.LABEL_CLOSE_PRIORITY_AR_TOUCH_PX,
+      arMouse: Interaction.LABEL_CLOSE_PRIORITY_AR_PX,
+      mobile: Interaction.LABEL_CLOSE_PRIORITY_MOBILE_PX,
+      desktop: Interaction.LABEL_CLOSE_PRIORITY_PX,
+    },
+    geometryCoreHit: {
+      arTouch: Interaction.GEOMETRY_CORE_HIT_AR_TOUCH_PX,
+      arMouse: Interaction.GEOMETRY_CORE_HIT_AR_PX,
+      mobile: Interaction.GEOMETRY_CORE_HIT_MOBILE_PX,
+      desktop: Interaction.GEOMETRY_CORE_HIT_PX,
+    },
+    geometryHardCoreHit: {
+      arTouch: Interaction.GEOMETRY_HARD_CORE_HIT_AR_TOUCH_PX,
+      arMouse: Interaction.GEOMETRY_HARD_CORE_HIT_AR_PX,
+      mobile: Interaction.GEOMETRY_HARD_CORE_HIT_MOBILE_PX,
+      desktop: Interaction.GEOMETRY_HARD_CORE_HIT_PX,
+    },
+  }
+
+  private getDeviceParam(presets: { arTouch: number; arMouse: number; mobile: number; desktop: number }): number {
     if (this.renderer.isARActive()) {
-      return this.isARCoarsePointer()
-        ? Interaction.LABEL_HITBOX_PADDING_AR_TOUCH_PX
-        : Interaction.LABEL_HITBOX_PADDING_AR_PX
+      return this.isARCoarsePointer() ? presets.arTouch : presets.arMouse
     }
-    return this.isTouchPreferredDevice()
-      ? Interaction.LABEL_HITBOX_PADDING_MOBILE_PX
-      : Interaction.LABEL_HITBOX_PADDING_PX
+    return this.isTouchPreferredDevice() ? presets.mobile : presets.desktop
+  }
+
+  private getLabelHitboxPaddingPx() {
+    return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.labelHitboxPadding)
   }
 
   private getGeometryProtectionPx() {
-    if (this.renderer.isARActive()) {
-      return this.isARCoarsePointer()
-        ? Interaction.LABEL_GEOMETRY_PROTECTION_AR_TOUCH_PX
-        : Interaction.LABEL_GEOMETRY_PROTECTION_AR_PX
-    }
-    return this.isTouchPreferredDevice()
-      ? Interaction.LABEL_GEOMETRY_PROTECTION_MOBILE_PX
-      : Interaction.LABEL_GEOMETRY_PROTECTION_PX
+    return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.geometryProtection)
   }
 
   private getLabelClosePriorityPx() {
-    if (this.renderer.isARActive()) {
-      return this.isARCoarsePointer()
-        ? Interaction.LABEL_CLOSE_PRIORITY_AR_TOUCH_PX
-        : Interaction.LABEL_CLOSE_PRIORITY_AR_PX
-    }
-    return this.isTouchPreferredDevice()
-      ? Interaction.LABEL_CLOSE_PRIORITY_MOBILE_PX
-      : Interaction.LABEL_CLOSE_PRIORITY_PX
+    return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.labelClosePriority)
   }
 
   private getGeometryCoreHitPx() {
-    if (this.renderer.isARActive()) {
-      return this.isARCoarsePointer()
-        ? Interaction.GEOMETRY_CORE_HIT_AR_TOUCH_PX
-        : Interaction.GEOMETRY_CORE_HIT_AR_PX
-    }
-    return this.isTouchPreferredDevice()
-      ? Interaction.GEOMETRY_CORE_HIT_MOBILE_PX
-      : Interaction.GEOMETRY_CORE_HIT_PX
+    return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.geometryCoreHit)
   }
 
   private getGeometryHardCoreHitPx() {
-    if (this.renderer.isARActive()) {
-      return this.isARCoarsePointer()
-        ? Interaction.GEOMETRY_HARD_CORE_HIT_AR_TOUCH_PX
-        : Interaction.GEOMETRY_HARD_CORE_HIT_AR_PX
-    }
-    return this.isTouchPreferredDevice()
-      ? Interaction.GEOMETRY_HARD_CORE_HIT_MOBILE_PX
-      : Interaction.GEOMETRY_HARD_CORE_HIT_PX
+    return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.geometryHardCoreHit)
   }
 
-  syncControlLockState() {
-    if (
+  private get isAnyDragging(): boolean {
+    return (
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
@@ -593,7 +647,11 @@ export class Interaction {
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
-    ) {
+    )
+  }
+
+  syncControlLockState() {
+    if (this.isAnyDragging) {
       this.renderer.controls.enabled = false
       return
     }
@@ -626,17 +684,7 @@ export class Interaction {
     this.commitLabelDrag()
     this.commitDragHistory()
     this.editor.scene.activeDraggedPointIds.clear()
-    this.draggingPointId = null
-    this.draggingLineId = null
-    this.draggingStraightLineId = null
-    this.draggingRayId = null
-    this.draggingVectorId = null
-    this.draggingCircleId = null
-    this.draggingSphereId = null
-    this.draggingConeId = null
-    this.draggingFaceId = null
-    this.draggingLabelTarget = null
-    this.pendingToggleSelection = null
+    this.clearDraggingIds()
     this.endDrag()
     if (hadDragPreview) {
       this.liveSyncUntil = performance.now() + Interaction.COLLAB_SETTLE_SYNC_MS
@@ -1465,25 +1513,7 @@ export class Interaction {
       const type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
       if (!geoId || !type) return
       if (this.editor.mode === EditorMode.Delete) {
-        if (type === 'point') {
-          this.editor.deletePoint(geoId)
-        } else if (type === 'line') {
-          this.editor.deleteLine(geoId)
-        } else if (type === 'straightLine') {
-          this.editor.deleteStraightLine(geoId)
-        } else if (type === 'ray') {
-          this.editor.deleteRay(geoId)
-        } else if (type === 'vector') {
-          this.editor.deleteVector(geoId)
-        } else if (type === 'circle') {
-          this.editor.deleteCircle(geoId)
-        } else if (type === 'sphere') {
-          this.editor.deleteSphere(geoId)
-        } else if (type === 'cone') {
-          this.editor.deleteCone(geoId)
-        } else if (type === 'face') {
-          this.editor.deleteFace(geoId)
-        }
+        Interaction.deleteByType[type]?.(this.editor, geoId)
         return
       }
       if (this.editor.mode === EditorMode.Select) {
@@ -1698,6 +1728,7 @@ export class Interaction {
           } else if (type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector') {
             this.normalCircleDirectionType = type as DirectionType
             this.normalCircleDirectionId = geoId
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this.selectGeometry(type as any, geoId)
           }
           if (this.normalCircleDirectionId) {
@@ -2135,14 +2166,7 @@ export class Interaction {
     if (this.editor.mode === EditorMode.Delete) {
       e.preventDefault()
       e.stopPropagation()
-      if (type === 'point') this.editor.deletePoint(geoId)
-      else if (type === 'line') this.editor.deleteLine(geoId)
-      else if (type === 'straightLine') this.editor.deleteStraightLine(geoId)
-      else if (type === 'ray') this.editor.deleteRay(geoId)
-      else if (type === 'vector') this.editor.deleteVector(geoId)
-      else if (type === 'circle') this.editor.deleteCircle(geoId)
-      else if (type === 'sphere') this.editor.deleteSphere(geoId)
-      else if (type === 'face') this.editor.deleteFace(geoId)
+      Interaction.deleteByType[type]?.(this.editor, geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -2210,6 +2234,7 @@ export class Interaction {
         } else if (type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector') {
           this.normalCircleDirectionType = type as DirectionType
           this.normalCircleDirectionId = geoId
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           this.selectGeometry(type as any, geoId)
         }
         if (this.normalCircleDirectionId) {
@@ -3732,39 +3757,9 @@ export class Interaction {
 
     if (nextOffsetX === target.startOffsetX && nextOffsetY === target.startOffsetY) return
 
-    if (target.type === 'point') {
-      this.editor.updatePoint(target.geoId, {
-        labelOffsetX: nextOffsetX,
-        labelOffsetY: nextOffsetY,
-      })
-    } else if (target.type === 'line') {
-      this.editor.updateLine(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
-    } else if (target.type === 'straightLine') {
-      this.editor.updateStraightLine(target.geoId, {
-        labelOffsetX: nextOffsetX,
-        labelOffsetY: nextOffsetY,
-      })
-    } else if (target.type === 'ray') {
-      this.editor.updateRay(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
-    } else if (target.type === 'vector') {
-      this.editor.updateVector(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
-    } else if (target.type === 'circle') {
-      this.editor.updateCircle(target.geoId, {
-        labelOffsetX: nextOffsetX,
-        labelOffsetY: nextOffsetY,
-      })
-    } else if (target.type === 'sphere') {
-      this.editor.updateSphere(target.geoId, {
-        labelOffsetX: nextOffsetX,
-        labelOffsetY: nextOffsetY,
-      })
-    } else if (target.type === 'cone') {
-      this.editor.updateCone(target.geoId, {
-        labelOffsetX: nextOffsetX,
-        labelOffsetY: nextOffsetY,
-      })
-    } else {
-      this.editor.updateFace(target.geoId, { labelOffsetX: nextOffsetX, labelOffsetY: nextOffsetY })
-    }
+    Interaction.updateLabelOffsetByType[target.type]?.(this.editor, target.geoId, {
+      labelOffsetX: nextOffsetX,
+      labelOffsetY: nextOffsetY,
+    })
   }
 }

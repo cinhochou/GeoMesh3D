@@ -11,6 +11,24 @@ import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face'
 
 export class AddElementCommand implements Command {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private static executeMap: Record<string, (scene: Scene, element: any) => void> = {
+    point: (scene, el) => scene.addPoint(el),
+    line: (scene, el) => scene.addLine(el),
+    straightLine: (scene, el) => scene.addStraightLine(el),
+    vector: (scene, el) => scene.addVector(el),
+    ray: (scene, el) => scene.addRay(el),
+  }
+
+  private static undoMap: Record<string, (scene: Scene, id: string) => void> = {
+    point: (scene, id) => { scene.points.delete(id); scene.selection.points.delete(id) },
+    line: (scene, id) => { scene.lines.delete(id); scene.selection.lines.delete(id) },
+    straightLine: (scene, id) => { scene.straightLines.delete(id); scene.selection.straightLines.delete(id) },
+    ray: (scene, id) => { scene.rays.delete(id); scene.selection.rays.delete(id) },
+    vector: (scene, id) => { scene.vectors.delete(id); scene.selection.vectors.delete(id) },
+    circle: (scene, id) => { scene.circles.delete(id); scene.selection.circles.delete(id) },
+  }
+
   private centerPoint: Point3 | null = null
   private prevCircleId: string | null = null
   private prevCircleRole: 'center' | null = null
@@ -33,13 +51,7 @@ export class AddElementCommand implements Command {
   }
 
   execute() {
-    if (this.type === 'point') {
-      this.scene.addPoint(this.element as Point3)
-    } else if (this.type === 'line') {
-      this.scene.addLine(this.element as Line3)
-    } else if (this.type === 'straightLine') {
-      this.scene.addStraightLine(this.element as StraightLine3)
-    } else if (this.type === 'face') {
+    if (this.type === 'face') {
       this.boundaryLines.forEach((line) => this.scene.addLine(line))
       this.scene.addFace(this.element as PlanarPolygon)
     } else if (this.type === 'circle') {
@@ -48,42 +60,24 @@ export class AddElementCommand implements Command {
         this.centerPoint.circleId = this.element.id
         this.centerPoint.circleRole = 'center'
       }
-    } else if (this.type === 'vector') {
-      this.scene.addVector(this.element as GeoVector3)
     } else {
-      this.scene.addRay(this.element as Ray3)
+      AddElementCommand.executeMap[this.type]!(this.scene, this.element)
     }
   }
 
   undo() {
-    if (this.type === 'point') {
-      this.scene.points.delete(this.element.id)
-      this.scene.selection.points.delete(this.element.id)
-    } else if (this.type === 'line') {
-      this.scene.lines.delete(this.element.id)
-      this.scene.selection.lines.delete(this.element.id)
-    } else if (this.type === 'straightLine') {
-      this.scene.straightLines.delete(this.element.id)
-      this.scene.selection.straightLines.delete(this.element.id)
-    } else if (this.type === 'face') {
+    if (this.type === 'face') {
       this.scene.removeFace(this.element.id)
       this.boundaryLines.forEach((line) => {
         this.scene.lines.delete(line.id)
         this.scene.selection.lines.delete(line.id)
       })
-    } else if (this.type === 'circle') {
-      this.scene.circles.delete(this.element.id)
-      this.scene.selection.circles.delete(this.element.id)
-      if (this.centerPoint) {
+    } else {
+      AddElementCommand.undoMap[this.type]!(this.scene, this.element.id)
+      if (this.type === 'circle' && this.centerPoint) {
         this.centerPoint.circleId = this.prevCircleId
         this.centerPoint.circleRole = this.prevCircleRole
       }
-    } else if (this.type === 'vector') {
-      this.scene.vectors.delete(this.element.id)
-      this.scene.selection.vectors.delete(this.element.id)
-    } else {
-      this.scene.rays.delete(this.element.id)
-      this.scene.selection.rays.delete(this.element.id)
     }
   }
 }

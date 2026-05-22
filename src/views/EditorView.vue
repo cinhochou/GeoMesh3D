@@ -595,17 +595,30 @@ const handleCancelRadiusSphereRadius = () => {
   uiStore.closeRadiusSphereDialog()
 }
 
-const radiusSphereRadiusError = computed(() => {
-  if (!radiusSphereDialog.value.visible) return ''
-  const r = radiusSphereDialog.value.radius
-  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
-  if (r <= 0) return '半径必须大于 0'
+const validatePositiveRadius = (visible: boolean, radius: number): string => {
+  if (!visible) return ''
+  if (typeof radius !== 'number' || isNaN(radius)) return '请输入有效的数字'
+  if (radius <= 0) return '半径必须大于 0'
   return ''
-})
+}
 
-const canConfirmRadiusSphereRadius = computed(() => {
-  return radiusSphereRadiusError.value === ''
-})
+const radiusSphereRadiusError = computed(() =>
+  validatePositiveRadius(radiusSphereDialog.value.visible, radiusSphereDialog.value.radius),
+)
+
+const canConfirmRadiusSphereRadius = computed(() => radiusSphereRadiusError.value === '')
+
+const coneRadiusRadiusError = computed(() =>
+  validatePositiveRadius(coneRadiusDialog.value.visible, coneRadiusDialog.value.radius),
+)
+
+const canConfirmConeRadius = computed(() => coneRadiusRadiusError.value === '')
+
+const normalCircleRadiusError = computed(() =>
+  validatePositiveRadius(normalCircleRadiusDialog.value.visible, normalCircleRadiusDialog.value.radius),
+)
+
+const canConfirmNormalCircleRadius = computed(() => normalCircleRadiusError.value === '')
 
 const handleShowConeRadiusDialog = (e: Event) => {
   const detail = (e as CustomEvent).detail
@@ -623,30 +636,6 @@ const handleCancelConeRadius = () => {
   interaction.cancelConeCreation()
   uiStore.closeConeRadiusDialog()
 }
-
-const coneRadiusRadiusError = computed(() => {
-  if (!coneRadiusDialog.value.visible) return ''
-  const r = coneRadiusDialog.value.radius
-  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
-  if (r <= 0) return '半径必须大于 0'
-  return ''
-})
-
-const canConfirmConeRadius = computed(() => {
-  return coneRadiusRadiusError.value === ''
-})
-
-const normalCircleRadiusError = computed(() => {
-  if (!normalCircleRadiusDialog.value.visible) return ''
-  const r = normalCircleRadiusDialog.value.radius
-  if (typeof r !== 'number' || isNaN(r)) return '请输入有效的数字'
-  if (r <= 0) return '半径必须大于 0'
-  return ''
-})
-
-const canConfirmNormalCircleRadius = computed(() => {
-  return normalCircleRadiusError.value === ''
-})
 
 const regularPolygonVertexError = computed(() => {
   if (!regularPolygonDialog.value.visible) return ''
@@ -816,14 +805,13 @@ const handleToggleAR = async (enabled: boolean) => {
     } else {
       sharedRotationOwnerNotice.value = ''
     }
-  } catch (err) {
+  } catch {
     // rollback if AR 初始化失败
     if (enabled && lastModeBeforeAR.value !== null) {
       editor.setMode(lastModeBeforeAR.value)
       sceneStore.setCurrentMode(lastModeBeforeAR.value)
     }
     uiStore.setARMode(false)
-    console.error(err)
   }
 }
 
@@ -838,8 +826,7 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
       editor.historyIndex = -1
       collabStore.closeJoinDialog()
       showToast(`成功加入房间: ${room}`, 'global')
-    } catch (err) {
-      console.error(err)
+    } catch {
       collabStore.closeJoinDialog()
       showToast('⚠️ 协作连接失败（请检查 websocket 服务）', 'global')
     }

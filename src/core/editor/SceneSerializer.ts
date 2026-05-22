@@ -257,14 +257,29 @@ function serializeVec3(v: Vec3): SerializedVec3 {
   return { x: v.x, y: v.y, z: v.z }
 }
 
+type BaseSerializableFields = {
+  id: string
+  name: string
+  nameVisible: boolean
+  valueVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
+}
+
+function pickBaseFields<T extends BaseSerializableFields>(obj: T): BaseSerializableFields {
+  return {
+    id: obj.id,
+    name: obj.name,
+    nameVisible: obj.nameVisible,
+    valueVisible: obj.valueVisible,
+    labelOffsetX: obj.labelOffsetX,
+    labelOffsetY: obj.labelOffsetY,
+  }
+}
+
 function serializePoint(p: Point3): SerializedPoint {
   return {
-    id: p.id,
-    name: p.name,
-    nameVisible: p.nameVisible,
-    valueVisible: p.valueVisible,
-    labelOffsetX: p.labelOffsetX,
-    labelOffsetY: p.labelOffsetY,
+    ...pickBaseFields(p),
     position: serializeVec3(p.position),
     locked: p.locked,
     userLocked: p.userLocked,
@@ -283,12 +298,7 @@ function serializePoint(p: Point3): SerializedPoint {
 
 function serializeLine(l: Line3): SerializedLine {
   return {
-    id: l.id,
-    name: l.name,
-    nameVisible: l.nameVisible,
-    valueVisible: l.valueVisible,
-    labelOffsetX: l.labelOffsetX,
-    labelOffsetY: l.labelOffsetY,
+    ...pickBaseFields(l),
     visible: l.visible,
     userLocked: l.userLocked,
     lengthLocked: l.lengthLocked,
@@ -302,12 +312,7 @@ function serializeLine(l: Line3): SerializedLine {
 
 function serializeStraightLine(l: StraightLine3): SerializedStraightLine {
   return {
-    id: l.id,
-    name: l.name,
-    nameVisible: l.nameVisible,
-    valueVisible: l.valueVisible,
-    labelOffsetX: l.labelOffsetX,
-    labelOffsetY: l.labelOffsetY,
+    ...pickBaseFields(l),
     visible: l.visible,
     userLocked: l.userLocked,
     p1Id: l.p1.id,
@@ -318,12 +323,7 @@ function serializeStraightLine(l: StraightLine3): SerializedStraightLine {
 
 function serializeRay(r: Ray3): SerializedRay {
   return {
-    id: r.id,
-    name: r.name,
-    nameVisible: r.nameVisible,
-    valueVisible: r.valueVisible,
-    labelOffsetX: r.labelOffsetX,
-    labelOffsetY: r.labelOffsetY,
+    ...pickBaseFields(r),
     visible: r.visible,
     userLocked: r.userLocked,
     p1Id: r.p1.id,
@@ -334,12 +334,7 @@ function serializeRay(r: Ray3): SerializedRay {
 
 function serializeVector(v: GeoVector3): SerializedVector {
   return {
-    id: v.id,
-    name: v.name,
-    nameVisible: v.nameVisible,
-    valueVisible: v.valueVisible,
-    labelOffsetX: v.labelOffsetX,
-    labelOffsetY: v.labelOffsetY,
+    ...pickBaseFields(v),
     visible: v.visible,
     userLocked: v.userLocked,
     p1Id: v.p1.id,
@@ -349,12 +344,7 @@ function serializeVector(v: GeoVector3): SerializedVector {
 
 function serializeCircle(c: Circle3): SerializedCircle {
   return {
-    id: c.id,
-    name: c.name,
-    nameVisible: c.nameVisible,
-    valueVisible: c.valueVisible,
-    labelOffsetX: c.labelOffsetX,
-    labelOffsetY: c.labelOffsetY,
+    ...pickBaseFields(c),
     visible: c.visible,
     userLocked: c.userLocked,
     centerVisible: c.centerVisible,
@@ -370,12 +360,7 @@ function serializeCircle(c: Circle3): SerializedCircle {
 
 function serializeFace(f: PlanarPolygon): SerializedFace {
   return {
-    id: f.id,
-    name: f.name,
-    nameVisible: f.nameVisible,
-    valueVisible: f.valueVisible,
-    labelOffsetX: f.labelOffsetX,
-    labelOffsetY: f.labelOffsetY,
+    ...pickBaseFields(f),
     visible: f.visible,
     fillColor: f.fillColor,
     fillOpacity: f.fillOpacity,
@@ -400,12 +385,7 @@ function serializeFace(f: PlanarPolygon): SerializedFace {
 
 function serializeSphere(s: Sphere3): SerializedSphere {
   return {
-    id: s.id,
-    name: s.name,
-    nameVisible: s.nameVisible,
-    valueVisible: s.valueVisible,
-    labelOffsetX: s.labelOffsetX,
-    labelOffsetY: s.labelOffsetY,
+    ...pickBaseFields(s),
     visible: s.visible,
     userLocked: s.userLocked,
     centerPointId: s.centerPoint.id,
@@ -416,12 +396,7 @@ function serializeSphere(s: Sphere3): SerializedSphere {
 
 function serializeCone(c: Cone3): SerializedCone {
   return {
-    id: c.id,
-    name: c.name,
-    nameVisible: c.nameVisible,
-    valueVisible: c.valueVisible,
-    labelOffsetX: c.labelOffsetX,
-    labelOffsetY: c.labelOffsetY,
+    ...pickBaseFields(c),
     visible: c.visible,
     userLocked: c.userLocked,
     baseCenterPointId: c.baseCenterPoint.id,
@@ -536,6 +511,58 @@ export function exportScene(scene: Scene): SerializedScene {
   }
 }
 
+function validateId(id: unknown, typeName: string): string | null {
+  if (typeof id !== 'string' || id === '') {
+    return `${typeName}数据包含无效或空的 id`
+  }
+  return null
+}
+
+function validateIdUnique(id: string, idSet: Set<string>, typeName: string): string | null {
+  if (idSet.has(id)) {
+    return `${typeName} id 重复：${id}`
+  }
+  return null
+}
+
+function validateName(name: unknown, typeName: string, id: string): string | null {
+  if (typeof name !== 'string') {
+    return `${typeName} "${id}" 缺少 name 字段`
+  }
+  return null
+}
+
+function validateReference(refId: unknown, idSet: Set<string>, errorMsg: string): string | null {
+  if (typeof refId !== 'string' || !idSet.has(refId)) {
+    return errorMsg
+  }
+  return null
+}
+
+function validatePositiveFiniteNumber(value: unknown, errorMsg: string): string | null {
+  if (typeof value !== 'number' || value <= 0 || !Number.isFinite(value)) {
+    return errorMsg
+  }
+  return null
+}
+
+function validateVec3(v: unknown, errorMsg: string): string | null {
+  if (typeof v !== 'object' || v === null) return errorMsg
+  const o = v as Record<string, unknown>
+  if (typeof o.x !== 'number' || typeof o.y !== 'number' || typeof o.z !== 'number' ||
+    !Number.isFinite(o.x) || !Number.isFinite(o.y) || !Number.isFinite(o.z)) {
+    return errorMsg
+  }
+  return null
+}
+
+function validateNullableStringId(value: unknown, errorMsg: string): string | null {
+  if (value !== null && typeof value !== 'string') {
+    return errorMsg
+  }
+  return null
+}
+
 export function validateSerializedScene(data: unknown): { valid: boolean; error?: string } {
   if (typeof data !== 'object' || data === null) {
     return { valid: false, error: '文件内容不是有效的 JSON 对象' }
@@ -577,55 +604,38 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const pointIdSet = new Set<string>()
   for (const p of points) {
-    if (typeof p.id !== 'string' || p.id === '') {
-      return { valid: false, error: '点数据包含无效或空的 id' }
-    }
-    if (typeof p.name !== 'string') {
-      return { valid: false, error: `点 "${p.id}" 缺少 name 字段` }
-    }
-    if (pointIdSet.has(p.id)) {
-      return { valid: false, error: `点 id 重复：${p.id}` }
-    }
+    let err = validateId(p.id, '点')
+    if (err) return { valid: false, error: err }
+    err = validateName(p.name, '点', p.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(p.id, pointIdSet, '点')
+    if (err) return { valid: false, error: err }
     pointIdSet.add(p.id)
-    if (
-      typeof p.position !== 'object' ||
-      p.position === null ||
-      typeof p.position.x !== 'number' ||
-      typeof p.position.y !== 'number' ||
-      typeof p.position.z !== 'number' ||
-      !Number.isFinite(p.position.x) ||
-      !Number.isFinite(p.position.y) ||
-      !Number.isFinite(p.position.z)
-    ) {
-      return { valid: false, error: `点 "${p.name}" 的坐标数据无效或包含非有限值` }
-    }
+    err = validateVec3(p.position, `点 "${p.name}" 的坐标数据无效或包含非有限值`)
+    if (err) return { valid: false, error: err }
     if (typeof p.locked !== 'boolean') {
       return { valid: false, error: `点 "${p.name}" 缺少 locked 字段` }
     }
     if (typeof p.userLocked !== 'boolean') {
       return { valid: false, error: `点 "${p.name}" 缺少 userLocked 字段` }
     }
-    if (p.cubeId !== null && typeof p.cubeId !== 'string') {
-      return { valid: false, error: `点 "${p.name}" 的 cubeId 无效` }
-    }
+    err = validateNullableStringId(p.cubeId, `点 "${p.name}" 的 cubeId 无效`)
+    if (err) return { valid: false, error: err }
     if (p.cubeRole !== null && p.cubeRole !== 'owner' && p.cubeRole !== 'dependent') {
       return { valid: false, error: `点 "${p.name}" 的 cubeRole 无效` }
     }
-    if (p.circleId !== null && typeof p.circleId !== 'string') {
-      return { valid: false, error: `点 "${p.name}" 的 circleId 无效` }
-    }
+    err = validateNullableStringId(p.circleId, `点 "${p.name}" 的 circleId 无效`)
+    if (err) return { valid: false, error: err }
     if (p.circleRole !== null && p.circleRole !== 'center') {
       return { valid: false, error: `点 "${p.name}" 的 circleRole 无效` }
     }
-    if (p.sphereId !== null && typeof p.sphereId !== 'string') {
-      return { valid: false, error: `点 "${p.name}" 的 sphereId 无效` }
-    }
+    err = validateNullableStringId(p.sphereId, `点 "${p.name}" 的 sphereId 无效`)
+    if (err) return { valid: false, error: err }
     if (p.sphereRole !== null && p.sphereRole !== 'center' && p.sphereRole !== 'radius') {
       return { valid: false, error: `点 "${p.name}" 的 sphereRole 无效` }
     }
-    if (p.coneId !== null && typeof p.coneId !== 'string') {
-      return { valid: false, error: `点 "${p.name}" 的 coneId 无效` }
-    }
+    err = validateNullableStringId(p.coneId, `点 "${p.name}" 的 coneId 无效`)
+    if (err) return { valid: false, error: err }
     if (p.coneRole !== null && p.coneRole !== 'baseCenter' && p.coneRole !== 'apex') {
       return { valid: false, error: `点 "${p.name}" 的 coneRole 无效` }
     }
@@ -637,22 +647,17 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const lines = obj.lines as SerializedLine[]
   for (const l of lines) {
-    if (typeof l.id !== 'string' || l.id === '') {
-      return { valid: false, error: '线段数据包含无效或空的 id' }
-    }
-    if (typeof l.name !== 'string') {
-      return { valid: false, error: `线段 "${l.id}" 缺少 name 字段` }
-    }
-    if (lineIdSet.has(l.id)) {
-      return { valid: false, error: `线段 id 重复：${l.id}` }
-    }
+    let err = validateId(l.id, '线段')
+    if (err) return { valid: false, error: err }
+    err = validateName(l.name, '线段', l.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(l.id, lineIdSet, '线段')
+    if (err) return { valid: false, error: err }
     lineIdSet.add(l.id)
-    if (typeof l.p1Id !== 'string' || !pointIdSet.has(l.p1Id)) {
-      return { valid: false, error: `线段 "${l.name}" 引用了不存在的起点` }
-    }
-    if (typeof l.p2Id !== 'string' || !pointIdSet.has(l.p2Id)) {
-      return { valid: false, error: `线段 "${l.name}" 引用了不存在的终点` }
-    }
+    err = validateReference(l.p1Id, pointIdSet, `线段 "${l.name}" 引用了不存在的起点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(l.p2Id, pointIdSet, `线段 "${l.name}" 引用了不存在的终点`)
+    if (err) return { valid: false, error: err }
     if (l.p1Id === l.p2Id) {
       return { valid: false, error: `线段 "${l.name}" 的起点和终点不能相同` }
     }
@@ -666,22 +671,17 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const straightLines = obj.straightLines as SerializedStraightLine[]
   for (const l of straightLines) {
-    if (typeof l.id !== 'string' || l.id === '') {
-      return { valid: false, error: '直线数据包含无效或空的 id' }
-    }
-    if (typeof l.name !== 'string') {
-      return { valid: false, error: `直线 "${l.id}" 缺少 name 字段` }
-    }
-    if (straightLineIdSet.has(l.id)) {
-      return { valid: false, error: `直线 id 重复：${l.id}` }
-    }
+    let err = validateId(l.id, '直线')
+    if (err) return { valid: false, error: err }
+    err = validateName(l.name, '直线', l.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(l.id, straightLineIdSet, '直线')
+    if (err) return { valid: false, error: err }
     straightLineIdSet.add(l.id)
-    if (typeof l.p1Id !== 'string' || !pointIdSet.has(l.p1Id)) {
-      return { valid: false, error: `直线 "${l.name}" 引用了不存在的起点` }
-    }
-    if (typeof l.p2Id !== 'string' || !pointIdSet.has(l.p2Id)) {
-      return { valid: false, error: `直线 "${l.name}" 引用了不存在的终点` }
-    }
+    err = validateReference(l.p1Id, pointIdSet, `直线 "${l.name}" 引用了不存在的起点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(l.p2Id, pointIdSet, `直线 "${l.name}" 引用了不存在的终点`)
+    if (err) return { valid: false, error: err }
     if (l.p1Id === l.p2Id) {
       return { valid: false, error: `直线 "${l.name}" 的起点和终点不能相同` }
     }
@@ -689,22 +689,17 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const rays = obj.rays as SerializedRay[]
   for (const r of rays) {
-    if (typeof r.id !== 'string' || r.id === '') {
-      return { valid: false, error: '射线数据包含无效或空的 id' }
-    }
-    if (typeof r.name !== 'string') {
-      return { valid: false, error: `射线 "${r.id}" 缺少 name 字段` }
-    }
-    if (rayIdSet.has(r.id)) {
-      return { valid: false, error: `射线 id 重复：${r.id}` }
-    }
+    let err = validateId(r.id, '射线')
+    if (err) return { valid: false, error: err }
+    err = validateName(r.name, '射线', r.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(r.id, rayIdSet, '射线')
+    if (err) return { valid: false, error: err }
     rayIdSet.add(r.id)
-    if (typeof r.p1Id !== 'string' || !pointIdSet.has(r.p1Id)) {
-      return { valid: false, error: `射线 "${r.name}" 引用了不存在的起点` }
-    }
-    if (typeof r.p2Id !== 'string' || !pointIdSet.has(r.p2Id)) {
-      return { valid: false, error: `射线 "${r.name}" 引用了不存在的终点` }
-    }
+    err = validateReference(r.p1Id, pointIdSet, `射线 "${r.name}" 引用了不存在的起点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(r.p2Id, pointIdSet, `射线 "${r.name}" 引用了不存在的终点`)
+    if (err) return { valid: false, error: err }
     if (r.p1Id === r.p2Id) {
       return { valid: false, error: `射线 "${r.name}" 的起点和终点不能相同` }
     }
@@ -712,22 +707,17 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const vectors = obj.vectors as SerializedVector[]
   for (const v of vectors) {
-    if (typeof v.id !== 'string' || v.id === '') {
-      return { valid: false, error: '向量数据包含无效或空的 id' }
-    }
-    if (typeof v.name !== 'string') {
-      return { valid: false, error: `向量 "${v.id}" 缺少 name 字段` }
-    }
-    if (vectorIdSet.has(v.id)) {
-      return { valid: false, error: `向量 id 重复：${v.id}` }
-    }
+    let err = validateId(v.id, '向量')
+    if (err) return { valid: false, error: err }
+    err = validateName(v.name, '向量', v.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(v.id, vectorIdSet, '向量')
+    if (err) return { valid: false, error: err }
     vectorIdSet.add(v.id)
-    if (typeof v.p1Id !== 'string' || !pointIdSet.has(v.p1Id)) {
-      return { valid: false, error: `向量 "${v.name}" 引用了不存在的起点` }
-    }
-    if (typeof v.p2Id !== 'string' || !pointIdSet.has(v.p2Id)) {
-      return { valid: false, error: `向量 "${v.name}" 引用了不存在的终点` }
-    }
+    err = validateReference(v.p1Id, pointIdSet, `向量 "${v.name}" 引用了不存在的起点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(v.p2Id, pointIdSet, `向量 "${v.name}" 引用了不存在的终点`)
+    if (err) return { valid: false, error: err }
     if (v.p1Id === v.p2Id) {
       return { valid: false, error: `向量 "${v.name}" 的起点和终点不能相同` }
     }
@@ -735,25 +725,19 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const circles = obj.circles as SerializedCircle[]
   for (const c of circles) {
-    if (typeof c.id !== 'string' || c.id === '') {
-      return { valid: false, error: '圆数据包含无效或空的 id' }
-    }
-    if (typeof c.name !== 'string') {
-      return { valid: false, error: `圆 "${c.id}" 缺少 name 字段` }
-    }
-    if (circleIdSet.has(c.id)) {
-      return { valid: false, error: `圆 id 重复：${c.id}` }
-    }
+    let err = validateId(c.id, '圆')
+    if (err) return { valid: false, error: err }
+    err = validateName(c.name, '圆', c.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(c.id, circleIdSet, '圆')
+    if (err) return { valid: false, error: err }
     circleIdSet.add(c.id)
-    if (typeof c.p1Id !== 'string' || !pointIdSet.has(c.p1Id)) {
-      return { valid: false, error: `圆 "${c.name}" 引用了不存在的点 p1` }
-    }
-    if (typeof c.p2Id !== 'string' || !pointIdSet.has(c.p2Id)) {
-      return { valid: false, error: `圆 "${c.name}" 引用了不存在的点 p2` }
-    }
-    if (typeof c.p3Id !== 'string' || !pointIdSet.has(c.p3Id)) {
-      return { valid: false, error: `圆 "${c.name}" 引用了不存在的点 p3` }
-    }
+    err = validateReference(c.p1Id, pointIdSet, `圆 "${c.name}" 引用了不存在的点 p1`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(c.p2Id, pointIdSet, `圆 "${c.name}" 引用了不存在的点 p2`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(c.p3Id, pointIdSet, `圆 "${c.name}" 引用了不存在的点 p3`)
+    if (err) return { valid: false, error: err }
     if (c.circleType !== 'threePoint' && c.circleType !== 'normal') {
       return { valid: false, error: `圆 "${c.name}" 的 circleType 无效` }
     }
@@ -783,23 +767,19 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       if (c.directionType === 'point' && !pointIdSet.has(c.directionId)) {
         return { valid: false, error: `法向圆 "${c.name}" 的方向引用了不存在的点` }
       }
-      if (c.lockedRadius === null || c.lockedRadius === undefined || typeof c.lockedRadius !== 'number' || c.lockedRadius <= 0 || !Number.isFinite(c.lockedRadius)) {
-        return { valid: false, error: `法向圆 "${c.name}" 的 lockedRadius 无效` }
-      }
+      err = validatePositiveFiniteNumber(c.lockedRadius, `法向圆 "${c.name}" 的 lockedRadius 无效`)
+      if (err) return { valid: false, error: err }
     }
   }
 
   const faces = obj.faces as SerializedFace[]
   for (const f of faces) {
-    if (typeof f.id !== 'string' || f.id === '') {
-      return { valid: false, error: '面数据包含无效或空的 id' }
-    }
-    if (typeof f.name !== 'string') {
-      return { valid: false, error: `面 "${f.id}" 缺少 name 字段` }
-    }
-    if (faceIdSet.has(f.id)) {
-      return { valid: false, error: `面 id 重复：${f.id}` }
-    }
+    let err = validateId(f.id, '面')
+    if (err) return { valid: false, error: err }
+    err = validateName(f.name, '面', f.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(f.id, faceIdSet, '面')
+    if (err) return { valid: false, error: err }
     faceIdSet.add(f.id)
     if (!Array.isArray(f.boundaryPointIds) || f.boundaryPointIds.length < 3) {
       return { valid: false, error: `面 "${f.name}" 的 boundaryPointIds 至少需要 3 个点` }
@@ -809,18 +789,15 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       return { valid: false, error: `面 "${f.name}" 的 boundaryPointIds 包含重复点` }
     }
     for (const pid of f.boundaryPointIds) {
-      if (typeof pid !== 'string' || !pointIdSet.has(pid)) {
-        return { valid: false, error: `面 "${f.name}" 的边界引用了不存在的点` }
-      }
+      err = validateReference(pid, pointIdSet, `面 "${f.name}" 的边界引用了不存在的点`)
+      if (err) return { valid: false, error: err }
     }
     for (const lid of f.boundaryLineIds) {
-      if (typeof lid !== 'string' || !lineIdSet.has(lid)) {
-        return { valid: false, error: `面 "${f.name}" 的边界引用了不存在的线段` }
-      }
+      err = validateReference(lid, lineIdSet, `面 "${f.name}" 的边界引用了不存在的线段`)
+      if (err) return { valid: false, error: err }
     }
-    if (f.cubeId !== null && typeof f.cubeId !== 'string') {
-      return { valid: false, error: `面 "${f.name}" 的 cubeId 无效` }
-    }
+    err = validateNullableStringId(f.cubeId, `面 "${f.name}" 的 cubeId 无效`)
+    if (err) return { valid: false, error: err }
     if (f.isRegularPolygon && (typeof f.regularPolygonVertexCount !== 'number' || f.regularPolygonVertexCount < 3 || !Number.isFinite(f.regularPolygonVertexCount))) {
       return { valid: false, error: `面 "${f.name}" 是正多边形但 vertexCount 无效` }
     }
@@ -831,59 +808,46 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const spheres = obj.spheres as SerializedSphere[]
   for (const s of spheres) {
-    if (typeof s.id !== 'string' || s.id === '') {
-      return { valid: false, error: '球数据包含无效或空的 id' }
-    }
-    if (typeof s.name !== 'string') {
-      return { valid: false, error: `球 "${s.id}" 缺少 name 字段` }
-    }
-    if (sphereIdSet.has(s.id)) {
-      return { valid: false, error: `球 id 重复：${s.id}` }
-    }
+    let err = validateId(s.id, '球')
+    if (err) return { valid: false, error: err }
+    err = validateName(s.name, '球', s.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(s.id, sphereIdSet, '球')
+    if (err) return { valid: false, error: err }
     sphereIdSet.add(s.id)
-    if (typeof s.centerPointId !== 'string' || !pointIdSet.has(s.centerPointId)) {
-      return { valid: false, error: `球 "${s.name}" 引用了不存在的中心点` }
-    }
+    err = validateReference(s.centerPointId, pointIdSet, `球 "${s.name}" 引用了不存在的中心点`)
+    if (err) return { valid: false, error: err }
     if (s.radiusPointId !== null) {
-      if (typeof s.radiusPointId !== 'string' || !pointIdSet.has(s.radiusPointId)) {
-        return { valid: false, error: `球 "${s.name}" 引用了不存在的半径点` }
-      }
+      err = validateReference(s.radiusPointId, pointIdSet, `球 "${s.name}" 引用了不存在的半径点`)
+      if (err) return { valid: false, error: err }
     }
     if (s.radiusPointId === null) {
-      if (typeof s.radiusValue !== 'number' || s.radiusValue <= 0 || !Number.isFinite(s.radiusValue)) {
-        return { valid: false, error: `球 "${s.name}" 缺少半径点但 radiusValue 无效` }
-      }
+      err = validatePositiveFiniteNumber(s.radiusValue, `球 "${s.name}" 缺少半径点但 radiusValue 无效`)
+      if (err) return { valid: false, error: err }
     }
   }
 
   const coneIdSet = new Set<string>()
   const cones = obj.cones as SerializedCone[]
   for (const c of cones) {
-    if (typeof c.id !== 'string' || c.id === '') {
-      return { valid: false, error: '圆锥数据包含无效或空的 id' }
-    }
-    if (typeof c.name !== 'string') {
-      return { valid: false, error: `圆锥 "${c.id}" 缺少 name 字段` }
-    }
-    if (coneIdSet.has(c.id)) {
-      return { valid: false, error: `圆锥 id 重复：${c.id}` }
-    }
+    let err = validateId(c.id, '圆锥')
+    if (err) return { valid: false, error: err }
+    err = validateName(c.name, '圆锥', c.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(c.id, coneIdSet, '圆锥')
+    if (err) return { valid: false, error: err }
     coneIdSet.add(c.id)
-    if (typeof c.baseCenterPointId !== 'string' || !pointIdSet.has(c.baseCenterPointId)) {
-      return { valid: false, error: `圆锥 "${c.name}" 引用了不存在的底面中心点` }
-    }
-    if (typeof c.apexPointId !== 'string' || !pointIdSet.has(c.apexPointId)) {
-      return { valid: false, error: `圆锥 "${c.name}" 引用了不存在的顶点` }
-    }
-    if (typeof c.radiusValue !== 'number' || c.radiusValue <= 0 || !Number.isFinite(c.radiusValue)) {
-      return { valid: false, error: `圆锥 "${c.name}" 的 radiusValue 无效` }
-    }
+    err = validateReference(c.baseCenterPointId, pointIdSet, `圆锥 "${c.name}" 引用了不存在的底面中心点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(c.apexPointId, pointIdSet, `圆锥 "${c.name}" 引用了不存在的顶点`)
+    if (err) return { valid: false, error: err }
+    err = validatePositiveFiniteNumber(c.radiusValue, `圆锥 "${c.name}" 的 radiusValue 无效`)
+    if (err) return { valid: false, error: err }
     if (c.coneType !== 'twoPoint' && c.coneType !== 'normalCircle') {
       return { valid: false, error: `圆锥 "${c.name}" 的 coneType 无效` }
     }
-    if (c.normalCircleId !== null && typeof c.normalCircleId !== 'string') {
-      return { valid: false, error: `圆锥 "${c.name}" 的 normalCircleId 无效` }
-    }
+    err = validateNullableStringId(c.normalCircleId, `圆锥 "${c.name}" 的 normalCircleId 无效`)
+    if (err) return { valid: false, error: err }
   }
 
   const constraints = obj.constraints as SerializedConstraint[]
@@ -914,29 +878,25 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
         return { valid: false, error: `立方体约束 "${cc.name}" 缺少 dependentLayouts` }
       }
       for (const layout of cc.dependentLayouts) {
-        if (typeof layout.pointId !== 'string' || !pointIdSet.has(layout.pointId)) {
-          return { valid: false, error: `立方体约束 "${cc.name}" 的依赖布局引用了不存在的点` }
-        }
-        if (typeof layout.x !== 'number' || typeof layout.y !== 'number' || typeof layout.z !== 'number' ||
-          !Number.isFinite(layout.x) || !Number.isFinite(layout.y) || !Number.isFinite(layout.z)) {
-          return { valid: false, error: `立方体约束 "${cc.name}" 的依赖布局坐标无效` }
-        }
+        let err = validateReference(layout.pointId, pointIdSet, `立方体约束 "${cc.name}" 的依赖布局引用了不存在的点`)
+        if (err) return { valid: false, error: err }
+        err = validateVec3(layout, `立方体约束 "${cc.name}" 的依赖布局坐标无效`)
+        if (err) return { valid: false, error: err }
       }
       if (!Array.isArray(cc.faceIds)) {
         return { valid: false, error: `立方体约束 "${cc.name}" 缺少 faceIds` }
       }
       for (const fid of cc.faceIds) {
-        if (typeof fid !== 'string' || !faceIdSet.has(fid)) {
-          return { valid: false, error: `立方体约束 "${cc.name}" 引用了不存在的面` }
-        }
+        const err = validateReference(fid, faceIdSet, `立方体约束 "${cc.name}" 引用了不存在的面`)
+        if (err) return { valid: false, error: err }
       }
-      if (cc.vAxisHint === null || typeof cc.vAxisHint !== 'object' ||
-        typeof cc.vAxisHint.x !== 'number' || typeof cc.vAxisHint.y !== 'number' || typeof cc.vAxisHint.z !== 'number' ||
-        !Number.isFinite(cc.vAxisHint.x) || !Number.isFinite(cc.vAxisHint.y) || !Number.isFinite(cc.vAxisHint.z)) {
-        return { valid: false, error: `立方体约束 "${cc.name}" 的 vAxisHint 无效` }
+      {
+        const err = validateVec3(cc.vAxisHint, `立方体约束 "${cc.name}" 的 vAxisHint 无效`)
+        if (err) return { valid: false, error: err }
       }
-      if (cc.edgeLengthLocked && (cc.lockedEdgeLength === null || typeof cc.lockedEdgeLength !== 'number' || cc.lockedEdgeLength <= 0 || !Number.isFinite(cc.lockedEdgeLength))) {
-        return { valid: false, error: `立方体约束 "${cc.name}" 锁定了边长但 lockedEdgeLength 无效` }
+      if (cc.edgeLengthLocked) {
+        const err = validatePositiveFiniteNumber(cc.lockedEdgeLength, `立方体约束 "${cc.name}" 锁定了边长但 lockedEdgeLength 无效`)
+        if (err) return { valid: false, error: err }
       }
     }
     if (c.type === 'intersection') {
@@ -996,34 +956,33 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       if (typeof rc.vertexCount !== 'number' || rc.vertexCount < 3 || !Number.isFinite(rc.vertexCount)) {
         return { valid: false, error: `正多边形约束 "${rc.name}" 的 vertexCount 无效（必须 ≥3）` }
       }
-      if (typeof rc.faceId !== 'string' || !faceIdSet.has(rc.faceId)) {
-        return { valid: false, error: `正多边形约束 "${rc.name}" 引用了不存在的面` }
+      {
+        const err = validateReference(rc.faceId, faceIdSet, `正多边形约束 "${rc.name}" 引用了不存在的面`)
+        if (err) return { valid: false, error: err }
       }
       if (!Array.isArray(rc.dependentLayouts)) {
         return { valid: false, error: `正多边形约束 "${rc.name}" 缺少 dependentLayouts` }
       }
       for (const layout of rc.dependentLayouts) {
-        if (typeof layout.pointId !== 'string' || !pointIdSet.has(layout.pointId)) {
-          return { valid: false, error: `正多边形约束 "${rc.name}" 的依赖布局引用了不存在的点` }
-        }
+        const err = validateReference(layout.pointId, pointIdSet, `正多边形约束 "${rc.name}" 的依赖布局引用了不存在的点`)
+        if (err) return { valid: false, error: err }
         if (typeof layout.angleIndex !== 'number' || !Number.isFinite(layout.angleIndex)) {
           return { valid: false, error: `正多边形约束 "${rc.name}" 的依赖布局 angleIndex 无效` }
         }
       }
-      if (rc.vAxisHint === null || typeof rc.vAxisHint !== 'object' ||
-        typeof rc.vAxisHint.x !== 'number' || typeof rc.vAxisHint.y !== 'number' || typeof rc.vAxisHint.z !== 'number' ||
-        !Number.isFinite(rc.vAxisHint.x) || !Number.isFinite(rc.vAxisHint.y) || !Number.isFinite(rc.vAxisHint.z)) {
-        return { valid: false, error: `正多边形约束 "${rc.name}" 的 vAxisHint 无效` }
+      {
+        const err = validateVec3(rc.vAxisHint, `正多边形约束 "${rc.name}" 的 vAxisHint 无效`)
+        if (err) return { valid: false, error: err }
       }
-      if (rc.edgeLengthLocked && (rc.lockedEdgeLength === null || typeof rc.lockedEdgeLength !== 'number' || rc.lockedEdgeLength <= 0 || !Number.isFinite(rc.lockedEdgeLength))) {
-        return { valid: false, error: `正多边形约束 "${rc.name}" 锁定了边长但 lockedEdgeLength 无效` }
+      if (rc.edgeLengthLocked) {
+        const err = validatePositiveFiniteNumber(rc.lockedEdgeLength, `正多边形约束 "${rc.name}" 锁定了边长但 lockedEdgeLength 无效`)
+        if (err) return { valid: false, error: err }
       }
     }
     if (c.type === 'planar') {
       const pc = c as SerializedPlanarConstraint
-      if (typeof pc.faceId !== 'string' || !faceIdSet.has(pc.faceId)) {
-        return { valid: false, error: '平面约束引用了不存在的面' }
-      }
+      const err = validateReference(pc.faceId, faceIdSet, '平面约束引用了不存在的面')
+      if (err) return { valid: false, error: err }
     }
   }
 
@@ -1334,30 +1293,57 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.markAllRenderDirty()
 }
 
-export function isSceneEmpty(scene: Scene): boolean {
-  if (scene.points.size > 1) return false
-  if (scene.lines.size > 0) return false
-  if (scene.straightLines.size > 0) return false
-  if (scene.rays.size > 0) return false
-  if (scene.vectors.size > 0) return false
-  if (scene.circles.size > 0) return false
-  if (scene.faces.size > 0) return false
-  if (scene.spheres.size > 0) return false
-  if (scene.cones.size > 0) return false
+type SceneElementCounts = {
+  points: number
+  lines: number
+  straightLines: number
+  rays: number
+  vectors: number
+  circles: number
+  faces: number
+  spheres: number
+  cones: number
+}
+
+function checkSceneEmpty(counts: SceneElementCounts): boolean {
+  if (counts.points > 1) return false
+  if (counts.lines > 0) return false
+  if (counts.straightLines > 0) return false
+  if (counts.rays > 0) return false
+  if (counts.vectors > 0) return false
+  if (counts.circles > 0) return false
+  if (counts.faces > 0) return false
+  if (counts.spheres > 0) return false
+  if (counts.cones > 0) return false
   return true
 }
 
+export function isSceneEmpty(scene: Scene): boolean {
+  return checkSceneEmpty({
+    points: scene.points.size,
+    lines: scene.lines.size,
+    straightLines: scene.straightLines.size,
+    rays: scene.rays.size,
+    vectors: scene.vectors.size,
+    circles: scene.circles.size,
+    faces: scene.faces.size,
+    spheres: scene.spheres.size,
+    cones: scene.cones.size,
+  })
+}
+
 export function isSerializedSceneEmpty(data: SerializedScene): boolean {
-  if (data.points.length > 1) return false
-  if (data.lines.length > 0) return false
-  if (data.straightLines.length > 0) return false
-  if (data.rays.length > 0) return false
-  if (data.vectors.length > 0) return false
-  if (data.circles.length > 0) return false
-  if (data.faces.length > 0) return false
-  if (data.spheres.length > 0) return false
-  if (data.cones.length > 0) return false
-  return true
+  return checkSceneEmpty({
+    points: data.points.length,
+    lines: data.lines.length,
+    straightLines: data.straightLines.length,
+    rays: data.rays.length,
+    vectors: data.vectors.length,
+    circles: data.circles.length,
+    faces: data.faces.length,
+    spheres: data.spheres.length,
+    cones: data.cones.length,
+  })
 }
 
 function localTimestampFileName(): string {

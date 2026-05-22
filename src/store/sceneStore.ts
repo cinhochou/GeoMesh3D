@@ -27,89 +27,51 @@ const createEmptyCounts = (): CountSummary => ({
   cone: 0,
 })
 
-const getModeName = (mode: EditorMode) => {
-  switch (mode) {
-    case EditorMode.Select:
-      return '选择'
-    case EditorMode.Delete:
-      return '删除'
-    case EditorMode.CreatePoint:
-      return '创建自由点'
-    case EditorMode.MergePoint:
-      return '合并点'
-    case EditorMode.IntersectionPoint:
-      return '创建交点'
-    case EditorMode.CreateLine:
-      return '创建线段'
-    case EditorMode.CreateStraightLine:
-      return '创建直线'
-    case EditorMode.CreateRay:
-      return '创建射线'
-    case EditorMode.CreateVector:
-      return '创建向量'
-    case EditorMode.CreateCircleThreePoints:
-      return '创建三点圆'
-    case EditorMode.CreateCircleNormal:
-      return '法向圆'
-    case EditorMode.CreatePlane:
-      return '创建多边形'
-    case EditorMode.CreateRegularPolygon:
-      return '创建正多边形'
-    case EditorMode.CreateHexahedron:
-      return '创建正六面体'
-    case EditorMode.CreateTetrahedron:
-      return '创建正四面体'
-    case EditorMode.CreateSphereTwoPoints:
-      return '创建两点球'
-    case EditorMode.CreateSphereRadius:
-      return '创建半径球'
-    case EditorMode.CreateCone:
-      return '创建圆锥'
-    default:
-      return ''
-  }
+const modeNameMap: Record<EditorMode, string> = {
+  [EditorMode.Select]: '选择',
+  [EditorMode.Delete]: '删除',
+  [EditorMode.CreatePoint]: '创建自由点',
+  [EditorMode.MergePoint]: '合并点',
+  [EditorMode.IntersectionPoint]: '创建交点',
+  [EditorMode.CreateLine]: '创建线段',
+  [EditorMode.CreateStraightLine]: '创建直线',
+  [EditorMode.CreateRay]: '创建射线',
+  [EditorMode.CreateVector]: '创建向量',
+  [EditorMode.CreateCircleThreePoints]: '创建三点圆',
+  [EditorMode.CreateCircleNormal]: '法向圆',
+  [EditorMode.CreatePlane]: '创建多边形',
+  [EditorMode.CreateRegularPolygon]: '创建正多边形',
+  [EditorMode.CreateHexahedron]: '创建正六面体',
+  [EditorMode.CreateTetrahedron]: '创建正四面体',
+  [EditorMode.CreateSphereTwoPoints]: '创建两点球',
+  [EditorMode.CreateSphereRadius]: '创建半径球',
+  [EditorMode.CreateCone]: '创建圆锥',
 }
 
-const getModeHint = (mode: EditorMode) => {
-  switch (mode) {
-    case EditorMode.Delete:
-      return '单击场景中的几何对象即可删除~'
-    case EditorMode.CreatePoint:
-      return 'Tips:旋转或缩放场景可以更好地确定落点位置哦~'
-    case EditorMode.CreateLine:
-      return '选中场景中的两个不同点以创建线段~'
-    case EditorMode.CreateStraightLine:
-      return '选中场景中的两个不同点以创建直线~'
-    case EditorMode.CreateRay:
-      return '选中场景中的两个不同点以创建射线~'
-    case EditorMode.CreateVector:
-      return '选中场景中的两个不同点以创建向量~'
-    case EditorMode.CreateCircleThreePoints:
-      return '选中场景中的三个不共线的点以创建三点圆~'
-    case EditorMode.CreateCircleNormal:
-      return '先选中一个点作为圆心，再选中一个法向量（线/射线/直线/向量/点）~'
-    case EditorMode.CreatePlane:
-      return '先选择多个点或闭合线段，再点击空白处确认创建多边形~'
-    case EditorMode.CreateRegularPolygon:
-      return '选中两个不同的点，再输入顶点数即可创建正多边形~'
-    case EditorMode.MergePoint:
-      return '先选中两个点，再选择保留哪个点完成合并~'
-    case EditorMode.IntersectionPoint:
-      return '选中两个可求交的对象来创建交点~'
-    case EditorMode.CreateHexahedron:
-      return '选中两个点或一条线段以创建正六面体~'
-    case EditorMode.CreateTetrahedron:
-      return '选中两个点或一条线段以创建正四面体~'
-    case EditorMode.CreateSphereTwoPoints:
-      return '先选中一点作为球心，再选中一点以创建球体~'
-    case EditorMode.CreateSphereRadius:
-      return '先选中一点作为球心，输入半径以创建球体~'
-    case EditorMode.CreateCone:
-      return '1.先选中一点作为底面圆心，再选中顶点，最后输入半径以创建圆锥 2.先选中一个法向圆，再选中一个顶点以创建圆锥'
-    default:
-      return ''
-  }
+const modeHintMap: Record<EditorMode, string> = {
+  [EditorMode.Select]: '',
+  [EditorMode.Delete]: '单击场景中的几何对象即可删除~',
+  [EditorMode.CreatePoint]: 'Tips:旋转或缩放场景可以更好地确定落点位置哦~',
+  [EditorMode.MergePoint]: '先选中两个点，再选择保留哪个点完成合并~',
+  [EditorMode.IntersectionPoint]: '选中两个可求交的对象来创建交点~',
+  [EditorMode.CreateLine]: '选中场景中的两个不同点以创建线段~',
+  [EditorMode.CreateStraightLine]: '选中场景中的两个不同点以创建直线~',
+  [EditorMode.CreateRay]: '选中场景中的两个不同点以创建射线~',
+  [EditorMode.CreateVector]: '选中场景中的两个不同点以创建向量~',
+  [EditorMode.CreateCircleThreePoints]: '选中场景中的三个不共线的点以创建三点圆~',
+  [EditorMode.CreateCircleNormal]: '先选中一个点作为圆心，再选中一个法向量（线/射线/直线/向量/点）~',
+  [EditorMode.CreatePlane]: '先选择多个点或闭合线段，再点击空白处确认创建多边形~',
+  [EditorMode.CreateRegularPolygon]: '选中两个不同的点，再输入顶点数即可创建正多边形~',
+  [EditorMode.CreateHexahedron]: '选中两个点或一条线段以创建正六面体~',
+  [EditorMode.CreateTetrahedron]: '选中两个点或一条线段以创建正四面体~',
+  [EditorMode.CreateSphereTwoPoints]: '先选中一点作为球心，再选中一点以创建球体~',
+  [EditorMode.CreateSphereRadius]: '先选中一点作为球心，输入半径以创建球体~',
+  [EditorMode.CreateCone]: '1.先选中一点作为底面圆心，再选中顶点，最后输入半径以创建圆锥 2.先选中一个法向圆，再选中一个顶点以创建圆锥',
 }
+
+const getModeName = (mode: EditorMode) => modeNameMap[mode] ?? ''
+
+const getModeHint = (mode: EditorMode) => modeHintMap[mode] ?? ''
 
 export const useSceneStore = defineStore('scene', () => {
   const currentMode = ref(EditorMode.Select)

@@ -306,20 +306,15 @@ const hasCubeConstraint = (point: Point3 | undefined) =>
 const hasRegularPolygonConstraint = (point: Point3 | undefined) => Boolean(point?.regularPolygonId)
 const hasCircleConstraint = (point: Point3 | undefined) =>
   Boolean(point?.circleId && point?.circleRole === 'center')
+const FACE_CONSTRAINT_BADGE: Record<string, string> = {
+  polygon: '多边形约束',
+  regularPolygon: '正多边形约束',
+  hexahedron: '正六面体约束',
+  tetrahedron: '正四面体约束',
+}
 const getLineConstraintBadge = (line: Line3 | undefined): string => {
   if (!line?.faceConstraintType) return ''
-  switch (line.faceConstraintType) {
-    case 'polygon':
-      return '多边形约束'
-    case 'regularPolygon':
-      return '正多边形约束'
-    case 'hexahedron':
-      return '正六面体约束'
-    case 'tetrahedron':
-      return '正四面体约束'
-    default:
-      return ''
-  }
+  return FACE_CONSTRAINT_BADGE[line.faceConstraintType] ?? ''
 }
 const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
@@ -333,6 +328,13 @@ const getConeForNormalCircle = (circle: Circle3) => {
   return null
 }
 
+const DIRECTION_TYPE_COLLECTION: Record<string, Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
+  line: props.scene.lines,
+  straightLine: props.scene.straightLines,
+  ray: props.scene.rays,
+  vector: props.scene.vectors,
+}
+
 const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
   const cone = getConeForNormalCircle(circle)
   if (cone) {
@@ -344,40 +346,21 @@ const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
   if (circle.directionType === 'point') return new Vec3(0, 1, 0)
   const directionId = circle.directionId
   if (!directionId) return null
-  if (circle.directionType === 'line') {
-    const line = props.scene.lines.get(directionId)
-    if (!line) return null
-    return new Vec3(
-      line.p2.position.x - line.p1.position.x,
-      line.p2.position.y - line.p1.position.y,
-      line.p2.position.z - line.p1.position.z,
-    )
-  } else if (circle.directionType === 'straightLine') {
-    const line = props.scene.straightLines.get(directionId)
-    if (!line) return null
-    return new Vec3(
-      line.p2.position.x - line.p1.position.x,
-      line.p2.position.y - line.p1.position.y,
-      line.p2.position.z - line.p1.position.z,
-    )
-  } else if (circle.directionType === 'ray') {
-    const ray = props.scene.rays.get(directionId)
-    if (!ray) return null
-    return new Vec3(
-      ray.p2.position.x - ray.p1.position.x,
-      ray.p2.position.y - ray.p1.position.y,
-      ray.p2.position.z - ray.p1.position.z,
-    )
-  } else if (circle.directionType === 'vector') {
-    const vector = props.scene.vectors.get(directionId)
-    if (!vector) return null
-    return new Vec3(
-      vector.p2.position.x - vector.p1.position.x,
-      vector.p2.position.y - vector.p1.position.y,
-      vector.p2.position.z - vector.p1.position.z,
-    )
-  }
-  return null
+  const collection = DIRECTION_TYPE_COLLECTION[circle.directionType]
+  const obj = collection?.get(directionId)
+  if (!obj) return null
+  return new Vec3(
+    obj.p2.position.x - obj.p1.position.x,
+    obj.p2.position.y - obj.p1.position.y,
+    obj.p2.position.z - obj.p1.position.z,
+  )
+}
+
+const DIRECTION_TYPE_LABEL: Record<string, string> = {
+  line: '线段',
+  straightLine: '直线',
+  ray: '射线',
+  vector: '向量',
 }
 
 const getDirectionLabel = (circle: Circle3): string => {
@@ -391,25 +374,10 @@ const getDirectionLabel = (circle: Circle3): string => {
     return `点${pt?.name ?? ''} · XOZ平面`
   }
   const directionId = circle.directionId
-  let typeName = ''
-  let directionName = ''
-  if (circle.directionType === 'line') {
-    typeName = '线段'
-    const line = props.scene.lines.get(directionId!)
-    directionName = line?.name ?? ''
-  } else if (circle.directionType === 'straightLine') {
-    typeName = '直线'
-    const line = props.scene.straightLines.get(directionId!)
-    directionName = line?.name ?? ''
-  } else if (circle.directionType === 'ray') {
-    typeName = '射线'
-    const ray = props.scene.rays.get(directionId!)
-    directionName = ray?.name ?? ''
-  } else if (circle.directionType === 'vector') {
-    typeName = '向量'
-    const vector = props.scene.vectors.get(directionId!)
-    directionName = vector?.name ?? ''
-  }
+  const typeName = DIRECTION_TYPE_LABEL[circle.directionType] ?? ''
+  const collection = DIRECTION_TYPE_COLLECTION[circle.directionType]
+  const obj = directionId ? collection?.get(directionId) : undefined
+  const directionName = (obj as { name?: string } | undefined)?.name ?? ''
   return `${typeName} ${directionName}`
 }
 
@@ -428,55 +396,28 @@ const getNormalCircleCircumference = (circle: Circle3): number => {
   return circle.getCircumference(resolveDirectionVec(circle))
 }
 
-const formatPiCircumference = (radius: number): string => {
-  const coeff = 2 * radius
+const formatPiCoeff = (coeff: number): string => {
   if (Math.abs(coeff) < 1e-10) return '0'
   if (Math.abs(coeff - 1) < 1e-10) return 'π'
   return `${coeff.toFixed(2)}π`
 }
 
-const formatPiArea = (radius: number): string => {
-  const coeff = radius * radius
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
-}
+const formatPiCircumference = (radius: number): string => formatPiCoeff(2 * radius)
 
-const formatPiConeVolume = (radius: number, height: number): string => {
-  const coeff = (1 / 3) * radius * radius * height
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
-}
+const formatPiArea = (radius: number): string => formatPiCoeff(radius * radius)
+
+const formatPiConeVolume = (radius: number, height: number): string => formatPiCoeff((1 / 3) * radius * radius * height)
 
 const formatPiConeLateralArea = (radius: number, height: number): string => {
   const slantHeight = Math.hypot(radius, height)
-  const coeff = radius * slantHeight
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
+  return formatPiCoeff(radius * slantHeight)
 }
 
-const formatPiConeBaseArea = (radius: number): string => {
-  const coeff = radius * radius
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
-}
+const formatPiConeBaseArea = (radius: number): string => formatPiCoeff(radius * radius)
 
-const formatPiSphereArea = (radius: number): string => {
-  const coeff = 4 * radius * radius
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
-}
+const formatPiSphereArea = (radius: number): string => formatPiCoeff(4 * radius * radius)
 
-const formatPiSphereVolume = (radius: number): string => {
-  const coeff = (4 / 3) * radius * radius * radius
-  if (Math.abs(coeff) < 1e-10) return '0'
-  if (Math.abs(coeff - 1) < 1e-10) return 'π'
-  return `${coeff.toFixed(2)}π`
-}
+const formatPiSphereVolume = (radius: number): string => formatPiCoeff((4 / 3) * radius * radius * radius)
 
 const editPoint = reactive({
   name: '',
@@ -693,65 +634,47 @@ const emitToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
   )
 }
 
-const selectPointFromContent = (id: string) => {
+const SELECT_FROM_CONTENT_MAP: Record<string, (id: string) => void> = {
+  point: (id) => props.scene.selection.selectPoint(id),
+  line: (id) => props.scene.selection.selectLine(id),
+  straightLine: (id) => props.scene.selection.selectStraightLine(id),
+  ray: (id) => props.scene.selection.selectRay(id),
+  vector: (id) => props.scene.selection.selectVector(id),
+  face: (id) => props.scene.selection.selectFace(id),
+  circle: (id) => props.scene.selection.selectCircle(id),
+  sphere: (id) => props.scene.selection.selectSphere(id),
+  cone: (id) => props.scene.selection.selectCone(id),
+}
+
+const selectFromContent = (type: string, id: string) => {
   editing.value = null
-  props.scene.selection.selectPoint(id)
+  SELECT_FROM_CONTENT_MAP[type]?.(id)
   props.scene.markAllRenderDirty()
 }
 
-const selectLineFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectLine(id)
-  props.scene.markAllRenderDirty()
-}
+const selectPointFromContent = (id: string) => selectFromContent('point', id)
 
-const selectStraightLineFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectStraightLine(id)
-  props.scene.markAllRenderDirty()
-}
+const selectLineFromContent = (id: string) => selectFromContent('line', id)
 
-const selectRayFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectRay(id)
-  props.scene.markAllRenderDirty()
-}
+const selectStraightLineFromContent = (id: string) => selectFromContent('straightLine', id)
 
-const selectVectorFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectVector(id)
-  props.scene.markAllRenderDirty()
-}
+const selectRayFromContent = (id: string) => selectFromContent('ray', id)
 
-const selectFaceFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectFace(id)
-  props.scene.markAllRenderDirty()
-}
+const selectVectorFromContent = (id: string) => selectFromContent('vector', id)
 
-const selectCircleFromContent = (id: string) => {
-  editing.value = null
-  props.scene.selection.selectCircle(id)
-  props.scene.markAllRenderDirty()
-}
+const selectFaceFromContent = (id: string) => selectFromContent('face', id)
+
+const selectCircleFromContent = (id: string) => selectFromContent('circle', id)
+
+const selectSphereFromContent = (sphereId: string) => selectFromContent('sphere', sphereId)
+
+const selectConeFromContent = (coneId: string) => selectFromContent('cone', coneId)
 
 const selectHexahedronFromContent = (cubeId: string) => {
   editing.value = null
   const constraint = props.editor.getCubeConstraint(cubeId)
   const firstFaceId = constraint?.faceIds[0]
   if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
-  props.scene.markAllRenderDirty()
-}
-
-const selectSphereFromContent = (sphereId: string) => {
-  editing.value = null
-  props.scene.selection.selectSphere(sphereId)
-  props.scene.markAllRenderDirty()
-}
-
-const selectConeFromContent = (coneId: string) => {
-  editing.value = null
-  props.scene.selection.selectCone(coneId)
   props.scene.markAllRenderDirty()
 }
 
@@ -857,16 +780,21 @@ watch(
   () => {
     if (!editing.value) return
     const { type, id } = editing.value
-    if (type === 'point' && !selectedPointIds.value.includes(id)) editing.value = null
-    if (type === 'line' && !selectedLineIds.value.includes(id)) editing.value = null
-    if (type === 'straightLine' && !selectedStraightLineIds.value.includes(id)) editing.value = null
-    if (type === 'ray' && !selectedRayIds.value.includes(id)) editing.value = null
-    if (type === 'vector' && !selectedVectorIds.value.includes(id)) editing.value = null
-    if (type === 'face' && !selectedEditableFaceIds.value.includes(id)) editing.value = null
-    if (type === 'circle' && !selectedCircleIds.value.includes(id)) editing.value = null
-    if (type === 'hexahedron' && !selectedHexahedronIds.value.includes(id)) editing.value = null
-    if (type === 'sphere' && !selectedSphereIds.value.includes(id)) editing.value = null
-    if (type === 'cone' && !selectedConeIds.value.includes(id)) editing.value = null
+    const idsMap: Record<string, string[] | undefined> = {
+      point: selectedPointIds.value,
+      line: selectedLineIds.value,
+      straightLine: selectedStraightLineIds.value,
+      ray: selectedRayIds.value,
+      vector: selectedVectorIds.value,
+      face: selectedEditableFaceIds.value,
+      circle: selectedCircleIds.value,
+      hexahedron: selectedHexahedronIds.value,
+      sphere: selectedSphereIds.value,
+      cone: selectedConeIds.value,
+      regularPolygon: selectedRegularPolygons.value.map((rp) => rp.constraintId),
+    }
+    const ids = idsMap[type]
+    if (ids && !ids.includes(id)) editing.value = null
   },
 )
 
