@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Scene } from '../../../scene/Scene'
 import { Cone3 } from '../../../geometry/Cone3'
 
@@ -6,23 +6,17 @@ type RadiusState = {
   radiusValue: number
 }
 
-export class UpdateConeRadiusCommand implements Command {
+export class UpdateConeRadiusCommand extends AbstractUpdateCommand<RadiusState> {
   constructor(
     private scene: Scene,
     private cone: Cone3,
-    private before: RadiusState,
-    private after: RadiusState,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+    before: RadiusState,
+    after: RadiusState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: RadiusState) {
+  protected apply(state: RadiusState) {
     this.cone.radiusValue = state.radiusValue
     if (this.cone.normalCircleId) {
       const normalCircle = this.scene.circles.get(this.cone.normalCircleId)

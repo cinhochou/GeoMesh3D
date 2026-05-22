@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Circle3 } from '../../../geometry/Circle3'
 import { Scene } from '../../../scene/Scene'
 
@@ -14,23 +14,17 @@ type CircleState = {
   lockedRadius: number | null
 }
 
-export class UpdateCircleCommand implements Command {
+export class UpdateCircleCommand extends AbstractUpdateCommand<CircleState> {
   constructor(
     private circle: Circle3,
-    private before: CircleState,
-    private after: CircleState,
+    before: CircleState,
+    after: CircleState,
     private scene?: Scene,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: CircleState) {
+  protected apply(state: CircleState) {
     this.circle.name = state.name
     this.circle.nameVisible = state.nameVisible
     this.circle.valueVisible = state.valueVisible

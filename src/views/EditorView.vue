@@ -805,13 +805,14 @@ const handleToggleAR = async (enabled: boolean) => {
     } else {
       sharedRotationOwnerNotice.value = ''
     }
-  } catch {
+  } catch (err) {
     // rollback if AR 初始化失败
     if (enabled && lastModeBeforeAR.value !== null) {
       editor.setMode(lastModeBeforeAR.value)
       sceneStore.setCurrentMode(lastModeBeforeAR.value)
     }
     uiStore.setARMode(false)
+    console.error(err)
   }
 }
 
@@ -826,9 +827,10 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
       editor.historyIndex = -1
       collabStore.closeJoinDialog()
       showToast(`成功加入房间: ${room}`, 'global')
-    } catch {
+    } catch (err) {
       collabStore.closeJoinDialog()
       showToast('⚠️ 协作连接失败（请检查 websocket 服务）', 'global')
+      console.error(err)
     }
     return
   }

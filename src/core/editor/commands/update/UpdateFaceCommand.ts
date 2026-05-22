@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 
 type FaceState = {
@@ -14,36 +14,25 @@ type FaceState = {
   edgeLengthLocks: Array<number | null>
 }
 
-export class UpdateFaceCommand implements Command {
+export class UpdateFaceCommand extends AbstractUpdateCommand<FaceState> {
   constructor(
     private face: PlanarPolygon,
-    private before: FaceState,
-    private after: FaceState,
-  ) {}
-
-  execute() {
-    this.face.name = this.after.name
-    this.face.nameVisible = this.after.nameVisible
-    this.face.valueVisible = this.after.valueVisible
-    this.face.labelOffsetX = this.after.labelOffsetX
-    this.face.labelOffsetY = this.after.labelOffsetY
-    this.face.visible = this.after.visible
-    this.face.userLocked = this.after.userLocked
-    this.face.areaLocked = this.after.areaLocked
-    this.face.lockedArea = this.after.lockedArea
-    this.face.edgeLengthLocks = [...this.after.edgeLengthLocks]
+    before: FaceState,
+    after: FaceState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.face.name = this.before.name
-    this.face.nameVisible = this.before.nameVisible
-    this.face.valueVisible = this.before.valueVisible
-    this.face.labelOffsetX = this.before.labelOffsetX
-    this.face.labelOffsetY = this.before.labelOffsetY
-    this.face.visible = this.before.visible
-    this.face.userLocked = this.before.userLocked
-    this.face.areaLocked = this.before.areaLocked
-    this.face.lockedArea = this.before.lockedArea
-    this.face.edgeLengthLocks = [...this.before.edgeLengthLocks]
+  protected apply(state: FaceState) {
+    this.face.name = state.name
+    this.face.nameVisible = state.nameVisible
+    this.face.valueVisible = state.valueVisible
+    this.face.labelOffsetX = state.labelOffsetX
+    this.face.labelOffsetY = state.labelOffsetY
+    this.face.visible = state.visible
+    this.face.userLocked = state.userLocked
+    this.face.areaLocked = state.areaLocked
+    this.face.lockedArea = state.lockedArea
+    this.face.edgeLengthLocks = [...state.edgeLengthLocks]
   }
 }

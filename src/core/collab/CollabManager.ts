@@ -580,6 +580,7 @@ export class CollabManager {
         return
       } catch (err) {
         lastError = err
+        console.warn(`collab room: ${normalizedRoomName}, failed to connect via ${serverUrl}`, err)
         // 当前地址连接失败后，先完整释放 provider，再尝试下一个备用地址。
         this.clearProviderBindings()
         this.provider.disconnect()
@@ -1573,6 +1574,7 @@ export class CollabManager {
     if (target.type === 'line') return this.scene.lines.has(target.id)
     if (target.type === 'straightLine') return this.scene.straightLines.has(target.id)
     if (target.type === 'ray') return this.scene.rays.has(target.id)
+    if (target.type === 'vector') return this.scene.vectors.has(target.id)
     return this.scene.faces.has(target.id)
   }
 

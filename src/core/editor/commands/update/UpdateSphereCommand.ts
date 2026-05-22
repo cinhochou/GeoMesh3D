@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Sphere3 } from '../../../geometry/Sphere3'
 
 type SphereState = {
@@ -11,22 +11,16 @@ type SphereState = {
   userLocked: boolean
 }
 
-export class UpdateSphereCommand implements Command {
+export class UpdateSphereCommand extends AbstractUpdateCommand<SphereState> {
   constructor(
     private sphere: Sphere3,
-    private before: SphereState,
-    private after: SphereState,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+    before: SphereState,
+    after: SphereState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: SphereState) {
+  protected apply(state: SphereState) {
     this.sphere.name = state.name
     this.sphere.nameVisible = state.nameVisible
     this.sphere.valueVisible = state.valueVisible

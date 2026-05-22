@@ -116,7 +116,9 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ editor
 │  │  │  ├─ Command.ts
 │  │  │  ├─ commands
+│  │  │  │  ├─ AbstractUpdateCommand.ts
 │  │  │  │  ├─ add
+│  │  │  │  │  ├─ AddConeCommand.ts
 │  │  │  │  │  ├─ AddElementCommand.ts
 │  │  │  │  │  ├─ AddHexahedronCommand.ts
 │  │  │  │  │  ├─ AddIntersectionPointCommand.ts
@@ -125,6 +127,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  │  └─ AddSphereCommand.ts
 │  │  │  │  ├─ delete
 │  │  │  │  │  ├─ DeleteCircleCommand.ts
+│  │  │  │  │  ├─ DeleteConeCommand.ts
 │  │  │  │  │  ├─ DeleteFaceCommand.ts
 │  │  │  │  │  ├─ DeleteHexahedronCommand.ts
 │  │  │  │  │  ├─ DeleteLineCommand.ts
@@ -143,6 +146,9 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  │  └─ TransformPointsCommand.ts
 │  │  │  │  └─ update
 │  │  │  │     ├─ UpdateCircleCommand.ts
+│  │  │  │     ├─ UpdateConeCommand.ts
+│  │  │  │     ├─ UpdateConeHeightCommand.ts
+│  │  │  │     ├─ UpdateConeRadiusCommand.ts
 │  │  │  │     ├─ UpdateCubeCommand.ts
 │  │  │  │     ├─ UpdateFaceCommand.ts
 │  │  │  │     ├─ UpdateLineCommand.ts
@@ -154,9 +160,11 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │     ├─ UpdateStraightLineCommand.ts
 │  │  │  │     └─ UpdateVectorCommand.ts
 │  │  │  ├─ Editor.ts
-│  │  │  └─ editorSession.ts
+│  │  │  ├─ editorSession.ts
+│  │  │  └─ SceneSerializer.ts
 │  │  ├─ geometry
 │  │  │  ├─ Circle3.ts
+│  │  │  ├─ Cone3.ts
 │  │  │  ├─ GeoVector3.ts
 │  │  │  ├─ IntersectionPoint3.ts
 │  │  │  ├─ Line3.ts
@@ -174,7 +182,11 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │     └─ Selection.ts
 │  ├─ main.ts
 │  ├─ renderer
+│  │  ├─ ARManager.ts
+│  │  ├─ AxisGridManager.ts
+│  │  ├─ GeometrySyncer.ts
 │  │  ├─ Interaction.ts
+│  │  ├─ LabelRenderer.ts
 │  │  ├─ ObjectMapper.ts
 │  │  └─ ThreeRenderer.ts
 │  ├─ resources

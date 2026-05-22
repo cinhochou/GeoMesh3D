@@ -723,7 +723,7 @@ export class Interaction {
       }
     })
 
-    return bestId ? (this.renderer.meshMap.get(bestId) ?? null) : null
+    return bestId ? (this.renderer.geometrySyncer.meshMap.get(bestId) ?? null) : null
   }
 
   private pickLinearWithThreshold(lineThreshold: number) {
@@ -731,7 +731,7 @@ export class Interaction {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
     this.raycaster.params.Line = { threshold: lineThreshold }
     const lineHits = this.raycaster.intersectObjects(
-      [...this.renderer.meshMap.values()].filter(
+      [...this.renderer.geometrySyncer.meshMap.values()].filter(
         (obj) =>
           obj.userData?.type === 'line' ||
           obj.userData?.type === 'straightLine' ||
@@ -781,7 +781,7 @@ export class Interaction {
 
     const nearest = candidates.sort((a, b) => a.distance - b.distance)[0]
     if (!nearest || nearest.distance > radiusPx) return null
-    return this.renderer.meshMap.get(nearest.id) ?? null
+    return this.renderer.geometrySyncer.meshMap.get(nearest.id) ?? null
   }
 
   private pickTouchTarget(clientX: number, clientY: number) {
@@ -810,7 +810,7 @@ export class Interaction {
 
   private pickIntersectionTarget() {
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-    const candidates = [...this.renderer.meshMap.values()].filter((obj) => {
+    const candidates = [...this.renderer.geometrySyncer.meshMap.values()].filter((obj) => {
       const type = obj.userData?.type
       return (
         type === 'line' ||
@@ -2991,7 +2991,7 @@ export class Interaction {
       const lineThreshold = this.getARLinePickThreshold()
       const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
       this.raycaster.params.Line = { threshold: lineThreshold }
-      const allObjects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+      const allObjects = [...this.renderer.geometrySyncer.meshMap.values(), ...this.renderer.geometrySyncer.groupMap.values()]
       const hits = this.raycaster.intersectObjects(allObjects, true)
       this.raycaster.params.Line = { threshold: previousThreshold }
 
@@ -3024,7 +3024,7 @@ export class Interaction {
       return null
     }
 
-    const allObjects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+    const allObjects = [...this.renderer.geometrySyncer.meshMap.values(), ...this.renderer.geometrySyncer.groupMap.values()]
     const hits = this.raycaster.intersectObjects(allObjects, true)
 
     if (hits.length > 0) {
@@ -3526,7 +3526,7 @@ export class Interaction {
 
   private findNearestScreenGeometry(clientX: number, clientY: number, rect: DOMRect) {
     let best: { object: THREE.Object3D; distance: number } | null = null
-    const objects = [...this.renderer.meshMap.values(), ...this.renderer.groupMap.values()]
+    const objects = [...this.renderer.geometrySyncer.meshMap.values(), ...this.renderer.geometrySyncer.groupMap.values()]
 
     for (const object of objects) {
       const type = object.userData?.type

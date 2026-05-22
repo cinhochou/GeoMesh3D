@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 
 type CubeState = {
@@ -8,22 +8,16 @@ type CubeState = {
   lockedEdgeLength: number | null
 }
 
-export class UpdateCubeCommand implements Command {
+export class UpdateCubeCommand extends AbstractUpdateCommand<CubeState> {
   constructor(
     private cube: CubeConstraint,
-    private before: CubeState,
-    private after: CubeState,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+    before: CubeState,
+    after: CubeState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: CubeState) {
+  protected apply(state: CubeState) {
     this.cube.name = state.name
     this.cube.valueVisible = state.valueVisible
     this.cube.edgeLengthLocked = state.edgeLengthLocked

@@ -639,6 +639,11 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (p.coneRole !== null && p.coneRole !== 'baseCenter' && p.coneRole !== 'apex') {
       return { valid: false, error: `点 "${p.name}" 的 coneRole 无效` }
     }
+    err = validateNullableStringId(p.regularPolygonId, `点 "${p.name}" 的 regularPolygonId 无效`)
+    if (err) return { valid: false, error: err }
+    if (p.regularPolygonRole !== null && p.regularPolygonRole !== 'owner' && p.regularPolygonRole !== 'dependent') {
+      return { valid: false, error: `点 "${p.name}" 的 regularPolygonRole 无效` }
+    }
   }
 
   if (!pointIdSet.has(Scene.ORIGIN_ID)) {

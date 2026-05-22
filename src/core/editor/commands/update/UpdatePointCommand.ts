@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Point3 } from '../../../geometry/Point3'
 
 type PointState = {
@@ -10,28 +10,21 @@ type PointState = {
   userLocked: boolean
 }
 
-export class UpdatePointCommand implements Command {
+export class UpdatePointCommand extends AbstractUpdateCommand<PointState> {
   constructor(
     private point: Point3,
-    private before: PointState,
-    private after: PointState,
-  ) {}
-
-  execute() {
-    this.point.name = this.after.name
-    this.point.nameVisible = this.after.nameVisible
-    this.point.valueVisible = this.after.valueVisible
-    this.point.labelOffsetX = this.after.labelOffsetX
-    this.point.labelOffsetY = this.after.labelOffsetY
-    this.point.userLocked = this.after.userLocked
+    before: PointState,
+    after: PointState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.point.name = this.before.name
-    this.point.nameVisible = this.before.nameVisible
-    this.point.valueVisible = this.before.valueVisible
-    this.point.labelOffsetX = this.before.labelOffsetX
-    this.point.labelOffsetY = this.before.labelOffsetY
-    this.point.userLocked = this.before.userLocked
+  protected apply(state: PointState) {
+    this.point.name = state.name
+    this.point.nameVisible = state.nameVisible
+    this.point.valueVisible = state.valueVisible
+    this.point.labelOffsetX = state.labelOffsetX
+    this.point.labelOffsetY = state.labelOffsetY
+    this.point.userLocked = state.userLocked
   }
 }

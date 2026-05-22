@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Cone3 } from '../../../geometry/Cone3'
 
 type ConeState = {
@@ -11,22 +11,16 @@ type ConeState = {
   userLocked: boolean
 }
 
-export class UpdateConeCommand implements Command {
+export class UpdateConeCommand extends AbstractUpdateCommand<ConeState> {
   constructor(
     private cone: Cone3,
-    private before: ConeState,
-    private after: ConeState,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+    before: ConeState,
+    after: ConeState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: ConeState) {
+  protected apply(state: ConeState) {
     this.cone.name = state.name
     this.cone.nameVisible = state.nameVisible
     this.cone.valueVisible = state.valueVisible

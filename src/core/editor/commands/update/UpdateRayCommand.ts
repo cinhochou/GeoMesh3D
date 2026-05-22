@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { Ray3 } from '../../../geometry/Ray3'
 
 type RayState = {
@@ -12,32 +12,23 @@ type RayState = {
   userLocked: boolean
 }
 
-export class UpdateRayCommand implements Command {
+export class UpdateRayCommand extends AbstractUpdateCommand<RayState> {
   constructor(
     private ray: Ray3,
-    private before: RayState,
-    private after: RayState,
-  ) {}
-
-  execute() {
-    this.ray.name = this.after.name
-    this.ray.nameVisible = this.after.nameVisible
-    this.ray.valueVisible = this.after.valueVisible
-    this.ray.labelOffsetX = this.after.labelOffsetX
-    this.ray.labelOffsetY = this.after.labelOffsetY
-    this.ray.visible = this.after.visible
-    this.ray.displayLength = Ray3.normalizeDisplayLength(this.after.displayLength)
-    this.ray.userLocked = this.after.userLocked
+    before: RayState,
+    after: RayState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.ray.name = this.before.name
-    this.ray.nameVisible = this.before.nameVisible
-    this.ray.valueVisible = this.before.valueVisible
-    this.ray.labelOffsetX = this.before.labelOffsetX
-    this.ray.labelOffsetY = this.before.labelOffsetY
-    this.ray.visible = this.before.visible
-    this.ray.displayLength = Ray3.normalizeDisplayLength(this.before.displayLength)
-    this.ray.userLocked = this.before.userLocked
+  protected apply(state: RayState) {
+    this.ray.name = state.name
+    this.ray.nameVisible = state.nameVisible
+    this.ray.valueVisible = state.valueVisible
+    this.ray.labelOffsetX = state.labelOffsetX
+    this.ray.labelOffsetY = state.labelOffsetY
+    this.ray.visible = state.visible
+    this.ray.displayLength = Ray3.normalizeDisplayLength(state.displayLength)
+    this.ray.userLocked = state.userLocked
   }
 }

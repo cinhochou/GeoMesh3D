@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 
 type RegularPolygonState = {
@@ -9,22 +9,16 @@ type RegularPolygonState = {
   lockedEdgeLength: number | null
 }
 
-export class UpdateRegularPolygonCommand implements Command {
+export class UpdateRegularPolygonCommand extends AbstractUpdateCommand<RegularPolygonState> {
   constructor(
     private constraint: RegularPolygonConstraint,
-    private before: RegularPolygonState,
-    private after: RegularPolygonState,
-  ) {}
-
-  execute() {
-    this.apply(this.after)
+    before: RegularPolygonState,
+    after: RegularPolygonState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.apply(this.before)
-  }
-
-  private apply(state: RegularPolygonState) {
+  protected apply(state: RegularPolygonState) {
     this.constraint.name = state.name
     this.constraint.nameVisible = state.nameVisible
     this.constraint.valueVisible = state.valueVisible

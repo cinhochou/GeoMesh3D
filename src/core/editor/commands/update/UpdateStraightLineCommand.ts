@@ -1,4 +1,4 @@
-import type { Command } from '../../Command'
+import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
 import { StraightLine3 } from '../../../geometry/StraightLine3'
 
 type StraightLineState = {
@@ -12,32 +12,23 @@ type StraightLineState = {
   userLocked: boolean
 }
 
-export class UpdateStraightLineCommand implements Command {
+export class UpdateStraightLineCommand extends AbstractUpdateCommand<StraightLineState> {
   constructor(
     private line: StraightLine3,
-    private before: StraightLineState,
-    private after: StraightLineState,
-  ) {}
-
-  execute() {
-    this.line.name = this.after.name
-    this.line.nameVisible = this.after.nameVisible
-    this.line.valueVisible = this.after.valueVisible
-    this.line.labelOffsetX = this.after.labelOffsetX
-    this.line.labelOffsetY = this.after.labelOffsetY
-    this.line.visible = this.after.visible
-    this.line.displayLength = StraightLine3.normalizeDisplayLength(this.after.displayLength)
-    this.line.userLocked = this.after.userLocked
+    before: StraightLineState,
+    after: StraightLineState,
+  ) {
+    super(before, after)
   }
 
-  undo() {
-    this.line.name = this.before.name
-    this.line.nameVisible = this.before.nameVisible
-    this.line.valueVisible = this.before.valueVisible
-    this.line.labelOffsetX = this.before.labelOffsetX
-    this.line.labelOffsetY = this.before.labelOffsetY
-    this.line.visible = this.before.visible
-    this.line.displayLength = StraightLine3.normalizeDisplayLength(this.before.displayLength)
-    this.line.userLocked = this.before.userLocked
+  protected apply(state: StraightLineState) {
+    this.line.name = state.name
+    this.line.nameVisible = state.nameVisible
+    this.line.valueVisible = state.valueVisible
+    this.line.labelOffsetX = state.labelOffsetX
+    this.line.labelOffsetY = state.labelOffsetY
+    this.line.visible = state.visible
+    this.line.displayLength = StraightLine3.normalizeDisplayLength(state.displayLength)
+    this.line.userLocked = state.userLocked
   }
 }
