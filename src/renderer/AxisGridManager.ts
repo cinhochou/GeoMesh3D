@@ -39,7 +39,7 @@ export class AxisGridManager {
   private static readonly AXIS_ARROW_MOBILE_SCALE_FACTOR = 2.4
   private static readonly POINT_SCALE_REFERENCE_DISTANCE =
     Math.sqrt(15 * 15 * 3) *
-    (Math.tan((60 / 2) * Math.PI / 180) / Math.tan((30 / 2) * Math.PI / 180))
+    (Math.tan(((60 / 2) * Math.PI) / 180) / Math.tan(((30 / 2) * Math.PI) / 180))
 
   axisGridGroup: THREE.Group
   private gridHelper: THREE.GridHelper | null = null
@@ -204,9 +204,9 @@ export class AxisGridManager {
   }
 
   getDefaultCameraPositionForAxisSize(size: number): THREE.Vector3 {
-    if (size === 20) return new THREE.Vector3(54, 54, 54)
-    if (size === 40) return new THREE.Vector3(65, 140, 65)
-    return new THREE.Vector3(32, 32, 32)
+    if (size === 20) return new THREE.Vector3(54, 40, 54)
+    if (size === 40) return new THREE.Vector3(100, 85, 100)
+    return new THREE.Vector3(32, 20, 32)
   }
 
   setAxisGridSize(size: number) {
@@ -322,9 +322,7 @@ export class AxisGridManager {
         (AxisGridManager.AXIS_ARROW_BASE_LENGTH +
           AxisGridManager.AXIS_ARROW_BASE_HEAD_LENGTH * 0.35) *
         Math.max(0, factor - 1)
-      const labelPos = dir
-        .clone()
-        .multiplyScalar(axisLength + labelOffset + extra + mobileExtra)
+      const labelPos = dir.clone().multiplyScalar(axisLength + labelOffset + extra + mobileExtra)
       if (Math.abs(dir.y) < 1e-6) {
         labelPos.y = yOffset
       } else {

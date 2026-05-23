@@ -6,12 +6,23 @@ import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
 import { LabelRenderer } from './LabelRenderer'
 import { GeometrySyncer, isLinearType, DEFAULT_POINT_COLOR } from './GeometrySyncer'
+import type { RenderSettings } from '@/store/uiStore' // 引入渲染设置类型定义
 
 type Matrix4WithLegacyGetInverse = THREE.Matrix4 & {
   getInverse?: (m: THREE.Matrix4) => THREE.Matrix4
 }
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'axisLabel'
+type RenderObjectType =
+  | 'point'
+  | 'line'
+  | 'straightLine'
+  | 'ray'
+  | 'vector'
+  | 'circle'
+  | 'face'
+  | 'sphere'
+  | 'cone'
+  | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -58,7 +69,9 @@ export class ThreeRenderer {
   static readonly LABEL_DRAG_LIMIT = 30
   private static readonly BACKGROUND_COLOR = 0x111111
   private static readonly SHARED_WORLD_ROTATION_LERP = 0.22
-  private static readonly POINT_SCALE_REFERENCE_DISTANCE = Math.sqrt(15 * 15 * 3) * (Math.tan(60 / 2 * Math.PI / 180) / Math.tan(30 / 2 * Math.PI / 180))
+  private static readonly POINT_SCALE_REFERENCE_DISTANCE =
+    Math.sqrt(15 * 15 * 3) *
+    (Math.tan(((60 / 2) * Math.PI) / 180) / Math.tan(((30 / 2) * Math.PI) / 180))
   private static readonly LABEL_OFFSET_EXPONENT = 0.65
   private static readonly LABEL_OFFSET_MIN_FACTOR = 0.7
   private static readonly LABEL_OFFSET_MAX_FACTOR = 1.15
@@ -79,12 +92,21 @@ export class ThreeRenderer {
   private sharedWorldTargetQuaternion = new THREE.Quaternion()
   private sharedWorldRotationInitialized = false
   private readonly isMobileDevice: boolean
+  private renderSettings: RenderSettings // 当前渲染设置（抗锯齿、分辨率缩放、帧率限制、GPU 偏好）
+  private pixelRatioScale = 1.0 // 分辨率缩放系数（0.5 ~ 1.0），用于动态调整渲染分辨率
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, settings?: RenderSettings) {
     this.container = container
+    // 初始化渲染设置，若未传入则使用默认值（抗锯齿关闭、分辨率 100%、帧率无限制、GPU 默认）
+    this.renderSettings = settings ?? {
+      antialias: false,
+      pixelRatioScale: 1.0,
+      fpsCap: 0,
+      powerPreference: 'default',
+    }
+    this.pixelRatioScale = this.renderSettings.pixelRatioScale
     this.isMobileDevice =
-      window.matchMedia('(pointer: coarse)').matches ||
-      window.matchMedia('(hover: none)').matches
+      window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color(ThreeRenderer.BACKGROUND_COLOR)
     this.world = new THREE.Group()
@@ -95,10 +117,15 @@ export class ThreeRenderer {
     const h = container.clientHeight
 
     this.camera = new THREE.PerspectiveCamera(30, w / h, 0.1, 1000)
-    this.camera.position.set(32, 32, 32)
+    this.camera.position.set(32, 20, 32)
     this.camera.lookAt(0, 0, 0)
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    // 创建 WebGLRenderer，应用用户设置的抗锯齿与 GPU 偏好
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: this.renderSettings.antialias,
+      alpha: true,
+      powerPreference: this.renderSettings.powerPreference,
+    })
     this.renderer.setSize(w, h, false)
 
     this.renderer.domElement.style.position = 'absolute'
@@ -148,11 +175,13 @@ export class ThreeRenderer {
       refreshScreenSpaceScales: () => this.refreshScreenSpaceScales(),
       onResize: () => this.onResize(),
       setWorldScale: (scale: number) => this.setWorldScale(scale),
-      setSharedWorldQuaternion: (q: THREE.Quaternion, immediate?: boolean) => this.setSharedWorldQuaternion(q, immediate),
+      setSharedWorldQuaternion: (q: THREE.Quaternion, immediate?: boolean) =>
+        this.setSharedWorldQuaternion(q, immediate),
     })
 
     this.axisGridManager = new AxisGridManager({
-      makeColoredTextSprite: (text: string, color: number) => this.labelRenderer.makeColoredTextSprite(text, color),
+      makeColoredTextSprite: (text: string, color: number) =>
+        this.labelRenderer.makeColoredTextSprite(text, color),
       updateRendererPixelRatio: () => this.updateRendererPixelRatio(),
       refreshScreenSpaceScales: () => this.refreshScreenSpaceScales(),
       getWorldScale: () => this.arManager.currentWorldScale,
@@ -292,15 +321,24 @@ export class ThreeRenderer {
     const valueLabel = userData.__valueLabelSprite
     if ((!label || !label.visible) && (!valueLabel || !valueLabel.visible)) return
 
-    const valueExtraOffset = this.labelRenderer.getValueLabelOffsetPx(label, userData.type === 'point')
+    const valueExtraOffset = this.labelRenderer.getValueLabelOffsetPx(
+      label,
+      userData.type === 'point',
+    )
 
     if (userData.type === 'point') {
       if (label?.visible) {
-        label.position.copy(this.geometrySyncer.getScreenOffsetPosition(object.position, offsetX, offsetY))
+        label.position.copy(
+          this.geometrySyncer.getScreenOffsetPosition(object.position, offsetX, offsetY),
+        )
       }
       if (valueLabel?.visible) {
         valueLabel.position.copy(
-          this.geometrySyncer.getScreenOffsetPosition(object.position, offsetX + valueExtraOffset, offsetY),
+          this.geometrySyncer.getScreenOffsetPosition(
+            object.position,
+            offsetX + valueExtraOffset,
+            offsetY,
+          ),
         )
       }
       return
@@ -396,13 +434,25 @@ export class ThreeRenderer {
     if (this.guideLabel) {
       const fovS = this.geometrySyncer.getFovSpriteScale()
       if (this.isMobileDevice) {
-        this.guideLabel.scale.set(0.1 * fovS / this.arManager.currentWorldScale, 0.05 * fovS / this.arManager.currentWorldScale, 1)
+        this.guideLabel.scale.set(
+          (0.1 * fovS) / this.arManager.currentWorldScale,
+          (0.05 * fovS) / this.arManager.currentWorldScale,
+          1,
+        )
       } else {
-        this.guideLabel.scale.set(0.18 * fovS / this.arManager.currentWorldScale, 0.1 * fovS / this.arManager.currentWorldScale, 1)
+        this.guideLabel.scale.set(
+          (0.18 * fovS) / this.arManager.currentWorldScale,
+          (0.1 * fovS) / this.arManager.currentWorldScale,
+          1,
+        )
       }
     }
     if (this.guidePoint) {
-      this.guidePoint.scale.set(this.geometrySyncer.getPointSpriteScale(), this.geometrySyncer.getPointSpriteScale(), 1)
+      this.guidePoint.scale.set(
+        this.geometrySyncer.getPointSpriteScale(),
+        this.geometrySyncer.getPointSpriteScale(),
+        1,
+      )
     }
   }
 
@@ -458,21 +508,59 @@ export class ThreeRenderer {
   private updateResponsiveScales() {
     this.geometrySyncer.refreshScreenSpaceScales()
     if (this.guidePoint) {
-      this.guidePoint.scale.set(this.geometrySyncer.getPointSpriteScale(), this.geometrySyncer.getPointSpriteScale(), 1)
+      this.guidePoint.scale.set(
+        this.geometrySyncer.getPointSpriteScale(),
+        this.geometrySyncer.getPointSpriteScale(),
+        1,
+      )
     }
     this.geometrySyncer.updateLinearArrowHeadScales()
     this.axisGridManager.updateAxisArrowScales()
   }
 
+  /**
+   * 更新渲染器的像素比例
+   * 根据设备原生 devicePixelRatio 与分辨率缩放系数重新设置
+   */
   private updateRendererPixelRatio() {
     const deviceRatio = window.devicePixelRatio || 1
-    let cap = deviceRatio
-    if (this.axisGridManager.getAxisGridSize() >= 40) {
-      cap = Math.min(deviceRatio, 1.45)
-    } else if (this.axisGridManager.getAxisGridSize() >= 20) {
-      cap = Math.min(deviceRatio, 1.7)
+    this.renderer.setPixelRatio(deviceRatio * this.pixelRatioScale)
+  }
+
+  /**
+   * 设置渲染参数
+   * pixelRatioScale 与 fpsCap 可立即生效；
+   * antialias 与 powerPreference 变更需要重建 WebGLRenderer，返回 needsRecreate 通知调用方
+   */
+  setRenderSettings(settings: Partial<RenderSettings>) {
+    const prevAntialias = this.renderSettings.antialias
+    const prevPowerPreference = this.renderSettings.powerPreference
+
+    this.renderSettings = {
+      ...this.renderSettings,
+      ...settings,
     }
-    this.renderer.setPixelRatio(cap)
+
+    // 若分辨率缩放比例发生变化，更新 pixelRatio 并刷新屏幕空间缩放
+    if (typeof settings.pixelRatioScale === 'number') {
+      this.pixelRatioScale = Math.min(1.0, Math.max(0.5, settings.pixelRatioScale))
+      this.updateRendererPixelRatio()
+      this.refreshScreenSpaceScales()
+    }
+
+    // 抗锯齿与 GPU 偏好变更需要重建 WebGLRenderer，返回标志通知调用方刷新页面
+    return {
+      needsRecreate:
+        (typeof settings.antialias === 'boolean' && settings.antialias !== prevAntialias) ||
+        (settings.powerPreference !== undefined && settings.powerPreference !== prevPowerPreference),
+    }
+  }
+
+  /**
+   * 获取当前渲染设置的只读副本
+   */
+  getRenderSettings(): Readonly<RenderSettings> {
+    return { ...this.renderSettings }
   }
 
   sync(
@@ -482,7 +570,13 @@ export class ThreeRenderer {
     activeLabelTarget?: { type: string; geoId: string } | null,
     activePointValueTarget?: { type: 'point'; geoId: string } | null,
   ) {
-    this.geometrySyncer.sync(geoScene, previewData, facePreviewData, activeLabelTarget, activePointValueTarget)
+    this.geometrySyncer.sync(
+      geoScene,
+      previewData,
+      facePreviewData,
+      activeLabelTarget,
+      activePointValueTarget,
+    )
   }
 
   cleanupMissingMeshes(scene: GeoScene) {
@@ -571,13 +665,15 @@ export class ThreeRenderer {
   }
 
   private getDefaultCameraPositionForAxisSize(size: number): THREE.Vector3 {
-    if (size === 20) return new THREE.Vector3(54, 54, 54)
-    if (size === 40) return new THREE.Vector3(65, 140, 65)
-    return new THREE.Vector3(32, 32, 32)
+    if (size === 20) return new THREE.Vector3(54, 40, 54)
+    if (size === 40) return new THREE.Vector3(100, 85, 100)
+    return new THREE.Vector3(32, 20, 32)
   }
 
   resetView() {
-    const defaultPos = this.getDefaultCameraPositionForAxisSize(this.axisGridManager.getAxisGridSize())
+    const defaultPos = this.getDefaultCameraPositionForAxisSize(
+      this.axisGridManager.getAxisGridSize(),
+    )
     this.controls.target.set(0, 0, 0)
     this.camera.position.copy(defaultPos)
     this.camera.zoom = 1
@@ -609,7 +705,9 @@ export class ThreeRenderer {
 
   setAxisGridSize(size: number) {
     this.axisGridManager.setAxisGridSize(size)
-    this.camera.position.copy(this.getDefaultCameraPositionForAxisSize(this.axisGridManager.getAxisGridSize()))
+    this.camera.position.copy(
+      this.getDefaultCameraPositionForAxisSize(this.axisGridManager.getAxisGridSize()),
+    )
     if (this.arManager.isARMode) {
       this.setWorldScale(this.getARSceneScaleForAxisSize(this.axisGridManager.getAxisGridSize()))
       this.axisGridManager.updateAxisArrowScales()
@@ -676,9 +774,17 @@ export class ThreeRenderer {
       this.guideLabel.center.set(0, 0)
       const fovS = this.geometrySyncer.getFovSpriteScale()
       if (this.isMobileDevice) {
-        this.guideLabel.scale.set(0.1 * fovS / this.arManager.currentWorldScale, 0.05 * fovS / this.arManager.currentWorldScale, 1)
+        this.guideLabel.scale.set(
+          (0.1 * fovS) / this.arManager.currentWorldScale,
+          (0.05 * fovS) / this.arManager.currentWorldScale,
+          1,
+        )
       } else {
-        this.guideLabel.scale.set(0.18 * fovS / this.arManager.currentWorldScale, 0.1 * fovS / this.arManager.currentWorldScale, 1)
+        this.guideLabel.scale.set(
+          (0.18 * fovS) / this.arManager.currentWorldScale,
+          (0.1 * fovS) / this.arManager.currentWorldScale,
+          1,
+        )
       }
       this.projectionGroup.add(this.guideLabel)
 
@@ -710,7 +816,10 @@ export class ThreeRenderer {
         this.getStableLabelCenterX(labelData.canvasPixelWidth ?? 256, true),
         ThreeRenderer.POINT_LABEL_CENTER_Y,
       )
-      this.labelRenderer.setAdaptiveSpriteScale(this.guideLabel!, this.geometrySyncer.getPointLabelScale())
+      this.labelRenderer.setAdaptiveSpriteScale(
+        this.guideLabel!,
+        this.geometrySyncer.getPointLabelScale(),
+      )
     }
     this.guideLabel!.position.copy(
       this.isMobileDevice

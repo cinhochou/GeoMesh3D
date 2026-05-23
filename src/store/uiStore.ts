@@ -1,8 +1,67 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { EditorMode } from '@/core/editor/Editor'
 
 export type ToastScope = 'global' | 'viewport'
+
+// 渲染设置分类：画质 / 性能 / 高级
+export type RenderSettingsCategory = 'graphics' | 'performance' | 'advanced'
+
+// GPU 偏好选项：默认 / 高性能
+export type PowerPreference = 'default' | 'high-performance'
+
+// 渲染设置数据结构
+export interface RenderSettings {
+  antialias: boolean          // 是否开启抗锯齿（MSAA）
+  pixelRatioScale: number     // 分辨率缩放比例（0.5 ~ 1.0）
+  fpsCap: number              // 帧率限制（0=无限制, 30/60/90/120）
+  powerPreference: PowerPreference  // GPU 偏好
+}
+
+// localStorage 存储键名，用于持久化保存用户渲染设置
+const RENDER_SETTINGS_KEY = '3d-editor-render-settings'
+
+// 默认渲染设置：抗锯齿关闭、分辨率100%、帧率无限制、GPU默认
+const defaultRenderSettings: RenderSettings = {
+  antialias: false,
+  pixelRatioScale: 1.0,
+  fpsCap: 0,
+  powerPreference: 'default',
+}
+
+// 从 localStorage 加载渲染设置
+// 首次访问或数据不存在时返回默认值
+// 会对每个字段进行类型校验，防止用户手动篡改 localStorage 导致错误
+function loadRenderSettings(): RenderSettings {
+  try {
+    const raw = localStorage.getItem(RENDER_SETTINGS_KEY)
+    if (!raw) return { ...defaultRenderSettings }
+    const parsed = JSON.parse(raw) as Partial<RenderSettings>
+    return {
+      antialias: typeof parsed.antialias === 'boolean' ? parsed.antialias : defaultRenderSettings.antialias,
+      pixelRatioScale:
+        typeof parsed.pixelRatioScale === 'number'
+          ? Math.min(1.0, Math.max(0.5, parsed.pixelRatioScale))
+          : defaultRenderSettings.pixelRatioScale,
+      fpsCap: [0, 30, 60, 90, 120].includes(parsed.fpsCap as number) ? (parsed.fpsCap as number) : defaultRenderSettings.fpsCap,
+      powerPreference:
+        parsed.powerPreference === 'high-performance' ? 'high-performance' : defaultRenderSettings.powerPreference,
+    }
+  } catch {
+    // 读取失败（如 JSON 损坏）时回退到默认值
+    return { ...defaultRenderSettings }
+  }
+}
+
+// 将渲染设置保存到 localStorage，实现持久化
+// 无痕模式或存储空间不足时可能失败，此时静默忽略
+function saveRenderSettings(settings: RenderSettings) {
+  try {
+    localStorage.setItem(RENDER_SETTINGS_KEY, JSON.stringify(settings))
+  } catch {
+    // ignore
+  }
+}
 
 type ContentGroupKey =
   | 'point'
@@ -133,6 +192,21 @@ export const useUiStore = defineStore('ui', () => {
 
   const contentGroupsCollapsed = ref<ContentGroupCollapseState>(createContentGroupsCollapsed())
   const hasAutoCollapsedContentGroups = ref(false)
+
+  // 渲染设置状态：从 localStorage 加载初始值，实现刷新后恢复
+  const renderSettings = ref<RenderSettings>(loadRenderSettings())
+  // 渲染设置面板是否打开
+  const isRenderSettingsPanelOpen = ref(false)
+
+  // 监听渲染设置变化，自动保存到 localStorage
+  // deep: true 确保对象内部属性变化也能触发保存
+  watch(
+    renderSettings,
+    (settings) => {
+      saveRenderSettings(settings)
+    },
+    { deep: true },
+  )
 
   const anyToolbarMenuOpen = computed(
     () =>
@@ -377,6 +451,25 @@ export const useUiStore = defineStore('ui', () => {
     hasAutoCollapsedContentGroups.value = false
   }
 
+  const openRenderSettingsPanel = () => {
+    isRenderSettingsPanelOpen.value = true
+  }
+
+  const closeRenderSettingsPanel = () => {
+    isRenderSettingsPanelOpen.value = false
+  }
+
+  const setRenderSettings = (settings: Partial<RenderSettings>) => {
+    renderSettings.value = {
+      ...renderSettings.value,
+      ...settings,
+    }
+  }
+
+  const resetRenderSettings = () => {
+    renderSettings.value = { ...defaultRenderSettings }
+  }
+
   return {
     isTouchDevice,
     isCompactLineEditor,
@@ -400,6 +493,8 @@ export const useUiStore = defineStore('ui', () => {
     contentGroupsCollapsed,
     hasAutoCollapsedContentGroups,
     anyToolbarMenuOpen,
+    renderSettings,
+    isRenderSettingsPanelOpen,
     openToast,
     closeToast,
     clearToast,
@@ -433,5 +528,9 @@ export const useUiStore = defineStore('ui', () => {
     setContentGroupCollapsed,
     toggleContentGroup,
     resetUiState,
+    openRenderSettingsPanel,
+    closeRenderSettingsPanel,
+    setRenderSettings,
+    resetRenderSettings,
   }
 })

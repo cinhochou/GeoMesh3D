@@ -360,6 +360,15 @@ const handleSaveScene = () => {
   closeSideMenu()
 }
 
+/**
+ * 打开渲染设置面板
+ * 先关闭侧边菜单，再调用 store 打开设置面板
+ */
+const handleOpenSettings = () => {
+  closeSideMenu()
+  uiStore.openRenderSettingsPanel()
+}
+
 const toggleProfileMenu = () => {
   profileMenuOpen.value = !profileMenuOpen.value
 }
@@ -925,6 +934,15 @@ onUnmounted(() => {
   <Teleport to="body">
     <Transition name="side-menu-slide">
       <div v-if="sideMenuOpen" ref="sideMenuRef" class="side-menu-panel">
+        <!-- 渲染设置入口：位于汉堡菜单顶部 -->
+        <button class="side-menu-item" @click="handleOpenSettings">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>设置</span>
+        </button>
+        <div class="side-menu-divider"></div>
         <button class="side-menu-item" @click="handleSaveScene">
           <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
@@ -949,6 +967,7 @@ onUnmounted(() => {
           </svg>
           <span>导入</span>
         </button>
+        <div class="side-menu-divider"></div>
       </div>
     </Transition>
   </Teleport>
@@ -1376,7 +1395,7 @@ button.is-active {
   box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  padding: 56px 0 0 0;
+  padding: 8px 0 0 0;
   gap: 2px;
 }
 
@@ -1418,6 +1437,12 @@ button.is-active {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
+}
+
+.side-menu-divider {
+  height: 1px;
+  background: #333;
+  margin: 4px 16px;
 }
 
 .toolbar::-webkit-scrollbar {
