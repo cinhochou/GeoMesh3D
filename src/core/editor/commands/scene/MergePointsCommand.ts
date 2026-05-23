@@ -9,9 +9,11 @@ import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../../../geometry/Circle3'
 import { Sphere3 } from '../../../geometry/Sphere3'
 import { Cone3 } from '../../../geometry/Cone3'
+import { Cylinder3 } from '../../../geometry/Cylinder3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
+import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
   item: T
@@ -93,6 +95,20 @@ type ConeSnapshot = {
   apexConeRole: 'baseCenter' | 'apex' | null
 }
 
+type CylinderSnapshot = {
+  cylinder: Cylinder3
+  bottomCenterPoint: Point3
+  topCenterPoint: Point3
+  bottomCenterCylinderId: string | null
+  bottomCenterCylinderRole: 'bottomCenter' | 'topCenter' | null
+  topCenterCylinderId: string | null
+  topCenterCylinderRole: 'bottomCenter' | 'topCenter' | null
+  bottomCircleId: string | null
+  topCircleId: string | null
+  bottomCircleDirectionId: string | null
+  topCircleDirectionId: string | null
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
@@ -106,6 +122,7 @@ export class MergePointsCommand implements Command {
   private circleSnapshots: CircleSnapshot[]
   private sphereSnapshots: SphereSnapshot[]
   private coneSnapshots: ConeSnapshot[]
+  private cylinderSnapshots: CylinderSnapshot[]
   private keepPointCircleId: string | null
   private keepPointCircleRole: 'center' | null
   private keepPointLocked: boolean
@@ -118,6 +135,7 @@ export class MergePointsCommand implements Command {
   private removedCircles = new Set<string>()
   private removedSpheres = new Set<string>()
   private removedCones = new Set<string>()
+  private removedCylinders = new Set<string>()
 
   constructor(
     private scene: Scene,
@@ -278,6 +296,29 @@ export class MergePointsCommand implements Command {
         apexConeId: cone.apexPoint.coneId,
         apexConeRole: cone.apexPoint.coneRole,
       }))
+
+    this.cylinderSnapshots = [...scene.cylinders.values()]
+      .filter((cylinder) =>
+        cylinder.bottomCenterPoint.id === keepPoint.id || cylinder.topCenterPoint.id === keepPoint.id ||
+        cylinder.bottomCenterPoint.id === removePoint.id || cylinder.topCenterPoint.id === removePoint.id,
+      )
+      .map((cylinder) => {
+        const bottomCircle = cylinder.normalCircleId ? scene.circles.get(cylinder.normalCircleId) : null
+        const topCircle = cylinder.topNormalCircleId ? scene.circles.get(cylinder.topNormalCircleId) : null
+        return {
+          cylinder,
+          bottomCenterPoint: cylinder.bottomCenterPoint,
+          topCenterPoint: cylinder.topCenterPoint,
+          bottomCenterCylinderId: cylinder.bottomCenterPoint.cylinderId,
+          bottomCenterCylinderRole: cylinder.bottomCenterPoint.cylinderRole,
+          topCenterCylinderId: cylinder.topCenterPoint.cylinderId,
+          topCenterCylinderRole: cylinder.topCenterPoint.cylinderRole,
+          bottomCircleId: cylinder.normalCircleId,
+          topCircleId: cylinder.topNormalCircleId,
+          bottomCircleDirectionId: bottomCircle?.directionId ?? null,
+          topCircleDirectionId: topCircle?.directionId ?? null,
+        }
+      })
   }
 
   private replacePointId(ids: string[]) {
@@ -524,6 +565,72 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.cylinderSnapshots.forEach((snapshot) => {
+      const { cylinder } = snapshot
+      if (cylinder.bottomCenterPoint.id === this.removePoint.id) {
+        cylinder.bottomCenterPoint = this.keepPoint
+        this.keepPoint.cylinderId = cylinder.id
+        this.keepPoint.cylinderRole = 'bottomCenter'
+        if (snapshot.bottomCircleId) {
+          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
+          if (bottomCircle) {
+            if (bottomCircle.p1.id === this.removePoint.id) bottomCircle.p1 = this.keepPoint
+            if (bottomCircle.p2.id === this.removePoint.id) bottomCircle.p2 = this.keepPoint
+            if (bottomCircle.p3.id === this.removePoint.id) bottomCircle.p3 = this.keepPoint
+          }
+        }
+        if (snapshot.topCircleId) {
+          const topCircle = this.scene.circles.get(snapshot.topCircleId)
+          if (topCircle && topCircle.directionId === this.removePoint.id) {
+            topCircle.directionId = this.keepPoint.id
+          }
+        }
+      }
+      if (cylinder.topCenterPoint.id === this.removePoint.id) {
+        cylinder.topCenterPoint = this.keepPoint
+        this.keepPoint.cylinderId = cylinder.id
+        this.keepPoint.cylinderRole = 'topCenter'
+        if (snapshot.topCircleId) {
+          const topCircle = this.scene.circles.get(snapshot.topCircleId)
+          if (topCircle) {
+            if (topCircle.p1.id === this.removePoint.id) topCircle.p1 = this.keepPoint
+            if (topCircle.p2.id === this.removePoint.id) topCircle.p2 = this.keepPoint
+            if (topCircle.p3.id === this.removePoint.id) topCircle.p3 = this.keepPoint
+          }
+        }
+        if (snapshot.bottomCircleId) {
+          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
+          if (bottomCircle && bottomCircle.directionId === this.removePoint.id) {
+            bottomCircle.directionId = this.keepPoint.id
+          }
+        }
+      }
+      if (cylinder.bottomCenterPoint.id === cylinder.topCenterPoint.id) {
+        if (snapshot.bottomCircleId) {
+          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
+          if (bottomCircle) {
+            this.scene.circles.delete(bottomCircle.id)
+            this.scene.selection.circles.delete(bottomCircle.id)
+            bottomCircle.p1.circleId = null
+            bottomCircle.p1.circleRole = null
+          }
+        }
+        if (snapshot.topCircleId) {
+          const topCircle = this.scene.circles.get(snapshot.topCircleId)
+          if (topCircle) {
+            this.scene.circles.delete(topCircle.id)
+            this.scene.selection.circles.delete(topCircle.id)
+            topCircle.p1.circleId = null
+            topCircle.p1.circleRole = null
+          }
+        }
+        this.scene.removeCylinder(cylinder.id)
+        this.removedCylinders.add(cylinder.id)
+        this.keepPoint.cylinderId = null
+        this.keepPoint.cylinderRole = null
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
@@ -665,6 +772,62 @@ export class MergePointsCommand implements Command {
       snapshot.apexPoint.coneRole = snapshot.apexConeRole
       if (this.removedCones.has(cone.id)) {
         this.scene.addCone(cone)
+      }
+    })
+
+    this.cylinderSnapshots.forEach((snapshot) => {
+      const { cylinder } = snapshot
+      cylinder.bottomCenterPoint = snapshot.bottomCenterPoint
+      cylinder.topCenterPoint = snapshot.topCenterPoint
+      snapshot.bottomCenterPoint.cylinderId = snapshot.bottomCenterCylinderId
+      snapshot.bottomCenterPoint.cylinderRole = snapshot.bottomCenterCylinderRole
+      snapshot.topCenterPoint.cylinderId = snapshot.topCenterCylinderId
+      snapshot.topCenterPoint.cylinderRole = snapshot.topCenterCylinderRole
+      if (snapshot.bottomCircleId) {
+        const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
+        if (bottomCircle) {
+          if (bottomCircle.p1.id === this.keepPoint.id) bottomCircle.p1 = snapshot.bottomCenterPoint
+          if (bottomCircle.p2.id === this.keepPoint.id) bottomCircle.p2 = snapshot.bottomCenterPoint
+          if (bottomCircle.p3.id === this.keepPoint.id) bottomCircle.p3 = snapshot.bottomCenterPoint
+          bottomCircle.directionId = snapshot.bottomCircleDirectionId
+        }
+      }
+      if (snapshot.topCircleId) {
+        const topCircle = this.scene.circles.get(snapshot.topCircleId)
+        if (topCircle) {
+          if (topCircle.p1.id === this.keepPoint.id) topCircle.p1 = snapshot.topCenterPoint
+          if (topCircle.p2.id === this.keepPoint.id) topCircle.p2 = snapshot.topCenterPoint
+          if (topCircle.p3.id === this.keepPoint.id) topCircle.p3 = snapshot.topCenterPoint
+          topCircle.directionId = snapshot.topCircleDirectionId
+        }
+      }
+      if (this.removedCylinders.has(cylinder.id)) {
+        this.scene.addCylinder(cylinder)
+        if (snapshot.bottomCircleId) {
+          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
+          if (bottomCircle) {
+            this.scene.addCircle(bottomCircle)
+            bottomCircle.p1.circleId = bottomCircle.id
+            bottomCircle.p1.circleRole = 'center'
+          }
+        }
+        if (snapshot.topCircleId) {
+          const topCircle = this.scene.circles.get(snapshot.topCircleId)
+          if (topCircle) {
+            this.scene.addCircle(topCircle)
+            topCircle.p1.circleId = topCircle.id
+            topCircle.p1.circleRole = 'center'
+          }
+        }
+        const constraint = new CylinderConstraint(
+          this.scene,
+          cylinder.id,
+          snapshot.bottomCircleId!,
+          snapshot.topCircleId!,
+          cylinder.name,
+          cylinder.valueVisible,
+        )
+        this.scene.addCylinderConstraint(constraint)
       }
     })
 

@@ -72,6 +72,10 @@ export class Interaction {
       e.scene.selection.deselectCone(id)
       e.scene.markAllRenderDirty()
     },
+    cylinder: (e, id) => {
+      e.scene.selection.deselectCylinder(id)
+      e.scene.markAllRenderDirty()
+    },
     face: (e, id) => e.deselectCubeByFaceId(id),
   }
 
@@ -87,6 +91,7 @@ export class Interaction {
     circle: (e, id) => e.scene.selection.selectCircle(id, true),
     sphere: (e, id) => e.scene.selection.selectSphere(id, true),
     cone: (e, id) => e.scene.selection.selectCone(id, true),
+    cylinder: (e, id) => e.scene.selection.selectCylinder(id, true),
     face: (e, id) => e.selectCubeByFaceId(id, true),
   }
 
@@ -102,6 +107,7 @@ export class Interaction {
     circle: (e, id) => e.deleteCircle(id),
     sphere: (e, id) => e.deleteSphere(id),
     cone: (e, id) => e.deleteCone(id),
+    cylinder: (e, id) => e.deleteCylinder(id),
     face: (e, id) => e.deleteFace(id),
   }
 
@@ -117,6 +123,7 @@ export class Interaction {
     circle: (e, id, o) => e.updateCircle(id, o),
     sphere: (e, id, o) => e.updateSphere(id, o),
     cone: (e, id, o) => e.updateCone(id, o),
+    cylinder: (e, id, o) => e.updateCylinder(id, o),
     face: (e, id, o) => e.updateFace(id, o),
   }
 
@@ -130,9 +137,10 @@ export class Interaction {
   draggingCircleId: string | null = null
   draggingSphereId: string | null = null
   draggingConeId: string | null = null
+  draggingCylinderId: string | null = null
   draggingFaceId: string | null = null
   private draggingLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
     startClientX: number
     startClientY: number
@@ -148,6 +156,7 @@ export class Interaction {
   radiusSphereCenterPointId: string | null = null
   coneBaseCenterPointId: string | null = null
   coneNormalCircleId: string | null = null
+  cylinderBottomCenterPointId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -171,13 +180,13 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
   } | null = null
   private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
   private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
   } | null = null
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
@@ -429,6 +438,7 @@ export class Interaction {
     this.draggingCircleId = null
     this.draggingSphereId = null
     this.draggingConeId = null
+    this.draggingCylinderId = null
     this.draggingFaceId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
@@ -498,21 +508,21 @@ export class Interaction {
   }
 
   private isSameActiveLabelTarget(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
   }
 
   private deselectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     Interaction.deselectByType[type]?.(this.editor, geoId)
   }
 
   private selectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     Interaction.selectByType[type]?.(this.editor, geoId)
@@ -1368,6 +1378,13 @@ export class Interaction {
               toMove.add(c.apexPoint.id)
             }
           })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(sphere.centerPoint.id)
           this.previewMovePoints([...toMove], delta)
@@ -1393,6 +1410,13 @@ export class Interaction {
               toMove.add(c.apexPoint.id)
             }
           })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           selection.spheres.forEach((sid) => {
             const s = this.editor.scene.spheres.get(sid)
             if (s && !this.editor.isSphereGeometryLocked(s)) {
@@ -1402,6 +1426,45 @@ export class Interaction {
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(cone.baseCenterPoint.id)
           toMove.add(cone.apexPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
+    if (this.draggingCylinderId) {
+      const cylinder = this.editor.scene.cylinders.get(this.draggingCylinderId)
+      if (!cylinder) return
+      if (this.editor.isCylinderGeometryLocked(cylinder)) return
+
+      this.handleDrag(
+        cylinder.bottomCenterPoint.position,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(cylinder.bottomCenterPoint.id)
+          toMove.add(cylinder.topCenterPoint.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -1493,6 +1556,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
+        this.editor.mode === EditorMode.CreateCylinder ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -1556,6 +1620,13 @@ export class Interaction {
               }
             } else if (p.coneId && (p.coneRole === 'baseCenter' || p.coneRole === 'apex')) {
               if (this.editor.isConeGeometryLocked(this.editor.scene.cones.get(p.coneId)!)) {
+                this.draggingPointId = null
+              } else {
+                this.draggingPointId = geoId
+                this.startDrag(p.position)
+              }
+            } else if (p.cylinderId && (p.cylinderRole === 'bottomCenter' || p.cylinderRole === 'topCenter')) {
+              if (this.editor.isCylinderGeometryLocked(this.editor.scene.cylinders.get(p.cylinderId)!)) {
                 this.draggingPointId = null
               } else {
                 this.draggingPointId = geoId
@@ -1669,6 +1740,24 @@ export class Interaction {
                 cone.baseCenterPoint.position.x,
                 cone.baseCenterPoint.position.y,
                 cone.baseCenterPoint.position.z,
+              ))
+            }
+          }
+        } else if (type === 'cylinder') {
+          const alreadySelected = this.editor.scene.selection.cylinders.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+          this.editor.scene.selection.selectCylinder(geoId, true)
+          this.editor.scene.markAllRenderDirty()
+          const cylinder = this.editor.scene.cylinders.get(geoId)
+          if (cylinder) {
+            if (this.editor.isCylinderGeometryLocked(cylinder)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingCylinderId = geoId
+              this.startDrag(new THREE.Vector3(
+                cylinder.bottomCenterPoint.position.x,
+                cylinder.bottomCenterPoint.position.y,
+                cylinder.bottomCenterPoint.position.z,
               ))
             }
           }
@@ -1825,6 +1914,22 @@ export class Interaction {
           this.coneBaseCenterPointId = null
           this.editor.scene.selection.selectCircle(geoId, true)
         }
+      } else if (this.editor.mode === EditorMode.CreateCylinder && type === 'point') {
+        if (!this.cylinderBottomCenterPointId) {
+          this.cylinderBottomCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.cylinderBottomCenterPointId && this.cylinderBottomCenterPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          const bottomCenterPoint = this.editor.scene.points.get(this.cylinderBottomCenterPointId)
+          const topCenterPoint = this.editor.scene.points.get(geoId)
+          if (bottomCenterPoint && topCenterPoint) {
+            window.dispatchEvent(
+              new CustomEvent('show-cylinder-radius-dialog', {
+                detail: { bottomCenterPointId: this.cylinderBottomCenterPointId, topCenterPointId: geoId },
+              }),
+            )
+          }
+        }
       } else if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
         this.toggleCreateSelection('point', geoId)
       } else if (
@@ -1858,6 +1963,8 @@ export class Interaction {
         this.resetRadiusSphereCreation()
       } else if (this.editor.mode === EditorMode.CreateCone) {
         this.resetConeCreation()
+      } else if (this.editor.mode === EditorMode.CreateCylinder) {
+        this.resetCylinderCreation()
       } else if (this.editor.mode === EditorMode.CreateCircleNormal) {
         this.resetNormalCircleCreation()
       } else if (this.editor.mode === EditorMode.IntersectionPoint)
@@ -1902,6 +2009,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
+        this.editor.mode === EditorMode.CreateCylinder ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -1990,6 +2098,7 @@ export class Interaction {
       this.draggingCircleId = null
       this.draggingSphereId = null
       this.draggingConeId = null
+      this.draggingCylinderId = null
       this.draggingFaceId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
@@ -2140,6 +2249,13 @@ export class Interaction {
         e.preventDefault()
         e.stopPropagation()
         this.resetConeCreation()
+        this.resetMobileInteractionState()
+        return
+      }
+      if (this.editor.mode === EditorMode.CreateCylinder) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetCylinderCreation()
         this.resetMobileInteractionState()
         return
       }
@@ -2393,6 +2509,30 @@ export class Interaction {
       return
     }
 
+    if (this.editor.mode === EditorMode.CreateCylinder) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'point') {
+        if (!this.cylinderBottomCenterPointId) {
+          this.cylinderBottomCenterPointId = geoId
+          this.editor.scene.selection.selectPoint(geoId, true)
+        } else if (this.cylinderBottomCenterPointId && this.cylinderBottomCenterPointId !== geoId) {
+          this.editor.scene.selection.selectPoint(geoId, true)
+          const bottomCenterPoint = this.editor.scene.points.get(this.cylinderBottomCenterPointId)
+          const topCenterPoint = this.editor.scene.points.get(geoId)
+          if (bottomCenterPoint && topCenterPoint) {
+            window.dispatchEvent(
+              new CustomEvent('show-cylinder-radius-dialog', {
+                detail: { bottomCenterPointId: this.cylinderBottomCenterPointId, topCenterPointId: geoId },
+              }),
+            )
+          }
+        }
+      }
+      this.resetMobileInteractionState()
+      return
+    }
+
     if (this.editor.mode === EditorMode.MergePoint && type === 'point') {
       e.preventDefault()
       e.stopPropagation()
@@ -2476,6 +2616,15 @@ export class Interaction {
         }
       } else if (point.coneId && (point.coneRole === 'baseCenter' || point.coneRole === 'apex')) {
         if (this.editor.isConeGeometryLocked(this.editor.scene.cones.get(point.coneId)!)) {
+          this.draggingPointId = null
+          this.syncControlLockState()
+          this.renderer.renderer.domElement.style.cursor = 'default'
+        } else {
+          this.draggingPointId = geoId
+          this.startDrag(point.position)
+        }
+      } else if (point.cylinderId && (point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter')) {
+        if (this.editor.isCylinderGeometryLocked(this.editor.scene.cylinders.get(point.cylinderId)!)) {
           this.draggingPointId = null
           this.syncControlLockState()
           this.renderer.renderer.domElement.style.cursor = 'default'
@@ -2703,6 +2852,39 @@ export class Interaction {
       return
     }
 
+    if (type === 'cylinder') {
+      const alreadySelected = this.editor.scene.selection.cylinders.has(geoId)
+      this.editor.scene.selection.selectCylinder(geoId, true)
+      this.editor.scene.markAllRenderDirty()
+      const cylinder = this.editor.scene.cylinders.get(geoId)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      if (!cylinder || this.editor.isCylinderGeometryLocked(cylinder)) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingCylinderId = geoId
+      this.startDrag(new THREE.Vector3(
+        cylinder.bottomCenterPoint.position.x,
+        cylinder.bottomCenterPoint.position.y,
+        cylinder.bottomCenterPoint.position.z,
+      ))
+      return
+    }
+
     if (type === 'face') {
       const alreadySelected = this.editor.scene.selection.faces.has(geoId)
       this.editor.selectCubeByFaceId(geoId, true)
@@ -2922,6 +3104,7 @@ export class Interaction {
         this.draggingCircleId = null
         this.draggingSphereId = null
         this.draggingConeId = null
+        this.draggingCylinderId = null
         this.draggingFaceId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
@@ -3010,7 +3193,8 @@ export class Interaction {
               resolved.userData.type === 'vector' ||
               resolved.userData.type === 'circle' ||
               resolved.userData.type === 'sphere' ||
-              resolved.userData.type === 'cone'
+              resolved.userData.type === 'cone' ||
+              resolved.userData.type === 'cylinder'
           },
         )
         if (lineHit) return resolveObject(lineHit.object)
@@ -3046,7 +3230,8 @@ export class Interaction {
             resolved.userData.type === 'vector' ||
             resolved.userData.type === 'circle' ||
             resolved.userData.type === 'sphere' ||
-            resolved.userData.type === 'cone'
+            resolved.userData.type === 'cone' ||
+            resolved.userData.type === 'cylinder'
         },
       )
       if (lineHit) return resolveObject(lineHit.object)
@@ -3331,6 +3516,23 @@ export class Interaction {
     this.resetConeCreation()
   }
 
+  resetCylinderCreation() {
+    this.cylinderBottomCenterPointId = null
+    this.editor.scene.selection.clear()
+  }
+
+  confirmCylinderRadius(bottomCenterPointId: string, topCenterPointId: string, radius: number) {
+    const bottomCenterPoint = this.editor.scene.points.get(bottomCenterPointId)
+    const topCenterPoint = this.editor.scene.points.get(topCenterPointId)
+    if (!bottomCenterPoint || !topCenterPoint) return
+    this.cylinderBottomCenterPointId = null
+    this.editor.tryCreateCylinderTwoPoint(bottomCenterPoint, topCenterPoint, radius)
+  }
+
+  cancelCylinderCreation() {
+    this.resetCylinderCreation()
+  }
+
   confirmRegularPolygonVertices(vertexCount: number, firstPointId: string, secondPointId: string) {
     const p1 = this.editor.scene.points.get(firstPointId)
     const p2 = this.editor.scene.points.get(secondPointId)
@@ -3372,6 +3574,7 @@ export class Interaction {
     this.renderer.hideAxisGuides()
     this.regularPolygonFirstPointId = null
     this.sphereTwoPointsFirstPointId = null
+    this.cylinderBottomCenterPointId = null
   }
 
   private endDrag() {
@@ -3398,6 +3601,7 @@ export class Interaction {
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
       this.draggingConeId !== null ||
+      this.draggingCylinderId !== null ||
       this.draggingFaceId !== null ||
       this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
@@ -3553,6 +3757,7 @@ export class Interaction {
       | 'circle'
       | 'sphere'
       | 'cone'
+      | 'cylinder'
       | 'face'
       | undefined
     if (!sprite.visible || !geoId || !type) return null
@@ -3691,7 +3896,7 @@ export class Interaction {
   }
 
   private getGeometryByType(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
@@ -3702,11 +3907,12 @@ export class Interaction {
     if (type === 'circle') return this.editor.scene.circles.get(geoId) ?? null
     if (type === 'sphere') return this.editor.scene.spheres.get(geoId) ?? null
     if (type === 'cone') return this.editor.scene.cones.get(geoId) ?? null
+    if (type === 'cylinder') return this.editor.scene.cylinders.get(geoId) ?? null
     return this.editor.scene.faces.get(geoId) ?? null
   }
 
   private beginLabelDrag(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
     clientX: number,
     clientY: number,

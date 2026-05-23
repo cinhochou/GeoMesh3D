@@ -338,6 +338,11 @@ const createCone = () => {
   emit('mode-change', EditorMode.CreateCone)
 }
 
+const createCylinder = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreateCylinder)
+}
+
 const toggleSideMenu = () => {
   sideMenuOpen.value = !sideMenuOpen.value
 }
@@ -689,7 +694,8 @@ onUnmounted(() => {
             currentMode === EditorMode.CreateTetrahedron ||
             currentMode === EditorMode.CreateSphereTwoPoints ||
             currentMode === EditorMode.CreateSphereRadius ||
-            currentMode === EditorMode.CreateCone,
+            currentMode === EditorMode.CreateCone ||
+            currentMode === EditorMode.CreateCylinder,
           'is-open': isSolidMenuOpen,
         }"
         @click="toggleSolidMenu"
@@ -916,6 +922,13 @@ onUnmounted(() => {
         @click="createCone"
       >
         圆锥
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateCylinder }"
+        @click="createCylinder"
+      >
+        圆柱
       </button>
     </div>
   </Teleport>

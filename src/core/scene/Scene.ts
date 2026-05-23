@@ -8,6 +8,8 @@ import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3 } from '../geometry/Cone3'
+import { Cylinder3 } from '../geometry/Cylinder3'
+import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 
@@ -31,9 +33,10 @@ export type SceneRenderSyncState = {
   faceIds: Set<string>
   sphereIds: Set<string>
   coneIds: Set<string>
+  cylinderIds: Set<string>
 }
 
-type DirtyKind = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone'
+type DirtyKind = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder'
 
 export class Scene {
   static readonly ORIGIN_ID = 'origin'
@@ -47,6 +50,7 @@ export class Scene {
   faces = new Map<string, PlanarPolygon>()
   spheres = new Map<string, Sphere3>()
   cones = new Map<string, Cone3>()
+  cylinders = new Map<string, Cylinder3>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
@@ -54,6 +58,7 @@ export class Scene {
   intersectionConstraints = new Map<string, SceneConstraint>()
   cubeConstraints = new Map<string, SceneConstraint>()
   regularPolygonConstraints = new Map<string, SceneConstraint>()
+  cylinderConstraints = new Map<string, CylinderConstraint>()
 
   private dirtyConstraints = new Set<SceneConstraint>()
   private dirtyIds: Record<DirtyKind, Set<string>> = {
@@ -66,6 +71,7 @@ export class Scene {
     face: new Set(),
     sphere: new Set(),
     cone: new Set(),
+    cylinder: new Set(),
   }
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
@@ -128,6 +134,18 @@ export class Scene {
     this.cones.delete(coneId)
     this.selection.cones.delete(coneId)
     this.dirtyIds.cone.add(coneId)
+  }
+
+  addCylinder(cylinder: Cylinder3) {
+    this.cylinders.set(cylinder.id, cylinder)
+    this.dirtyIds.cylinder.add(cylinder.id)
+  }
+
+  removeCylinder(cylinderId: string) {
+    this.removeCylinderConstraint(cylinderId)
+    this.cylinders.delete(cylinderId)
+    this.selection.cylinders.delete(cylinderId)
+    this.dirtyIds.cylinder.add(cylinderId)
   }
 
   addFace(face: PlanarPolygon) {
@@ -208,6 +226,14 @@ export class Scene {
     this.dirtyConstraints.delete(existing)
   }
 
+  removeCylinderConstraint(cylinderId: string) {
+    const existing = this.cylinderConstraints.get(cylinderId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.cylinderConstraints.delete(cylinderId)
+    this.dirtyConstraints.delete(existing)
+  }
+
   addRegularPolygonConstraint(c: SceneConstraint & { constraintId: string }) {
     const existing = this.regularPolygonConstraints.get(c.constraintId)
     if (existing) {
@@ -215,6 +241,19 @@ export class Scene {
       this.dirtyConstraints.delete(existing)
     }
     this.regularPolygonConstraints.set(c.constraintId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+    this.markConstraintDirty(c)
+  }
+
+  addCylinderConstraint(c: CylinderConstraint) {
+    const existing = this.cylinderConstraints.get(c.cylinderId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.cylinderConstraints.set(c.cylinderId, c)
     if (!this.constraints.includes(c)) {
       this.constraints.push(c)
     }
@@ -274,6 +313,7 @@ export class Scene {
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
     this.regularPolygonConstraints.clear()
+    this.cylinderConstraints.clear()
     this.dirtyConstraints.clear()
   }
 
@@ -282,12 +322,16 @@ export class Scene {
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
     this.regularPolygonConstraints.clear()
+    this.cylinderConstraints.clear()
     this.constraints.forEach((constraint) => {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
       if (constraint.cubeId) this.cubeConstraints.set(constraint.cubeId, constraint)
       if ('constraintId' in constraint && typeof (constraint as { constraintId: string }).constraintId === 'string') {
         this.regularPolygonConstraints.set((constraint as { constraintId: string }).constraintId, constraint)
+      }
+      if (constraint instanceof CylinderConstraint) {
+        this.cylinderConstraints.set((constraint as CylinderConstraint).cylinderId, constraint as CylinderConstraint)
       }
       this.markConstraintDirty(constraint)
     })
@@ -319,6 +363,27 @@ export class Scene {
     this.cones.forEach((cone) => {
       if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
         this.dirtyIds.cone.add(cone.id)
+      }
+    })
+    this.cylinders.forEach((cylinder) => {
+      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
+        this.dirtyIds.cylinder.add(cylinder.id)
+      }
+    })
+    this.cylinderConstraints.forEach((constraint, cylinderId) => {
+      const cylinder = this.cylinders.get(cylinderId)
+      if (cylinder && (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId)) {
+        this.markConstraintDirty(constraint)
+      }
+    })
+    this.cylinders.forEach((cylinder) => {
+      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
+        if (cylinder.normalCircleId) {
+          this.dirtyIds.circle.add(cylinder.normalCircleId)
+        }
+        if (cylinder.topNormalCircleId) {
+          this.dirtyIds.circle.add(cylinder.topNormalCircleId)
+        }
       }
     })
     this.constraints.forEach((constraint) => {
@@ -372,6 +437,7 @@ export class Scene {
         faceIds: new Set(this.faces.keys()),
         sphereIds: new Set(this.spheres.keys()),
         coneIds: new Set(this.cones.keys()),
+        cylinderIds: new Set(this.cylinders.keys()),
       }
     }
 
@@ -384,6 +450,7 @@ export class Scene {
     const faceIds = new Set(this.dirtyIds.face)
     const sphereIds = new Set(this.dirtyIds.sphere)
     const coneIds = new Set(this.dirtyIds.cone)
+    const cylinderIds = new Set(this.dirtyIds.cylinder)
 
     pointIds.forEach((pointId) => {
       this.lines.forEach((line, lineId) => {
@@ -451,6 +518,11 @@ export class Scene {
           coneIds.add(coneId)
         }
       })
+      this.cylinders.forEach((cylinder, cylinderId) => {
+        if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
+          cylinderIds.add(cylinderId)
+        }
+      })
     })
 
     this.clearAllDirtyIds()
@@ -462,7 +534,30 @@ export class Scene {
       }
     })
 
-    if ([pointIds, lineIds, straightLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds].every((s) => s.size === 0)) {
+    cylinderIds.forEach((cylinderId) => {
+      const cylinder = this.cylinders.get(cylinderId)
+      if (cylinder?.normalCircleId) {
+        circleIds.add(cylinder.normalCircleId)
+      }
+      if (cylinder?.topNormalCircleId) {
+        circleIds.add(cylinder.topNormalCircleId)
+      }
+    })
+
+    circleIds.forEach((circleId) => {
+      this.cylinders.forEach((cylinder, cylinderId) => {
+        if (cylinder.normalCircleId === circleId || cylinder.topNormalCircleId === circleId) {
+          cylinderIds.add(cylinderId)
+        }
+      })
+      this.cones.forEach((cone, coneId) => {
+        if (cone.normalCircleId === circleId) {
+          coneIds.add(coneId)
+        }
+      })
+    })
+
+    if ([pointIds, lineIds, straightLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds].every((s) => s.size === 0)) {
       return null
     }
 
@@ -477,6 +572,7 @@ export class Scene {
       faceIds,
       sphereIds,
       coneIds,
+      cylinderIds,
     }
   }
 

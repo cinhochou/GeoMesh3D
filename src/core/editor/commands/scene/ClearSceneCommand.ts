@@ -7,6 +7,9 @@ import { Circle3 } from '../../../geometry/Circle3'
 import { Sphere3 } from '../../../geometry/Sphere3'
 import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
+import { Cone3 } from '../../../geometry/Cone3'
+import { Cylinder3 } from '../../../geometry/Cylinder3'
+import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { Scene, type SceneConstraint } from '../../../scene/Scene'
 
 export class ClearSceneCommand implements Command {
@@ -21,6 +24,9 @@ export class ClearSceneCommand implements Command {
     private spheres: Sphere3[],
     private faces: PlanarPolygon[],
     private constraints: SceneConstraint[],
+    private cones: Cone3[] = [],
+    private cylinders: Cylinder3[] = [],
+    private cylinderConstraints: CylinderConstraint[] = [],
   ) {}
 
   execute() {
@@ -31,6 +37,8 @@ export class ClearSceneCommand implements Command {
     this.scene.circles.clear()
     this.scene.spheres.clear()
     this.scene.faces.clear()
+    this.scene.cones.clear()
+    this.scene.cylinders.clear()
     this.points.forEach((point) => this.scene.points.delete(point.id))
     this.scene.clearAllConstraints()
     this.scene.selection.clear()
@@ -45,7 +53,10 @@ export class ClearSceneCommand implements Command {
     this.circles.forEach((circle) => this.scene.addCircle(circle))
     this.spheres.forEach((sphere) => this.scene.addSphere(sphere))
     this.faces.forEach((face) => this.scene.addFace(face))
+    this.cones.forEach((cone) => this.scene.addCone(cone))
+    this.cylinders.forEach((cylinder) => this.scene.addCylinder(cylinder))
     this.scene.constraints.push(...this.constraints)
+    this.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
     this.scene.rebuildConstraintIndexes()
   }
 }

@@ -58,6 +58,12 @@ import { DeleteConeCommand } from './commands/delete/DeleteConeCommand'
 import { UpdateConeCommand } from './commands/update/UpdateConeCommand'
 import { UpdateConeRadiusCommand } from './commands/update/UpdateConeRadiusCommand'
 import { UpdateConeHeightCommand } from './commands/update/UpdateConeHeightCommand'
+import { AddCylinderCommand } from './commands/add/AddCylinderCommand'
+import { DeleteCylinderCommand } from './commands/delete/DeleteCylinderCommand'
+import { UpdateCylinderCommand } from './commands/update/UpdateCylinderCommand'
+import { UpdateCylinderRadiusCommand } from './commands/update/UpdateCylinderRadiusCommand'
+import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHeightCommand'
+import { Cylinder3 } from '../geometry/Cylinder3'
 import { AddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
@@ -88,6 +94,7 @@ export enum EditorMode {
   CreateSphereTwoPoints,
   CreateSphereRadius,
   CreateCone,
+  CreateCylinder,
 }
 
 export type FacePreviewData = {
@@ -390,7 +397,11 @@ export class Editor {
 
     for (const sphere of this.scene.spheres.values()) {
       if (!sphere.userLocked) continue
-      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) return true
+      if (
+        sphere.centerPoint.id === pointId ||
+        (sphere.radiusPoint && sphere.radiusPoint.id === pointId)
+      )
+        return true
     }
 
     for (const cone of this.scene.cones.values()) {
@@ -573,7 +584,8 @@ export class Editor {
 
   getRegularPolygonConstraints() {
     return [...this.scene.regularPolygonConstraints.values()].filter(
-      (constraint): constraint is RegularPolygonConstraint => constraint instanceof RegularPolygonConstraint,
+      (constraint): constraint is RegularPolygonConstraint =>
+        constraint instanceof RegularPolygonConstraint,
     )
   }
 
@@ -848,8 +860,11 @@ export class Editor {
   }
 
   isSphereGeometryLocked(sphere: Sphere3): boolean {
-    return sphere.userLocked ||
-      (this.isPointCoordinateLocked(sphere.centerPoint) && (!sphere.radiusPoint || this.isPointCoordinateLocked(sphere.radiusPoint)))
+    return (
+      sphere.userLocked ||
+      (this.isPointCoordinateLocked(sphere.centerPoint) &&
+        (!sphere.radiusPoint || this.isPointCoordinateLocked(sphere.radiusPoint)))
+    )
   }
 
   getSphereRadius(sphereId: string): number {
@@ -873,11 +888,7 @@ export class Editor {
     const normalizedRadius = Math.max(0.1, nextRadius)
     const center = sphere.centerPoint.position
     const radius = sphere.radiusPoint!.position
-    const direction = new Vec3(
-      radius.x - center.x,
-      radius.y - center.y,
-      radius.z - center.z,
-    )
+    const direction = new Vec3(radius.x - center.x, radius.y - center.y, radius.z - center.z)
     const directionLength = Math.hypot(direction.x, direction.y, direction.z)
     if (directionLength <= 1e-8) return
     const newPosition = new Vec3(
@@ -918,12 +929,7 @@ export class Editor {
       0,
       (index) => `两点球${index + 1}`,
     )
-    const sphere = new Sphere3(
-      genId('sph'),
-      sphereName,
-      firstPoint,
-      secondPoint,
-    )
+    const sphere = new Sphere3(genId('sph'), sphereName, firstPoint, secondPoint)
     this.executeCommand(new AddSphereCommand(this.scene, sphere))
     this.scene.selection.clear()
     this.scene.selection.selectSphere(sphere.id)
@@ -1136,10 +1142,12 @@ export class Editor {
   }
 
   tryCreateConeNormalCircle(normalCircle: Circle3, apexPoint: Point3) {
-    const frame = normalCircle.getFrame(this.resolveDirectionVector(
-      normalCircle.directionType ?? 'point',
-      normalCircle.directionId ?? '',
-    ))
+    const frame = normalCircle.getFrame(
+      this.resolveDirectionVector(
+        normalCircle.directionType ?? 'point',
+        normalCircle.directionId ?? '',
+      ),
+    )
     if (!frame) {
       emitToast('法向圆无效，无法创建圆锥')
       return
@@ -1177,6 +1185,256 @@ export class Editor {
   getConeApexPoint(coneId: string): Point3 | undefined {
     const cone = this.getCone(coneId)
     return cone?.apexPoint
+  }
+
+  getCylinder(cylinderId: string): Cylinder3 | undefined {
+    return this.scene.cylinders.get(cylinderId)
+  }
+
+  getCylinderNameSuffix(cylinderId: string): string {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return ''
+    return cylinder.name.replace(/^法向圆柱|^圆柱/, '')
+  }
+
+  updateCylinderName(cylinderId: string, suffix: string) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    cylinder.name = `圆柱${suffix.trim()}`
+    this.scene.markAllRenderDirty()
+  }
+
+  setCylinderValueVisible(cylinderId: string, visible: boolean) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder || cylinder.valueVisible === visible) return
+    cylinder.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setCylinderNameVisible(cylinderId: string, visible: boolean) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder || cylinder.nameVisible === visible) return
+    cylinder.nameVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setCylinderLockState(cylinderId: string, locked: boolean) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    const cylinderPoints = [cylinder.bottomCenterPoint, cylinder.topCenterPoint]
+    const endpointTransforms = cylinderPoints
+      .filter((point) => !point.locked)
+      .map((point) => ({
+        point,
+        before: point.userLocked,
+        after: locked,
+      }))
+      .filter((transform) => transform.before !== transform.after)
+
+    const circleTransforms: { circle: Circle3; before: boolean; after: boolean }[] = []
+    if (cylinder.normalCircleId) {
+      const bottomCircle = this.scene.circles.get(cylinder.normalCircleId)
+      if (bottomCircle && bottomCircle.userLocked !== locked) {
+        circleTransforms.push({
+          circle: bottomCircle,
+          before: bottomCircle.userLocked,
+          after: locked,
+        })
+      }
+    }
+    if (cylinder.topNormalCircleId) {
+      const topCircle = this.scene.circles.get(cylinder.topNormalCircleId)
+      if (topCircle && topCircle.userLocked !== locked) {
+        circleTransforms.push({ circle: topCircle, before: topCircle.userLocked, after: locked })
+      }
+    }
+
+    if (
+      cylinder.userLocked === locked &&
+      endpointTransforms.length === 0 &&
+      circleTransforms.length === 0
+    )
+      return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        endpointTransforms,
+        [],
+        [],
+        [],
+        [],
+        [],
+        circleTransforms,
+        [],
+        [],
+        [{ cylinder, before: cylinder.userLocked, after: locked }],
+      ),
+    )
+  }
+
+  updateCylinder(
+    cylinderId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      userLocked?: boolean
+    },
+  ) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    const before = {
+      name: cylinder.name,
+      nameVisible: cylinder.nameVisible,
+      valueVisible: cylinder.valueVisible,
+      labelOffsetX: cylinder.labelOffsetX,
+      labelOffsetY: cylinder.labelOffsetY,
+      visible: cylinder.visible,
+      userLocked: cylinder.userLocked,
+    }
+    const after = {
+      name: patch.name ?? cylinder.name,
+      nameVisible: patch.nameVisible ?? cylinder.nameVisible,
+      valueVisible: patch.valueVisible ?? cylinder.valueVisible,
+      labelOffsetX: patch.labelOffsetX ?? cylinder.labelOffsetX,
+      labelOffsetY: patch.labelOffsetY ?? cylinder.labelOffsetY,
+      visible: patch.visible ?? cylinder.visible,
+      userLocked: patch.userLocked ?? cylinder.userLocked,
+    }
+    this.executeCommand(new UpdateCylinderCommand(cylinder, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
+  isCylinderGeometryLocked(cylinder: Cylinder3): boolean {
+    return cylinder.userLocked
+  }
+
+  getCylinderRadius(cylinderId: string): number {
+    const cylinder = this.getCylinder(cylinderId)
+    return cylinder?.getRadius() ?? 0
+  }
+
+  getCylinderHeight(cylinderId: string): number {
+    const cylinder = this.getCylinder(cylinderId)
+    return cylinder?.getHeight() ?? 0
+  }
+
+  updateCylinderRadius(cylinderId: string, nextRadius: number) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    const normalizedRadius = Math.max(0.1, nextRadius)
+    const before = { radiusValue: cylinder.radiusValue }
+    const after = { radiusValue: normalizedRadius }
+    this.executeCommand(new UpdateCylinderRadiusCommand(this.scene, cylinder, before, after))
+    this.scene.markAllRenderDirty()
+  }
+
+  updateCylinderHeight(cylinderId: string, nextHeight: number) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    const normalizedHeight = Math.max(0.1, nextHeight)
+    this.executeCommand(
+      new UpdateCylinderHeightCommand(cylinder, cylinder.topCenterPoint, normalizedHeight),
+    )
+    this.scene.markAllRenderDirty()
+  }
+
+  deleteCylinder(cylinderId: string) {
+    const cylinder = this.getCylinder(cylinderId)
+    if (!cylinder) return
+    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder))
+  }
+
+  tryCreateCylinderTwoPoint(bottomCenterPoint: Point3, topCenterPoint: Point3, radius: number) {
+    if (bottomCenterPoint.id === topCenterPoint.id) {
+      emitToast('请选择两个不同的点')
+      return
+    }
+    if (radius <= 0) {
+      emitToast('半径必须大于0')
+      return
+    }
+    const cylinderName = genNextAvailableName(
+      [...this.scene.cylinders.values()].map((c) => c.name),
+      0,
+      (index) => `圆柱${index + 1}`,
+    )
+    const bottomCircle = new Circle3(
+      genId('c'),
+      genNextAvailableName(
+        [...this.scene.circles.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'c' : `c${index}`),
+      ),
+      bottomCenterPoint,
+      bottomCenterPoint,
+      bottomCenterPoint,
+      false,
+      true,
+      false,
+      Circle3.DEFAULT_LABEL_OFFSET_X,
+      Circle3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      true,
+      'normal',
+      'point',
+      topCenterPoint.id,
+      radius,
+    )
+    const topCircle = new Circle3(
+      genId('c'),
+      genNextAvailableName(
+        [...this.scene.circles.values()].map((item) => item.name),
+        0,
+        (index) => (index === 0 ? 'c' : `c${index}`),
+      ),
+      topCenterPoint,
+      topCenterPoint,
+      topCenterPoint,
+      false,
+      true,
+      false,
+      Circle3.DEFAULT_LABEL_OFFSET_X,
+      Circle3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      true,
+      'normal',
+      'point',
+      bottomCenterPoint.id,
+      radius,
+    )
+    const cylinder = new Cylinder3(
+      genId('cylinder'),
+      cylinderName,
+      bottomCenterPoint,
+      topCenterPoint,
+      'normalCircle',
+      false,
+      true,
+      false,
+      Cylinder3.DEFAULT_LABEL_OFFSET_X,
+      Cylinder3.DEFAULT_LABEL_OFFSET_Y,
+      false,
+      radius,
+      bottomCircle.id,
+      topCircle.id,
+    )
+    this.executeCommand(new AddCylinderCommand(this.scene, cylinder, bottomCircle, topCircle))
+    this.scene.selection.clear()
+    this.scene.selection.selectCylinder(cylinder.id)
+  }
+
+  getCylinderBottomCenterPoint(cylinderId: string): Point3 | undefined {
+    const cylinder = this.getCylinder(cylinderId)
+    return cylinder?.bottomCenterPoint
+  }
+
+  getCylinderTopCenterPoint(cylinderId: string): Point3 | undefined {
+    const cylinder = this.getCylinder(cylinderId)
+    return cylinder?.topCenterPoint
   }
 
   getRegularPolygonConstraint(constraintId: string) {
@@ -1498,16 +1756,28 @@ export class Editor {
       )
 
     if (transforms.length === 0) return
-    const axisHintChanges = [{ setAxisHint: constraint.setAxisHint.bind(constraint), before: axisHintBefore, after: vAxis }]
+    const axisHintChanges = [
+      {
+        setAxisHint: constraint.setAxisHint.bind(constraint),
+        before: axisHintBefore,
+        after: vAxis,
+      },
+    ]
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges))
+      this.executeCommand(
+        new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges),
+      )
       return
     }
     this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
   }
 
-  private rotateRegularPolygonByDependentPoint(constraintId: string, pointId: string, position: Vec3) {
+  private rotateRegularPolygonByDependentPoint(
+    constraintId: string,
+    pointId: string,
+    position: Vec3,
+  ) {
     const constraint = this.getRegularPolygonConstraint(constraintId)
     if (!constraint) return
 
@@ -1529,7 +1799,10 @@ export class Editor {
     if (!layout) return
 
     const circumradius = edgeLength / (2 * Math.sin(Math.PI / constraint.vertexCount))
-    const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
+    const alpha =
+      -Math.PI / 2 -
+      Math.PI / constraint.vertexCount +
+      (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
     const cosA = Math.cos(alpha)
 
     const baseOffset = new Vec3(
@@ -1577,15 +1850,32 @@ export class Editor {
       )
 
     if (transforms.length === 0) return
-    const axisHintChanges = [{ setAxisHint: constraint.setAxisHint.bind(constraint), before: axisHintBefore, after: projectedDir }]
+    const axisHintChanges = [
+      {
+        setAxisHint: constraint.setAxisHint.bind(constraint),
+        before: axisHintBefore,
+        after: projectedDir,
+      },
+    ]
     if (transforms.length === 1) {
-      this.executeCommand(new TransformCommand(transforms[0]!.point, transforms[0]!.before, transforms[0]!.after, axisHintChanges))
+      this.executeCommand(
+        new TransformCommand(
+          transforms[0]!.point,
+          transforms[0]!.before,
+          transforms[0]!.after,
+          axisHintChanges,
+        ),
+      )
       return
     }
     this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
   }
 
-  private setRegularPolygonOwnerPointPosition(constraintId: string, pointId: string, position: Vec3) {
+  private setRegularPolygonOwnerPointPosition(
+    constraintId: string,
+    pointId: string,
+    position: Vec3,
+  ) {
     const constraint = this.getRegularPolygonConstraint(constraintId)
     if (!constraint) return
     const point = this.scene.points.get(pointId)
@@ -1648,8 +1938,7 @@ export class Editor {
         : null
 
     const projectedHint = projectPerpendicularVec3(
-      alignmentHint ??
-        constraint.getVAxisHint(),
+      alignmentHint ?? constraint.getVAxisHint(),
       uAxis,
     )
     const fallbackProjected = projectPerpendicularVec3(chooseFallbackAxisVec3(uAxis), uAxis)
@@ -1771,7 +2060,10 @@ export class Editor {
         const desired = positionOverrides.get(draggedDependent.pointId)
         if (desired && edgeLength > 1e-8) {
           const circumradius = edgeLength / (2 * Math.sin(Math.PI / constraint.vertexCount))
-          const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * draggedDependent.angleIndex) / constraint.vertexCount
+          const alpha =
+            -Math.PI / 2 -
+            Math.PI / constraint.vertexCount +
+            (2 * Math.PI * draggedDependent.angleIndex) / constraint.vertexCount
           const cosA = Math.cos(alpha)
           const baseOffset = new Vec3(
             ownerA.x + (edgeLength / 2 + circumradius * cosA) * uAxis.x,
@@ -1797,7 +2089,10 @@ export class Editor {
       constraint.dependentLayouts.forEach((layout) => {
         const point = this.scene.points.get(layout.pointId)
         if (!point || this.isPointCoordinateLocked(point)) return
-        const alpha = -Math.PI / 2 - Math.PI / constraint.vertexCount + (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
+        const alpha =
+          -Math.PI / 2 -
+          Math.PI / constraint.vertexCount +
+          (2 * Math.PI * layout.angleIndex) / constraint.vertexCount
         const cosA = Math.cos(alpha)
         const sinA = Math.sin(alpha)
         const pos = new Vec3(
@@ -1819,7 +2114,8 @@ export class Editor {
 
       if (!sphere.radiusPoint) return
 
-      const currentCenter = this.scene.points.get(sphere.centerPoint.id)?.position ?? sphere.centerPoint.position
+      const currentCenter =
+        this.scene.points.get(sphere.centerPoint.id)?.position ?? sphere.centerPoint.position
       const delta = new Vec3(
         centerOverride.x - currentCenter.x,
         centerOverride.y - currentCenter.y,
@@ -1829,12 +2125,12 @@ export class Editor {
       const radiusPointOverride = positionOverrides.get(sphere.radiusPoint.id)
       if (radiusPointOverride) return
 
-      const radiusPos = this.scene.points.get(sphere.radiusPoint.id)?.position ?? sphere.radiusPoint.position
-      positionOverrides.set(sphere.radiusPoint.id, new Vec3(
-        radiusPos.x + delta.x,
-        radiusPos.y + delta.y,
-        radiusPos.z + delta.z,
-      ))
+      const radiusPos =
+        this.scene.points.get(sphere.radiusPoint.id)?.position ?? sphere.radiusPoint.position
+      positionOverrides.set(
+        sphere.radiusPoint.id,
+        new Vec3(radiusPos.x + delta.x, radiusPos.y + delta.y, radiusPos.z + delta.z),
+      )
     })
   }
 
@@ -1850,10 +2146,7 @@ export class Editor {
     const uAxis = normalizeVec3(edge)
     if (!uAxis) return null
 
-    const projectedHint = projectPerpendicularVec3(
-      constraint.getVAxisHint(),
-      uAxis,
-    )
+    const projectedHint = projectPerpendicularVec3(constraint.getVAxisHint(), uAxis)
     const fallbackProjected = projectPerpendicularVec3(chooseFallbackAxisVec3(uAxis), uAxis)
     const vAxis = normalizeVec3(projectedHint) ?? normalizeVec3(fallbackProjected)
     if (!vAxis) return null
@@ -2057,7 +2350,9 @@ export class Editor {
       (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
     const relatedSpheres = [...this.scene.spheres.values()].filter(
-      (sphere) => sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
+      (sphere) =>
+        sphere.centerPoint.id === pointId ||
+        (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
     )
     const relatedCones = [...this.scene.cones.values()].filter(
       (cone) => cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId,
@@ -2301,9 +2596,7 @@ export class Editor {
   setCircleLockState(circleId: string, locked: boolean) {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
-    const circlePoints = circle.isNormalCircle()
-      ? [circle.p1]
-      : [circle.p1, circle.p2, circle.p3]
+    const circlePoints = circle.isNormalCircle() ? [circle.p1] : [circle.p1, circle.p2, circle.p3]
     const endpointTransforms = !locked
       ? circlePoints
           .filter((point) => !point.locked)
@@ -2315,7 +2608,40 @@ export class Editor {
           .filter((transform) => transform.before !== transform.after)
       : []
 
-    if (circle.userLocked === locked && endpointTransforms.length === 0) return
+    const cylinderTransforms: { cylinder: Cylinder3; before: boolean; after: boolean }[] = []
+    const extraCircleTransforms: { circle: Circle3; before: boolean; after: boolean }[] = []
+    if (!locked && circle.isNormalCircle()) {
+      for (const cylinder of this.scene.cylinders.values()) {
+        if (cylinder.normalCircleId === circleId || cylinder.topNormalCircleId === circleId) {
+          if (cylinder.userLocked) {
+            cylinderTransforms.push({ cylinder, before: cylinder.userLocked, after: false })
+          }
+          const otherCircleId =
+            cylinder.normalCircleId === circleId
+              ? cylinder.topNormalCircleId
+              : cylinder.normalCircleId
+          if (otherCircleId) {
+            const otherCircle = this.scene.circles.get(otherCircleId)
+            if (otherCircle && otherCircle.userLocked) {
+              extraCircleTransforms.push({
+                circle: otherCircle,
+                before: otherCircle.userLocked,
+                after: false,
+              })
+            }
+          }
+          break
+        }
+      }
+    }
+
+    if (
+      circle.userLocked === locked &&
+      endpointTransforms.length === 0 &&
+      cylinderTransforms.length === 0 &&
+      extraCircleTransforms.length === 0
+    )
+      return
 
     this.executeCommand(
       new SyncLockStateCommand(
@@ -2325,7 +2651,10 @@ export class Editor {
         [],
         [],
         [],
-        [{ circle, before: circle.userLocked, after: locked }],
+        [{ circle, before: circle.userLocked, after: locked }, ...extraCircleTransforms],
+        [],
+        [],
+        cylinderTransforms,
       ),
     )
   }
@@ -2450,7 +2779,9 @@ export class Editor {
       (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
     )
     const relatedSpheres = [...this.scene.spheres.values()].filter(
-      (sphere) => sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
+      (sphere) =>
+        sphere.centerPoint.id === pointId ||
+        (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
     )
     const relatedFaces = [...this.scene.faces.values()].filter(
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
@@ -2491,7 +2822,13 @@ export class Editor {
     const dependentCubes = this.collectDependentCubesByLineId(lineId)
     const dependentFaces = this.collectDependentFacesByLineId(lineId)
     this.executeCommand(
-      new DeleteLineCommand(this.scene, line, dependentIntersectionPoints, dependentCubes, dependentFaces),
+      new DeleteLineCommand(
+        this.scene,
+        line,
+        dependentIntersectionPoints,
+        dependentCubes,
+        dependentFaces,
+      ),
     )
   }
 
@@ -2554,7 +2891,15 @@ export class Editor {
 
   clearAll() {
     const points = [...this.scene.points.values()].filter(
-      (point) => !point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius',
+      (point) =>
+        !point.locked ||
+        point.circleRole === 'center' ||
+        point.sphereRole === 'center' ||
+        point.sphereRole === 'radius' ||
+        point.coneRole === 'baseCenter' ||
+        point.coneRole === 'apex' ||
+        point.cylinderRole === 'bottomCenter' ||
+        point.cylinderRole === 'topCenter',
     )
     const lines = [...this.scene.lines.values()]
     const straightLines = [...this.scene.straightLines.values()]
@@ -2563,7 +2908,10 @@ export class Editor {
     const circles = [...this.scene.circles.values()]
     const spheres = [...this.scene.spheres.values()]
     const faces = [...this.scene.faces.values()]
+    const cones = [...this.scene.cones.values()]
+    const cylinders = [...this.scene.cylinders.values()]
     const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
+    const cylinderConstraints = [...this.scene.cylinderConstraints.values()]
 
     if (
       points.length === 0 &&
@@ -2574,12 +2922,28 @@ export class Editor {
       circles.length === 0 &&
       spheres.length === 0 &&
       faces.length === 0 &&
+      cones.length === 0 &&
+      cylinders.length === 0 &&
       constraints.length === 0
     )
       return
 
     this.executeCommand(
-      new ClearSceneCommand(this.scene, points, lines, straightLines, rays, vectors, circles, spheres, faces, constraints),
+      new ClearSceneCommand(
+        this.scene,
+        points,
+        lines,
+        straightLines,
+        rays,
+        vectors,
+        circles,
+        spheres,
+        faces,
+        constraints,
+        cones,
+        cylinders,
+        cylinderConstraints,
+      ),
     )
     this.selectedPoints = []
   }
@@ -3332,27 +3696,47 @@ export class Editor {
     const removePoint = this.scene.points.get(removePointId)
     if (!keepPoint || !removePoint || (removePoint.locked && !removePoint.circleId)) return
 
-    const centerPoint = keepPoint.circleRole === 'center' ? keepPoint
-      : removePoint.circleRole === 'center' ? removePoint
-      : null
+    const centerPoint =
+      keepPoint.circleRole === 'center'
+        ? keepPoint
+        : removePoint.circleRole === 'center'
+          ? removePoint
+          : null
     if (centerPoint) {
       const otherPoint = centerPoint === keepPoint ? removePoint : keepPoint
       const circle = this.scene.circles.get(centerPoint.circleId!)
-      if (circle && (circle.p1.id === otherPoint.id || circle.p2.id === otherPoint.id || circle.p3.id === otherPoint.id)) {
+      if (
+        circle &&
+        (circle.p1.id === otherPoint.id ||
+          circle.p2.id === otherPoint.id ||
+          circle.p3.id === otherPoint.id)
+      ) {
         emitToast('圆心不能和所属圆上的点合并')
         return
       }
     }
 
-    const keepRpConstraint = keepPoint.regularPolygonId ? this.getRegularPolygonConstraint(keepPoint.regularPolygonId) : null
-    const removeRpConstraint = removePoint.regularPolygonId ? this.getRegularPolygonConstraint(removePoint.regularPolygonId) : null
+    const keepRpConstraint = keepPoint.regularPolygonId
+      ? this.getRegularPolygonConstraint(keepPoint.regularPolygonId)
+      : null
+    const removeRpConstraint = removePoint.regularPolygonId
+      ? this.getRegularPolygonConstraint(removePoint.regularPolygonId)
+      : null
 
-    if (keepRpConstraint && removeRpConstraint && keepRpConstraint.constraintId === removeRpConstraint.constraintId) {
+    if (
+      keepRpConstraint &&
+      removeRpConstraint &&
+      keepRpConstraint.constraintId === removeRpConstraint.constraintId
+    ) {
       emitToast('同一正多边形内部的点禁止合并')
       return
     }
 
-    if (keepRpConstraint && removeRpConstraint && keepRpConstraint.constraintId !== removeRpConstraint.constraintId) {
+    if (
+      keepRpConstraint &&
+      removeRpConstraint &&
+      keepRpConstraint.constraintId !== removeRpConstraint.constraintId
+    ) {
       emitToast('不同正多边形之间的点禁止合并')
       return
     }
@@ -3372,6 +3756,15 @@ export class Editor {
 
     if (removePoint.cubeRole === 'dependent') {
       emitToast('正四/六面体的受约束点不允许被外部点替换')
+      return
+    }
+
+    if (
+      keepPoint.cylinderId &&
+      removePoint.cylinderId &&
+      keepPoint.cylinderId === removePoint.cylinderId
+    ) {
+      emitToast('同一圆柱内部的点不支持合并')
       return
     }
 
@@ -3743,13 +4136,20 @@ export class Editor {
 
     const projectedReference = new Vec3(
       referenceAxis.x -
-        uAxis.x * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+        uAxis.x *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
       referenceAxis.y -
-        uAxis.y * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+        uAxis.y *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
       referenceAxis.z -
-        uAxis.z * (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
+        uAxis.z *
+          (referenceAxis.x * uAxis.x + referenceAxis.y * uAxis.y + referenceAxis.z * uAxis.z),
     )
-    const projectedLength = Math.hypot(projectedReference.x, projectedReference.y, projectedReference.z)
+    const projectedLength = Math.hypot(
+      projectedReference.x,
+      projectedReference.y,
+      projectedReference.z,
+    )
     if (projectedLength <= 1e-6) {
       emitToast('无法确定正多边形所在平面')
       return
@@ -3797,13 +4197,7 @@ export class Editor {
         center.z + circumradius * (uAxis.z * cosA + vAxis.z * sinA),
       )
 
-      const point = new Point3(
-        genId('p'),
-        nextPointName(),
-        worldPos,
-        false,
-        true,
-      )
+      const point = new Point3(genId('p'), nextPointName(), worldPos, false, true)
       point.regularPolygonId = constraintId
       point.regularPolygonRole = 'dependent'
       newPoints.push(point)
@@ -3816,9 +4210,8 @@ export class Editor {
       index === 0 ? 'F' : `F${index}`,
     )
 
-    const supportPointIds = boundaryPointIds.length >= 3
-      ? boundaryPointIds.slice(0, 3)
-      : boundaryPointIds
+    const supportPointIds =
+      boundaryPointIds.length >= 3 ? boundaryPointIds.slice(0, 3) : boundaryPointIds
 
     const rpName = genNextAvailableName(
       [...this.scene.regularPolygonConstraints.values()]
@@ -3872,7 +4265,9 @@ export class Editor {
       rpName,
     )
 
-    this.executeCommand(new AddRegularPolygonCommand(this.scene, newPoints, face, constraint, newLines))
+    this.executeCommand(
+      new AddRegularPolygonCommand(this.scene, newPoints, face, constraint, newLines),
+    )
 
     this.selectedPoints = []
     this.scene.selection.clear()
@@ -3892,7 +4287,12 @@ export class Editor {
     const draft = this.buildFaceDraftFromSelection(selectedPoints, selectedLines)
     if (!draft) return
 
-    const { newLines, boundaryLineIds } = this.ensureBoundaryLines(draft.boundaryPointIds, draft.boundaryLineIds, new Map(), 'polygon')
+    const { newLines, boundaryLineIds } = this.ensureBoundaryLines(
+      draft.boundaryPointIds,
+      draft.boundaryLineIds,
+      new Map(),
+      'polygon',
+    )
 
     const face = new PlanarPolygon(
       genId('f'),
@@ -4023,7 +4423,9 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines))
+    this.executeCommand(
+      new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
+    )
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
   }
@@ -4124,7 +4526,9 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines))
+    this.executeCommand(
+      new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
+    )
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
   }

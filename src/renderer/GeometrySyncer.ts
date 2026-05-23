@@ -5,6 +5,7 @@ import { Ray3 } from '../core/geometry/Ray3'
 import { GeoVector3 } from '../core/geometry/GeoVector3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { Cone3 } from '../core/geometry/Cone3'
+import { Cylinder3 } from '../core/geometry/Cylinder3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -12,7 +13,7 @@ import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
 import { LabelRenderer } from './LabelRenderer'
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'axisLabel'
+type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder' | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -107,9 +108,14 @@ const CONE_FILL_OPACITY = 0.6
 const CONE_SELECTED_COLOR = SELECTED_COLOR
 const CONE_SELECTED_OPACITY = 0.7
 const CONE_SEGMENTS = 48
+const CYLINDER_FILL_COLOR = 0x3a8fbf
+const CYLINDER_FILL_OPACITY = 0.45
+const CYLINDER_SELECTED_COLOR = SELECTED_COLOR
+const CYLINDER_SELECTED_OPACITY = 0.7
+const CYLINDER_SEGMENTS = 48
 
 const LINEAR_TYPES = new Set<string>([
-  'line', 'straightLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'face',
+  'line', 'straightLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
 ])
 
 const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX: number; labelOffsetY: number }>> = {
@@ -122,6 +128,7 @@ const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { label
   face: (s) => s.faces,
   sphere: (s) => s.spheres,
   cone: (s) => s.cones,
+  cylinder: (s) => s.cylinders,
 }
 
 const DIRECTION_TYPE_TO_COLLECTION: Record<string, (scene: GeoScene) => Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
@@ -209,6 +216,7 @@ export class GeometrySyncer {
       this.syncFaces(geoScene, dirtyState)
       this.syncSpheres(geoScene, dirtyState)
       this.syncCones(geoScene, dirtyState)
+      this.syncCylinders(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
     }
     this.updateRubberBand(previewData)
@@ -251,9 +259,49 @@ export class GeometrySyncer {
       if (p.circleRole === 'center' && p.circleId) {
         const circle = scene.circles.get(p.circleId)
         if (circle) {
-          const resolvedDirection = circle.isNormalCircle() && circle.directionType && circle.directionId
+          let resolvedDirection = circle.isNormalCircle() && circle.directionType && circle.directionId
             ? this.resolveDirectionVectorForCircle(circle.directionType, circle.directionId)
             : undefined
+          if (circle.isNormalCircle()) {
+            let coneForCircle: Cone3 | null = null
+            const conesMap = scene.cones as unknown as Map<string, Cone3>
+            conesMap.forEach((c) => {
+              if (c.normalCircleId === p.circleId) coneForCircle = c
+            })
+            if (coneForCircle) {
+              const cone = coneForCircle as Cone3
+              const center = cone.baseCenterPoint.position
+              const apex = cone.apexPoint.position
+              const axis = new THREE.Vector3(
+                apex.x - center.x,
+                apex.y - center.y,
+                apex.z - center.z,
+              )
+              if (axis.length() > 1e-8) {
+                resolvedDirection = new Vec3(axis.x, axis.y, axis.z)
+              }
+            }
+            let cylinderForCircle: Cylinder3 | null = null
+            if (!coneForCircle) {
+              const cylindersMap = scene.cylinders as unknown as Map<string, Cylinder3>
+              cylindersMap.forEach((c) => {
+                if (c.normalCircleId === p.circleId || c.topNormalCircleId === p.circleId) cylinderForCircle = c
+              })
+              if (cylinderForCircle) {
+                const cylinder = cylinderForCircle as Cylinder3
+                const bottomCenter = cylinder.bottomCenterPoint.position
+                const topCenter = cylinder.topCenterPoint.position
+                const axis = new THREE.Vector3(
+                  topCenter.x - bottomCenter.x,
+                  topCenter.y - bottomCenter.y,
+                  topCenter.z - bottomCenter.z,
+                )
+                if (axis.length() > 1e-8) {
+                  resolvedDirection = new Vec3(axis.x, axis.y, axis.z)
+                }
+              }
+            }
+          }
           const frame = circle.getFrame(resolvedDirection)
           if (frame) {
             p.position = frame.center
@@ -660,6 +708,26 @@ export class GeometrySyncer {
             resolvedDirection = new Vec3(axis.x, axis.y, axis.z)
           }
         }
+        let cylinderForCircle: Cylinder3 | null = null
+        if (!coneForCircle) {
+          const cylindersMap = scene.cylinders as unknown as Map<string, Cylinder3>
+          cylindersMap.forEach((c) => {
+            if (c.normalCircleId === id || c.topNormalCircleId === id) cylinderForCircle = c
+          })
+          if (cylinderForCircle) {
+            const cylinder = cylinderForCircle as Cylinder3
+            const bottomCenter = cylinder.bottomCenterPoint.position
+            const topCenter = cylinder.topCenterPoint.position
+            const axis = new THREE.Vector3(
+              topCenter.x - bottomCenter.x,
+              topCenter.y - bottomCenter.y,
+              topCenter.z - bottomCenter.z,
+            )
+            if (axis.length() > 1e-8) {
+              resolvedDirection = new Vec3(axis.x, axis.y, axis.z)
+            }
+          }
+        }
       }
       const frame = circleData.getFrame(resolvedDirection)
       let circle = this.meshMap.get(id) as THREE.LineLoop | undefined
@@ -978,14 +1046,15 @@ export class GeometrySyncer {
       coneGroup.visible = coneData.visible !== false
 
       const isSelected = scene.selection.cones.has(id)
+      const isBaseCircleSelected = coneData.normalCircleId
+        ? scene.selection.circles.has(coneData.normalCircleId)
+        : false
       const sideMat = sideMesh.material as THREE.MeshPhongMaterial
       const baseMat = baseMesh.material as THREE.MeshPhongMaterial
-      const fillColor = isSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR
-      const fillOpacity = isSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
-      sideMat.color.set(fillColor)
-      sideMat.opacity = fillOpacity
-      baseMat.color.set(fillColor)
-      baseMat.opacity = fillOpacity
+      sideMat.color.set(isSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
+      sideMat.opacity = isSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
+      baseMat.color.set(isSelected || isBaseCircleSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
+      baseMat.opacity = isSelected || isBaseCircleSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
 
       const isLabelActive =
         this.activeLabelTarget?.type === 'cone' && this.activeLabelTarget.geoId === id
@@ -1002,6 +1071,158 @@ export class GeometrySyncer {
         `V=${this.deps.labelRenderer.formatMetricNumber(coneData.getVolume())}`,
         midPoint,
         isLabelActive ? CONE_SELECTED_COLOR : LINEAR_COLOR,
+      )
+    })
+  }
+
+  syncCylinders(scene: GeoScene, dirtyState: SceneRenderSyncState): void {
+    dirtyState.cylinderIds.forEach((id) => {
+      const cylinderData = scene.cylinders.get(id)
+      if (!cylinderData) {
+        const existing = this.meshMap.get(id)
+        if (existing) {
+          this.deps.world.remove(existing)
+          this.meshMap.delete(id)
+        }
+        const existingGroup = this.groupMap.get(id)
+        if (existingGroup) {
+          this.deps.world.remove(existingGroup)
+          this.groupMap.delete(id)
+        }
+        return
+      }
+
+      const frame = cylinderData.getFrame()
+      if (!frame) {
+        const existingGroup = this.groupMap.get(id)
+        if (existingGroup) {
+          this.deps.world.remove(existingGroup)
+          this.groupMap.delete(id)
+        }
+        return
+      }
+
+      let cylinderGroup = this.groupMap.get(id) as THREE.Group | undefined
+
+      if (!cylinderGroup) {
+        cylinderGroup = new THREE.Group()
+        cylinderGroup.userData = { geoId: id, type: 'cylinder' }
+        this.deps.world.add(cylinderGroup)
+        this.groupMap.set(id, cylinderGroup)
+      }
+
+      while (cylinderGroup.children.length > 0) {
+        const child = cylinderGroup.children[0]
+        if (child) cylinderGroup.remove(child)
+      }
+
+      const { bottomCenter, topCenter, radius, height, normal } = frame
+      const segments = CYLINDER_SEGMENTS
+
+      const sideGeometry = new THREE.CylinderGeometry(1, 1, 1, segments, 1, true)
+      const sideMaterial = new THREE.MeshPhongMaterial({
+        color: CYLINDER_FILL_COLOR,
+        transparent: true,
+        opacity: CYLINDER_FILL_OPACITY,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        shininess: 100,
+        specular: 0x666666,
+      })
+      const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
+      sideMesh.userData = { geoId: id, type: 'cylinder' }
+      sideMesh.renderOrder = 1
+
+      const bottomGeometry = new THREE.CircleGeometry(1, segments)
+      const bottomMaterial = new THREE.MeshPhongMaterial({
+        color: CYLINDER_FILL_COLOR,
+        transparent: true,
+        opacity: CYLINDER_FILL_OPACITY,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        shininess: 100,
+        specular: 0x666666,
+      })
+      const bottomMesh = new THREE.Mesh(bottomGeometry, bottomMaterial)
+      bottomMesh.userData = { geoId: id, type: 'cylinder' }
+      bottomMesh.renderOrder = 1
+
+      const topGeometry = new THREE.CircleGeometry(1, segments)
+      const topMaterial = new THREE.MeshPhongMaterial({
+        color: CYLINDER_FILL_COLOR,
+        transparent: true,
+        opacity: CYLINDER_FILL_OPACITY,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        shininess: 100,
+        specular: 0x666666,
+      })
+      const topMesh = new THREE.Mesh(topGeometry, topMaterial)
+      topMesh.userData = { geoId: id, type: 'cylinder' }
+      topMesh.renderOrder = 1
+
+      const safeRadius = Math.max(radius, 0.001)
+      const safeHeight = Math.max(height, 0.001)
+
+      sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
+      sideMesh.position.set(0, safeHeight / 2, 0)
+
+      bottomMesh.scale.set(safeRadius, safeRadius, 1)
+      bottomMesh.rotation.x = -Math.PI / 2
+      bottomMesh.position.set(0, 0, 0)
+
+      topMesh.scale.set(safeRadius, safeRadius, 1)
+      topMesh.rotation.x = Math.PI / 2
+      topMesh.position.set(0, safeHeight, 0)
+
+      cylinderGroup.add(sideMesh)
+      cylinderGroup.add(bottomMesh)
+      cylinderGroup.add(topMesh)
+
+      const yAxis = new THREE.Vector3(0, 1, 0)
+      const targetNormal = new THREE.Vector3(normal.x, normal.y, normal.z)
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(yAxis, targetNormal)
+
+      cylinderGroup.position.set(bottomCenter.x, bottomCenter.y, bottomCenter.z)
+      cylinderGroup.quaternion.copy(quaternion)
+      cylinderGroup.visible = cylinderData.visible !== false
+
+      const isSelected = scene.selection.cylinders.has(id)
+      const isBottomCircleSelected = cylinderData.normalCircleId
+        ? scene.selection.circles.has(cylinderData.normalCircleId)
+        : false
+      const isTopCircleSelected = cylinderData.topNormalCircleId
+        ? scene.selection.circles.has(cylinderData.topNormalCircleId)
+        : false
+
+      const sideMat = sideMesh.material as THREE.MeshPhongMaterial
+      const bottomMat = bottomMesh.material as THREE.MeshPhongMaterial
+      const topMat = topMesh.material as THREE.MeshPhongMaterial
+
+      const fillColor = isSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR
+      const fillOpacity = isSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+      sideMat.color.set(fillColor)
+      sideMat.opacity = fillOpacity
+      bottomMat.color.set(isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
+      bottomMat.opacity = isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+      topMat.color.set(isSelected || isTopCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
+      topMat.opacity = isSelected || isTopCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'cylinder' && this.activeLabelTarget.geoId === id
+      const midPoint = new THREE.Vector3(
+        (bottomCenter.x + topCenter.x) / 2,
+        (bottomCenter.y + topCenter.y) / 2,
+        (bottomCenter.z + topCenter.z) / 2,
+      )
+      this.syncLinearLabel(
+        cylinderGroup,
+        cylinderData.name ?? '',
+        cylinderData.nameVisible && cylinderData.visible !== false,
+        cylinderData.valueVisible === true && cylinderData.visible !== false,
+        `V=${this.deps.labelRenderer.formatMetricNumber(cylinderData.getVolume())}`,
+        midPoint,
+        isLabelActive ? CYLINDER_SELECTED_COLOR : LINEAR_COLOR,
       )
     })
   }
@@ -1187,7 +1408,7 @@ export class GeometrySyncer {
       }
     })
     this.groupMap.forEach((obj, id) => {
-      if (!scene.cones.has(id)) {
+      if (!scene.cones.has(id) && !scene.cylinders.has(id)) {
         const userData = this.getRenderUserData(obj)
         this.removeMeshWithLabels(obj, userData, this.groupMap, id)
       }

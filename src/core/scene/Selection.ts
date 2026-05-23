@@ -9,6 +9,7 @@ export class Selection {
   faces = new Set<string>()
   spheres = new Set<string>()
   cones = new Set<string>()
+  cylinders = new Set<string>()
 
   clear() {
     this.points.clear()
@@ -20,6 +21,7 @@ export class Selection {
     this.faces.clear()
     this.spheres.clear()
     this.cones.clear()
+    this.cylinders.clear()
   }
 
   selectPoint(id: string, additive = false) {
@@ -103,6 +105,15 @@ export class Selection {
     this.cones.delete(id)
   }
 
+  selectCylinder(id: string, additive = false) {
+    if (!additive) this.clear()
+    this.cylinders.add(id)
+  }
+
+  deselectCylinder(id: string) {
+    this.cylinders.delete(id)
+  }
+
   isEmpty() {
     return (
       this.points.size === 0 &&
@@ -113,7 +124,8 @@ export class Selection {
       this.circles.size === 0 &&
       this.faces.size === 0 &&
       this.spheres.size === 0 &&
-      this.cones.size === 0
+      this.cones.size === 0 &&
+      this.cylinders.size === 0
     )
   }
 }

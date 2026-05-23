@@ -24,6 +24,8 @@ export class Point3 {
   sphereRole: 'center' | 'radius' | null
   coneId: string | null
   coneRole: 'baseCenter' | 'apex' | null
+  cylinderId: string | null
+  cylinderRole: 'bottomCenter' | 'topCenter' | null
   onPositionChanged: ((point: Point3, previous: Vec3, next: Vec3) => void) | null = null
 
   constructor(
@@ -56,6 +58,8 @@ export class Point3 {
     this.sphereRole = null
     this.coneId = null
     this.coneRole = null
+    this.cylinderId = null
+    this.cylinderRole = null
   }
 
   setPosition(v: Vec3) {

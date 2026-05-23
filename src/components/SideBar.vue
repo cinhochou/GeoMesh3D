@@ -10,6 +10,7 @@ import type { Line3 } from '../core/geometry/Line3'
 import type { Circle3 } from '../core/geometry/Circle3'
 import type { Sphere3 } from '../core/geometry/Sphere3'
 import type { Cone3 } from '../core/geometry/Cone3'
+import type { Cylinder3 } from '../core/geometry/Cylinder3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
@@ -174,6 +175,12 @@ const selectedCones = computed(() => {
     .map((id) => props.scene.cones.get(id))
     .filter((cone): cone is Cone3 => cone !== undefined)
 })
+const selectedCylinders = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.cylinders]
+    .map((id) => props.scene.cylinders.get(id))
+    .filter((cylinder): cylinder is Cylinder3 => cylinder !== undefined)
+})
 const isConstrainedPoint = (point: Point3) =>
   (point.cubeId !== null && point.cubeRole === 'dependent') ||
   (point.regularPolygonId !== null && point.regularPolygonRole === 'dependent')
@@ -221,6 +228,10 @@ const spheresInScene = computed(() => {
 const conesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.cones.values()]
+})
+const cylindersInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.cylinders.values()]
 })
 const hexahedronsInScene = computed(() => {
   void commandRevision.value
@@ -272,6 +283,7 @@ const editing = ref<{
     | 'regularPolygon'
     | 'sphere'
     | 'cone'
+    | 'cylinder'
   id: string
 } | null>(null)
 
@@ -328,6 +340,14 @@ const getConeForNormalCircle = (circle: Circle3) => {
   return null
 }
 
+const getCylinderForNormalCircle = (circle: Circle3) => {
+  if (!circle.isNormalCircle()) return null
+  for (const cylinder of props.scene.cylinders.values()) {
+    if (cylinder.normalCircleId === circle.id || cylinder.topNormalCircleId === circle.id) return cylinder
+  }
+  return null
+}
+
 const DIRECTION_TYPE_COLLECTION: Record<string, Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
   line: props.scene.lines,
   straightLine: props.scene.straightLines,
@@ -341,6 +361,12 @@ const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
     const center = cone.baseCenterPoint.position
     const apex = cone.apexPoint.position
     return new Vec3(apex.x - center.x, apex.y - center.y, apex.z - center.z)
+  }
+  const cylinder = getCylinderForNormalCircle(circle)
+  if (cylinder) {
+    const bottomCenter = cylinder.bottomCenterPoint.position
+    const topCenter = cylinder.topCenterPoint.position
+    return new Vec3(topCenter.x - bottomCenter.x, topCenter.y - bottomCenter.y, topCenter.z - bottomCenter.z)
   }
   if (!circle.directionType) return null
   if (circle.directionType === 'point') return new Vec3(0, 1, 0)
@@ -367,6 +393,10 @@ const getDirectionLabel = (circle: Circle3): string => {
   const cone = getConeForNormalCircle(circle)
   if (cone) {
     return `点${cone.baseCenterPoint.name ?? ''}-点${cone.apexPoint.name ?? ''}`
+  }
+  const cylinder = getCylinderForNormalCircle(circle)
+  if (cylinder) {
+    return `点${cylinder.bottomCenterPoint.name ?? ''}-点${cylinder.topCenterPoint.name ?? ''}`
   }
   if (!circle.directionType) return '未知'
   if (circle.directionType === 'point') {
@@ -414,6 +444,11 @@ const formatPiConeLateralArea = (radius: number, height: number): string => {
 }
 
 const formatPiConeBaseArea = (radius: number): string => formatPiCoeff(radius * radius)
+
+const formatPiCylinderVolume = (radius: number, height: number): string => formatPiCoeff(radius * radius * height)
+const formatPiCylinderLateralArea = (radius: number, height: number): string => formatPiCoeff(2 * radius * height)
+const formatPiCylinderBaseArea = (radius: number): string => formatPiCoeff(radius * radius)
+const formatPiCylinderSurfaceArea = (radius: number, height: number): string => formatPiCoeff(2 * radius * height + 2 * radius * radius)
 
 const formatPiSphereArea = (radius: number): string => formatPiCoeff(4 * radius * radius)
 
@@ -488,6 +523,11 @@ const getConePiMode = (coneId: string) => conePiModes.get(coneId) ?? false
 const toggleConePiMode = (coneId: string) => {
   conePiModes.set(coneId, !getConePiMode(coneId))
 }
+const cylinderPiModes = reactive(new Map<string, boolean>())
+const getCylinderPiMode = (cylinderId: string) => cylinderPiModes.get(cylinderId) ?? false
+const toggleCylinderPiMode = (cylinderId: string) => {
+  cylinderPiModes.set(cylinderId, !getCylinderPiMode(cylinderId))
+}
 const spherePiModes = reactive(new Map<string, boolean>())
 const getSpherePiMode = (sphereId: string) => spherePiModes.get(sphereId) ?? false
 const toggleSpherePiMode = (sphereId: string) => {
@@ -544,6 +584,16 @@ const editCone = reactive({
   baseCenterPoint: { x: '', y: '', z: '' },
   apexPoint: { x: '', y: '', z: '' },
 })
+const editCylinder = reactive({
+  nameSuffix: '',
+  nameVisible: false,
+  valueVisible: false,
+  userLocked: false,
+  radius: '',
+  height: '',
+  bottomCenterPoint: { x: '', y: '', z: '' },
+  topCenterPoint: { x: '', y: '', z: '' },
+})
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 const splitPaneRef = ref<HTMLElement | null>(null)
@@ -569,6 +619,7 @@ const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id)
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
 const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).filter(Boolean))
+const selectedCylinderIds = computed(() => selectedCylinders.value.map((c) => c?.id).filter(Boolean))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
@@ -580,7 +631,8 @@ const totalContentCount = computed(
     facesInScene.value.length +
     hexahedronsInScene.value.length +
     spheresInScene.value.length +
-    conesInScene.value.length,
+    conesInScene.value.length +
+    cylindersInScene.value.length,
 )
 const contentGroupLabels: Record<
   | 'point'
@@ -592,7 +644,8 @@ const contentGroupLabels: Record<
   | 'face'
   | 'hexahedron'
   | 'sphere'
-  | 'cone',
+  | 'cone'
+  | 'cylinder',
   string
 > = {
   point: '点',
@@ -605,6 +658,7 @@ const contentGroupLabels: Record<
   hexahedron: '立体',
   sphere: '球体',
   cone: '圆锥',
+  cylinder: '圆柱',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
@@ -621,7 +675,8 @@ const toggleContentGroup = (
     | 'face'
     | 'hexahedron'
     | 'sphere'
-    | 'cone',
+    | 'cone'
+    | 'cylinder',
 ) => {
   uiStore.toggleContentGroup(type)
 }
@@ -644,6 +699,7 @@ const SELECT_FROM_CONTENT_MAP: Record<string, (id: string) => void> = {
   circle: (id) => props.scene.selection.selectCircle(id),
   sphere: (id) => props.scene.selection.selectSphere(id),
   cone: (id) => props.scene.selection.selectCone(id),
+  cylinder: (id) => props.scene.selection.selectCylinder(id),
 }
 
 const selectFromContent = (type: string, id: string) => {
@@ -669,6 +725,8 @@ const selectCircleFromContent = (id: string) => selectFromContent('circle', id)
 const selectSphereFromContent = (sphereId: string) => selectFromContent('sphere', sphereId)
 
 const selectConeFromContent = (coneId: string) => selectFromContent('cone', coneId)
+
+const selectCylinderFromContent = (cylinderId: string) => selectFromContent('cylinder', cylinderId)
 
 const selectHexahedronFromContent = (cubeId: string) => {
   editing.value = null
@@ -776,6 +834,7 @@ watch(
     selectedHexahedronIds,
     selectedSphereIds,
     selectedConeIds,
+    selectedCylinderIds,
   ],
   () => {
     if (!editing.value) return
@@ -791,6 +850,7 @@ watch(
       hexahedron: selectedHexahedronIds.value,
       sphere: selectedSphereIds.value,
       cone: selectedConeIds.value,
+      cylinder: selectedCylinderIds.value,
       regularPolygon: selectedRegularPolygons.value.map((rp) => rp.constraintId),
     }
     const ids = idsMap[type]
@@ -812,6 +872,7 @@ watch(
     if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
     if (spheresInScene.value.length > 0) activeKeys.push('sphere')
     if (conesInScene.value.length > 0) activeKeys.push('cone')
+    if (cylindersInScene.value.length > 0) activeKeys.push('cylinder')
     if (activeKeys.length === 0) return
     const allCollapsed = activeKeys.every((k) => c[k])
     const allExpanded = activeKeys.every((k) => !c[k])
@@ -2114,6 +2175,159 @@ const nudgeConePointCoord = (
   applyConePointCoord(pointKey)
 }
 
+const startEditCylinder = (cylinderId: string) => {
+  const cylinder = props.editor.getCylinder(cylinderId)
+  if (!cylinder) return
+  editing.value = { type: 'cylinder', id: cylinderId }
+  editCylinder.nameSuffix = props.editor.getCylinderNameSuffix(cylinderId)
+  editCylinder.nameVisible = cylinder.nameVisible !== false
+  editCylinder.valueVisible = cylinder.valueVisible === true
+  editCylinder.userLocked = props.editor.isCylinderGeometryLocked(cylinder)
+  editCylinder.radius = toFixed2(props.editor.getCylinderRadius(cylinderId))
+  editCylinder.height = toFixed2(props.editor.getCylinderHeight(cylinderId))
+  const bottomCenterPoint = props.editor.getCylinderBottomCenterPoint(cylinderId)
+  const topCenterPoint = props.editor.getCylinderTopCenterPoint(cylinderId)
+  if (bottomCenterPoint) {
+    editCylinder.bottomCenterPoint.x = toFixed2(bottomCenterPoint.position.x)
+    editCylinder.bottomCenterPoint.y = toFixed2(bottomCenterPoint.position.y)
+    editCylinder.bottomCenterPoint.z = toFixed2(bottomCenterPoint.position.z)
+  }
+  if (topCenterPoint) {
+    editCylinder.topCenterPoint.x = toFixed2(topCenterPoint.position.x)
+    editCylinder.topCenterPoint.y = toFixed2(topCenterPoint.position.y)
+    editCylinder.topCenterPoint.z = toFixed2(topCenterPoint.position.z)
+  }
+}
+
+const currentEditCylinder = computed(() => {
+  if (!editing.value || editing.value.type !== 'cylinder') return null
+  const cylinder = props.editor.getCylinder(editing.value.id)
+  if (!cylinder) return null
+  return { cylinderId: editing.value.id, cylinder }
+})
+
+const applyEditCylinderMeta = () => {
+  const state = currentEditCylinder.value
+  if (!state) return
+  const prefix = '圆柱'
+  props.editor.updateCylinder(state.cylinderId, {
+    name: prefix + editCylinder.nameSuffix.trim(),
+    nameVisible: editCylinder.nameVisible,
+    valueVisible: editCylinder.valueVisible,
+  })
+  props.editor.setCylinderLockState(state.cylinderId, editCylinder.userLocked)
+}
+
+const applyEditCylinderRadius = () => {
+  const state = currentEditCylinder.value
+  if (!state) return
+  const nextRadius = Number(editCylinder.radius)
+  if (!Number.isFinite(nextRadius) || nextRadius < LENGTH_MIN) return
+  props.editor.updateCylinderRadius(state.cylinderId, nextRadius)
+}
+
+const applyEditCylinderHeight = () => {
+  const state = currentEditCylinder.value
+  if (!state) return
+  const nextHeight = Number(editCylinder.height)
+  if (!Number.isFinite(nextHeight) || nextHeight < LENGTH_MIN) return
+  props.editor.updateCylinderHeight(state.cylinderId, nextHeight)
+}
+
+const applyCylinderPointCoord = (pointKey: 'bottomCenterPoint' | 'topCenterPoint') => {
+  const state = currentEditCylinder.value
+  if (!state) return
+  const point =
+    pointKey === 'bottomCenterPoint'
+      ? props.editor.getCylinderBottomCenterPoint(state.cylinderId)
+      : props.editor.getCylinderTopCenterPoint(state.cylinderId)
+  if (!point) return
+  const nextPosition = {
+    x: Number(editCylinder[pointKey].x),
+    y: Number(editCylinder[pointKey].y),
+    z: Number(editCylinder[pointKey].z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  )
+    return
+  if (isPointCoordinateLocked(point)) return
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+}
+
+const handleCylinderRadiusFocus = () => {
+  setCoordFocus('cylinder.radius', true)
+}
+
+const handleCylinderRadiusBlur = () => {
+  editCylinder.radius = clampLengthValue('cylinder.radius', editCylinder.radius, editCylinder.radius)
+  editCylinder.radius = normalizeDisplayLength(editCylinder.radius)
+  setCoordFocus('cylinder.radius', false)
+  applyEditCylinderRadius()
+}
+
+const nudgeCylinderRadius = (direction: 'up' | 'down') => {
+  const current = Number(editCylinder.radius)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('cylinder.radius', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editCylinder.radius = next.toFixed(2)
+  applyEditCylinderRadius()
+}
+
+const handleCylinderHeightFocus = () => {
+  setCoordFocus('cylinder.height', true)
+}
+
+const handleCylinderHeightBlur = () => {
+  editCylinder.height = clampLengthValue('cylinder.height', editCylinder.height, editCylinder.height)
+  editCylinder.height = normalizeDisplayLength(editCylinder.height)
+  setCoordFocus('cylinder.height', false)
+  applyEditCylinderHeight()
+}
+
+const nudgeCylinderHeight = (direction: 'up' | 'down') => {
+  const current = Number(editCylinder.height)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('cylinder.height', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editCylinder.height = next.toFixed(2)
+  applyEditCylinderHeight()
+}
+
+const handleCylinderPointCoordFocus = (
+  pointKey: 'bottomCenterPoint' | 'topCenterPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  setCoordFocus(`cylinder.${pointKey}.${axis}`, true)
+}
+
+const handleCylinderPointCoordBlur = (
+  pointKey: 'bottomCenterPoint' | 'topCenterPoint',
+  axis: 'x' | 'y' | 'z',
+) => {
+  editCylinder[pointKey][axis] = normalizeCoord(editCylinder[pointKey][axis])
+  setCoordFocus(`cylinder.${pointKey}.${axis}`, false)
+  applyCylinderPointCoord(pointKey)
+}
+
+const nudgeCylinderPointCoord = (
+  pointKey: 'bottomCenterPoint' | 'topCenterPoint',
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`cylinder.${pointKey}.${axis}`, direction)
+  if (nextValue === null) return
+  editCylinder[pointKey][axis] = nextValue
+  applyCylinderPointCoord(pointKey)
+}
+
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
@@ -2641,7 +2855,8 @@ onUnmounted(() => {
         selectedHexahedrons.length > 0 ||
         selectedRegularPolygons.length > 0 ||
         selectedSpheres.length > 0 ||
-        selectedCones.length > 0
+        selectedCones.length > 0 ||
+        selectedCylinders.length > 0
       "
     >
       双击标签以编辑几何元素~
@@ -2660,7 +2875,8 @@ onUnmounted(() => {
             selectedHexahedrons.length === 0 &&
             selectedRegularPolygons.length === 0 &&
             selectedSpheres.length === 0 &&
-            selectedCones.length === 0
+            selectedCones.length === 0 &&
+            selectedCylinders.length === 0
           "
         >
           无
@@ -5886,6 +6102,356 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="c in selectedCylinders"
+          :key="c!.id"
+          class="selectedCylinder-info"
+          @dblclick="startEditCylinder(c!.id)"
+        >
+          <div v-if="editing?.type === 'cylinder' && editing?.id === c!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editCylinder.nameSuffix" @input="applyEditCylinderMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCylinder.nameVisible"
+                  @change="applyEditCylinderMeta"
+                />
+                {{ editCylinder.nameVisible ? '名称显示' : '名称隐藏' }}
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCylinder.valueVisible"
+                  @change="applyEditCylinderMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editCylinder.userLocked"
+                  @change="applyEditCylinderMeta"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">侧面积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderLateralArea(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
+                  : c!.getLateralArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">底面积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
+                  : c!.getBottomArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">体积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderVolume(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
+                  : c!.getVolume().toFixed(2)
+              }}</span>
+              <label class="pi-mode-toggle"
+                ><input
+                  type="checkbox"
+                  :checked="getCylinderPiMode(c!.id)"
+                  @change="toggleCylinderPiMode(c!.id)"
+                />π模式</label
+              >
+            </div>
+            <div class="length-row">
+              <label>半径：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderRadius('down')"
+                  :disabled="editCylinder.userLocked"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('cylinder.radius', el)"
+                  v-model="editCylinder.radius"
+                  @input="applyEditCylinderRadius"
+                  @focus="handleCylinderRadiusFocus"
+                  @blur="handleCylinderRadiusBlur"
+                  :disabled="editCylinder.userLocked"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderRadius('up')"
+                  :disabled="editCylinder.userLocked"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['cylinder.radius']?.show" class="length-bubble">{{ bubbleState['cylinder.radius']?.message }}</div>
+                </Transition>
+              </div>
+            </div>
+            <div class="length-row">
+              <label>高度：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderHeight('down')"
+                  :disabled="editCylinder.userLocked"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('cylinder.height', el)"
+                  v-model="editCylinder.height"
+                  @input="applyEditCylinderHeight"
+                  @focus="handleCylinderHeightFocus"
+                  @blur="handleCylinderHeightBlur"
+                  :disabled="editCylinder.userLocked"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderHeight('up')"
+                  :disabled="editCylinder.userLocked"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['cylinder.height']?.show" class="length-bubble">{{ bubbleState['cylinder.height']?.message }}</div>
+                </Transition>
+              </div>
+            </div>
+            <div
+              class="line-editor-grid"
+              :class="{ 'line-editor-grid--compact': isCompactLineEditor }"
+            >
+              <div class="line-editor-head"></div>
+              <div class="line-editor-head">
+                底心{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? 'A' }}(x,y,z)
+              </div>
+              <div class="line-editor-head">
+                顶心{{ props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="line-axis-label">x</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.bottomCenterPoint.x', el)"
+                  v-model="editCylinder.bottomCenterPoint.x"
+                  @input="applyCylinderPointCoord('bottomCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'x')"
+                  @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'x', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.topCenterPoint.x', el)"
+                  v-model="editCylinder.topCenterPoint.x"
+                  @input="applyCylinderPointCoord('topCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('topCenterPoint', 'x')"
+                  @blur="handleCylinderPointCoordBlur('topCenterPoint', 'x')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'x', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">y</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.bottomCenterPoint.y', el)"
+                  v-model="editCylinder.bottomCenterPoint.y"
+                  @input="applyCylinderPointCoord('bottomCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'y')"
+                  @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'y', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.topCenterPoint.y', el)"
+                  v-model="editCylinder.topCenterPoint.y"
+                  @input="applyCylinderPointCoord('topCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('topCenterPoint', 'y')"
+                  @blur="handleCylinderPointCoordBlur('topCenterPoint', 'y')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'y', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="line-axis-label">z</div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.bottomCenterPoint.z', el)"
+                  v-model="editCylinder.bottomCenterPoint.z"
+                  @input="applyCylinderPointCoord('bottomCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'z')"
+                  @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('bottomCenterPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+              <div class="coord-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'z', 'down')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('cylinder.topCenterPoint.z', el)"
+                  v-model="editCylinder.topCenterPoint.z"
+                  @input="applyCylinderPointCoord('topCenterPoint')"
+                  @focus="handleCylinderPointCoordFocus('topCenterPoint', 'z')"
+                  @blur="handleCylinderPointCoordBlur('topCenterPoint', 'z')"
+                  step="0.5"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeCylinderPointCoord('topCenterPoint', 'z', 'up')"
+                  :disabled="isPointCoordinateLocked(props.editor.getCylinderTopCenterPoint(c!.id))"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div>
+              {{ c!.name ?? '' }}
+              <span v-if="props.editor.isCylinderGeometryLocked(c!)" class="lock-badge">🔒</span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">半径：{{ props.editor.getCylinderRadius(c!.id).toFixed(2) }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">高度：{{ props.editor.getCylinderHeight(c!.id).toFixed(2) }}</span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">体积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderVolume(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
+                  : c!.getVolume().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">表面积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderSurfaceArea(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
+                  : c!.getSurfaceArea().toFixed(2)
+              }}</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">底面积：{{
+                getCylinderPiMode(c!.id)
+                  ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
+                  : c!.getBottomArea().toFixed(2)
+              }}</span>
+            </div>
+            <div>
+              来源：点{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? '' }}-点{{ props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? '' }}
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="face in selectedEditableFaces"
           :key="face!.id"
           class="selectedFace-info"
@@ -6286,6 +6852,7 @@ onUnmounted(() => {
                 {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
                 <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
                 <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
+                <span v-if="getCylinderForNormalCircle(c!)" class="constraint-badge">圆柱约束</span>
               </div>
               <template v-if="c!.isNormalCircle()">
                 <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
@@ -6424,6 +6991,44 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="cylindersInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.cylinder"
+            @click="toggleContentGroup('cylinder')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.cylinder ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.cylinder }}</span>
+            <span class="content-group-count">{{ cylindersInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.cylinder" class="content-group-body">
+            <div
+              v-for="cylinder in cylindersInScene"
+              :key="cylinder.id"
+              class="cylinder-info selectable-geo"
+              :class="{ 'is-selected': selectedCylinderIds.includes(cylinder.id) }"
+              @click="selectCylinderFromContent(cylinder.id)"
+            >
+              <div>
+                {{ cylinder.name ?? '' }}
+                <span v-if="props.editor.isCylinderGeometryLocked(cylinder)" class="lock-badge"
+                  >🔒</span
+                >
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">半径：{{ props.editor.getCylinderRadius(cylinder.id).toFixed(2) }}</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">高度：{{ props.editor.getCylinderHeight(cylinder.id).toFixed(2) }}</span>
+              </div>
+              <div>
+                来源：点{{ props.editor.getCylinderBottomCenterPoint(cylinder.id)?.name ?? '' }}-点{{ props.editor.getCylinderTopCenterPoint(cylinder.id)?.name ?? '' }}
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="facesInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -6446,7 +7051,7 @@ onUnmounted(() => {
               @click="selectFaceFromContent(face!.id)"
             >
               <div>
-                {{ face!.isRegularPolygon ? '正多边形' : '面' }}{{ face!.name ?? '' }}
+                {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
                 <span v-if="face!.isRegularPolygon" class="constraint-badge"
                   >正{{ face!.regularPolygonVertexCount }}边形</span
                 >
@@ -6516,6 +7121,7 @@ hr {
 .selectedVector-info,
 .selectedCircle-info,
 .selectedCone-info,
+.selectedCylinder-info,
 .selectedFace-info,
 .line-info,
 .straight-line-info,
@@ -6523,6 +7129,7 @@ hr {
 .vector-info,
 .circle-info,
 .cone-info,
+.cylinder-info,
 .face-info {
   background-color: rgba(44, 90, 52, 0.4); /* 使用半透明绿色 */
   border-left: 3px solid #43f260; /* 增加一个亮色左边框提升质感 */
@@ -6564,6 +7171,11 @@ hr {
 .cone-info {
   background-color: rgba(200, 120, 30, 0.22);
   border-left-color: #f0a030;
+}
+.selectedCylinder-info,
+.cylinder-info {
+  background-color: rgba(232, 96, 122, 0.22);
+  border-left-color: #e8607a;
 }
 .selectable-geo {
   cursor: pointer;
@@ -7121,13 +7733,15 @@ hr {
   .selectedVector-info,
   .selectedCircle-info,
   .selectedCone-info,
+  .selectedCylinder-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
   .vector-info,
   .circle-info,
-  .cone-info {
+  .cone-info,
+  .cylinder-info {
     padding: 6px;
     font-size: 12px;
   }
@@ -7339,11 +7953,13 @@ hr {
   .selectedRay-info,
   .selectedCircle-info,
   .selectedCone-info,
+  .selectedCylinder-info,
   .point-info,
   .line-info,
   .ray-info,
   .circle-info,
-  .cone-info {
+  .cone-info,
+  .cylinder-info {
     padding: 4px;
     font-size: 10px;
   }
@@ -7427,13 +8043,15 @@ hr {
   .selectedVector-info,
   .selectedCircle-info,
   .selectedCone-info,
+  .selectedCylinder-info,
   .point-info,
   .line-info,
   .face-info,
   .ray-info,
   .vector-info,
   .circle-info,
-  .cone-info {
+  .cone-info,
+  .cylinder-info {
     margin-bottom: 4px;
     padding: 5px;
     font-size: 11px;

@@ -10,6 +10,8 @@ import { StraightLine3 } from '../geometry/StraightLine3'
 import { Circle3, type CircleType, type DirectionType } from '../geometry/Circle3'
 import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3, type ConeType } from '../geometry/Cone3'
+import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
+import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -28,7 +30,7 @@ export type CollabStatus = {
 }
 
 type LiveLabelTarget = {
-  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'face'
+  type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
   geoId: string
 }
 
@@ -41,10 +43,12 @@ type LocalSceneSnapshot = {
   circles: Circle3[]
   spheres: Sphere3[]
   cones: Cone3[]
+  cylinders: Cylinder3[]
   faces: PlanarPolygon[]
   intersections: IntersectionPointConstraint[]
   cubes: CubeConstraint[]
   regularPolygons: RegularPolygonConstraint[]
+  cylinderConstraints: CylinderConstraint[]
 }
 
 type PointSharedMap = Y.Map<string | number | boolean>
@@ -55,6 +59,7 @@ type VectorSharedMap = Y.Map<string | number | boolean>
 type CircleSharedMap = Y.Map<string | number | boolean>
 type SphereSharedMap = Y.Map<string | number | boolean>
 type ConeSharedMap = Y.Map<string | number | boolean>
+type CylinderSharedMap = Y.Map<string | number | boolean>
 type IntersectionSharedMap = Y.Map<string>
 type FaceSharedArrayValue = string | number | null
 type FaceSharedMapValue = string | number | boolean | Y.Array<FaceSharedArrayValue>
@@ -94,6 +99,7 @@ export class CollabManager {
   private yCircles: Y.Map<CircleSharedMap>
   private ySpheres: Y.Map<SphereSharedMap>
   private yCones: Y.Map<ConeSharedMap>
+  private yCylinders: Y.Map<CylinderSharedMap>
   private yIntersections: Y.Map<IntersectionSharedMap>
   private yFaces: Y.Map<FaceSharedMap>
   private yCubes: Y.Map<CubeSharedMap>
@@ -107,6 +113,7 @@ export class CollabManager {
   private circlesObserver: ((event: Y.YMapEvent<CircleSharedMap>) => void) | null = null
   private spheresObserver: ((event: Y.YMapEvent<SphereSharedMap>) => void) | null = null
   private conesObserver: ((event: Y.YMapEvent<ConeSharedMap>) => void) | null = null
+  private cylindersObserver: ((event: Y.YMapEvent<CylinderSharedMap>) => void) | null = null
   private intersectionsObserver: ((event: Y.YMapEvent<IntersectionSharedMap>) => void) | null = null
   private facesObserver: ((event: Y.YMapEvent<FaceSharedMap>) => void) | null = null
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
@@ -120,6 +127,7 @@ export class CollabManager {
   private readonly circleRecordCleanup = new Map<string, () => void>()
   private readonly sphereRecordCleanup = new Map<string, () => void>()
   private readonly coneRecordCleanup = new Map<string, () => void>()
+  private readonly cylinderRecordCleanup = new Map<string, () => void>()
   private readonly intersectionRecordCleanup = new Map<string, () => void>()
   private readonly faceRecordCleanup = new Map<string, () => void>()
   private readonly cubeRecordCleanup = new Map<string, () => void>()
@@ -148,6 +156,7 @@ export class CollabManager {
   private readonly dirtyCircleIds = new Set<string>()
   private readonly dirtySphereIds = new Set<string>()
   private readonly dirtyConeIds = new Set<string>()
+  private readonly dirtyCylinderIds = new Set<string>()
   private readonly dirtyIntersectionIds = new Set<string>()
   private readonly dirtyFaceIds = new Set<string>()
   private readonly dirtyCubeIds = new Set<string>()
@@ -160,6 +169,7 @@ export class CollabManager {
   private readonly deletedCircleIds = new Set<string>()
   private readonly deletedSphereIds = new Set<string>()
   private readonly deletedConeIds = new Set<string>()
+  private readonly deletedCylinderIds = new Set<string>()
   private readonly deletedIntersectionIds = new Set<string>()
   private readonly deletedFaceIds = new Set<string>()
   private readonly deletedCubeIds = new Set<string>()
@@ -180,6 +190,7 @@ export class CollabManager {
     this.yCircles = this.ydoc.getMap<CircleSharedMap>('circles')
     this.ySpheres = this.ydoc.getMap<SphereSharedMap>('spheres')
     this.yCones = this.ydoc.getMap<ConeSharedMap>('cones')
+    this.yCylinders = this.ydoc.getMap<CylinderSharedMap>('cylinders')
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
@@ -203,6 +214,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.circleRecordCleanup)
     this.cleanupRecordObservers(this.sphereRecordCleanup)
     this.cleanupRecordObservers(this.coneRecordCleanup)
+    this.cleanupRecordObservers(this.cylinderRecordCleanup)
     this.cleanupRecordObservers(this.intersectionRecordCleanup)
     this.cleanupRecordObservers(this.faceRecordCleanup)
     this.cleanupRecordObservers(this.cubeRecordCleanup)
@@ -475,6 +487,15 @@ export class CollabManager {
     if (!record) {
       record = new Y.Map<string | number | boolean>()
       this.yCones.set(id, record)
+    }
+    return record
+  }
+
+  private ensureCylinderRecord(id: string) {
+    let record = this.yCylinders.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yCylinders.set(id, record)
     }
     return record
   }
@@ -783,7 +804,7 @@ export class CollabManager {
   private captureLocalSnapshot(): LocalSceneSnapshot {
     return {
       points: [...this.scene.points.values()].filter(
-        (point) => !point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex',
+        (point) => !point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex' || point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter',
       ),
       lines: [...this.scene.lines.values()],
       straightLines: [...this.scene.straightLines.values()],
@@ -792,6 +813,7 @@ export class CollabManager {
       circles: [...this.scene.circles.values()],
       spheres: [...this.scene.spheres.values()],
       cones: [...this.scene.cones.values()],
+      cylinders: [...this.scene.cylinders.values()],
       faces: [...this.scene.faces.values()],
       intersections: [...this.scene.intersectionConstraints.values()].filter(
         (constraint): constraint is IntersectionPointConstraint =>
@@ -804,6 +826,10 @@ export class CollabManager {
         (constraint): constraint is RegularPolygonConstraint =>
           constraint instanceof RegularPolygonConstraint,
       ),
+      cylinderConstraints: [...this.scene.cylinderConstraints.values()].filter(
+        (constraint): constraint is CylinderConstraint =>
+          constraint instanceof CylinderConstraint,
+      ),
     }
   }
 
@@ -815,9 +841,10 @@ export class CollabManager {
     this.scene.circles.clear()
     this.scene.spheres.clear()
     this.scene.cones.clear()
+    this.scene.cylinders.clear()
     this.scene.faces.clear()
     this.scene.points.forEach((point, id) => {
-      if (!point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex') this.scene.points.delete(id)
+      if (!point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex' || point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter') this.scene.points.delete(id)
     })
     this.scene.clearAllConstraints()
     this.scene.selection.clear()
@@ -832,10 +859,12 @@ export class CollabManager {
     snapshot.circles.forEach((circle) => this.scene.addCircle(circle))
     snapshot.spheres.forEach((sphere) => this.scene.addSphere(sphere))
     snapshot.cones.forEach((cone) => this.scene.addCone(cone))
+    snapshot.cylinders.forEach((cylinder) => this.scene.addCylinder(cylinder))
     snapshot.faces.forEach((face) => this.scene.addFace(face))
     snapshot.intersections.forEach((constraint) => this.scene.addIntersectionConstraint(constraint))
     snapshot.cubes.forEach((cube) => this.scene.addCubeConstraint(cube))
     snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
+    snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
   }
 
   private clearDirtyState() {
@@ -847,6 +876,7 @@ export class CollabManager {
     this.dirtyCircleIds.clear()
     this.dirtySphereIds.clear()
     this.dirtyConeIds.clear()
+    this.dirtyCylinderIds.clear()
     this.dirtyFaceIds.clear()
     this.dirtyIntersectionIds.clear()
     this.deletedPointIds.clear()
@@ -857,6 +887,7 @@ export class CollabManager {
     this.deletedCircleIds.clear()
     this.deletedSphereIds.clear()
     this.deletedConeIds.clear()
+    this.deletedCylinderIds.clear()
     this.deletedFaceIds.clear()
     this.deletedIntersectionIds.clear()
     this.dirtyCubeIds.clear()
@@ -898,6 +929,11 @@ export class CollabManager {
   private markConeDirty(id: string) {
     this.deletedConeIds.delete(id)
     this.dirtyConeIds.add(id)
+  }
+
+  private markCylinderDirty(id: string) {
+    this.deletedCylinderIds.delete(id)
+    this.dirtyCylinderIds.add(id)
   }
 
   private markStraightLineDirty(id: string) {
@@ -953,6 +989,11 @@ export class CollabManager {
   private markConeDeleted(id: string) {
     this.dirtyConeIds.delete(id)
     this.deletedConeIds.add(id)
+  }
+
+  private markCylinderDeleted(id: string) {
+    this.dirtyCylinderIds.delete(id)
+    this.deletedCylinderIds.add(id)
   }
 
   private markStraightLineDeleted(id: string) {
@@ -1029,6 +1070,11 @@ export class CollabManager {
         this.markConeDirty(id)
       }
     })
+    this.scene.cylinders.forEach((cylinder, id) => {
+      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
+        this.markCylinderDirty(id)
+      }
+    })
     this.scene.straightLines.forEach((line, id) => {
       if (line.p1.id === pointId || line.p2.id === pointId) this.markStraightLineDirty(id)
     })
@@ -1066,6 +1112,9 @@ export class CollabManager {
     for (const cone of this.scene.cones.values()) {
       if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) return true
     }
+    for (const cylinder of this.scene.cylinders.values()) {
+      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) return true
+    }
     for (const face of this.scene.faces.values()) {
       if (face.includesPoint(pointId)) return true
     }
@@ -1088,7 +1137,7 @@ export class CollabManager {
 
   markSceneDirty() {
     this.scene.points.forEach((point, id) => {
-      if (!point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex' || id === Scene.ORIGIN_ID) {
+      if (!point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex' || point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter' || id === Scene.ORIGIN_ID) {
         this.markPointDirty(id)
       }
     })
@@ -1099,6 +1148,7 @@ export class CollabManager {
     this.scene.circles.forEach((_, id) => this.markCircleDirty(id))
     this.scene.spheres.forEach((_, id) => this.markSphereDirty(id))
     this.scene.cones.forEach((_, id) => this.markConeDirty(id))
+    this.scene.cylinders.forEach((_, id) => this.markCylinderDirty(id))
     this.scene.faces.forEach((_, id) => this.markFaceDirty(id))
     this.scene.intersectionConstraints.forEach((constraint, id) => {
       if (constraint instanceof IntersectionPointConstraint) this.markIntersectionDirty(id)
@@ -1133,6 +1183,9 @@ export class CollabManager {
     }
     for (const id of [...this.yCones.keys()]) {
       if (!this.scene.cones.has(id)) this.markConeDeleted(id)
+    }
+    for (const id of [...this.yCylinders.keys()]) {
+      if (!this.scene.cylinders.has(id)) this.markCylinderDeleted(id)
     }
     for (const id of [...this.yIntersections.keys()]) {
       if (!this.scene.intersectionConstraints.has(id)) this.markIntersectionDeleted(id)
@@ -1191,6 +1244,10 @@ export class CollabManager {
       this.markConeDirty(target.geoId)
       return
     }
+    if (target.type === 'cylinder') {
+      this.markCylinderDirty(target.geoId)
+      return
+    }
     this.markFaceDirty(target.geoId)
   }
 
@@ -1204,6 +1261,7 @@ export class CollabManager {
       this.yCircles.size > 0 ||
       this.ySpheres.size > 0 ||
       this.yCones.size > 0 ||
+      this.yCylinders.size > 0 ||
       this.yIntersections.size > 0 ||
       this.yFaces.size > 0 ||
       this.yCubes.size > 0 ||
@@ -1222,10 +1280,12 @@ export class CollabManager {
       localSnapshot.circles.length === 0 &&
       localSnapshot.spheres.length === 0 &&
       localSnapshot.cones.length === 0 &&
+      localSnapshot.cylinders.length === 0 &&
       localSnapshot.intersections.length === 0 &&
       localSnapshot.faces.length === 0 &&
       localSnapshot.cubes.length === 0 &&
-      localSnapshot.regularPolygons.length === 0
+      localSnapshot.regularPolygons.length === 0 &&
+      localSnapshot.cylinderConstraints.length === 0
     ) {
       return
     }
@@ -1305,6 +1365,7 @@ export class CollabManager {
     if (this.circlesObserver) this.yCircles.unobserve(this.circlesObserver)
     if (this.spheresObserver) this.ySpheres.unobserve(this.spheresObserver)
     if (this.conesObserver) this.yCones.unobserve(this.conesObserver)
+    if (this.cylindersObserver) this.yCylinders.unobserve(this.cylindersObserver)
     if (this.intersectionsObserver) this.yIntersections.unobserve(this.intersectionsObserver)
     if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
@@ -1321,6 +1382,7 @@ export class CollabManager {
     this.yCircles = this.ydoc.getMap<CircleSharedMap>('circles')
     this.ySpheres = this.ydoc.getMap<SphereSharedMap>('spheres')
     this.yCones = this.ydoc.getMap<ConeSharedMap>('cones')
+    this.yCylinders = this.ydoc.getMap<CylinderSharedMap>('cylinders')
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
@@ -1358,6 +1420,14 @@ export class CollabManager {
     if (point?.coneId && (point.coneRole === 'baseCenter' || point.coneRole === 'apex')) {
       if (!this.yCones.has(point.coneId)) {
         this.removeConeFromScene(point.coneId)
+      }
+      this.scene.points.delete(id)
+      this.scene.selection.points.delete(id)
+      return
+    }
+    if (point?.cylinderId && (point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter')) {
+      if (!this.yCylinders.has(point.cylinderId)) {
+        this.removeCylinderFromScene(point.cylinderId)
       }
       this.scene.points.delete(id)
       this.scene.selection.points.delete(id)
@@ -1407,6 +1477,13 @@ export class CollabManager {
       if (cone.baseCenterPoint.id === id || cone.apexPoint.id === id) {
         if (!this.yCones.has(coneId)) {
           this.removeConeFromScene(coneId)
+        }
+      }
+    })
+    this.scene.cylinders.forEach((cylinder, cylinderId) => {
+      if (cylinder.bottomCenterPoint.id === id || cylinder.topCenterPoint.id === id) {
+        if (!this.yCylinders.has(cylinderId)) {
+          this.removeCylinderFromScene(cylinderId)
         }
       }
     })
@@ -1474,6 +1551,45 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private removeCylinderFromScene(id: string) {
+    const cylinder = this.scene.cylinders.get(id)
+    if (cylinder) {
+      if (cylinder.normalCircleId) {
+        const bottomCircle = this.scene.circles.get(cylinder.normalCircleId)
+        if (bottomCircle) {
+          bottomCircle.p1.circleId = null
+          bottomCircle.p1.circleRole = null
+        }
+        this.scene.circles.delete(cylinder.normalCircleId)
+        this.scene.selection.circles.delete(cylinder.normalCircleId)
+      }
+      if (cylinder.topNormalCircleId) {
+        const topCircle = this.scene.circles.get(cylinder.topNormalCircleId)
+        if (topCircle) {
+          topCircle.p1.circleId = null
+          topCircle.p1.circleRole = null
+        }
+        this.scene.circles.delete(cylinder.topNormalCircleId)
+        this.scene.selection.circles.delete(cylinder.topNormalCircleId)
+      }
+    }
+    this.scene.removeCylinderConstraint(id)
+    this.scene.cylinders.delete(id)
+    this.scene.selection.cylinders.delete(id)
+    this.scene.points.forEach((point, pointId) => {
+      if (point.cylinderId === id && (point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter')) {
+        if (this.isPointReferencedByOtherGeometry(pointId)) {
+          point.cylinderId = null
+          point.cylinderRole = null
+        } else {
+          this.scene.points.delete(pointId)
+          this.scene.selection.points.delete(pointId)
+        }
+      }
+    })
+    this.scene.markAllRenderDirty()
+  }
+
   private reconcileGeometryForPoint(pointId: string) {
     this.yLines.forEach((record, id) => {
       const p1Id = this.readString(record, 'p1Id', '')
@@ -1515,6 +1631,13 @@ export class CollabManager {
       const apexPointId = this.readString(record, 'apexPointId', '')
       if (baseCenterPointId === pointId || apexPointId === pointId) {
         this.applyConeRecord(id, record)
+      }
+    })
+    this.yCylinders.forEach((record, id) => {
+      const bottomCenterPointId = this.readString(record, 'bottomCenterPointId', '')
+      const topCenterPointId = this.readString(record, 'topCenterPointId', '')
+      if (bottomCenterPointId === pointId || topCenterPointId === pointId) {
+        this.applyCylinderRecord(id, record)
       }
     })
     this.yFaces.forEach((record, id) => {
@@ -1628,6 +1751,9 @@ export class CollabManager {
     const coneId = this.readNullableString(record, 'coneId')
     const coneRoleValue = this.readNullableString(record, 'coneRole')
     const coneRole = coneRoleValue === 'baseCenter' || coneRoleValue === 'apex' ? coneRoleValue : null
+    const cylinderId = this.readNullableString(record, 'cylinderId')
+    const cylinderRoleValue = this.readNullableString(record, 'cylinderRole')
+    const cylinderRole = cylinderRoleValue === 'bottomCenter' || cylinderRoleValue === 'topCenter' ? cylinderRoleValue : null
 
     if (point) {
       point.name = name
@@ -1646,6 +1772,8 @@ export class CollabManager {
       point.sphereRole = sphereRole
       point.coneId = coneId
       point.coneRole = coneRole
+      point.cylinderId = cylinderId
+      point.cylinderRole = cylinderRole
       if (!point.locked) {
         point.setPosition(new Vec3(x, y, z))
       }
@@ -1674,6 +1802,8 @@ export class CollabManager {
     nextPoint.sphereRole = sphereRole
     nextPoint.coneId = coneId
     nextPoint.coneRole = coneRole
+    nextPoint.cylinderId = cylinderId
+    nextPoint.cylinderRole = cylinderRole
     this.scene.addPoint(nextPoint)
     this.scene.markAllRenderDirty()
     this.reconcileGeometryForPoint(id)
@@ -2168,6 +2298,111 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private applyCylinderRecord(id: string, record: CylinderSharedMap) {
+    const bottomCenterPointId = this.readString(record, 'bottomCenterPointId', '')
+    const topCenterPointId = this.readString(record, 'topCenterPointId', '')
+    const radiusValue = this.readNumber(record, 'radiusValue', 0)
+    const cylinderTypeValue = this.readString(record, 'cylinderType', 'twoPoint')
+    const cylinderType: CylinderType = cylinderTypeValue === 'normalCircle' ? 'normalCircle' : 'twoPoint'
+    const normalCircleId = this.readNullableString(record, 'normalCircleId')
+    const topNormalCircleId = this.readNullableString(record, 'topNormalCircleId')
+    const bottomCenterPoint = this.scene.points.get(bottomCenterPointId)
+    const topCenterPoint = this.scene.points.get(topCenterPointId)
+    if (!bottomCenterPoint || !topCenterPoint) return
+
+    const cylinder = this.scene.cylinders.get(id)
+    const name = this.readString(record, 'name', cylinder?.name ?? '')
+    const nameVisible = this.readBoolean(record, 'nameVisible', cylinder?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', cylinder?.valueVisible ?? false)
+    const labelOffsetX = this.readNumber(
+      record,
+      'labelOffsetX',
+      cylinder?.labelOffsetX ?? Cylinder3.DEFAULT_LABEL_OFFSET_X,
+    )
+    const labelOffsetY = this.readNumber(
+      record,
+      'labelOffsetY',
+      cylinder?.labelOffsetY ?? Cylinder3.DEFAULT_LABEL_OFFSET_Y,
+    )
+    const visible = this.readBoolean(record, 'visible', cylinder?.visible ?? true)
+    const userLocked = this.readBoolean(record, 'userLocked', cylinder?.userLocked ?? false)
+
+    if (cylinder) {
+      cylinder.name = name
+      cylinder.nameVisible = nameVisible
+      cylinder.valueVisible = valueVisible
+      cylinder.labelOffsetX = labelOffsetX
+      cylinder.labelOffsetY = labelOffsetY
+      cylinder.visible = visible
+      cylinder.userLocked = userLocked
+      cylinder.bottomCenterPoint = bottomCenterPoint
+      cylinder.topCenterPoint = topCenterPoint
+      cylinder.radiusValue = radiusValue
+      cylinder.cylinderType = cylinderType
+      cylinder.normalCircleId = normalCircleId
+      cylinder.topNormalCircleId = topNormalCircleId
+      bottomCenterPoint.cylinderId = id
+      bottomCenterPoint.cylinderRole = 'bottomCenter'
+      topCenterPoint.cylinderId = id
+      topCenterPoint.cylinderRole = 'topCenter'
+      if (normalCircleId) {
+        const bottomCircle = this.scene.circles.get(normalCircleId)
+        if (bottomCircle) bottomCircle.lockedRadius = radiusValue
+      }
+      if (topNormalCircleId) {
+        const topCircle = this.scene.circles.get(topNormalCircleId)
+        if (topCircle) topCircle.lockedRadius = radiusValue
+      }
+      if (
+        normalCircleId != null &&
+        topNormalCircleId != null &&
+        this.scene.circles.has(normalCircleId) &&
+        this.scene.circles.has(topNormalCircleId) &&
+        !this.scene.cylinderConstraints.has(id)
+      ) {
+        this.scene.addCylinderConstraint(
+          new CylinderConstraint(this.scene, id, normalCircleId, topNormalCircleId),
+        )
+      }
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    this.scene.addCylinder(
+      new Cylinder3(
+        id,
+        name,
+        bottomCenterPoint,
+        topCenterPoint,
+        cylinderType,
+        nameVisible,
+        visible,
+        userLocked,
+        labelOffsetX,
+        labelOffsetY,
+        valueVisible,
+        radiusValue,
+        normalCircleId,
+        topNormalCircleId,
+      ),
+    )
+    bottomCenterPoint.cylinderId = id
+    bottomCenterPoint.cylinderRole = 'bottomCenter'
+    topCenterPoint.cylinderId = id
+    topCenterPoint.cylinderRole = 'topCenter'
+    if (
+      normalCircleId != null &&
+      topNormalCircleId != null &&
+      this.scene.circles.has(normalCircleId) &&
+      this.scene.circles.has(topNormalCircleId)
+    ) {
+      this.scene.addCylinderConstraint(
+        new CylinderConstraint(this.scene, id, normalCircleId, topNormalCircleId),
+      )
+    }
+    this.scene.markAllRenderDirty()
+  }
+
   private applyIntersectionRecord(id: string, record: IntersectionSharedMap) {
     const point = this.scene.points.get(id)
     if (!point || point.locked) return
@@ -2538,6 +2773,15 @@ export class CollabManager {
     this.coneRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
+  private observeCylinderRecord(id: string, record: CylinderSharedMap) {
+    this.releaseRecordObserver(id, this.cylinderRecordCleanup)
+    const handler = () => {
+      this.applyCylinderRecord(id, record)
+    }
+    record.observe(handler)
+    this.cylinderRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
   private observeIntersectionRecord(id: string, record: IntersectionSharedMap) {
     this.releaseRecordObserver(id, this.intersectionRecordCleanup)
     const handler = () => {
@@ -2739,6 +2983,26 @@ export class CollabManager {
       this.applyConeRecord(id, record)
     })
 
+    this.cylindersObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.cylinderRecordCleanup)
+          this.removeCylinderFromScene(id)
+          return
+        }
+
+        const record = this.yCylinders.get(id)
+        if (!record) return
+        this.observeCylinderRecord(id, record)
+        this.applyCylinderRecord(id, record)
+      })
+    }
+    this.yCylinders.observe(this.cylindersObserver)
+    this.yCylinders.forEach((record, id) => {
+      this.observeCylinderRecord(id, record)
+      this.applyCylinderRecord(id, record)
+    })
+
     this.intersectionsObserver = (event) => {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
@@ -2856,6 +3120,8 @@ export class CollabManager {
     this.setNullableScalarField(record, 'sphereRole', point.sphereRole)
     this.setNullableScalarField(record, 'coneId', point.coneId)
     this.setNullableScalarField(record, 'coneRole', point.coneRole)
+    this.setNullableScalarField(record, 'cylinderId', point.cylinderId)
+    this.setNullableScalarField(record, 'cylinderRole', point.cylinderRole)
   }
 
   private syncLineRecord(record: LineSharedMap, line: Line3) {
@@ -2956,6 +3222,22 @@ export class CollabManager {
     this.setScalarField(record, 'labelOffsetY', cone.labelOffsetY)
     this.setScalarField(record, 'visible', cone.visible)
     this.setScalarField(record, 'userLocked', cone.userLocked)
+  }
+
+  private syncCylinderRecord(record: CylinderSharedMap, cylinder: Cylinder3) {
+    this.setScalarField(record, 'bottomCenterPointId', cylinder.bottomCenterPoint.id)
+    this.setScalarField(record, 'topCenterPointId', cylinder.topCenterPoint.id)
+    this.setScalarField(record, 'radiusValue', cylinder.radiusValue)
+    this.setScalarField(record, 'cylinderType', cylinder.cylinderType)
+    this.setNullableScalarField(record, 'normalCircleId', cylinder.normalCircleId)
+    this.setNullableScalarField(record, 'topNormalCircleId', cylinder.topNormalCircleId)
+    this.setScalarField(record, 'name', cylinder.name)
+    this.setScalarField(record, 'nameVisible', cylinder.nameVisible)
+    this.setScalarField(record, 'valueVisible', cylinder.valueVisible)
+    this.setScalarField(record, 'labelOffsetX', cylinder.labelOffsetX)
+    this.setScalarField(record, 'labelOffsetY', cylinder.labelOffsetY)
+    this.setScalarField(record, 'visible', cylinder.visible)
+    this.setScalarField(record, 'userLocked', cylinder.userLocked)
   }
 
   private syncIntersectionRecord(record: IntersectionSharedMap, constraint: IntersectionPointConstraint) {
@@ -3130,6 +3412,7 @@ export class CollabManager {
     const circleIds = [...this.dirtyCircleIds]
     const sphereIds = [...this.dirtySphereIds]
     const coneIds = [...this.dirtyConeIds]
+    const cylinderIds = [...this.dirtyCylinderIds]
     const intersectionIds = [...this.dirtyIntersectionIds]
     const faceIds = [...this.dirtyFaceIds]
     const cubeIds = [...this.dirtyCubeIds]
@@ -3142,6 +3425,7 @@ export class CollabManager {
     const deletedCircleIds = [...this.deletedCircleIds]
     const deletedSphereIds = [...this.deletedSphereIds]
     const deletedConeIds = [...this.deletedConeIds]
+    const deletedCylinderIds = [...this.deletedCylinderIds]
     const deletedIntersectionIds = [...this.deletedIntersectionIds]
     const deletedFaceIds = [...this.deletedFaceIds]
     const deletedCubeIds = [...this.deletedCubeIds]
@@ -3156,6 +3440,7 @@ export class CollabManager {
       circleIds.length === 0 &&
       sphereIds.length === 0 &&
       coneIds.length === 0 &&
+      cylinderIds.length === 0 &&
       intersectionIds.length === 0 &&
       faceIds.length === 0 &&
       cubeIds.length === 0 &&
@@ -3168,6 +3453,7 @@ export class CollabManager {
       deletedCircleIds.length === 0 &&
       deletedSphereIds.length === 0 &&
       deletedConeIds.length === 0 &&
+      deletedCylinderIds.length === 0 &&
       deletedIntersectionIds.length === 0 &&
       deletedFaceIds.length === 0 &&
       deletedCubeIds.length === 0 &&
@@ -3200,6 +3486,9 @@ export class CollabManager {
       })
       deletedConeIds.forEach((id) => {
         this.yCones.delete(id)
+      })
+      deletedCylinderIds.forEach((id) => {
+        this.yCylinders.delete(id)
       })
       deletedIntersectionIds.forEach((id) => {
         this.yIntersections.delete(id)
@@ -3286,6 +3575,15 @@ export class CollabManager {
         this.syncConeRecord(this.ensureConeRecord(id), cone)
       })
 
+      cylinderIds.forEach((id) => {
+        const cylinder = this.scene.cylinders.get(id)
+        if (!cylinder) {
+          this.yCylinders.delete(id)
+          return
+        }
+        this.syncCylinderRecord(this.ensureCylinderRecord(id), cylinder)
+      })
+
       intersectionIds.forEach((id) => {
         const constraint = this.scene.getIntersectionConstraint(id)
         if (!(constraint instanceof IntersectionPointConstraint)) {
@@ -3331,6 +3629,7 @@ export class CollabManager {
     circleIds.forEach((id) => this.dirtyCircleIds.delete(id))
     sphereIds.forEach((id) => this.dirtySphereIds.delete(id))
     coneIds.forEach((id) => this.dirtyConeIds.delete(id))
+    cylinderIds.forEach((id) => this.dirtyCylinderIds.delete(id))
     intersectionIds.forEach((id) => this.dirtyIntersectionIds.delete(id))
     faceIds.forEach((id) => this.dirtyFaceIds.delete(id))
     cubeIds.forEach((id) => this.dirtyCubeIds.delete(id))
@@ -3343,6 +3642,7 @@ export class CollabManager {
     deletedCircleIds.forEach((id) => this.deletedCircleIds.delete(id))
     deletedSphereIds.forEach((id) => this.deletedSphereIds.delete(id))
     deletedConeIds.forEach((id) => this.deletedConeIds.delete(id))
+    deletedCylinderIds.forEach((id) => this.deletedCylinderIds.delete(id))
     deletedIntersectionIds.forEach((id) => this.deletedIntersectionIds.delete(id))
     deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))
     deletedCubeIds.forEach((id) => this.deletedCubeIds.delete(id))

@@ -75,6 +75,7 @@ type ContentGroupKey =
   | 'tetrahedron'
   | 'sphere'
   | 'cone'
+  | 'cylinder'
 
 interface MergePointDialogState {
   visible: boolean
@@ -106,6 +107,13 @@ interface ConeRadiusDialogState {
   radius: number
 }
 
+interface CylinderRadiusDialogState {
+  visible: boolean
+  bottomCenterPointId: string
+  topCenterPointId: string
+  radius: number
+}
+
 interface ContentGroupCollapseState {
   point: boolean
   line: boolean
@@ -118,6 +126,7 @@ interface ContentGroupCollapseState {
   tetrahedron: boolean
   sphere: boolean
   cone: boolean
+  cylinder: boolean
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
@@ -132,6 +141,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   tetrahedron: false,
   sphere: false,
   cone: false,
+  cylinder: false,
 })
 
 export const useUiStore = defineStore('ui', () => {
@@ -178,6 +188,13 @@ export const useUiStore = defineStore('ui', () => {
     visible: false,
     baseCenterPointId: '',
     apexPointId: '',
+    radius: 1,
+  })
+
+  const cylinderRadiusDialog = ref<CylinderRadiusDialogState>({
+    visible: false,
+    bottomCenterPointId: '',
+    topCenterPointId: '',
     radius: 1,
   })
 
@@ -362,6 +379,24 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
+  const openCylinderRadiusDialog = (bottomCenterPointId: string, topCenterPointId: string) => {
+    cylinderRadiusDialog.value = {
+      visible: true,
+      bottomCenterPointId,
+      topCenterPointId,
+      radius: 1,
+    }
+  }
+
+  const closeCylinderRadiusDialog = () => {
+    cylinderRadiusDialog.value = {
+      visible: false,
+      bottomCenterPointId: '',
+      topCenterPointId: '',
+      radius: 1,
+    }
+  }
+
   const setMergePointTargetId = (targetId: string) => {
     mergePointDialog.value = {
       ...mergePointDialog.value,
@@ -415,6 +450,7 @@ export const useUiStore = defineStore('ui', () => {
       tetrahedron: collapsed,
       sphere: collapsed,
       cone: collapsed,
+      cylinder: collapsed,
     }
   }
 
@@ -446,6 +482,7 @@ export const useUiStore = defineStore('ui', () => {
     closeNormalCircleRadiusDialog()
     closeRadiusSphereDialog()
     closeConeRadiusDialog()
+    closeCylinderRadiusDialog()
     closeAllToolbarMenus()
     contentGroupsCollapsed.value = createContentGroupsCollapsed()
     hasAutoCollapsedContentGroups.value = false
@@ -489,6 +526,7 @@ export const useUiStore = defineStore('ui', () => {
     normalCircleRadiusDialog,
     radiusSphereDialog,
     coneRadiusDialog,
+    cylinderRadiusDialog,
     toolbarMenus,
     contentGroupsCollapsed,
     hasAutoCollapsedContentGroups,
@@ -520,6 +558,8 @@ export const useUiStore = defineStore('ui', () => {
     closeRadiusSphereDialog,
     openConeRadiusDialog,
     closeConeRadiusDialog,
+    openCylinderRadiusDialog,
+    closeCylinderRadiusDialog,
     setMergePointTargetId,
     closeAllToolbarMenus,
     setToolbarMenuOpen,

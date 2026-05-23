@@ -57,6 +57,7 @@ const {
   normalCircleRadiusDialog,
   radiusSphereDialog,
   coneRadiusDialog,
+  cylinderRadiusDialog,
   renderSettings,
 } = storeToRefs(uiStore)
 const {
@@ -255,6 +256,7 @@ onMounted(() => {
   window.addEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   window.addEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
   window.addEventListener('show-cone-radius-dialog', handleShowConeRadiusDialog)
+  window.addEventListener('show-cylinder-radius-dialog', handleShowCylinderRadiusDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // Ensure renderer rebuilds meshes when editor view is mounted again
@@ -565,6 +567,7 @@ onUnmounted(() => {
   window.removeEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   window.removeEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
   window.removeEventListener('show-cone-radius-dialog', handleShowConeRadiusDialog)
+  window.removeEventListener('show-cylinder-radius-dialog', handleShowCylinderRadiusDialog)
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -701,6 +704,12 @@ const coneRadiusRadiusError = computed(() =>
 
 const canConfirmConeRadius = computed(() => coneRadiusRadiusError.value === '')
 
+const cylinderRadiusError = computed(() =>
+  validatePositiveRadius(cylinderRadiusDialog.value.visible, cylinderRadiusDialog.value.radius),
+)
+
+const canConfirmCylinderRadius = computed(() => cylinderRadiusError.value === '')
+
 const normalCircleRadiusError = computed(() =>
   validatePositiveRadius(normalCircleRadiusDialog.value.visible, normalCircleRadiusDialog.value.radius),
 )
@@ -722,6 +731,23 @@ const handleConfirmConeRadius = () => {
 const handleCancelConeRadius = () => {
   interaction.cancelConeCreation()
   uiStore.closeConeRadiusDialog()
+}
+
+const handleShowCylinderRadiusDialog = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  uiStore.openCylinderRadiusDialog(detail.bottomCenterPointId, detail.topCenterPointId)
+}
+
+const handleConfirmCylinderRadius = () => {
+  if (!canConfirmCylinderRadius.value) return
+  const r = Math.round(cylinderRadiusDialog.value.radius * 10) / 10
+  interaction.confirmCylinderRadius(cylinderRadiusDialog.value.bottomCenterPointId, cylinderRadiusDialog.value.topCenterPointId, r)
+  uiStore.closeCylinderRadiusDialog()
+}
+
+const handleCancelCylinderRadius = () => {
+  interaction.cancelCylinderCreation()
+  uiStore.closeCylinderRadiusDialog()
 }
 
 const regularPolygonVertexError = computed(() => {
@@ -1058,6 +1084,28 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
         class="dialog-input"
         :class="{ 'dialog-input-error': coneRadiusRadiusError }"
         @keydown.enter="handleConfirmConeRadius"
+      />
+    </InputDialog>
+
+    <InputDialog
+      :visible="cylinderRadiusDialog.visible"
+      title="输入底面半径"
+      :error-message="cylinderRadiusError"
+      :can-confirm="canConfirmCylinderRadius"
+      :min-step-hint="MIN_STEP_HINT_TEXT"
+      :min-step-value="0.5"
+      @confirm="handleConfirmCylinderRadius"
+      @cancel="handleCancelCylinderRadius"
+    >
+      <label class="dialog-label">半径</label>
+      <input
+        v-model.number="cylinderRadiusDialog.radius"
+        type="number"
+        min="0.5"
+        step="0.5"
+        class="dialog-input"
+        :class="{ 'dialog-input-error': cylinderRadiusError }"
+        @keydown.enter="handleConfirmCylinderRadius"
       />
     </InputDialog>
 

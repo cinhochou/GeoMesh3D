@@ -7,6 +7,8 @@ import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3, type ConeType } from '../geometry/Cone3'
+import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
+import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Scene, type SceneConstraint } from '../scene/Scene'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -37,6 +39,8 @@ type SerializedPoint = {
   sphereRole: 'center' | 'radius' | null
   coneId: string | null
   coneRole: 'baseCenter' | 'apex' | null
+  cylinderId: string | null
+  cylinderRole: 'bottomCenter' | 'topCenter' | null
 }
 
 type SerializedLine = {
@@ -174,6 +178,23 @@ type SerializedCone = {
   normalCircleId: string | null
 }
 
+type SerializedCylinder = {
+  id: string
+  name: string
+  nameVisible: boolean
+  valueVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
+  visible: boolean
+  userLocked: boolean
+  bottomCenterPointId: string
+  topCenterPointId: string
+  radiusValue: number
+  cylinderType: CylinderType
+  normalCircleId: string | null
+  topNormalCircleId: string | null
+}
+
 type SerializedCubeConstraint = {
   type: 'cube'
   cubeId: string
@@ -215,11 +236,21 @@ type SerializedPlanarConstraint = {
   faceId: string
 }
 
+type SerializedCylinderConstraint = {
+  type: 'cylinder'
+  cylinderId: string
+  bottomCircleId: string
+  topCircleId: string
+  name: string
+  valueVisible: boolean
+}
+
 type SerializedConstraint =
   | SerializedCubeConstraint
   | SerializedIntersectionConstraint
   | SerializedRegularPolygonConstraint
   | SerializedPlanarConstraint
+  | SerializedCylinderConstraint
 
 type SceneMetadata = {
   exportedAt: string
@@ -233,6 +264,7 @@ type SceneMetadata = {
   faceCount: number
   sphereCount: number
   coneCount: number
+  cylinderCount: number
   constraintCount: number
 }
 
@@ -248,6 +280,7 @@ export type SerializedScene = {
   faces: SerializedFace[]
   spheres: SerializedSphere[]
   cones: SerializedCone[]
+  cylinders: SerializedCylinder[]
   constraints: SerializedConstraint[]
 }
 
@@ -293,6 +326,8 @@ function serializePoint(p: Point3): SerializedPoint {
     sphereRole: p.sphereRole,
     coneId: p.coneId,
     coneRole: p.coneRole,
+    cylinderId: p.cylinderId,
+    cylinderRole: p.cylinderRole,
   }
 }
 
@@ -407,6 +442,20 @@ function serializeCone(c: Cone3): SerializedCone {
   }
 }
 
+function serializeCylinder(c: Cylinder3): SerializedCylinder {
+  return {
+    ...pickBaseFields(c),
+    visible: c.visible,
+    userLocked: c.userLocked,
+    bottomCenterPointId: c.bottomCenterPoint.id,
+    topCenterPointId: c.topCenterPoint.id,
+    radiusValue: c.radiusValue,
+    cylinderType: c.cylinderType,
+    normalCircleId: c.normalCircleId,
+    topNormalCircleId: c.topNormalCircleId,
+  }
+}
+
 function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
   if (c instanceof CubeConstraint) {
     return {
@@ -461,6 +510,16 @@ function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
       faceId: c.faceId,
     }
   }
+  if (c instanceof CylinderConstraint) {
+    return {
+      type: 'cylinder',
+      cylinderId: c.cylinderId,
+      bottomCircleId: c.bottomCircleId,
+      topCircleId: c.topCircleId,
+      name: c.name,
+      valueVisible: c.valueVisible,
+    }
+  }
   return null
 }
 
@@ -474,6 +533,7 @@ export function exportScene(scene: Scene): SerializedScene {
   const faces = [...scene.faces.values()].map(serializeFace)
   const spheres = [...scene.spheres.values()].map(serializeSphere)
   const cones = [...scene.cones.values()].map(serializeCone)
+  const cylinders = [...scene.cylinders.values()].map(serializeCylinder)
   const constraints = scene.constraints.map(serializeConstraint).filter((c): c is SerializedConstraint => c !== null)
 
   const now = new Date()
@@ -482,7 +542,7 @@ export function exportScene(scene: Scene): SerializedScene {
 
   const metadata: SceneMetadata = {
     exportedAt,
-    totalElements: points.length + lines.length + straightLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length,
+    totalElements: points.length + lines.length + straightLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length + cylinders.length,
     pointCount: points.length,
     lineCount: lines.length,
     straightLineCount: straightLines.length,
@@ -492,6 +552,7 @@ export function exportScene(scene: Scene): SerializedScene {
     faceCount: faces.length,
     sphereCount: spheres.length,
     coneCount: cones.length,
+    cylinderCount: cylinders.length,
     constraintCount: constraints.length,
   }
 
@@ -507,6 +568,7 @@ export function exportScene(scene: Scene): SerializedScene {
     faces,
     spheres,
     cones,
+    cylinders,
     constraints,
   }
 }
@@ -593,6 +655,10 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     }
   }
 
+  if (!Array.isArray(obj.cylinders)) {
+    obj.cylinders = []
+  }
+
   const points = obj.points as SerializedPoint[]
   const lineIdSet = new Set<string>()
   const straightLineIdSet = new Set<string>()
@@ -638,6 +704,12 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (err) return { valid: false, error: err }
     if (p.coneRole !== null && p.coneRole !== 'baseCenter' && p.coneRole !== 'apex') {
       return { valid: false, error: `点 "${p.name}" 的 coneRole 无效` }
+    }
+    err = validateNullableStringId(p.cylinderId ?? null, `点 "${p.name}" 的 cylinderId 无效`)
+    if (err) return { valid: false, error: err }
+    const cylinderRole = p.cylinderRole ?? null
+    if (cylinderRole !== null && cylinderRole !== 'bottomCenter' && cylinderRole !== 'topCenter') {
+      return { valid: false, error: `点 "${p.name}" 的 cylinderRole 无效` }
     }
     err = validateNullableStringId(p.regularPolygonId, `点 "${p.name}" 的 regularPolygonId 无效`)
     if (err) return { valid: false, error: err }
@@ -855,8 +927,39 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (err) return { valid: false, error: err }
   }
 
+  const cylinderIdSet = new Set<string>()
+  const cylinders = obj.cylinders as SerializedCylinder[]
+  for (const c of cylinders) {
+    let err = validateId(c.id, '圆柱')
+    if (err) return { valid: false, error: err }
+    err = validateName(c.name, '圆柱', c.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(c.id, cylinderIdSet, '圆柱')
+    if (err) return { valid: false, error: err }
+    cylinderIdSet.add(c.id)
+    err = validateReference(c.bottomCenterPointId, pointIdSet, `圆柱 "${c.name}" 引用了不存在的底面中心点`)
+    if (err) return { valid: false, error: err }
+    err = validateReference(c.topCenterPointId, pointIdSet, `圆柱 "${c.name}" 引用了不存在的顶面中心点`)
+    if (err) return { valid: false, error: err }
+    err = validatePositiveFiniteNumber(c.radiusValue, `圆柱 "${c.name}" 的 radiusValue 无效`)
+    if (err) return { valid: false, error: err }
+    if (c.cylinderType !== 'twoPoint' && c.cylinderType !== 'normalCircle') {
+      return { valid: false, error: `圆柱 "${c.name}" 的 cylinderType 无效` }
+    }
+    err = validateNullableStringId(c.normalCircleId, `圆柱 "${c.name}" 的 normalCircleId 无效`)
+    if (err) return { valid: false, error: err }
+    if (c.normalCircleId !== null && !circleIdSet.has(c.normalCircleId)) {
+      return { valid: false, error: `圆柱 "${c.name}" 的 normalCircleId 引用了不存在的圆` }
+    }
+    err = validateNullableStringId(c.topNormalCircleId, `圆柱 "${c.name}" 的 topNormalCircleId 无效`)
+    if (err) return { valid: false, error: err }
+    if (c.topNormalCircleId !== null && !circleIdSet.has(c.topNormalCircleId)) {
+      return { valid: false, error: `圆柱 "${c.name}" 的 topNormalCircleId 引用了不存在的圆` }
+    }
+  }
+
   const constraints = obj.constraints as SerializedConstraint[]
-  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar'])
+  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder'])
   const constraintPointIds = new Set<string>()
   for (const c of constraints) {
     if (!validTypes.has(c.type)) {
@@ -989,6 +1092,18 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       const err = validateReference(pc.faceId, faceIdSet, '平面约束引用了不存在的面')
       if (err) return { valid: false, error: err }
     }
+    if (c.type === 'cylinder') {
+      const yc = c as SerializedCylinderConstraint
+      if (typeof yc.cylinderId !== 'string' || yc.cylinderId === '' || !cylinderIdSet.has(yc.cylinderId)) {
+        return { valid: false, error: '圆柱约束引用了不存在的圆柱' }
+      }
+      if (typeof yc.bottomCircleId !== 'string' || yc.bottomCircleId === '' || !circleIdSet.has(yc.bottomCircleId)) {
+        return { valid: false, error: `圆柱约束 "${yc.name}" 引用了不存在的底面圆` }
+      }
+      if (typeof yc.topCircleId !== 'string' || yc.topCircleId === '' || !circleIdSet.has(yc.topCircleId)) {
+        return { valid: false, error: `圆柱约束 "${yc.name}" 引用了不存在的顶面圆` }
+      }
+    }
   }
 
   return { valid: true }
@@ -1007,6 +1122,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.faces.clear()
   scene.spheres.clear()
   scene.cones.clear()
+  scene.cylinders.clear()
 
   const pointMap = new Map<string, Point3>()
 
@@ -1036,6 +1152,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       existing.sphereRole = sp.sphereRole
       existing.coneId = sp.coneId
       existing.coneRole = sp.coneRole
+      existing.cylinderId = sp.cylinderId ?? null
+      existing.cylinderRole = sp.cylinderRole ?? null
       continue
     }
 
@@ -1060,6 +1178,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     p.sphereRole = sp.sphereRole
     p.coneId = sp.coneId
     p.coneRole = sp.coneRole
+    p.cylinderId = sp.cylinderId ?? null
+    p.cylinderRole = sp.cylinderRole ?? null
     scene.addPoint(p)
     pointMap.set(p.id, p)
   }
@@ -1245,6 +1365,33 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     scene.addCone(c)
   }
 
+  for (const sc of data.cylinders) {
+    const bottomCenterPoint = scene.points.get(sc.bottomCenterPointId)
+    const topCenterPoint = scene.points.get(sc.topCenterPointId)
+    if (!bottomCenterPoint || !topCenterPoint) continue
+    const c = new Cylinder3(
+      sc.id,
+      sc.name,
+      bottomCenterPoint,
+      topCenterPoint,
+      sc.cylinderType,
+      sc.nameVisible,
+      sc.visible,
+      sc.userLocked,
+      sc.labelOffsetX,
+      sc.labelOffsetY,
+      sc.valueVisible,
+      sc.radiusValue,
+      sc.normalCircleId,
+      sc.topNormalCircleId,
+    )
+    scene.addCylinder(c)
+    bottomCenterPoint.cylinderId = c.id
+    bottomCenterPoint.cylinderRole = 'bottomCenter'
+    topCenterPoint.cylinderId = c.id
+    topCenterPoint.cylinderRole = 'topCenter'
+  }
+
   for (const sc of data.constraints) {
     if (sc.type === 'cube') {
       const cc = sc as SerializedCubeConstraint
@@ -1292,6 +1439,17 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       const pc = sc as SerializedPlanarConstraint
       const constraint = new PlanarPolygonConstraint(scene, pc.faceId)
       scene.addConstraint(constraint)
+    } else if (sc.type === 'cylinder') {
+      const yc = sc as SerializedCylinderConstraint
+      const constraint = new CylinderConstraint(
+        scene,
+        yc.cylinderId,
+        yc.bottomCircleId,
+        yc.topCircleId,
+        yc.name,
+        yc.valueVisible,
+      )
+      scene.addCylinderConstraint(constraint)
     }
   }
 
@@ -1308,6 +1466,7 @@ type SceneElementCounts = {
   faces: number
   spheres: number
   cones: number
+  cylinders: number
 }
 
 function checkSceneEmpty(counts: SceneElementCounts): boolean {
@@ -1320,6 +1479,7 @@ function checkSceneEmpty(counts: SceneElementCounts): boolean {
   if (counts.faces > 0) return false
   if (counts.spheres > 0) return false
   if (counts.cones > 0) return false
+  if (counts.cylinders > 0) return false
   return true
 }
 
@@ -1334,6 +1494,7 @@ export function isSceneEmpty(scene: Scene): boolean {
     faces: scene.faces.size,
     spheres: scene.spheres.size,
     cones: scene.cones.size,
+    cylinders: scene.cylinders.size,
   })
 }
 
@@ -1348,6 +1509,7 @@ export function isSerializedSceneEmpty(data: SerializedScene): boolean {
     faces: data.faces.length,
     spheres: data.spheres.length,
     cones: data.cones.length,
+    cylinders: data.cylinders?.length ?? 0,
   })
 }
 
