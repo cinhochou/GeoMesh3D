@@ -30,6 +30,24 @@ export class Interaction {
   private static readonly AR_TOUCH_POINT_PICK_RADIUS_PX = 17
   private static readonly AR_MOUSE_LINE_PICK_THRESHOLD = 0.14
   private static readonly AR_TOUCH_LINE_PICK_THRESHOLD = 0.18
+  private static readonly SCREEN_POINT_HIT_RADIUS_PX = 14
+  private static readonly SCREEN_POINT_HIT_RADIUS_MOBILE_PX = 20
+  private static readonly SCREEN_POINT_HIT_RADIUS_AR_MOUSE_PX = 18
+  private static readonly SCREEN_POINT_HIT_RADIUS_AR_TOUCH_PX = 24
+  private static readonly SCREEN_LINE_HIT_RADIUS_PX = 8
+  private static readonly SCREEN_LINE_HIT_RADIUS_MOBILE_PX = 14
+  private static readonly SCREEN_LINE_HIT_RADIUS_AR_MOUSE_PX = 12
+  private static readonly SCREEN_LINE_HIT_RADIUS_AR_TOUCH_PX = 18
+  private static readonly SCREEN_CIRCLE_HIT_RADIUS_PX = 8
+  private static readonly SCREEN_CIRCLE_HIT_RADIUS_MOBILE_PX = 14
+  private static readonly SCREEN_CIRCLE_HIT_RADIUS_AR_MOUSE_PX = 12
+  private static readonly SCREEN_CIRCLE_HIT_RADIUS_AR_TOUCH_PX = 18
+  private static readonly SCREEN_POINT_PROTECTION_RADIUS_PX = 14
+  private static readonly SCREEN_POINT_PROTECTION_RADIUS_MOBILE_PX = 20
+  private static readonly SCREEN_POINT_PROTECTION_RADIUS_AR_MOUSE_PX = 18
+  private static readonly SCREEN_POINT_PROTECTION_RADIUS_AR_TOUCH_PX = 24
+  private static readonly SCREEN_TIE_BREAK_PX = 3
+  private static readonly SCREEN_LABEL_GEO_BONUS_PX = 2
   private static readonly POINT_LABEL_HITBOX_SCALE = 0.72
   private static readonly POINT_PICK_PROTECTION_RADIUS_PX = 14
   private static readonly POINT_LABEL_OVERLAP_PRIORITY_PX = 18
@@ -644,6 +662,42 @@ export class Interaction {
     return this.getDeviceParam(Interaction.DEVICE_PARAM_PRESETS.geometryHardCoreHit)
   }
 
+  private getScreenPointHitRadiusPx(): number {
+    return this.getDeviceParam({
+      arTouch: Interaction.SCREEN_POINT_HIT_RADIUS_AR_TOUCH_PX,
+      arMouse: Interaction.SCREEN_POINT_HIT_RADIUS_AR_MOUSE_PX,
+      mobile: Interaction.SCREEN_POINT_HIT_RADIUS_MOBILE_PX,
+      desktop: Interaction.SCREEN_POINT_HIT_RADIUS_PX,
+    })
+  }
+
+  private getScreenLineHitRadiusPx(): number {
+    return this.getDeviceParam({
+      arTouch: Interaction.SCREEN_LINE_HIT_RADIUS_AR_TOUCH_PX,
+      arMouse: Interaction.SCREEN_LINE_HIT_RADIUS_AR_MOUSE_PX,
+      mobile: Interaction.SCREEN_LINE_HIT_RADIUS_MOBILE_PX,
+      desktop: Interaction.SCREEN_LINE_HIT_RADIUS_PX,
+    })
+  }
+
+  private getScreenCircleHitRadiusPx(): number {
+    return this.getDeviceParam({
+      arTouch: Interaction.SCREEN_CIRCLE_HIT_RADIUS_AR_TOUCH_PX,
+      arMouse: Interaction.SCREEN_CIRCLE_HIT_RADIUS_AR_MOUSE_PX,
+      mobile: Interaction.SCREEN_CIRCLE_HIT_RADIUS_MOBILE_PX,
+      desktop: Interaction.SCREEN_CIRCLE_HIT_RADIUS_PX,
+    })
+  }
+
+  private getScreenPointProtectionRadiusPx(): number {
+    return this.getDeviceParam({
+      arTouch: Interaction.SCREEN_POINT_PROTECTION_RADIUS_AR_TOUCH_PX,
+      arMouse: Interaction.SCREEN_POINT_PROTECTION_RADIUS_AR_MOUSE_PX,
+      mobile: Interaction.SCREEN_POINT_PROTECTION_RADIUS_MOBILE_PX,
+      desktop: Interaction.SCREEN_POINT_PROTECTION_RADIUS_PX,
+    })
+  }
+
   private get isAnyDragging(): boolean {
     return (
       this.draggingPointId !== null ||
@@ -795,27 +849,7 @@ export class Interaction {
   }
 
   private pickTouchTarget(clientX: number, clientY: number) {
-    const pointHit = this.getTouchPointHit(
-      clientX,
-      clientY,
-      Interaction.MOBILE_POINT_PICK_RADIUS_PX,
-    )
-    if (pointHit) return pointHit
-
-    const lineThreshold = this.renderer.isARActive()
-      ? this.getARLinePickThreshold()
-      : Interaction.MOBILE_LINE_PICK_THRESHOLD
-    const lineHit = this.pickLinearWithThreshold(lineThreshold)
-    if (!lineHit) return this.pick()
-
-    const protectedEndpoint = this.getProtectedEndpointHit(
-      lineHit.userData.geoId,
-      lineHit.userData.type,
-      clientX,
-      clientY,
-      Interaction.MOBILE_ENDPOINT_PROTECTION_RADIUS_PX,
-    )
-    return protectedEndpoint ?? lineHit
+    return this.pickScreenSpace(clientX, clientY)
   }
 
   private pickIntersectionTarget() {
@@ -844,6 +878,328 @@ export class Interaction {
     if (linearHit) return linearHit.object
 
     return hits[0]!.object
+  }
+
+  private pickScreenSpace(clientX?: number, clientY?: number): THREE.Object3D | null {
+    const rect = this.getPointerClientRect()
+    const cx = clientX ?? rect.left + (this.mouse.x + 1) * 0.5 * rect.width
+    const cy = clientY ?? rect.top + (1 - this.mouse.y) * 0.5 * rect.height
+    const pointer = new THREE.Vector2(cx, cy)
+    const camera = this.renderer.getActiveCamera()
+    const cameraPos = camera.getWorldPosition(new THREE.Vector3())
+
+    this.renderer.world.updateMatrixWorld(true)
+
+    const isAR = this.renderer.isARActive()
+    const pointHitRadius = this.getScreenPointHitRadiusPx()
+    const lineHitRadius = this.getScreenLineHitRadiusPx()
+    const circleHitRadius = this.getScreenCircleHitRadiusPx()
+    const pointProtectionRadius = this.getScreenPointProtectionRadiusPx()
+
+    interface PickCandidate {
+      object: THREE.Object3D
+      screenDist: number
+      depth: number
+      type: string
+      geoId: string
+    }
+
+    const candidates: PickCandidate[] = []
+
+    const pointScreenPositions = new Map<string, THREE.Vector2>()
+
+    for (const [id, point] of this.editor.scene.points) {
+      const screenPos = this.projectMathPositionToClient(point.position, rect)
+      if (!screenPos) continue
+      pointScreenPositions.set(id, screenPos)
+      const dist = pointer.distanceTo(screenPos)
+      if (dist > pointHitRadius) continue
+      const mesh = this.renderer.geometrySyncer.meshMap.get(id)
+      if (!mesh) continue
+      const worldPos = this.renderer.toMathWorldPosition(
+        new THREE.Vector3(point.position.x, point.position.y, point.position.z),
+      )
+      const depth = cameraPos.distanceTo(worldPos)
+      candidates.push({ object: mesh, screenDist: dist, depth, type: 'point', geoId: id })
+    }
+
+    const protectedPointIds = new Set<string>()
+    for (const [id, screenPos] of pointScreenPositions) {
+      if (pointer.distanceTo(screenPos) <= pointProtectionRadius) {
+        protectedPointIds.add(id)
+      }
+    }
+
+    const addLinearCandidate = (
+      id: string,
+      p1Pos: Vec3,
+      p2Pos: Vec3,
+      type: string,
+      isProtectedByPoint: boolean,
+    ) => {
+      const p1Screen = this.projectMathPositionToClient(p1Pos, rect)
+      const p2Screen = this.projectMathPositionToClient(p2Pos, rect)
+      if (!p1Screen || !p2Screen) return
+      const dist = this.distanceToSegment2D(pointer, p1Screen, p2Screen)
+      if (dist > lineHitRadius) return
+      if (isProtectedByPoint) return
+      const mesh = this.renderer.geometrySyncer.meshMap.get(id)
+      if (!mesh) return
+      const midWorld = this.renderer.toMathWorldPosition(
+        new THREE.Vector3(
+          (p1Pos.x + p2Pos.x) / 2,
+          (p1Pos.y + p2Pos.y) / 2,
+          (p1Pos.z + p2Pos.z) / 2,
+        ),
+      )
+      const depth = cameraPos.distanceTo(midWorld)
+      candidates.push({ object: mesh, screenDist: dist, depth, type, geoId: id })
+    }
+
+    for (const [id, line] of this.editor.scene.lines) {
+      const nearPoint = protectedPointIds.has(line.p1.id) || protectedPointIds.has(line.p2.id)
+      addLinearCandidate(id, line.p1.position, line.p2.position, 'line', nearPoint)
+    }
+
+    for (const [id, sl] of this.editor.scene.straightLines) {
+      const dp = sl.getDisplayPoints()
+      const nearPoint = protectedPointIds.has(sl.p1.id) || protectedPointIds.has(sl.p2.id)
+      addLinearCandidate(id, dp.start, dp.end, 'straightLine', nearPoint)
+    }
+
+    for (const [id, ray] of this.editor.scene.rays) {
+      const endPos = ray.getDisplayEndPoint()
+      const nearPoint = protectedPointIds.has(ray.p1.id) || protectedPointIds.has(ray.p2.id)
+      addLinearCandidate(id, ray.p1.position, endPos, 'ray', nearPoint)
+    }
+
+    for (const [id, vec] of this.editor.scene.vectors) {
+      const nearPoint = protectedPointIds.has(vec.p1.id) || protectedPointIds.has(vec.p2.id)
+      addLinearCandidate(id, vec.p1.position, vec.p2.position, 'vector', nearPoint)
+    }
+
+    for (const [id, circle] of this.editor.scene.circles) {
+      const frame = circle.getFrame(
+        this.editor.resolveDirectionVector(
+          circle.directionType ?? 'point',
+          circle.directionId ?? '',
+        ),
+      )
+      if (!frame) continue
+      const centerScreen = this.projectMathPositionToClient(frame.center, rect)
+      if (!centerScreen) continue
+      const centerDist = pointer.distanceTo(centerScreen)
+      const radiusScreenPx = (() => {
+        const edgePoint = new Vec3(
+          frame.center.x + frame.uAxis.x * frame.radius,
+          frame.center.y + frame.uAxis.y * frame.radius,
+          frame.center.z + frame.uAxis.z * frame.radius,
+        )
+        const edgeScreen = this.projectMathPositionToClient(edgePoint, rect)
+        if (!edgeScreen) return 0
+        return edgeScreen.distanceTo(centerScreen)
+      })()
+      const ringDist = Math.abs(centerDist - radiusScreenPx)
+      if (ringDist > circleHitRadius) continue
+      const nearPoint =
+        protectedPointIds.has(circle.p1.id) ||
+        protectedPointIds.has(circle.p2.id) ||
+        protectedPointIds.has(circle.p3.id)
+      if (nearPoint) continue
+      const mesh = this.renderer.geometrySyncer.meshMap.get(id)
+      if (!mesh) continue
+      const centerWorld = this.renderer.toMathWorldPosition(
+        new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
+      )
+      const depth = cameraPos.distanceTo(centerWorld)
+      candidates.push({ object: mesh, screenDist: ringDist, depth, type: 'circle', geoId: id })
+    }
+
+    this.raycaster.setFromCamera(this.mouse, camera)
+    if (isAR) {
+      const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
+      this.raycaster.params.Line = { threshold: this.getARLinePickThreshold() }
+
+      const allObjects = [
+        ...this.renderer.geometrySyncer.meshMap.values(),
+        ...this.renderer.geometrySyncer.groupMap.values(),
+      ]
+      const hits = this.raycaster.intersectObjects(allObjects, true)
+      this.raycaster.params.Line = { threshold: previousThreshold }
+
+      const resolveObject = (obj: THREE.Object3D): THREE.Object3D => {
+        if (obj.userData.type) return obj
+        if (obj.parent && obj.parent.userData.type) return obj.parent
+        return obj
+      }
+
+      for (const hit of hits) {
+        const resolved = resolveObject(hit.object)
+        const type = resolved.userData?.type as string | undefined
+        const geoId = resolved.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        const existing = candidates.find((c) => c.geoId === geoId && c.type === type)
+        if (existing) continue
+        if (type === 'point') {
+          if (protectedPointIds.has(geoId)) continue
+          const point = this.editor.scene.points.get(geoId)
+          const screenPos = point
+            ? this.projectMathPositionToClient(point.position, rect)
+            : null
+          const screenDist = screenPos ? pointer.distanceTo(screenPos) : pointHitRadius + 1
+          if (screenDist > pointHitRadius) continue
+          candidates.push({
+            object: resolved,
+            screenDist,
+            depth: hit.distance,
+            type,
+            geoId,
+          })
+        } else if (
+          type === 'line' || type === 'straightLine' || type === 'ray' ||
+          type === 'vector' || type === 'circle'
+        ) {
+          const nearPoint = this.isLinearNearProtectedPoint(type, geoId, protectedPointIds)
+          if (nearPoint) continue
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance,
+            type,
+            geoId,
+          })
+        } else {
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance,
+            type,
+            geoId,
+          })
+        }
+      }
+    } else {
+      const faceCandidates = [...this.renderer.geometrySyncer.meshMap.values()].filter(
+        (obj) => obj.userData?.type === 'face',
+      )
+      const faceHits = this.raycaster.intersectObjects(faceCandidates)
+      for (const hit of faceHits) {
+        const obj = hit.object
+        const type = obj.userData?.type as string | undefined
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        candidates.push({
+          object: obj,
+          screenDist: 0,
+          depth: hit.distance + cameraPos.length(),
+          type,
+          geoId,
+        })
+      }
+
+      const sphereCandidates = [...this.renderer.geometrySyncer.meshMap.values()].filter(
+        (obj) => obj.userData?.type === 'sphere',
+      )
+      const sphereHits = this.raycaster.intersectObjects(sphereCandidates)
+      for (const hit of sphereHits) {
+        const obj = hit.object
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!geoId) continue
+        const sphere = this.editor.scene.spheres.get(geoId)
+        if (sphere && protectedPointIds.has(sphere.centerPoint.id)) continue
+        candidates.push({
+          object: obj,
+          screenDist: 0,
+          depth: hit.distance + cameraPos.length(),
+          type: 'sphere',
+          geoId,
+        })
+      }
+
+      const coneCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter(
+        (obj) => obj.userData?.type === 'cone',
+      )
+      const coneHits = this.raycaster.intersectObjects(coneCandidates, true)
+      for (const hit of coneHits) {
+        let obj: THREE.Object3D = hit.object
+        if (!obj.userData?.type && obj.parent?.userData?.type) obj = obj.parent
+        const type = obj.userData?.type as string | undefined
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        const cone = this.editor.scene.cones.get(geoId)
+        if (cone && (protectedPointIds.has(cone.baseCenterPoint.id) || protectedPointIds.has(cone.apexPoint.id))) continue
+        candidates.push({
+          object: obj,
+          screenDist: 0,
+          depth: hit.distance + cameraPos.length(),
+          type,
+          geoId,
+        })
+      }
+
+      const cylinderCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter(
+        (obj) => obj.userData?.type === 'cylinder',
+      )
+      const cylinderHits = this.raycaster.intersectObjects(cylinderCandidates, true)
+      for (const hit of cylinderHits) {
+        let obj: THREE.Object3D = hit.object
+        if (!obj.userData?.type && obj.parent?.userData?.type) obj = obj.parent
+        const type = obj.userData?.type as string | undefined
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        const cylinder = this.editor.scene.cylinders.get(geoId)
+        if (cylinder && (protectedPointIds.has(cylinder.bottomCenterPoint.id) || protectedPointIds.has(cylinder.topCenterPoint.id))) continue
+        candidates.push({
+          object: obj,
+          screenDist: 0,
+          depth: hit.distance + cameraPos.length(),
+          type,
+          geoId,
+        })
+      }
+    }
+
+    if (candidates.length === 0) return null
+
+    candidates.sort((a, b) => {
+      const screenDiff = a.screenDist - b.screenDist
+      if (Math.abs(screenDiff) > Interaction.SCREEN_TIE_BREAK_PX) return screenDiff
+      return a.depth - b.depth
+    })
+
+    return candidates[0]!.object
+  }
+
+  private isLinearNearProtectedPoint(
+    type: string,
+    geoId: string,
+    protectedPointIds: Set<string>,
+  ): boolean {
+    if (type === 'line') {
+      const line = this.editor.scene.lines.get(geoId)
+      return line ? protectedPointIds.has(line.p1.id) || protectedPointIds.has(line.p2.id) : false
+    }
+    if (type === 'straightLine') {
+      const sl = this.editor.scene.straightLines.get(geoId)
+      return sl ? protectedPointIds.has(sl.p1.id) || protectedPointIds.has(sl.p2.id) : false
+    }
+    if (type === 'ray') {
+      const ray = this.editor.scene.rays.get(geoId)
+      return ray ? protectedPointIds.has(ray.p1.id) || protectedPointIds.has(ray.p2.id) : false
+    }
+    if (type === 'vector') {
+      const vec = this.editor.scene.vectors.get(geoId)
+      return vec ? protectedPointIds.has(vec.p1.id) || protectedPointIds.has(vec.p2.id) : false
+    }
+    if (type === 'circle') {
+      const circle = this.editor.scene.circles.get(geoId)
+      return circle
+        ? protectedPointIds.has(circle.p1.id) ||
+            protectedPointIds.has(circle.p2.id) ||
+            protectedPointIds.has(circle.p3.id)
+        : false
+    }
+    return false
   }
 
   private getLinePivotDragPoint(line: Line3): Point3 | null {
@@ -3160,88 +3516,7 @@ export class Interaction {
   }
 
   pick(): THREE.Object3D | null {
-    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
-
-    if (this.renderer.isARActive()) {
-      const rect = this.getPointerClientRect()
-      const ndcX = this.mouse.x
-      const ndcY = this.mouse.y
-      const clientX = rect.left + (ndcX + 1) * 0.5 * rect.width
-      const clientY = rect.top + (1 - ndcY) * 0.5 * rect.height
-      const pointHit = this.getTouchPointHit(clientX, clientY, this.getARPointPickRadiusPx())
-      if (pointHit) return pointHit
-
-      const lineThreshold = this.getARLinePickThreshold()
-      const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
-      this.raycaster.params.Line = { threshold: lineThreshold }
-      const allObjects = [...this.renderer.geometrySyncer.meshMap.values(), ...this.renderer.geometrySyncer.groupMap.values()]
-      const hits = this.raycaster.intersectObjects(allObjects, true)
-      this.raycaster.params.Line = { threshold: previousThreshold }
-
-      if (hits.length > 0) {
-        const resolveObject = (obj: THREE.Object3D): THREE.Object3D => {
-          if (obj.userData.type) return obj
-          if (obj.parent && obj.parent.userData.type) return obj.parent
-          return obj
-        }
-        const lineHit = hits.find(
-          (h) => {
-            const resolved = resolveObject(h.object)
-            return resolved.userData.type === 'line' ||
-              resolved.userData.type === 'straightLine' ||
-              resolved.userData.type === 'ray' ||
-              resolved.userData.type === 'vector' ||
-              resolved.userData.type === 'circle' ||
-              resolved.userData.type === 'sphere' ||
-              resolved.userData.type === 'cone' ||
-              resolved.userData.type === 'cylinder'
-          },
-        )
-        if (lineHit) return resolveObject(lineHit.object)
-
-        const faceHit = hits.find((h) => resolveObject(h.object).userData.type === 'face')
-        if (faceHit) return resolveObject(faceHit.object)
-
-        const nonPointHit = hits.find((h) => resolveObject(h.object).userData.type !== 'point')
-        if (nonPointHit) return resolveObject(nonPointHit.object)
-      }
-      return null
-    }
-
-    const allObjects = [...this.renderer.geometrySyncer.meshMap.values(), ...this.renderer.geometrySyncer.groupMap.values()]
-    const hits = this.raycaster.intersectObjects(allObjects, true)
-
-    if (hits.length > 0) {
-      const resolveObject = (obj: THREE.Object3D): THREE.Object3D => {
-        if (obj.userData.type) return obj
-        if (obj.parent && obj.parent.userData.type) return obj.parent
-        return obj
-      }
-
-      const pointHit = hits.find((h) => resolveObject(h.object).userData.type === 'point')
-      if (pointHit) return resolveObject(pointHit.object)
-
-      const lineHit = hits.find(
-        (h) => {
-          const resolved = resolveObject(h.object)
-          return resolved.userData.type === 'line' ||
-            resolved.userData.type === 'straightLine' ||
-            resolved.userData.type === 'ray' ||
-            resolved.userData.type === 'vector' ||
-            resolved.userData.type === 'circle' ||
-            resolved.userData.type === 'sphere' ||
-            resolved.userData.type === 'cone' ||
-            resolved.userData.type === 'cylinder'
-        },
-      )
-      if (lineHit) return resolveObject(lineHit.object)
-
-      const faceHit = hits.find((h) => resolveObject(h.object).userData.type === 'face')
-      if (faceHit) return resolveObject(faceHit.object)
-
-      return resolveObject(hits[0]!.object)
-    }
-    return null
+    return this.pickScreenSpace()
   }
 
   updateMouse(e: MouseEvent) {
@@ -3824,56 +4099,18 @@ export class Interaction {
     clientX: number,
     clientY: number,
   ) {
+    if (!labelHit && !geometryHit) return null
     if (!labelHit) return geometryHit
+    if (!geometryHit) return labelHit
 
     const rect = this.getPointerClientRect()
     const labelMetrics = this.getLabelHitMetrics(labelHit as THREE.Sprite, clientX, clientY, rect)
     if (!labelMetrics) return geometryHit
 
-    const nearestGeometry = this.findNearestScreenGeometry(clientX, clientY, rect)
-    const effectiveGeometryHit =
-      geometryHit ??
-      (nearestGeometry && nearestGeometry.distance <= this.getGeometryCoreHitPx()
-        ? nearestGeometry.object
-        : null)
-    if (!effectiveGeometryHit) return labelHit
+    const geoDist = this.getGeometryScreenDistance(geometryHit, clientX, clientY, rect)
+    const labelDist = labelMetrics.centerDistance
 
-    const geometryDistance = Math.min(
-      this.getGeometryScreenDistance(effectiveGeometryHit, clientX, clientY, rect),
-      nearestGeometry?.distance ?? Number.POSITIVE_INFINITY,
-    )
-    const geometryProtection = this.getGeometryProtectionPx()
-    const labelClosePriority = this.getLabelClosePriorityPx()
-
-    const geometryCore = this.getGeometryCoreHitPx()
-    const geometryHardCore = this.getGeometryHardCoreHitPx()
-    const labelCore = Interaction.LABEL_CORE_EDGE_RATIO
-
-    if (geometryDistance <= geometryHardCore && labelMetrics.edgeDistance > 0.62) {
-      return effectiveGeometryHit
-    }
-
-    if (labelMetrics.edgeDistance <= 0.82 && geometryDistance > geometryHardCore) {
-      return labelHit
-    }
-
-    if (geometryDistance <= geometryCore && labelMetrics.edgeDistance <= labelCore) {
-      const geometryScore = geometryDistance / Math.max(geometryCore, 1)
-      const labelScore = labelMetrics.edgeDistance / Math.max(labelCore, 0.01)
-      return geometryScore <= labelScore ? effectiveGeometryHit : labelHit
-    }
-
-    if (labelMetrics.centerDistance <= labelClosePriority || labelMetrics.edgeDistance <= labelCore) {
-      return labelHit
-    }
-
-    if (labelMetrics.edgeDistance <= 0.72 && labelMetrics.centerDistance <= geometryDistance + 4) {
-      return labelHit
-    }
-
-    if (geometryDistance <= geometryProtection) return effectiveGeometryHit
-
-    return geometryDistance < labelMetrics.centerDistance ? effectiveGeometryHit : labelHit
+    return (geoDist - Interaction.SCREEN_LABEL_GEO_BONUS_PX) <= labelDist ? geometryHit : labelHit
   }
 
   private pickLabelAtClient(clientX: number, clientY: number) {
