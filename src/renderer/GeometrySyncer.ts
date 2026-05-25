@@ -80,7 +80,6 @@ const POINT_LABEL_CENTER_Y = 0.32
 const LINE_LABEL_CENTER_X = 0.5
 const LINE_LABEL_CENTER_Y = 0.3
 const LINEAR_COLOR = 0xffffff
-const LINEAR_WIDTH = 2
 const INTERSECTION_POINT_COLOR = 0xffd84a
 const CUBE_DEPENDENT_POINT_COLOR = 0xcfd3d8
 export const DEFAULT_POINT_COLOR = 0xff5555
@@ -113,6 +112,12 @@ const CYLINDER_FILL_OPACITY = 0.45
 const CYLINDER_SELECTED_COLOR = SELECTED_COLOR
 const CYLINDER_SELECTED_OPACITY = 0.7
 const CYLINDER_SEGMENTS = 48
+const HIDDEN_EDGE_DASH_SIZE = 0.3
+const HIDDEN_EDGE_GAP_SIZE = 0.15
+const HIDDEN_EDGE_OPACITY = 0.45
+const SOLID_EDGE_RENDER_ORDER = 3
+const HIDDEN_EDGE_RENDER_ORDER = 4
+const SURFACE_RENDER_ORDER = 0
 
 const LINEAR_TYPES = new Set<string>([
   'line', 'straightLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
@@ -172,6 +177,7 @@ export class GeometrySyncer {
 
   public meshMap = new Map<string, THREE.Object3D>()
   public groupMap = new Map<string, THREE.Group>()
+  public hiddenLineMap = new Map<string, THREE.Object3D>()
   public pointMeshes = new Map<string, THREE.Points>()
   public facePreviewMesh: THREE.Mesh | null = null
   public rubberBandLine: THREE.Line | null = null
@@ -184,6 +190,143 @@ export class GeometrySyncer {
 
   constructor(deps: GeometrySyncerDeps) {
     this.deps = deps
+  }
+
+  private createSolidEdgeMaterial(color: number): THREE.LineBasicMaterial {
+    return new THREE.LineBasicMaterial({
+      color,
+      depthFunc: THREE.LessEqualDepth,
+      transparent: true,
+      opacity: 0.95,
+    })
+  }
+
+  private createHiddenEdgeMaterial(color: number): THREE.LineDashedMaterial {
+    return new THREE.LineDashedMaterial({
+      color,
+      dashSize: HIDDEN_EDGE_DASH_SIZE,
+      gapSize: HIDDEN_EDGE_GAP_SIZE,
+      depthFunc: THREE.GreaterDepth,
+      transparent: true,
+      opacity: HIDDEN_EDGE_OPACITY,
+    })
+  }
+
+  private generateCirclePoints(
+    center: THREE.Vector3,
+    uAxis: THREE.Vector3,
+    vAxis: THREE.Vector3,
+    radius: number,
+    segments: number,
+  ): THREE.Vector3[] {
+    return Array.from({ length: segments }, (_, i) => {
+      const angle = (Math.PI * 2 * i) / segments
+      return center.clone()
+        .addScaledVector(uAxis, Math.cos(angle) * radius)
+        .addScaledVector(vAxis, Math.sin(angle) * radius)
+    })
+  }
+
+  private addDualLineLoopToParent(
+    parent: THREE.Object3D,
+    points: THREE.Vector3[],
+    color: number,
+    name: string,
+  ): { solid: THREE.LineLoop; hidden: THREE.LineLoop } {
+    const solid = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(points),
+      this.createSolidEdgeMaterial(color),
+    )
+    solid.name = name
+    solid.renderOrder = SOLID_EDGE_RENDER_ORDER
+
+    const hidden = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(points),
+      this.createHiddenEdgeMaterial(color),
+    )
+    hidden.name = name + '_hidden'
+    hidden.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+    hidden.computeLineDistances()
+
+    parent.add(solid)
+    parent.add(hidden)
+    return { solid, hidden }
+  }
+
+  private addDualLineSegmentsToParent(
+    parent: THREE.Object3D,
+    points: THREE.Vector3[],
+    color: number,
+    name: string,
+  ): { solid: THREE.LineSegments; hidden: THREE.LineSegments } {
+    const solid = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points),
+      this.createSolidEdgeMaterial(color),
+    )
+    solid.name = name
+    solid.renderOrder = SOLID_EDGE_RENDER_ORDER
+
+    const hidden = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(points),
+      this.createHiddenEdgeMaterial(color),
+    )
+    hidden.name = name + '_hidden'
+    hidden.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+    hidden.computeLineDistances()
+
+    parent.add(solid)
+    parent.add(hidden)
+    return { solid, hidden }
+  }
+
+  private updateDualLineLoopGeometry(
+    parent: THREE.Object3D,
+    name: string,
+    points: THREE.Vector3[],
+  ): void {
+    const solid = parent.getObjectByName(name) as THREE.LineLoop | undefined
+    if (solid) {
+      solid.geometry.setFromPoints(points)
+      solid.geometry.computeBoundingBox()
+      solid.geometry.computeBoundingSphere()
+    }
+    const hidden = parent.getObjectByName(name + '_hidden') as THREE.LineLoop | undefined
+    if (hidden) {
+      hidden.geometry.setFromPoints(points)
+      hidden.computeLineDistances()
+    }
+  }
+
+  private updateDualLineSegmentsGeometry(
+    parent: THREE.Object3D,
+    name: string,
+    points: THREE.Vector3[],
+  ): void {
+    const solid = parent.getObjectByName(name) as THREE.LineSegments | undefined
+    if (solid) {
+      solid.geometry.setFromPoints(points)
+      solid.geometry.computeBoundingBox()
+      solid.geometry.computeBoundingSphere()
+    }
+    const hidden = parent.getObjectByName(name + '_hidden') as THREE.LineSegments | undefined
+    if (hidden) {
+      hidden.geometry.setFromPoints(points)
+      hidden.computeLineDistances()
+    }
+  }
+
+  private setDualEdgeColor(parent: THREE.Object3D, name: string, color: number): void {
+    const solid = parent.getObjectByName(name) as THREE.Line | undefined
+    if (solid) (solid.material as THREE.LineBasicMaterial).color.set(color)
+    const hidden = parent.getObjectByName(name + '_hidden') as THREE.Line | undefined
+    if (hidden) (hidden.material as THREE.LineDashedMaterial).color.set(color)
+  }
+
+  private setDualEdgeVisibility(parent: THREE.Object3D, name: string, visible: boolean): void {
+    const solid = parent.getObjectByName(name)
+    if (solid) solid.visible = visible
+    const hidden = parent.getObjectByName(name + '_hidden')
+    if (hidden) hidden.visible = visible
   }
 
   private getRenderUserData(object: THREE.Object3D): RenderObjectUserData {
@@ -241,7 +384,7 @@ export class GeometrySyncer {
         material.alphaTest = 0.1
 
         sprite = new THREE.Sprite(material)
-        sprite.renderOrder = 2
+        sprite.renderOrder = 6
 
         const scale = this.getPointSpriteScale()
 
@@ -465,18 +608,26 @@ export class GeometrySyncer {
       let line = this.meshMap.get(id) as THREE.Line
       const p1 = lineData.p1.position
       const p2 = lineData.p2.position
-      const points = [new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)]
+      const points = [
+        new THREE.Vector3(p1.x, p1.y, p1.z),
+        new THREE.Vector3(p2.x, p2.y, p2.z),
+      ]
 
       if (!line) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({
-          color: LINEAR_COLOR,
-          linewidth: LINEAR_WIDTH,
-          depthTest: !lineData.faceOwned,
-        })
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
+        line.renderOrder = SOLID_EDGE_RENDER_ORDER
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenLine = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenLine.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenLine.computeLineDistances()
+        this.deps.world.add(hiddenLine)
+        this.hiddenLineMap.set(id, hiddenLine)
+
         line.userData = { geoId: id, type: 'line' }
-        if (lineData.faceOwned) line.renderOrder = 12
         this.deps.world.add(line)
         this.meshMap.set(id, line)
       } else {
@@ -484,8 +635,13 @@ export class GeometrySyncer {
         line.geometry.attributes.position!.needsUpdate = true
         line.geometry.computeBoundingBox()
         line.geometry.computeBoundingSphere()
-        const mat = line.material as THREE.LineBasicMaterial
-        mat.depthTest = !lineData.faceOwned
+
+        const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenLine) {
+          hiddenLine.geometry.setFromPoints(points)
+          hiddenLine.geometry.attributes.position!.needsUpdate = true
+          hiddenLine.computeLineDistances()
+        }
       }
 
       line.visible = lineData.visible !== false
@@ -500,9 +656,14 @@ export class GeometrySyncer {
           }
         }
       }
-      ;(line.material as THREE.LineBasicMaterial).color.set(
-        (isSelected || isFaceHighlight) ? SELECTED_COLOR : LINEAR_COLOR,
-      )
+      const edgeColor = (isSelected || isFaceHighlight) ? SELECTED_COLOR : LINEAR_COLOR
+      ;(line.material as THREE.LineBasicMaterial).color.set(edgeColor)
+
+      const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenLine) {
+        hiddenLine.visible = lineData.visible !== false
+        ;(hiddenLine.material as THREE.LineDashedMaterial).color.set(edgeColor)
+      }
 
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
       const isLabelActive =
@@ -526,31 +687,51 @@ export class GeometrySyncer {
       let ray = this.meshMap.get(id) as THREE.Line | undefined
       const p1 = rayData.p1.position
       const end = rayData.getDisplayEndPoint()
-      const points = [new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(end.x, end.y, end.z)]
+      const points = [
+        new THREE.Vector3(p1.x, p1.y, p1.z),
+        new THREE.Vector3(end.x, end.y, end.z),
+      ]
 
       if (!ray) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({
-          color: LINEAR_COLOR,
-          linewidth: LINEAR_WIDTH,
-        })
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         ray = new THREE.Line(geo, mat)
+        ray.renderOrder = SOLID_EDGE_RENDER_ORDER
         ray.userData = { geoId: id, type: 'ray' }
         this.attachRayArrowHead(ray)
         this.deps.world.add(ray)
         this.meshMap.set(id, ray)
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenRay = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenRay.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenRay.computeLineDistances()
+        this.deps.world.add(hiddenRay)
+        this.hiddenLineMap.set(id, hiddenRay)
       } else {
         ray.geometry.setFromPoints(points)
         ray.geometry.attributes.position!.needsUpdate = true
         ray.geometry.computeBoundingBox()
         ray.geometry.computeBoundingSphere()
+
+        const hiddenRay = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenRay) {
+          hiddenRay.geometry.setFromPoints(points)
+          hiddenRay.computeLineDistances()
+        }
       }
 
       ray.visible = rayData.visible
       const isSelected = scene.selection.rays.has(id)
-      ;(ray.material as THREE.LineBasicMaterial).color.set(
-        isSelected ? SELECTED_COLOR : LINEAR_COLOR,
-      )
+      const rayColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(ray.material as THREE.LineBasicMaterial).color.set(rayColor)
+
+      const hiddenRayObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenRayObj) {
+        hiddenRayObj.visible = rayData.visible
+        ;(hiddenRayObj.material as THREE.LineDashedMaterial).color.set(rayColor)
+      }
 
       this.updateRayArrowHead(ray, rayData, isSelected)
       const mid = new THREE.Vector3((p1.x + end.x) / 2, (p1.y + end.y) / 2, (p1.z + end.z) / 2)
@@ -583,26 +764,43 @@ export class GeometrySyncer {
 
       if (!line) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({
-          color: LINEAR_COLOR,
-          linewidth: LINEAR_WIDTH,
-        })
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
+        line.renderOrder = SOLID_EDGE_RENDER_ORDER
         line.userData = { geoId: id, type: 'straightLine' }
         this.deps.world.add(line)
         this.meshMap.set(id, line)
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenLine = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenLine.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenLine.computeLineDistances()
+        this.deps.world.add(hiddenLine)
+        this.hiddenLineMap.set(id, hiddenLine)
       } else {
         line.geometry.setFromPoints(points)
         line.geometry.attributes.position!.needsUpdate = true
         line.geometry.computeBoundingBox()
         line.geometry.computeBoundingSphere()
+
+        const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenLine) {
+          hiddenLine.geometry.setFromPoints(points)
+          hiddenLine.computeLineDistances()
+        }
       }
 
       line.visible = lineData.visible
       const isSelected = scene.selection.straightLines.has(id)
-      ;(line.material as THREE.LineBasicMaterial).color.set(
-        isSelected ? SELECTED_COLOR : LINEAR_COLOR,
-      )
+      const slColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(line.material as THREE.LineBasicMaterial).color.set(slColor)
+
+      const hiddenSlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenSlObj) {
+        hiddenSlObj.visible = lineData.visible
+        ;(hiddenSlObj.material as THREE.LineDashedMaterial).color.set(slColor)
+      }
 
       const mid = new THREE.Vector3(
         (lineData.p1.position.x + lineData.p2.position.x) / 2,
@@ -630,41 +828,51 @@ export class GeometrySyncer {
       let vector = this.meshMap.get(id) as THREE.Line | undefined
       const p1 = vectorData.p1.position
       const p2 = vectorData.p2.position
-      const start = new THREE.Vector3(p1.x, p1.y, p1.z)
-      const end = new THREE.Vector3(p2.x, p2.y, p2.z)
-      const direction = end.clone().sub(start)
-      const length = direction.length()
-      const headScale = this.getLinearArrowScale()
-      const headLen = RAY_HEAD_LENGTH * headScale
-      const shortEnough = length <= headLen
-      const lineEnd = shortEnough
-        ? end.clone()
-        : end.clone().sub(direction.clone().normalize().multiplyScalar(headLen))
-      const points = [start.clone(), lineEnd]
+      const points = [
+        new THREE.Vector3(p1.x, p1.y, p1.z),
+        new THREE.Vector3(p2.x, p2.y, p2.z),
+      ]
 
       if (!vector) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({
-          color: LINEAR_COLOR,
-          linewidth: LINEAR_WIDTH,
-        })
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         vector = new THREE.Line(geo, mat)
+        vector.renderOrder = SOLID_EDGE_RENDER_ORDER
         vector.userData = { geoId: id, type: 'vector' }
         this.attachVectorArrowHead(vector)
         this.deps.world.add(vector)
         this.meshMap.set(id, vector)
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenVector = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenVector.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenVector.computeLineDistances()
+        this.deps.world.add(hiddenVector)
+        this.hiddenLineMap.set(id, hiddenVector)
       } else {
         vector.geometry.setFromPoints(points)
         vector.geometry.attributes.position!.needsUpdate = true
         vector.geometry.computeBoundingBox()
         vector.geometry.computeBoundingSphere()
+
+        const hiddenVector = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenVector) {
+          hiddenVector.geometry.setFromPoints(points)
+          hiddenVector.computeLineDistances()
+        }
       }
 
       vector.visible = vectorData.visible
       const isSelected = scene.selection.vectors.has(id)
-      ;(vector.material as THREE.LineBasicMaterial).color.set(
-        isSelected ? SELECTED_COLOR : LINEAR_COLOR,
-      )
+      const vecColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(vector.material as THREE.LineBasicMaterial).color.set(vecColor)
+
+      const hiddenVecObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenVecObj) {
+        hiddenVecObj.visible = vectorData.visible
+        ;(hiddenVecObj.material as THREE.LineDashedMaterial).color.set(vecColor)
+      }
 
       this.updateVectorArrowHead(vector, vectorData, isSelected)
       const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
@@ -753,13 +961,19 @@ export class GeometrySyncer {
 
       if (!circle) {
         const geo = new THREE.BufferGeometry().setFromPoints(points)
-        const mat = new THREE.LineBasicMaterial({
-          color: LINEAR_COLOR,
-          linewidth: LINEAR_WIDTH,
-        })
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         circle = new THREE.LineLoop(geo, mat)
         circle.userData = { geoId: id, type: 'circle' }
-        circle.renderOrder = 6
+        circle.renderOrder = SOLID_EDGE_RENDER_ORDER
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenCircle = new THREE.LineLoop(hiddenGeo, hiddenMat)
+        hiddenCircle.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenCircle.computeLineDistances()
+        this.deps.world.add(hiddenCircle)
+        this.hiddenLineMap.set(id, hiddenCircle)
+
         this.deps.world.add(circle)
         this.meshMap.set(id, circle)
       } else {
@@ -767,13 +981,24 @@ export class GeometrySyncer {
         circle.geometry.attributes.position!.needsUpdate = true
         circle.geometry.computeBoundingBox()
         circle.geometry.computeBoundingSphere()
+
+        const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
+        if (hiddenCircle) {
+          hiddenCircle.geometry.setFromPoints(points)
+          hiddenCircle.computeLineDistances()
+        }
       }
 
       circle.visible = circleData.visible
       const isSelected = scene.selection.circles.has(id)
-      ;(circle.material as THREE.LineBasicMaterial).color.set(
-        isSelected ? SELECTED_COLOR : LINEAR_COLOR,
-      )
+      const circleColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(circle.material as THREE.LineBasicMaterial).color.set(circleColor)
+
+      const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
+      if (hiddenCircle) {
+        hiddenCircle.visible = circleData.visible
+        ;(hiddenCircle.material as THREE.LineDashedMaterial).color.set(circleColor)
+      }
       const isLabelActive =
         this.activeLabelTarget?.type === 'circle' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -804,24 +1029,42 @@ export class GeometrySyncer {
           opacity: faceData.fillOpacity ?? FACE_FILL_OPACITY,
           side: THREE.DoubleSide,
           depthWrite: false,
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1,
+          depthTest: false,
         })
         faceMesh = new THREE.Mesh(geometry, material)
         faceMesh.userData = { geoId: id, type: 'face' }
-        const outline = new THREE.LineLoop(
+        faceMesh.renderOrder = SURFACE_RENDER_ORDER
+
+        const depthMesh = new THREE.Mesh(
           new THREE.BufferGeometry(),
-          new THREE.LineBasicMaterial({
-            color: LINEAR_COLOR,
-            depthTest: false,
-            transparent: true,
-            opacity: 0.95,
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
           }),
         )
+        depthMesh.name = 'faceDepthMesh'
+        depthMesh.renderOrder = -1
+        faceMesh.add(depthMesh)
+
+        const outline = new THREE.LineLoop(
+          new THREE.BufferGeometry(),
+          this.createSolidEdgeMaterial(LINEAR_COLOR),
+        )
+        outline.name = 'faceOutline'
         outline.userData = { geoId: id, type: 'face' }
-        outline.renderOrder = 12
+        outline.renderOrder = SOLID_EDGE_RENDER_ORDER
         faceMesh.add(outline)
+
+        const hiddenOutline = new THREE.LineLoop(
+          new THREE.BufferGeometry(),
+          this.createHiddenEdgeMaterial(LINEAR_COLOR),
+        )
+        hiddenOutline.name = 'faceHiddenOutline'
+        hiddenOutline.userData = { geoId: id, type: 'face' }
+        hiddenOutline.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        faceMesh.add(hiddenOutline)
+
         this.deps.world.add(faceMesh)
         this.meshMap.set(id, faceMesh)
       }
@@ -833,23 +1076,38 @@ export class GeometrySyncer {
       geometry.computeBoundingBox()
       geometry.computeBoundingSphere()
 
-      const outline = faceMesh.children[0] as THREE.LineLoop | undefined
+      const depthMesh = faceMesh.getObjectByName('faceDepthMesh') as THREE.Mesh | undefined
+      if (depthMesh) {
+        const depthGeo = depthMesh.geometry as THREE.BufferGeometry
+        depthGeo.setFromPoints(triangulated.positions)
+        depthGeo.setIndex(triangulated.indices)
+        depthGeo.computeVertexNormals()
+        depthGeo.computeBoundingBox()
+        depthGeo.computeBoundingSphere()
+      }
+
+      const outline = faceMesh.getObjectByName('faceOutline') as THREE.LineLoop | undefined
+      const hiddenOutline = faceMesh.getObjectByName('faceHiddenOutline') as THREE.LineLoop | undefined
       const hasBoundaryLines = faceData.boundaryLineIds.length > 0 &&
         faceData.boundaryLineIds.some((lineId) => scene.lines.has(lineId))
+      const boundaryPoints = faceData
+        .getBoundaryPoints(scene.points)
+        .map((point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z))
+
       if (outline) {
-        outline.geometry.setFromPoints([
-          ...faceData
-            .getBoundaryPoints(scene.points)
-            .map(
-              (point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z),
-            ),
-        ])
+        outline.geometry.setFromPoints(boundaryPoints)
         outline.geometry.computeBoundingBox()
         outline.geometry.computeBoundingSphere()
       }
+      if (hiddenOutline) {
+        hiddenOutline.geometry.setFromPoints(boundaryPoints)
+        hiddenOutline.computeLineDistances()
+      }
 
       faceMesh.visible = faceData.visible !== false
-      if (outline) outline.visible = faceData.visible !== false && !hasBoundaryLines
+      const outlineVisible = faceData.visible !== false && !hasBoundaryLines
+      if (outline) outline.visible = outlineVisible
+      if (hiddenOutline) hiddenOutline.visible = outlineVisible
 
       const isSelected = scene.selection.faces.has(id)
       const cubeConstraint = faceData.cubeId
@@ -869,11 +1127,14 @@ export class GeometrySyncer {
       ;(faceMesh.material as THREE.MeshBasicMaterial).opacity = shouldHighlightFaceFill
         ? Math.max(baseOpacity, FACE_SELECTED_OPACITY)
         : baseOpacity
+
+      const outlineColor = isSelected ? FACE_SELECTED_COLOR : LINEAR_COLOR
       if (outline) {
-        ;(outline.material as THREE.LineBasicMaterial).color.set(
-          isSelected ? FACE_SELECTED_COLOR : LINEAR_COLOR,
-        )
+        ;(outline.material as THREE.LineBasicMaterial).color.set(outlineColor)
         ;(outline.material as THREE.LineBasicMaterial).opacity = isSelected ? 1 : 0.95
+      }
+      if (hiddenOutline) {
+        ;(hiddenOutline.material as THREE.LineDashedMaterial).color.set(outlineColor)
       }
 
       const isLabelActive =
@@ -916,13 +1177,27 @@ export class GeometrySyncer {
           transparent: true,
           opacity: SPHERE_FILL_OPACITY,
           side: THREE.DoubleSide,
-          depthWrite: true,
-          shininess: 100,
-          specular: 0x666666,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
         })
         sphereMesh = new THREE.Mesh(geometry, material)
         sphereMesh.userData = { geoId: id, type: 'sphere' }
-        sphereMesh.renderOrder = 5
+        sphereMesh.renderOrder = SURFACE_RENDER_ORDER
+
+        const depthMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 32, 24),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        depthMesh.name = 'sphereDepthMesh'
+        depthMesh.renderOrder = -1
+        sphereMesh.add(depthMesh)
+
         this.deps.world.add(sphereMesh)
         this.meshMap.set(id, sphereMesh)
       }
@@ -996,19 +1271,31 @@ export class GeometrySyncer {
       const { center, radius, height, normal, apex } = frame
       const segments = CONE_SEGMENTS
 
-      const sideGeometry = new THREE.ConeGeometry(1, 1, segments, 1, false)
+      const sideGeometry = new THREE.ConeGeometry(1, 1, segments, 1, true)
       const sideMaterial = new THREE.MeshPhongMaterial({
         color: CONE_FILL_COLOR,
         transparent: true,
         opacity: CONE_FILL_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: true,
-        shininess: 100,
-        specular: 0x666666,
+        depthWrite: false,
+        depthTest: false,
+        shininess: 20,
+          specular: 0x222222,
       })
       const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
       sideMesh.userData = { geoId: id, type: 'cone' }
-      sideMesh.renderOrder = 1
+      sideMesh.renderOrder = SURFACE_RENDER_ORDER
+
+      const sideDepthMesh = new THREE.Mesh(
+        new THREE.ConeGeometry(1, 1, segments, 1, true),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      sideDepthMesh.renderOrder = -1
+      sideMesh.add(sideDepthMesh)
 
       const baseGeometry = new THREE.CircleGeometry(1, segments)
       const baseMaterial = new THREE.MeshPhongMaterial({
@@ -1016,13 +1303,25 @@ export class GeometrySyncer {
         transparent: true,
         opacity: CONE_FILL_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: true,
-        shininess: 100,
-        specular: 0x666666,
+        depthWrite: false,
+        depthTest: false,
+        shininess: 20,
+          specular: 0x222222,
       })
       const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
       baseMesh.userData = { geoId: id, type: 'cone' }
-      baseMesh.renderOrder = 1
+      baseMesh.renderOrder = SURFACE_RENDER_ORDER
+
+      const baseDepthMesh = new THREE.Mesh(
+        new THREE.CircleGeometry(1, segments),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      baseDepthMesh.renderOrder = -1
+      baseMesh.add(baseDepthMesh)
 
       const safeRadius = Math.max(radius, 0.001)
       const safeHeight = Math.max(height, 0.001)
@@ -1125,13 +1424,25 @@ export class GeometrySyncer {
         transparent: true,
         opacity: CYLINDER_FILL_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: true,
-        shininess: 100,
-        specular: 0x666666,
+        depthWrite: false,
+        depthTest: false,
+        shininess: 20,
+          specular: 0x222222,
       })
       const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
       sideMesh.userData = { geoId: id, type: 'cylinder' }
-      sideMesh.renderOrder = 1
+      sideMesh.renderOrder = SURFACE_RENDER_ORDER
+
+      const sideDepthMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(1, 1, 1, segments, 1, true),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      sideDepthMesh.renderOrder = -1
+      sideMesh.add(sideDepthMesh)
 
       const bottomGeometry = new THREE.CircleGeometry(1, segments)
       const bottomMaterial = new THREE.MeshPhongMaterial({
@@ -1139,13 +1450,25 @@ export class GeometrySyncer {
         transparent: true,
         opacity: CYLINDER_FILL_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: true,
-        shininess: 100,
-        specular: 0x666666,
+        depthWrite: false,
+        depthTest: false,
+        shininess: 20,
+          specular: 0x222222,
       })
       const bottomMesh = new THREE.Mesh(bottomGeometry, bottomMaterial)
       bottomMesh.userData = { geoId: id, type: 'cylinder' }
-      bottomMesh.renderOrder = 1
+      bottomMesh.renderOrder = SURFACE_RENDER_ORDER
+
+      const bottomDepthMesh = new THREE.Mesh(
+        new THREE.CircleGeometry(1, segments),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      bottomDepthMesh.renderOrder = -1
+      bottomMesh.add(bottomDepthMesh)
 
       const topGeometry = new THREE.CircleGeometry(1, segments)
       const topMaterial = new THREE.MeshPhongMaterial({
@@ -1153,13 +1476,25 @@ export class GeometrySyncer {
         transparent: true,
         opacity: CYLINDER_FILL_OPACITY,
         side: THREE.DoubleSide,
-        depthWrite: true,
-        shininess: 100,
-        specular: 0x666666,
+        depthWrite: false,
+        depthTest: false,
+        shininess: 20,
+          specular: 0x222222,
       })
       const topMesh = new THREE.Mesh(topGeometry, topMaterial)
       topMesh.userData = { geoId: id, type: 'cylinder' }
-      topMesh.renderOrder = 1
+      topMesh.renderOrder = SURFACE_RENDER_ORDER
+
+      const topDepthMesh = new THREE.Mesh(
+        new THREE.CircleGeometry(1, segments),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      topDepthMesh.renderOrder = -1
+      topMesh.add(topDepthMesh)
 
       const safeRadius = Math.max(radius, 0.001)
       const safeHeight = Math.max(height, 0.001)
@@ -1423,6 +1758,13 @@ export class GeometrySyncer {
       this.deps.world.remove(label)
       this.deps.labelRenderer.cubeValueLabels.delete(cubeId)
     })
+
+    this.hiddenLineMap.forEach((obj, id) => {
+      if (!this.meshMap.has(id) && !this.groupMap.has(id)) {
+        this.deps.world.remove(obj)
+        this.hiddenLineMap.delete(id)
+      }
+    })
   }
 
   removeMeshWithLabels(obj: THREE.Object3D, userData: RenderObjectUserData, map: Map<string, THREE.Object3D>, id: string): void {
@@ -1432,6 +1774,12 @@ export class GeometrySyncer {
     if (valueLabel) this.deps.world.remove(valueLabel)
     this.deps.world.remove(obj)
     map.delete(id)
+
+    const hiddenLine = this.hiddenLineMap.get(id)
+    if (hiddenLine) {
+      this.deps.world.remove(hiddenLine)
+      this.hiddenLineMap.delete(id)
+    }
   }
 
   updateFacePreview(data: FacePreviewData | null | undefined): void {
@@ -1809,9 +2157,14 @@ export class GeometrySyncer {
       RAY_HEAD_LENGTH,
       16,
     )
-    const material = new THREE.MeshBasicMaterial({ color: LINEAR_COLOR })
+    const material = new THREE.MeshBasicMaterial({
+      color: LINEAR_COLOR,
+      depthTest: false,
+      depthWrite: false,
+    })
     const arrowHead = new THREE.Mesh(geometry, material)
     arrowHead.rotation.x = Math.PI / 2
+    arrowHead.renderOrder = 5
     this.getRenderUserData(ray).__arrowHead = arrowHead
     ray.add(arrowHead)
   }
@@ -1855,9 +2208,14 @@ export class GeometrySyncer {
       RAY_HEAD_LENGTH,
       16,
     )
-    const material = new THREE.MeshBasicMaterial({ color: LINEAR_COLOR })
+    const material = new THREE.MeshBasicMaterial({
+      color: LINEAR_COLOR,
+      depthTest: false,
+      depthWrite: false,
+    })
     const arrowHead = new THREE.Mesh(geometry, material)
     arrowHead.rotation.x = Math.PI / 2
+    arrowHead.renderOrder = 5
     this.getRenderUserData(vector).__arrowHead = arrowHead
     vector.add(arrowHead)
   }
@@ -1895,14 +2253,6 @@ export class GeometrySyncer {
     const normalized = direction.clone().normalize()
     const headScale = this.getLinearArrowScale()
     const headLen = RAY_HEAD_LENGTH * headScale
-    const lineEnd =
-      length <= headLen
-        ? end.clone()
-        : end.clone().sub(normalized.clone().multiplyScalar(headLen))
-    vector.geometry.setFromPoints([start.clone(), lineEnd])
-    vector.geometry.attributes.position!.needsUpdate = true
-    vector.geometry.computeBoundingBox()
-    vector.geometry.computeBoundingSphere()
 
     if (length <= headLen) {
       const scale = length / headLen

@@ -154,8 +154,9 @@ export class AxisGridManager {
       dir.clone().multiplyScalar(length),
     ]
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
-    const material = new THREE.LineBasicMaterial({ color })
+    const material = new THREE.LineBasicMaterial({ color, depthTest: false, depthWrite: false })
     const line = new THREE.Line(geometry, material)
+    line.renderOrder = 20
     this.axisGridGroup.add(line)
 
     const arrow = new THREE.ArrowHelper(
@@ -170,6 +171,19 @@ export class AxisGridManager {
     arrowUserData.__baseLength = AxisGridManager.AXIS_ARROW_BASE_LENGTH
     arrowUserData.__baseHeadLength = AxisGridManager.AXIS_ARROW_BASE_HEAD_LENGTH
     arrowUserData.__baseHeadWidth = AxisGridManager.AXIS_ARROW_BASE_HEAD_WIDTH
+    arrow.renderOrder = 21
+    arrow.traverse((obj) => {
+      const material = (obj as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined
+      if (Array.isArray(material)) {
+        material.forEach((m) => {
+          m.depthTest = false
+          m.depthWrite = false
+        })
+      } else if (material) {
+        material.depthTest = false
+        material.depthWrite = false
+      }
+    })
     this.axisGridGroup.add(arrow)
     this.axisArrows.push(arrow)
 
@@ -186,8 +200,9 @@ export class AxisGridManager {
       tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickVertices, 3))
       const tickLine = new THREE.LineSegments(
         tickGeo,
-        new THREE.LineBasicMaterial({ color: 0xffffff }),
+        new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false }),
       )
+      tickLine.renderOrder = 20
       this.axisGridGroup.add(tickLine)
     }
 
@@ -237,6 +252,7 @@ export class AxisGridManager {
     const gridMaterial = this.gridHelper.material as THREE.Material | THREE.Material[]
     const applyGridMaterial = (material: THREE.Material) => {
       material.depthWrite = false
+      material.depthTest = false
       material.polygonOffset = true
       material.polygonOffsetFactor = 1
       material.polygonOffsetUnits = 1
