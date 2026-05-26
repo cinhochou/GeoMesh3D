@@ -1,4 +1,4 @@
-import { Point3 } from '../geometry/Point3'
+import { Point3, type ConstrainedToRef } from '../geometry/Point3'
 import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
@@ -9,6 +9,7 @@ import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3, type ConeType } from '../geometry/Cone3'
 import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
+import { ObjectConstrainedPointConstraint, type ParametricData } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Scene, type SceneConstraint } from '../scene/Scene'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -41,6 +42,7 @@ type SerializedPoint = {
   coneRole: 'baseCenter' | 'apex' | null
   cylinderId: string | null
   cylinderRole: 'bottomCenter' | 'topCenter' | null
+  constrainedTo: { type: string; id: string } | null
 }
 
 type SerializedLine = {
@@ -245,12 +247,21 @@ type SerializedCylinderConstraint = {
   valueVisible: boolean
 }
 
+type SerializedObjectConstrainedPointConstraint = {
+  type: 'objectConstrainedPoint'
+  pointId: string
+  targetType: string
+  targetId: string
+  parametricData: ParametricData | null
+}
+
 type SerializedConstraint =
   | SerializedCubeConstraint
   | SerializedIntersectionConstraint
   | SerializedRegularPolygonConstraint
   | SerializedPlanarConstraint
   | SerializedCylinderConstraint
+  | SerializedObjectConstrainedPointConstraint
 
 type SceneMetadata = {
   exportedAt: string
@@ -328,6 +339,7 @@ function serializePoint(p: Point3): SerializedPoint {
     coneRole: p.coneRole,
     cylinderId: p.cylinderId,
     cylinderRole: p.cylinderRole,
+    constrainedTo: p.constrainedTo,
   }
 }
 
@@ -518,6 +530,15 @@ function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
       topCircleId: c.topCircleId,
       name: c.name,
       valueVisible: c.valueVisible,
+    }
+  }
+  if (c instanceof ObjectConstrainedPointConstraint) {
+    return {
+      type: 'objectConstrainedPoint',
+      pointId: c.pointId,
+      targetType: c.target.type,
+      targetId: c.target.id,
+      parametricData: c.parametricData,
     }
   }
   return null
@@ -959,7 +980,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
   }
 
   const constraints = obj.constraints as SerializedConstraint[]
-  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder'])
+  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint'])
   const constraintPointIds = new Set<string>()
   for (const c of constraints) {
     if (!validTypes.has(c.type)) {
@@ -1154,6 +1175,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       existing.coneRole = sp.coneRole
       existing.cylinderId = sp.cylinderId ?? null
       existing.cylinderRole = sp.cylinderRole ?? null
+      existing.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
       continue
     }
 
@@ -1180,6 +1202,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     p.coneRole = sp.coneRole
     p.cylinderId = sp.cylinderId ?? null
     p.cylinderRole = sp.cylinderRole ?? null
+    p.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
     scene.addPoint(p)
     pointMap.set(p.id, p)
   }
@@ -1450,6 +1473,15 @@ export function importScene(scene: Scene, data: SerializedScene): void {
         yc.valueVisible,
       )
       scene.addCylinderConstraint(constraint)
+    } else if (sc.type === 'objectConstrainedPoint') {
+      const oc = sc as SerializedObjectConstrainedPointConstraint
+      const point = scene.points.get(oc.pointId)
+      if (point) {
+        point.constrainedTo = { type: oc.targetType as ConstrainedToRef['type'], id: oc.targetId }
+        const constraint = new ObjectConstrainedPointConstraint(scene, oc.pointId, point.constrainedTo)
+        constraint.parametricData = oc.parametricData
+        scene.addObjectConstrainedPointConstraint(constraint)
+      }
     }
   }
 

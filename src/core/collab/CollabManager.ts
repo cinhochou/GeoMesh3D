@@ -2,7 +2,7 @@
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import { Scene } from '../scene/Scene'
-import { Point3 } from '../geometry/Point3'
+import { Point3, type ConstrainedToRef } from '../geometry/Point3'
 import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
@@ -12,6 +12,7 @@ import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3, type ConeType } from '../geometry/Cone3'
 import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
+import { ObjectConstrainedPointConstraint, type ParametricData } from '../constraints/ObjectConstrainedPointConstraint'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -49,6 +50,7 @@ type LocalSceneSnapshot = {
   cubes: CubeConstraint[]
   regularPolygons: RegularPolygonConstraint[]
   cylinderConstraints: CylinderConstraint[]
+  objectConstrainedPoints: ObjectConstrainedPointConstraint[]
 }
 
 type PointSharedMap = Y.Map<string | number | boolean>
@@ -61,6 +63,7 @@ type SphereSharedMap = Y.Map<string | number | boolean>
 type ConeSharedMap = Y.Map<string | number | boolean>
 type CylinderSharedMap = Y.Map<string | number | boolean>
 type IntersectionSharedMap = Y.Map<string>
+type ObjectConstrainedPointSharedMap = Y.Map<string | number | boolean>
 type FaceSharedArrayValue = string | number | null
 type FaceSharedMapValue = string | number | boolean | Y.Array<FaceSharedArrayValue>
 type FaceSharedMap = Y.Map<FaceSharedMapValue>
@@ -101,6 +104,7 @@ export class CollabManager {
   private yCones: Y.Map<ConeSharedMap>
   private yCylinders: Y.Map<CylinderSharedMap>
   private yIntersections: Y.Map<IntersectionSharedMap>
+  private yObjectConstrainedPoints: Y.Map<ObjectConstrainedPointSharedMap>
   private yFaces: Y.Map<FaceSharedMap>
   private yCubes: Y.Map<CubeSharedMap>
   private yRegularPolygons: Y.Map<RegularPolygonSharedMap>
@@ -115,6 +119,7 @@ export class CollabManager {
   private conesObserver: ((event: Y.YMapEvent<ConeSharedMap>) => void) | null = null
   private cylindersObserver: ((event: Y.YMapEvent<CylinderSharedMap>) => void) | null = null
   private intersectionsObserver: ((event: Y.YMapEvent<IntersectionSharedMap>) => void) | null = null
+  private objectConstrainedPointsObserver: ((event: Y.YMapEvent<ObjectConstrainedPointSharedMap>) => void) | null = null
   private facesObserver: ((event: Y.YMapEvent<FaceSharedMap>) => void) | null = null
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
   private regularPolygonsObserver: ((event: Y.YMapEvent<RegularPolygonSharedMap>) => void) | null = null
@@ -129,6 +134,7 @@ export class CollabManager {
   private readonly coneRecordCleanup = new Map<string, () => void>()
   private readonly cylinderRecordCleanup = new Map<string, () => void>()
   private readonly intersectionRecordCleanup = new Map<string, () => void>()
+  private readonly objectConstrainedPointRecordCleanup = new Map<string, () => void>()
   private readonly faceRecordCleanup = new Map<string, () => void>()
   private readonly cubeRecordCleanup = new Map<string, () => void>()
   private readonly regularPolygonRecordCleanup = new Map<string, () => void>()
@@ -158,6 +164,7 @@ export class CollabManager {
   private readonly dirtyConeIds = new Set<string>()
   private readonly dirtyCylinderIds = new Set<string>()
   private readonly dirtyIntersectionIds = new Set<string>()
+  private readonly dirtyObjectConstrainedPointIds = new Set<string>()
   private readonly dirtyFaceIds = new Set<string>()
   private readonly dirtyCubeIds = new Set<string>()
   private readonly dirtyRegularPolygonIds = new Set<string>()
@@ -171,6 +178,7 @@ export class CollabManager {
   private readonly deletedConeIds = new Set<string>()
   private readonly deletedCylinderIds = new Set<string>()
   private readonly deletedIntersectionIds = new Set<string>()
+  private readonly deletedObjectConstrainedPointIds = new Set<string>()
   private readonly deletedFaceIds = new Set<string>()
   private readonly deletedCubeIds = new Set<string>()
   private readonly deletedRegularPolygonIds = new Set<string>()
@@ -192,6 +200,7 @@ export class CollabManager {
     this.yCones = this.ydoc.getMap<ConeSharedMap>('cones')
     this.yCylinders = this.ydoc.getMap<CylinderSharedMap>('cylinders')
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
+    this.yObjectConstrainedPoints = this.ydoc.getMap<ObjectConstrainedPointSharedMap>('objectConstrainedPoints')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
@@ -216,6 +225,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.coneRecordCleanup)
     this.cleanupRecordObservers(this.cylinderRecordCleanup)
     this.cleanupRecordObservers(this.intersectionRecordCleanup)
+    this.cleanupRecordObservers(this.objectConstrainedPointRecordCleanup)
     this.cleanupRecordObservers(this.faceRecordCleanup)
     this.cleanupRecordObservers(this.cubeRecordCleanup)
     this.cleanupRecordObservers(this.regularPolygonRecordCleanup)
@@ -536,6 +546,15 @@ export class CollabManager {
     return record
   }
 
+  private ensureObjectConstrainedPointRecord(id: string) {
+    let record = this.yObjectConstrainedPoints.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yObjectConstrainedPoints.set(id, record)
+    }
+    return record
+  }
+
   private static normalizeServerUrl(url: string) {
     // y-websocket 只接受 ws / wss，这里把 http / https 也规范成对应协议。
     return url
@@ -830,6 +849,10 @@ export class CollabManager {
         (constraint): constraint is CylinderConstraint =>
           constraint instanceof CylinderConstraint,
       ),
+      objectConstrainedPoints: [...this.scene.objectConstrainedPointConstraints.values()].filter(
+        (constraint): constraint is ObjectConstrainedPointConstraint =>
+          constraint instanceof ObjectConstrainedPointConstraint,
+      ),
     }
   }
 
@@ -862,6 +885,7 @@ export class CollabManager {
     snapshot.cylinders.forEach((cylinder) => this.scene.addCylinder(cylinder))
     snapshot.faces.forEach((face) => this.scene.addFace(face))
     snapshot.intersections.forEach((constraint) => this.scene.addIntersectionConstraint(constraint))
+    snapshot.objectConstrainedPoints.forEach((constraint) => this.scene.addObjectConstrainedPointConstraint(constraint))
     snapshot.cubes.forEach((cube) => this.scene.addCubeConstraint(cube))
     snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
     snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
@@ -879,6 +903,7 @@ export class CollabManager {
     this.dirtyCylinderIds.clear()
     this.dirtyFaceIds.clear()
     this.dirtyIntersectionIds.clear()
+    this.dirtyObjectConstrainedPointIds.clear()
     this.deletedPointIds.clear()
     this.deletedLineIds.clear()
     this.deletedStraightLineIds.clear()
@@ -890,6 +915,7 @@ export class CollabManager {
     this.deletedCylinderIds.clear()
     this.deletedFaceIds.clear()
     this.deletedIntersectionIds.clear()
+    this.deletedObjectConstrainedPointIds.clear()
     this.dirtyCubeIds.clear()
     this.dirtyRegularPolygonIds.clear()
     this.deletedCubeIds.clear()
@@ -1026,6 +1052,16 @@ export class CollabManager {
     this.deletedRegularPolygonIds.add(id)
   }
 
+  private markObjectConstrainedPointDirty(id: string) {
+    this.deletedObjectConstrainedPointIds.delete(id)
+    this.dirtyObjectConstrainedPointIds.add(id)
+  }
+
+  private markObjectConstrainedPointDeleted(id: string) {
+    this.dirtyObjectConstrainedPointIds.delete(id)
+    this.deletedObjectConstrainedPointIds.add(id)
+  }
+
   private markLinkedGeometryDirtyForPoint(pointId: string) {
     const point = this.scene.points.get(pointId)
     if (point?.cubeId) this.markCubeDirty(point.cubeId)
@@ -1042,6 +1078,17 @@ export class CollabManager {
       if (id === pointId) {
         for (const dependencyId of dependencyIds) {
           if (dependencyId !== pointId) this.markPointDirty(dependencyId)
+        }
+      }
+    })
+    this.scene.objectConstrainedPointConstraints.forEach((constraint) => {
+      const dependencyIds = constraint.getDependencyPointIds?.()
+      if (!dependencyIds) return
+      for (const dependencyId of dependencyIds) {
+        if (dependencyId === pointId && dependencyId !== constraint.pointId) {
+          this.markPointDirty(constraint.pointId)
+          this.markObjectConstrainedPointDirty(constraint.pointId)
+          return
         }
       }
     })
@@ -1153,6 +1200,9 @@ export class CollabManager {
     this.scene.intersectionConstraints.forEach((constraint, id) => {
       if (constraint instanceof IntersectionPointConstraint) this.markIntersectionDirty(id)
     })
+    this.scene.objectConstrainedPointConstraints.forEach((constraint, id) => {
+      if (constraint instanceof ObjectConstrainedPointConstraint) this.markObjectConstrainedPointDirty(id)
+    })
     this.scene.cubeConstraints.forEach((constraint, id) => {
       if (constraint instanceof CubeConstraint) this.markCubeDirty(id)
     })
@@ -1190,6 +1240,9 @@ export class CollabManager {
     for (const id of [...this.yIntersections.keys()]) {
       if (!this.scene.intersectionConstraints.has(id)) this.markIntersectionDeleted(id)
     }
+    for (const id of [...this.yObjectConstrainedPoints.keys()]) {
+      if (!this.scene.objectConstrainedPointConstraints.has(id)) this.markObjectConstrainedPointDeleted(id)
+    }
     for (const id of [...this.yFaces.keys()]) {
       if (!this.scene.faces.has(id)) this.markFaceDeleted(id)
     }
@@ -1207,6 +1260,9 @@ export class CollabManager {
       if (!point || point.locked) continue
       this.markPointDirty(id)
       this.markLinkedGeometryDirtyForPoint(id)
+      if (this.scene.objectConstrainedPointConstraints.has(id)) {
+        this.markObjectConstrainedPointDirty(id)
+      }
     }
   }
 
@@ -1263,6 +1319,7 @@ export class CollabManager {
       this.yCones.size > 0 ||
       this.yCylinders.size > 0 ||
       this.yIntersections.size > 0 ||
+      this.yObjectConstrainedPoints.size > 0 ||
       this.yFaces.size > 0 ||
       this.yCubes.size > 0 ||
       this.yRegularPolygons.size > 0
@@ -1285,7 +1342,8 @@ export class CollabManager {
       localSnapshot.faces.length === 0 &&
       localSnapshot.cubes.length === 0 &&
       localSnapshot.regularPolygons.length === 0 &&
-      localSnapshot.cylinderConstraints.length === 0
+      localSnapshot.cylinderConstraints.length === 0 &&
+      localSnapshot.objectConstrainedPoints.length === 0
     ) {
       return
     }
@@ -1367,6 +1425,7 @@ export class CollabManager {
     if (this.conesObserver) this.yCones.unobserve(this.conesObserver)
     if (this.cylindersObserver) this.yCylinders.unobserve(this.cylindersObserver)
     if (this.intersectionsObserver) this.yIntersections.unobserve(this.intersectionsObserver)
+    if (this.objectConstrainedPointsObserver) this.yObjectConstrainedPoints.unobserve(this.objectConstrainedPointsObserver)
     if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
     if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
@@ -1384,6 +1443,7 @@ export class CollabManager {
     this.yCones = this.ydoc.getMap<ConeSharedMap>('cones')
     this.yCylinders = this.ydoc.getMap<CylinderSharedMap>('cylinders')
     this.yIntersections = this.ydoc.getMap<IntersectionSharedMap>('intersections')
+    this.yObjectConstrainedPoints = this.ydoc.getMap<ObjectConstrainedPointSharedMap>('objectConstrainedPoints')
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
@@ -1754,6 +1814,9 @@ export class CollabManager {
     const cylinderId = this.readNullableString(record, 'cylinderId')
     const cylinderRoleValue = this.readNullableString(record, 'cylinderRole')
     const cylinderRole = cylinderRoleValue === 'bottomCenter' || cylinderRoleValue === 'topCenter' ? cylinderRoleValue : null
+    const constrainedToType = this.readNullableString(record, 'constrainedToType')
+    const constrainedToId = this.readNullableString(record, 'constrainedToId')
+    const constrainedTo = constrainedToType && constrainedToId ? { type: constrainedToType as ConstrainedToRef['type'], id: constrainedToId } : null
 
     if (point) {
       point.name = name
@@ -1774,8 +1837,17 @@ export class CollabManager {
       point.coneRole = coneRole
       point.cylinderId = cylinderId
       point.cylinderRole = cylinderRole
+      point.constrainedTo = constrainedTo
       if (!point.locked) {
         point.setPosition(new Vec3(x, y, z))
+      }
+      const constraint = this.scene.getObjectConstrainedPointConstraint(id)
+      if (constraint) {
+        const projected = constraint.projectPosition(point.position)
+        if (projected) {
+          point.setPosition(projected)
+          constraint.computeParametricDataFromPosition(projected)
+        }
       }
       this.scene.markAllRenderDirty()
       return
@@ -1804,6 +1876,7 @@ export class CollabManager {
     nextPoint.coneRole = coneRole
     nextPoint.cylinderId = cylinderId
     nextPoint.cylinderRole = cylinderRole
+    nextPoint.constrainedTo = constrainedTo
     this.scene.addPoint(nextPoint)
     this.scene.markAllRenderDirty()
     this.reconcileGeometryForPoint(id)
@@ -2420,6 +2493,46 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private applyObjectConstrainedPointRecord(id: string, record: ObjectConstrainedPointSharedMap) {
+    const point = this.scene.points.get(id)
+    if (!point || point.locked) return
+
+    const targetType = this.readString(record, 'targetType', '')
+    const targetId = this.readString(record, 'targetId', '')
+    if (!targetType || !targetId) return
+    const validTargetTypes = new Set([
+      'line', 'straightLine', 'ray', 'vector', 'circle', 'face', 'sphere',
+      'cone', 'coneBase', 'cylinder', 'cylinderBottom', 'cylinderTop',
+      'xAxis', 'yAxis', 'zAxis',
+    ])
+    if (!validTargetTypes.has(targetType)) return
+
+    const constrainedTo: ConstrainedToRef = { type: targetType as ConstrainedToRef['type'], id: targetId }
+    point.constrainedTo = constrainedTo
+
+    const pdJson = this.readString(record, 'parametricData', '')
+    let parametricData: ParametricData | null = null
+    if (pdJson) {
+      try {
+        parametricData = JSON.parse(pdJson) as ParametricData
+      } catch {
+        parametricData = null
+      }
+    }
+
+    const existing = this.scene.getObjectConstrainedPointConstraint(id)
+    if (existing) {
+      existing.target = constrainedTo
+      if (parametricData) existing.parametricData = parametricData
+      this.scene.requestConstraintSolve(existing)
+    } else {
+      const constraint = new ObjectConstrainedPointConstraint(this.scene, id, constrainedTo)
+      if (parametricData) constraint.parametricData = parametricData
+      this.scene.addObjectConstrainedPointConstraint(constraint)
+    }
+    this.scene.markAllRenderDirty()
+  }
+
   private applyFaceRecord(id: string, record: FaceSharedMap) {
     const face = this.scene.faces.get(id)
     const boundaryPointIds = this.readStringArray(record, 'boundaryPointIds')
@@ -2791,6 +2904,15 @@ export class CollabManager {
     this.intersectionRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
+  private observeObjectConstrainedPointRecord(id: string, record: ObjectConstrainedPointSharedMap) {
+    this.releaseRecordObserver(id, this.objectConstrainedPointRecordCleanup)
+    const handler = () => {
+      this.applyObjectConstrainedPointRecord(id, record)
+    }
+    record.observe(handler)
+    this.objectConstrainedPointRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
   private observeFaceRecord(id: string, record: FaceSharedMap) {
     this.releaseRecordObserver(id, this.faceRecordCleanup)
     const handler = () => {
@@ -3024,6 +3146,27 @@ export class CollabManager {
       this.applyIntersectionRecord(id, record)
     })
 
+    this.objectConstrainedPointsObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.objectConstrainedPointRecordCleanup)
+          this.scene.removeObjectConstrainedPointConstraint(id)
+          this.scene.markAllRenderDirty()
+          return
+        }
+
+        const record = this.yObjectConstrainedPoints.get(id)
+        if (!record) return
+        this.observeObjectConstrainedPointRecord(id, record)
+        this.applyObjectConstrainedPointRecord(id, record)
+      })
+    }
+    this.yObjectConstrainedPoints.observe(this.objectConstrainedPointsObserver)
+    this.yObjectConstrainedPoints.forEach((record, id) => {
+      this.observeObjectConstrainedPointRecord(id, record)
+      this.applyObjectConstrainedPointRecord(id, record)
+    })
+
     this.facesObserver = (event) => {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
@@ -3122,6 +3265,10 @@ export class CollabManager {
     this.setNullableScalarField(record, 'coneRole', point.coneRole)
     this.setNullableScalarField(record, 'cylinderId', point.cylinderId)
     this.setNullableScalarField(record, 'cylinderRole', point.cylinderRole)
+    const constrainedToType = point.constrainedTo?.type ?? null
+    const constrainedToId = point.constrainedTo?.id ?? null
+    this.setNullableScalarField(record, 'constrainedToType', constrainedToType)
+    this.setNullableScalarField(record, 'constrainedToId', constrainedToId)
   }
 
   private syncLineRecord(record: LineSharedMap, line: Line3) {
@@ -3245,6 +3392,12 @@ export class CollabManager {
     this.setScalarField(record, 'sourceAId', constraint.sourceA.id)
     this.setScalarField(record, 'sourceBType', constraint.sourceB.type)
     this.setScalarField(record, 'sourceBId', constraint.sourceB.id)
+  }
+
+  private syncObjectConstrainedPointRecord(record: ObjectConstrainedPointSharedMap, constraint: ObjectConstrainedPointConstraint) {
+    this.setScalarField(record, 'targetType', constraint.target.type)
+    this.setScalarField(record, 'targetId', constraint.target.id)
+    this.setScalarField(record, 'parametricData', constraint.parametricData ? JSON.stringify(constraint.parametricData) : '')
   }
 
   private syncFaceRecord(record: FaceSharedMap, face: PlanarPolygon) {
@@ -3430,6 +3583,8 @@ export class CollabManager {
     const deletedFaceIds = [...this.deletedFaceIds]
     const deletedCubeIds = [...this.deletedCubeIds]
     const deletedRegularPolygonIds = [...this.deletedRegularPolygonIds]
+    const objectConstrainedPointIds = [...this.dirtyObjectConstrainedPointIds]
+    const deletedObjectConstrainedPointIds = [...this.deletedObjectConstrainedPointIds]
 
     if (
       pointIds.length === 0 &&
@@ -3442,6 +3597,7 @@ export class CollabManager {
       coneIds.length === 0 &&
       cylinderIds.length === 0 &&
       intersectionIds.length === 0 &&
+      objectConstrainedPointIds.length === 0 &&
       faceIds.length === 0 &&
       cubeIds.length === 0 &&
       regularPolygonIds.length === 0 &&
@@ -3455,6 +3611,7 @@ export class CollabManager {
       deletedConeIds.length === 0 &&
       deletedCylinderIds.length === 0 &&
       deletedIntersectionIds.length === 0 &&
+      deletedObjectConstrainedPointIds.length === 0 &&
       deletedFaceIds.length === 0 &&
       deletedCubeIds.length === 0 &&
       deletedRegularPolygonIds.length === 0
@@ -3492,6 +3649,9 @@ export class CollabManager {
       })
       deletedIntersectionIds.forEach((id) => {
         this.yIntersections.delete(id)
+      })
+      deletedObjectConstrainedPointIds.forEach((id) => {
+        this.yObjectConstrainedPoints.delete(id)
       })
       deletedFaceIds.forEach((id) => {
         this.yFaces.delete(id)
@@ -3619,6 +3779,15 @@ export class CollabManager {
         }
         this.syncRegularPolygonRecord(this.ensureRegularPolygonRecord(id), constraint)
       })
+
+      objectConstrainedPointIds.forEach((id) => {
+        const constraint = this.scene.objectConstrainedPointConstraints.get(id)
+        if (!(constraint instanceof ObjectConstrainedPointConstraint)) {
+          this.yObjectConstrainedPoints.delete(id)
+          return
+        }
+        this.syncObjectConstrainedPointRecord(this.ensureObjectConstrainedPointRecord(id), constraint)
+      })
     })
 
     pointIds.forEach((id) => this.dirtyPointIds.delete(id))
@@ -3631,6 +3800,7 @@ export class CollabManager {
     coneIds.forEach((id) => this.dirtyConeIds.delete(id))
     cylinderIds.forEach((id) => this.dirtyCylinderIds.delete(id))
     intersectionIds.forEach((id) => this.dirtyIntersectionIds.delete(id))
+    objectConstrainedPointIds.forEach((id) => this.dirtyObjectConstrainedPointIds.delete(id))
     faceIds.forEach((id) => this.dirtyFaceIds.delete(id))
     cubeIds.forEach((id) => this.dirtyCubeIds.delete(id))
     regularPolygonIds.forEach((id) => this.dirtyRegularPolygonIds.delete(id))
@@ -3642,6 +3812,7 @@ export class CollabManager {
     deletedCircleIds.forEach((id) => this.deletedCircleIds.delete(id))
     deletedSphereIds.forEach((id) => this.deletedSphereIds.delete(id))
     deletedConeIds.forEach((id) => this.deletedConeIds.delete(id))
+    deletedObjectConstrainedPointIds.forEach((id) => this.deletedObjectConstrainedPointIds.delete(id))
     deletedCylinderIds.forEach((id) => this.deletedCylinderIds.delete(id))
     deletedIntersectionIds.forEach((id) => this.deletedIntersectionIds.delete(id))
     deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))

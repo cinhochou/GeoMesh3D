@@ -13,7 +13,21 @@ import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
 import { LabelRenderer } from './LabelRenderer'
 
-type RenderObjectType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder' | 'axisLabel'
+type RenderObjectType =
+  | 'point'
+  | 'line'
+  | 'straightLine'
+  | 'ray'
+  | 'vector'
+  | 'circle'
+  | 'face'
+  | 'sphere'
+  | 'cone'
+  | 'coneBase'
+  | 'cylinder'
+  | 'cylinderBottom'
+  | 'cylinderTop'
+  | 'axisLabel'
 
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
@@ -59,15 +73,15 @@ export interface GeometrySyncerDeps {
 
 const POINT_PIXEL = 9
 const POINT_SCALE_REFERENCE_DISTANCE = Math.sqrt(15 * 15 * 3) * (Math.tan(60 / 2 * Math.PI / 180) / Math.tan(30 / 2 * Math.PI / 180))
-const POINT_SCALE_EXPONENT = 0.72
-const POINT_MIN_SCALE_FACTOR = 0.45
-const POINT_MAX_SCALE_FACTOR = 1.08
+const POINT_SCALE_EXPONENT = 0.82
+const POINT_MIN_SCALE_FACTOR = 0.3
+const POINT_MAX_SCALE_FACTOR = 2.2
 const POINT_LABEL_BASE_PIXEL = 70
 const LINE_LABEL_BASE_PIXEL = 68
 const POINT_LABEL_SCALE_MULTIPLIER = 5.6
 const LINE_LABEL_SCALE_MULTIPLIER = 5.4
-const LABEL_MIN_SCALE_FACTOR = 0.52
-const LABEL_MAX_SCALE_FACTOR = 1.38
+const LABEL_MIN_SCALE_FACTOR = 0.3
+const LABEL_MAX_SCALE_FACTOR = 2.2
 const LABEL_OFFSET_EXPONENT = 0.65
 const LABEL_OFFSET_MIN_FACTOR = 0.7
 const LABEL_OFFSET_MAX_FACTOR = 1.15
@@ -80,7 +94,7 @@ const POINT_LABEL_CENTER_Y = 0.32
 const LINE_LABEL_CENTER_X = 0.5
 const LINE_LABEL_CENTER_Y = 0.3
 const LINEAR_COLOR = 0xffffff
-const INTERSECTION_POINT_COLOR = 0xffd84a
+const CONSTRAINED_POINT_COLOR = 0xffd84a
 const CUBE_DEPENDENT_POINT_COLOR = 0xcfd3d8
 export const DEFAULT_POINT_COLOR = 0xff5555
 export const SELECTED_COLOR = 0x43f260
@@ -158,7 +172,10 @@ function computePointBaseColor(p: Point3, scene: GeoScene): number {
     return 0xffffff
   }
   if (scene.getIntersectionConstraint(p.id)) {
-    return INTERSECTION_POINT_COLOR
+    return CONSTRAINED_POINT_COLOR
+  }
+  if (p.isConstrainedPoint) {
+    return CONSTRAINED_POINT_COLOR
   }
   if (p.cubeRole === 'dependent') {
     return CUBE_DEPENDENT_POINT_COLOR
@@ -181,6 +198,13 @@ export class GeometrySyncer {
   public pointMeshes = new Map<string, THREE.Points>()
   public facePreviewMesh: THREE.Mesh | null = null
   public rubberBandLine: THREE.Line | null = null
+
+  private occlusionRaycaster = new THREE.Raycaster()
+  private occlusionFrameCounter = 0
+  private readonly OCCLUSION_CHECK_INTERVAL = 3
+  private pointOcclusionTarget = new Map<string, number>()
+  private pointOcclusionLastResult = new Map<string, boolean>()
+  private pointOcclusionStableCount = new Map<string, number>()
 
   private currentSceneRef: GeoScene | null = null
   private activeLabelTarget: { type: string; geoId: string } | null = null
@@ -1309,7 +1333,7 @@ export class GeometrySyncer {
           specular: 0x222222,
       })
       const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
-      baseMesh.userData = { geoId: id, type: 'cone' }
+      baseMesh.userData = { geoId: id, type: 'coneBase' }
       baseMesh.renderOrder = SURFACE_RENDER_ORDER
 
       const baseDepthMesh = new THREE.Mesh(
@@ -1456,7 +1480,7 @@ export class GeometrySyncer {
           specular: 0x222222,
       })
       const bottomMesh = new THREE.Mesh(bottomGeometry, bottomMaterial)
-      bottomMesh.userData = { geoId: id, type: 'cylinder' }
+      bottomMesh.userData = { geoId: id, type: 'cylinderBottom' }
       bottomMesh.renderOrder = SURFACE_RENDER_ORDER
 
       const bottomDepthMesh = new THREE.Mesh(
@@ -1482,7 +1506,7 @@ export class GeometrySyncer {
           specular: 0x222222,
       })
       const topMesh = new THREE.Mesh(topGeometry, topMaterial)
-      topMesh.userData = { geoId: id, type: 'cylinder' }
+      topMesh.userData = { geoId: id, type: 'cylinderTop' }
       topMesh.renderOrder = SURFACE_RENDER_ORDER
 
       const topDepthMesh = new THREE.Mesh(
@@ -2262,5 +2286,123 @@ export class GeometrySyncer {
     }
     arrowHead.position.copy(end.clone().sub(normalized.clone().multiplyScalar(headLen / 2)))
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized)
+  }
+
+  updateDepthOcclusion(): void {
+    this.occlusionFrameCounter++
+    const shouldCheck = this.occlusionFrameCounter % this.OCCLUSION_CHECK_INTERVAL === 0
+
+    if (shouldCheck) {
+      const camera = this.deps.getActiveCamera()
+      const cameraWorldPos = new THREE.Vector3()
+      camera.getWorldPosition(cameraWorldPos)
+
+      const occluders = this.collectOccluders()
+      const activePointIds = new Set<string>()
+      const scene = this.currentSceneRef
+
+      this.meshMap.forEach((obj) => {
+        if (obj.userData.type !== 'point' || !obj.visible) return
+        const geoId = obj.userData.geoId
+        if (!geoId) return
+        activePointIds.add(geoId)
+
+        if (scene && scene.selection.points.has(geoId)) {
+          this.pointOcclusionTarget.set(geoId, 1.0)
+          this.pointOcclusionLastResult.delete(geoId)
+          this.pointOcclusionStableCount.delete(geoId)
+          return
+        }
+
+        const sprite = obj as THREE.Sprite
+        const pointWorldPos = new THREE.Vector3()
+        this.deps.world.localToWorld(pointWorldPos.copy(sprite.position))
+
+        const direction = new THREE.Vector3().subVectors(pointWorldPos, cameraWorldPos)
+        const distance = direction.length()
+        if (distance < 0.001) {
+          this.pointOcclusionTarget.set(geoId, 1.0)
+          return
+        }
+        direction.normalize()
+
+        this.occlusionRaycaster.set(cameraWorldPos, direction)
+        this.occlusionRaycaster.near = 0.01
+        this.occlusionRaycaster.far = distance - 0.1
+
+        const hits = this.occlusionRaycaster.intersectObjects(occluders, true)
+        const isOccluded = hits.length > 0
+
+        const lastResult = this.pointOcclusionLastResult.get(geoId)
+        this.pointOcclusionLastResult.set(geoId, isOccluded)
+
+        if (lastResult === undefined) {
+          this.pointOcclusionTarget.set(geoId, isOccluded ? 0.3 : 1.0)
+          this.pointOcclusionStableCount.set(geoId, 1)
+        } else if (isOccluded === lastResult) {
+          const count = (this.pointOcclusionStableCount.get(geoId) ?? 0) + 1
+          this.pointOcclusionStableCount.set(geoId, count)
+          if (count >= 2) {
+            this.pointOcclusionTarget.set(geoId, isOccluded ? 0.3 : 1.0)
+          }
+        } else {
+          this.pointOcclusionStableCount.set(geoId, 1)
+        }
+      })
+
+      for (const id of [...this.pointOcclusionTarget.keys()]) {
+        if (!activePointIds.has(id)) {
+          this.pointOcclusionTarget.delete(id)
+          this.pointOcclusionLastResult.delete(id)
+          this.pointOcclusionStableCount.delete(id)
+        }
+      }
+    }
+
+    const LERP_SPEED = 0.15
+    const OCCLUDED_LABEL_OPACITY = 0.2
+
+    this.meshMap.forEach((obj) => {
+      if (obj.userData.type !== 'point' || !obj.visible) return
+      const geoId = obj.userData.geoId
+      if (!geoId) return
+
+      const targetOpacity = this.pointOcclusionTarget.get(geoId) ?? 1.0
+      const sprite = obj as THREE.Sprite
+      const material = sprite.material as THREE.SpriteMaterial
+
+      const currentOpacity = material.opacity
+      const newOpacity = THREE.MathUtils.lerp(currentOpacity, targetOpacity, LERP_SPEED)
+      material.opacity = newOpacity
+
+      const label = this.getRenderUserData(obj).__labelSprite
+      if (label && label.visible) {
+        const labelMat = label.material as THREE.SpriteMaterial
+        const labelTarget = targetOpacity < 1.0 ? OCCLUDED_LABEL_OPACITY : 1.0
+        const labelCurrent = labelMat.opacity
+        const labelNew = THREE.MathUtils.lerp(labelCurrent, labelTarget, LERP_SPEED)
+        labelMat.opacity = labelNew
+      }
+    })
+  }
+
+  private collectOccluders(): THREE.Object3D[] {
+    const occluders: THREE.Object3D[] = []
+    const occluderTypes = new Set(['face', 'sphere'])
+
+    this.meshMap.forEach((obj) => {
+      if (occluderTypes.has(obj.userData.type ?? '')) {
+        occluders.push(obj)
+      }
+    })
+
+    this.groupMap.forEach((obj) => {
+      const type = obj.userData.type
+      if (type === 'cone' || type === 'cylinder') {
+        occluders.push(obj)
+      }
+    })
+
+    return occluders
   }
 }

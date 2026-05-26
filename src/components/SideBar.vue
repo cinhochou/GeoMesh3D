@@ -324,6 +324,40 @@ const FACE_CONSTRAINT_BADGE: Record<string, string> = {
   hexahedron: '正六面体约束',
   tetrahedron: '正四面体约束',
 }
+const POINT_CONSTRAINT_BADGE: Record<string, string> = {
+  line: '线段约束',
+  straightLine: '直线约束',
+  ray: '射线约束',
+  vector: '向量约束',
+  circle: '圆约束',
+  face: '面约束',
+  sphere: '球面约束',
+  cone: '锥面约束',
+  coneBase: '锥底约束',
+  cylinder: '柱面约束',
+  cylinderBottom: '柱底约束',
+  cylinderTop: '柱顶约束',
+  xAxis: 'X轴约束',
+  yAxis: 'Y轴约束',
+  zAxis: 'Z轴约束',
+}
+const getPointConstraintBadge = (point: Point3 | undefined): string => {
+  if (!point?.constrainedTo) return ''
+  const type = point.constrainedTo.type
+  if (type === 'circle') {
+    const circle = props.scene.circles.get(point.constrainedTo.id)
+    if (circle?.isNormalCircle()) {
+      for (const cone of props.scene.cones.values()) {
+        if (cone.normalCircleId === circle.id) return '锥底约束'
+      }
+      for (const cylinder of props.scene.cylinders.values()) {
+        if (cylinder.normalCircleId === circle.id) return '柱底约束'
+        if (cylinder.topNormalCircleId === circle.id) return '柱顶约束'
+      }
+    }
+  }
+  return POINT_CONSTRAINT_BADGE[type] ?? ''
+}
 const getLineConstraintBadge = (line: Line3 | undefined): string => {
   if (!line?.faceConstraintType) return ''
   return FACE_CONSTRAINT_BADGE[line.faceConstraintType] ?? ''
@@ -3026,6 +3060,7 @@ onUnmounted(() => {
                 >正多边形约束</span
               >
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
+              <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{ getPointConstraintBadge(p!) }}</span>
             </div>
             <div>
               x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
@@ -6664,6 +6699,7 @@ onUnmounted(() => {
                   >正多边形约束</span
                 >
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
+                <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{ getPointConstraintBadge(p!) }}</span>
               </div>
             </div>
           </div>

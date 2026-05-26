@@ -819,6 +819,7 @@ const handleImportScene = async () => {
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
     scene.markAllRenderDirty()
+    collabManager.value?.syncAction()
 
     showToast('导入成功', 'global')
   } catch {

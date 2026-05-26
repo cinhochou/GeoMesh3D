@@ -99,6 +99,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  ├─ App.vue
 │  ├─ components
 │  │  ├─ InputDialog.vue
+│  │  ├─ RenderSettingsPanel.vue
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
 │  │  └─ Toolbar.vue
@@ -109,8 +110,10 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  └─ CollabManager.ts
 │  │  ├─ constraints
 │  │  │  ├─ CubeConstraint.ts
+│  │  │  ├─ CylinderConstraint.ts
 │  │  │  ├─ DistanceConstraint.ts
 │  │  │  ├─ IntersectionPointConstraint.ts
+│  │  │  ├─ ObjectConstrainedPointConstraint.ts
 │  │  │  ├─ PlanarFaceConstraint.ts
 │  │  │  └─ RegularPolygonConstraint.ts
 │  │  ├─ editor
@@ -119,6 +122,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  ├─ AbstractUpdateCommand.ts
 │  │  │  │  ├─ add
 │  │  │  │  │  ├─ AddConeCommand.ts
+│  │  │  │  │  ├─ AddConstrainedPointCommand.ts
+│  │  │  │  │  ├─ AddCylinderCommand.ts
 │  │  │  │  │  ├─ AddElementCommand.ts
 │  │  │  │  │  ├─ AddHexahedronCommand.ts
 │  │  │  │  │  ├─ AddIntersectionPointCommand.ts
@@ -128,6 +133,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  ├─ delete
 │  │  │  │  │  ├─ DeleteCircleCommand.ts
 │  │  │  │  │  ├─ DeleteConeCommand.ts
+│  │  │  │  │  ├─ DeleteCylinderCommand.ts
 │  │  │  │  │  ├─ DeleteFaceCommand.ts
 │  │  │  │  │  ├─ DeleteHexahedronCommand.ts
 │  │  │  │  │  ├─ DeleteLineCommand.ts
@@ -150,6 +156,9 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │     ├─ UpdateConeHeightCommand.ts
 │  │  │  │     ├─ UpdateConeRadiusCommand.ts
 │  │  │  │     ├─ UpdateCubeCommand.ts
+│  │  │  │     ├─ UpdateCylinderCommand.ts
+│  │  │  │     ├─ UpdateCylinderHeightCommand.ts
+│  │  │  │     ├─ UpdateCylinderRadiusCommand.ts
 │  │  │  │     ├─ UpdateFaceCommand.ts
 │  │  │  │     ├─ UpdateLineCommand.ts
 │  │  │  │     ├─ UpdatePointCommand.ts
@@ -165,6 +174,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ geometry
 │  │  │  ├─ Circle3.ts
 │  │  │  ├─ Cone3.ts
+│  │  │  ├─ Cylinder3.ts
 │  │  │  ├─ GeoVector3.ts
 │  │  │  ├─ IntersectionPoint3.ts
 │  │  │  ├─ Line3.ts

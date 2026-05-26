@@ -1,5 +1,25 @@
 import { Vec3 } from './Vec3'
 
+export type ConstrainedToRef = {
+  type:
+    | 'line'
+    | 'straightLine'
+    | 'ray'
+    | 'vector'
+    | 'circle'
+    | 'face'
+    | 'sphere'
+    | 'cone'
+    | 'coneBase'
+    | 'cylinder'
+    | 'cylinderBottom'
+    | 'cylinderTop'
+    | 'xAxis'
+    | 'yAxis'
+    | 'zAxis'
+  id: string
+}
+
 export class Point3 {
   private static readonly POSITION_EPSILON = 1e-8
   static readonly DEFAULT_LABEL_OFFSET_X = 3
@@ -26,7 +46,12 @@ export class Point3 {
   coneRole: 'baseCenter' | 'apex' | null
   cylinderId: string | null
   cylinderRole: 'bottomCenter' | 'topCenter' | null
+  constrainedTo: ConstrainedToRef | null = null
   onPositionChanged: ((point: Point3, previous: Vec3, next: Vec3) => void) | null = null
+
+  get isConstrainedPoint(): boolean {
+    return this.constrainedTo !== null
+  }
 
   constructor(
     id: string,

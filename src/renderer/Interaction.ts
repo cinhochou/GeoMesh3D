@@ -12,6 +12,7 @@ import type { DirectionType } from '../core/geometry/Circle3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
+import { DEFAULT_POINT_COLOR } from './GeometrySyncer'
 
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
@@ -377,16 +378,198 @@ export class Interaction {
 
   private commitCurrentCreatePoint(shouldSnap: boolean) {
     const pos = this.getCurrentCreatePointPosition(shouldSnap)
-    this.editor.createPoint(new Vec3(pos.x, pos.y, pos.z))
+    const mathPos = new Vec3(pos.x, pos.y, pos.z)
+    const rect = this.getPointerClientRect()
+    const snapResult = this.detectAxisProximityScreen(mathPos, rect)
+    if (snapResult) {
+      this.editor.createConstrainedPoint(snapResult.snappedPos, snapResult.axis, snapResult.axis)
+    } else {
+      this.editor.createPoint(mathPos)
+    }
     this.createPointDraft = null
     this.mobileCreatePreviewPos = null
     this.renderer.hideAxisGuides()
     return true
   }
 
+  private detectAxisProximityScreen(
+    pos: Vec3,
+    rect: DOMRect,
+  ): { axis: 'xAxis' | 'yAxis' | 'zAxis'; snappedPos: Vec3 } | null {
+    const thresholdPx = 8
+    const pointScreen = this.projectMathPositionToClient(pos, rect)
+    if (!pointScreen) return null
+
+    const axisSize = this.renderer.getAxisGridSize()
+    const steps = 20
+    const maxSegLen = Math.max(rect.width, rect.height)
+
+    const axes: { axis: 'xAxis' | 'yAxis' | 'zAxis'; getPoint: (t: number) => Vec3 }[] = [
+      { axis: 'xAxis', getPoint: (t) => new Vec3(t * axisSize, 0, 0) },
+      { axis: 'yAxis', getPoint: (t) => new Vec3(0, t * axisSize, 0) },
+      { axis: 'zAxis', getPoint: (t) => new Vec3(0, 0, t * axisSize) },
+    ]
+
+    let bestAxis: 'xAxis' | 'yAxis' | 'zAxis' | null = null
+    let bestDist = thresholdPx
+    let bestSnappedPos: Vec3 | null = null
+
+    for (const { axis, getPoint } of axes) {
+      const samples: { screen: THREE.Vector2; pos3d: Vec3 }[] = []
+      for (let i = 0; i <= steps; i++) {
+        const t = -1 + (2 * i) / steps
+        const p3d = getPoint(t)
+        const sp = this.projectMathPositionToClient(p3d, rect)
+        if (sp) samples.push({ screen: sp, pos3d: p3d })
+      }
+
+      for (let i = 0; i < samples.length - 1; i++) {
+        const sa = samples[i]!
+        const sb = samples[i + 1]!
+        if (sa.screen.distanceTo(sb.screen) > maxSegLen) continue
+        const { dist, t } = this.pointToSegmentInfo(pointScreen, sa.screen, sb.screen)
+        if (dist < bestDist) {
+          bestDist = dist
+          bestAxis = axis
+          const ax = sa.pos3d.x + t * (sb.pos3d.x - sa.pos3d.x)
+          const ay = sa.pos3d.y + t * (sb.pos3d.y - sa.pos3d.y)
+          const az = sa.pos3d.z + t * (sb.pos3d.z - sa.pos3d.z)
+          bestSnappedPos = new Vec3(ax, ay, az)
+        }
+      }
+    }
+
+    if (bestAxis && bestSnappedPos) {
+      return { axis: bestAxis, snappedPos: bestSnappedPos }
+    }
+    return null
+  }
+
+  private pointToSegmentInfo(
+    p: THREE.Vector2,
+    a: THREE.Vector2,
+    b: THREE.Vector2,
+  ): { dist: number; t: number } {
+    const ab = new THREE.Vector2().subVectors(b, a)
+    const ap = new THREE.Vector2().subVectors(p, a)
+    const lenSq = ab.lengthSq()
+    if (lenSq === 0) return { dist: p.distanceTo(a), t: 0 }
+    const t = Math.max(0, Math.min(1, ap.dot(ab) / lenSq))
+    const closest = a.clone().add(ab.multiplyScalar(t))
+    return { dist: p.distanceTo(closest), t }
+  }
+
   private showCreatePointPreview(pos: THREE.Vector3) {
     this.mobileCreatePreviewPos = new Vec3(pos.x, pos.y, pos.z)
+    const rect = this.getPointerClientRect()
+    const mathPos = new Vec3(pos.x, pos.y, pos.z)
+    const nearAxis = this.detectAxisProximityScreen(mathPos, rect)
+    const hasConstrainedTarget = this.pickConstrainedTarget() !== null
     this.renderer.showAxisGuidesAt(pos)
+    if (nearAxis || hasConstrainedTarget) {
+      this.renderer.setGuideLinesVisible(false)
+      this.renderer.setGuideLabelVisible(false)
+    } else {
+      this.renderer.setGuideLinesVisible(true)
+      this.renderer.setGuideLabelVisible(true)
+    }
+    this.renderer.setGuidePointColor(hasConstrainedTarget ? 0xffff00 : DEFAULT_POINT_COLOR)
+  }
+
+  private pickConstrainedTarget(): THREE.Object3D | null {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const validTypes = new Set([
+      'line', 'straightLine', 'ray', 'vector', 'circle',
+      'sphere', 'face', 'cone', 'coneBase', 'cylinder', 'cylinderBottom', 'cylinderTop',
+    ])
+    const meshCandidates = [...this.renderer.geometrySyncer.meshMap.values()].filter((obj) => {
+      return validTypes.has(obj.userData?.type)
+    })
+    const groupCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter((obj) => {
+      return validTypes.has(obj.userData?.type)
+    })
+    const allCandidates = [...meshCandidates, ...groupCandidates]
+    const hits = this.raycaster.intersectObjects(allCandidates, true)
+    if (hits.length === 0) return null
+    return hits[0]!.object
+  }
+
+  private tryCreateConstrainedPointFromHit(hit: THREE.Object3D): boolean {
+    let resolvedHit: THREE.Object3D = hit
+    while (!resolvedHit.userData?.type && resolvedHit.parent) {
+      resolvedHit = resolvedHit.parent
+    }
+    const type = resolvedHit.userData?.type as string | undefined
+    const geoId = resolvedHit.userData?.geoId as string | undefined
+    if (!type || !geoId) return false
+
+    const validTypes = new Set([
+      'line', 'straightLine', 'ray', 'vector', 'circle', 'face', 'sphere',
+      'cone', 'coneBase', 'cylinder', 'cylinderBottom', 'cylinderTop',
+    ])
+    if (!validTypes.has(type)) return false
+
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+
+    const closestHit = this.findClosestHitOnObject(type, geoId)
+    if (!closestHit) return false
+
+    const pos = this.renderer.toMathLocalPosition(closestHit)
+    this.editor.createConstrainedPoint(
+      new Vec3(pos.x, pos.y, pos.z),
+      type as
+        | 'line'
+        | 'straightLine'
+        | 'ray'
+        | 'vector'
+        | 'circle'
+        | 'face'
+        | 'sphere'
+        | 'cone'
+        | 'coneBase'
+        | 'cylinder'
+        | 'cylinderBottom'
+        | 'cylinderTop',
+      geoId,
+    )
+    this.createPointDraft = null
+    this.mobileCreatePreviewPos = null
+    this.renderer.hideAxisGuides()
+    return true
+  }
+
+  private findClosestHitOnObject(
+    _type: string,
+    _geoId: string,
+  ): THREE.Vector3 | null {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const candidates = [...this.renderer.geometrySyncer.meshMap.values()].filter((obj) => {
+      const t = obj.userData?.type
+      const gid = obj.userData?.geoId
+      return t === _type && gid === _geoId
+    })
+    const groupCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter((obj) => {
+      const t = obj.userData?.type
+      const gid = obj.userData?.geoId
+      return t === _type && gid === _geoId
+    })
+    const fallbackGroups = [...this.renderer.geometrySyncer.groupMap.values()].filter((obj) => {
+      const gid = obj.userData?.geoId
+      return gid === _geoId && (obj.userData?.type === 'cone' || obj.userData?.type === 'cylinder')
+    })
+    const allCandidates = [...candidates, ...groupCandidates, ...fallbackGroups]
+    if (allCandidates.length === 0) return null
+
+    const hits = this.raycaster.intersectObjects(allCandidates, true)
+    for (const hit of hits) {
+      let obj: THREE.Object3D = hit.object
+      while (obj && !obj.userData?.type && obj.parent) obj = obj.parent
+      if (obj.userData?.type === _type && hit.point) {
+        return hit.point.clone()
+      }
+    }
+
+    return null
   }
 
   private resetMobileCreatePointerState() {
@@ -930,6 +1113,18 @@ export class Interaction {
       }
     }
 
+    const constrainedPointsOnObject = new Map<string, Set<string>>()
+    for (const [, constraint] of this.editor.scene.objectConstrainedPointConstraints) {
+      if (protectedPointIds.has(constraint.pointId)) {
+        let set = constrainedPointsOnObject.get(constraint.target.id)
+        if (!set) {
+          set = new Set()
+          constrainedPointsOnObject.set(constraint.target.id, set)
+        }
+        set.add(constraint.pointId)
+      }
+    }
+
     const addLinearCandidate = (
       id: string,
       p1Pos: Vec3,
@@ -956,25 +1151,36 @@ export class Interaction {
       candidates.push({ object: mesh, screenDist: dist, depth, type, geoId: id })
     }
 
+    const isObjectProtected = (objectId: string, endpointIds: string[]): boolean => {
+      if (endpointIds.some((pid) => protectedPointIds.has(pid))) return true
+      const cpSet = constrainedPointsOnObject.get(objectId)
+      if (cpSet) {
+        for (const cpId of cpSet) {
+          if (protectedPointIds.has(cpId)) return true
+        }
+      }
+      return false
+    }
+
     for (const [id, line] of this.editor.scene.lines) {
-      const nearPoint = protectedPointIds.has(line.p1.id) || protectedPointIds.has(line.p2.id)
+      const nearPoint = isObjectProtected(id, [line.p1.id, line.p2.id])
       addLinearCandidate(id, line.p1.position, line.p2.position, 'line', nearPoint)
     }
 
     for (const [id, sl] of this.editor.scene.straightLines) {
       const dp = sl.getDisplayPoints()
-      const nearPoint = protectedPointIds.has(sl.p1.id) || protectedPointIds.has(sl.p2.id)
+      const nearPoint = isObjectProtected(id, [sl.p1.id, sl.p2.id])
       addLinearCandidate(id, dp.start, dp.end, 'straightLine', nearPoint)
     }
 
     for (const [id, ray] of this.editor.scene.rays) {
       const endPos = ray.getDisplayEndPoint()
-      const nearPoint = protectedPointIds.has(ray.p1.id) || protectedPointIds.has(ray.p2.id)
+      const nearPoint = isObjectProtected(id, [ray.p1.id, ray.p2.id])
       addLinearCandidate(id, ray.p1.position, endPos, 'ray', nearPoint)
     }
 
     for (const [id, vec] of this.editor.scene.vectors) {
-      const nearPoint = protectedPointIds.has(vec.p1.id) || protectedPointIds.has(vec.p2.id)
+      const nearPoint = isObjectProtected(id, [vec.p1.id, vec.p2.id])
       addLinearCandidate(id, vec.p1.position, vec.p2.position, 'vector', nearPoint)
     }
 
@@ -1001,10 +1207,7 @@ export class Interaction {
       })()
       const ringDist = Math.abs(centerDist - radiusScreenPx)
       if (ringDist > circleHitRadius) continue
-      const nearPoint =
-        protectedPointIds.has(circle.p1.id) ||
-        protectedPointIds.has(circle.p2.id) ||
-        protectedPointIds.has(circle.p3.id)
+      const nearPoint = isObjectProtected(id, [circle.p1.id, circle.p2.id, circle.p3.id])
       if (nearPoint) continue
       const mesh = this.renderer.geometrySyncer.meshMap.get(id)
       if (!mesh) continue
@@ -1059,8 +1262,18 @@ export class Interaction {
           type === 'line' || type === 'straightLine' || type === 'ray' ||
           type === 'vector' || type === 'circle'
         ) {
-          const nearPoint = this.isLinearNearProtectedPoint(type, geoId, protectedPointIds)
+          const nearPoint = this.isLinearNearProtectedPoint(type, geoId, protectedPointIds, constrainedPointsOnObject)
           if (nearPoint) continue
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance,
+            type,
+            geoId,
+          })
+        } else if (type === 'face') {
+          const face = this.editor.scene.faces.get(geoId)
+          if (face && isObjectProtected(geoId, face.memberPointIds)) continue
           candidates.push({
             object: resolved,
             screenDist: 0,
@@ -1088,6 +1301,8 @@ export class Interaction {
         const type = obj.userData?.type as string | undefined
         const geoId = obj.userData?.geoId as string | undefined
         if (!type || !geoId) continue
+        const face = this.editor.scene.faces.get(geoId)
+        if (face && isObjectProtected(geoId, face.memberPointIds)) continue
         candidates.push({
           object: obj,
           screenDist: 0,
@@ -1106,7 +1321,7 @@ export class Interaction {
         const geoId = obj.userData?.geoId as string | undefined
         if (!geoId) continue
         const sphere = this.editor.scene.spheres.get(geoId)
-        if (sphere && protectedPointIds.has(sphere.centerPoint.id)) continue
+        if (sphere && isObjectProtected(geoId, [sphere.centerPoint.id])) continue
         candidates.push({
           object: obj,
           screenDist: 0,
@@ -1123,16 +1338,16 @@ export class Interaction {
       for (const hit of coneHits) {
         let obj: THREE.Object3D = hit.object
         if (!obj.userData?.type && obj.parent?.userData?.type) obj = obj.parent
-        const type = obj.userData?.type as string | undefined
+        const rawType = obj.userData?.type as string | undefined
         const geoId = obj.userData?.geoId as string | undefined
-        if (!type || !geoId) continue
+        if (!rawType || !geoId) continue
         const cone = this.editor.scene.cones.get(geoId)
-        if (cone && (protectedPointIds.has(cone.baseCenterPoint.id) || protectedPointIds.has(cone.apexPoint.id))) continue
+        if (cone && isObjectProtected(geoId, [cone.baseCenterPoint.id, cone.apexPoint.id])) continue
         candidates.push({
           object: obj,
           screenDist: 0,
           depth: hit.distance + cameraPos.length(),
-          type,
+          type: rawType === 'coneBase' ? 'cone' : rawType,
           geoId,
         })
       }
@@ -1144,16 +1359,16 @@ export class Interaction {
       for (const hit of cylinderHits) {
         let obj: THREE.Object3D = hit.object
         if (!obj.userData?.type && obj.parent?.userData?.type) obj = obj.parent
-        const type = obj.userData?.type as string | undefined
+        const rawType = obj.userData?.type as string | undefined
         const geoId = obj.userData?.geoId as string | undefined
-        if (!type || !geoId) continue
+        if (!rawType || !geoId) continue
         const cylinder = this.editor.scene.cylinders.get(geoId)
-        if (cylinder && (protectedPointIds.has(cylinder.bottomCenterPoint.id) || protectedPointIds.has(cylinder.topCenterPoint.id))) continue
+        if (cylinder && isObjectProtected(geoId, [cylinder.bottomCenterPoint.id, cylinder.topCenterPoint.id])) continue
         candidates.push({
           object: obj,
           screenDist: 0,
           depth: hit.distance + cameraPos.length(),
-          type,
+          type: rawType === 'cylinderBottom' || rawType === 'cylinderTop' ? 'cylinder' : rawType,
           geoId,
         })
       }
@@ -1161,9 +1376,21 @@ export class Interaction {
 
     if (candidates.length === 0) return null
 
+    const getPointPriority = (geoId: string): number => {
+      const point = this.editor.scene.points.get(geoId)
+      if (!point) return 0
+      if (point.isConstrainedPoint) return 3
+      if (point.id === Scene.ORIGIN_ID) return 2
+      return 1
+    }
+
     candidates.sort((a, b) => {
       const screenDiff = a.screenDist - b.screenDist
       if (Math.abs(screenDiff) > Interaction.SCREEN_TIE_BREAK_PX) return screenDiff
+      if (a.type === 'point' && b.type === 'point') {
+        const priorityDiff = getPointPriority(b.geoId) - getPointPriority(a.geoId)
+        if (priorityDiff !== 0) return priorityDiff
+      }
       return a.depth - b.depth
     })
 
@@ -1174,30 +1401,39 @@ export class Interaction {
     type: string,
     geoId: string,
     protectedPointIds: Set<string>,
+    constrainedPointsOnObject?: Map<string, Set<string>>,
   ): boolean {
+    const checkEndpoints = (endpointIds: string[]): boolean => {
+      if (endpointIds.some((pid) => protectedPointIds.has(pid))) return true
+      if (constrainedPointsOnObject) {
+        const cpSet = constrainedPointsOnObject.get(geoId)
+        if (cpSet) {
+          for (const cpId of cpSet) {
+            if (protectedPointIds.has(cpId)) return true
+          }
+        }
+      }
+      return false
+    }
     if (type === 'line') {
       const line = this.editor.scene.lines.get(geoId)
-      return line ? protectedPointIds.has(line.p1.id) || protectedPointIds.has(line.p2.id) : false
+      return line ? checkEndpoints([line.p1.id, line.p2.id]) : false
     }
     if (type === 'straightLine') {
       const sl = this.editor.scene.straightLines.get(geoId)
-      return sl ? protectedPointIds.has(sl.p1.id) || protectedPointIds.has(sl.p2.id) : false
+      return sl ? checkEndpoints([sl.p1.id, sl.p2.id]) : false
     }
     if (type === 'ray') {
       const ray = this.editor.scene.rays.get(geoId)
-      return ray ? protectedPointIds.has(ray.p1.id) || protectedPointIds.has(ray.p2.id) : false
+      return ray ? checkEndpoints([ray.p1.id, ray.p2.id]) : false
     }
     if (type === 'vector') {
       const vec = this.editor.scene.vectors.get(geoId)
-      return vec ? protectedPointIds.has(vec.p1.id) || protectedPointIds.has(vec.p2.id) : false
+      return vec ? checkEndpoints([vec.p1.id, vec.p2.id]) : false
     }
     if (type === 'circle') {
       const circle = this.editor.scene.circles.get(geoId)
-      return circle
-        ? protectedPointIds.has(circle.p1.id) ||
-            protectedPointIds.has(circle.p2.id) ||
-            protectedPointIds.has(circle.p3.id)
-        : false
+      return circle ? checkEndpoints([circle.p1.id, circle.p2.id, circle.p3.id]) : false
     }
     return false
   }
@@ -1919,7 +2155,11 @@ export class Interaction {
     }
 
     if (this.editor.mode === EditorMode.CreatePoint) {
-      if (hit) return
+      const constrainedHit = this.pickConstrainedTarget()
+      if (constrainedHit) {
+        const constrainedResult = this.tryCreateConstrainedPointFromHit(constrainedHit)
+        if (constrainedResult) return
+      }
       this.renderer.controls.enabled = false
       this.commitCurrentCreatePoint(this.editor.isSnappingEnabled && !e.altKey)
       return
@@ -2520,7 +2760,12 @@ export class Interaction {
       }
 
       this.updatePointerPosition(e.clientX, e.clientY)
-      if (this.pickTouchTarget(e.clientX, e.clientY)) return
+
+      const touchTarget = this.pickConstrainedTarget()
+      if (touchTarget) {
+        const constrainedResult = this.tryCreateConstrainedPointFromHit(touchTarget)
+        if (constrainedResult) return
+      }
 
       e.preventDefault()
       e.stopPropagation()
@@ -3895,6 +4140,23 @@ export class Interaction {
         if (!dependencyIds || !constraint.pointId) return
 
         const linkedIds = new Set<string>([constraint.pointId, ...dependencyIds])
+        const shouldExpand = [...linkedIds].some((id) => pointIds.has(id))
+        if (!shouldExpand) return
+
+        linkedIds.forEach((id) => {
+          if (!pointIds.has(id)) {
+            pointIds.add(id)
+            changed = true
+          }
+        })
+      })
+
+      this.editor.scene.objectConstrainedPointConstraints.forEach((constraint) => {
+        if (!constraint.pointId) return
+        const depIds = constraint.getDependencyPointIds?.()
+        if (!depIds) return
+
+        const linkedIds = new Set<string>([constraint.pointId, ...depIds])
         const shouldExpand = [...linkedIds].some((id) => pointIds.has(id))
         if (!shouldExpand) return
 

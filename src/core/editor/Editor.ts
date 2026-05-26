@@ -3,7 +3,7 @@ import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { TransformCommand } from './commands/scene/TransformCommand'
 import { AddElementCommand } from './commands/add/AddElementCommand'
-import { Point3 } from '../geometry/Point3'
+import { Point3, type ConstrainedToRef } from '../geometry/Point3'
 import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
 import { GeoVector3 } from '../geometry/GeoVector3'
@@ -48,6 +48,8 @@ import { SyncLockStateCommand } from './commands/scene/SyncLockStateCommand'
 import { MergePointsCommand } from './commands/scene/MergePointsCommand'
 import { MergeCubePointsCommand } from './commands/scene/MergeCubePointsCommand'
 import { AddIntersectionPointCommand } from './commands/add/AddIntersectionPointCommand'
+import { AddConstrainedPointCommand } from './commands/add/AddConstrainedPointCommand'
+import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
 import { AddHexahedronCommand } from './commands/add/AddHexahedronCommand'
 import { AddSphereCommand } from './commands/add/AddSphereCommand'
 import { AddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
@@ -902,6 +904,7 @@ export class Editor {
   deleteSphere(sphereId: string) {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
+    this.removeConstrainedPointsReferencing('sphere', sphereId)
     if (sphere.name.startsWith('半径球')) {
       this.executeCommand(new DeleteRadiusSphereCommand(this.scene, sphere))
     } else {
@@ -1105,6 +1108,8 @@ export class Editor {
   deleteCone(coneId: string) {
     const cone = this.getCone(coneId)
     if (!cone) return
+    this.removeConstrainedPointsReferencing('cone', coneId)
+    this.removeConstrainedPointsReferencing('coneBase', coneId)
     this.executeCommand(new DeleteConeCommand(this.scene, cone))
   }
 
@@ -1345,6 +1350,9 @@ export class Editor {
   deleteCylinder(cylinderId: string) {
     const cylinder = this.getCylinder(cylinderId)
     if (!cylinder) return
+    this.removeConstrainedPointsReferencing('cylinder', cylinderId)
+    this.removeConstrainedPointsReferencing('cylinderBottom', cylinderId)
+    this.removeConstrainedPointsReferencing('cylinderTop', cylinderId)
     this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder))
   }
 
@@ -1766,11 +1774,11 @@ export class Editor {
     if (transforms.length === 1) {
       const transform = transforms[0]!
       this.executeCommand(
-        new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges),
+        new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges, this.scene),
       )
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
+    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges, this.scene))
   }
 
   private rotateRegularPolygonByDependentPoint(
@@ -1864,11 +1872,12 @@ export class Editor {
           transforms[0]!.before,
           transforms[0]!.after,
           axisHintChanges,
+          this.scene,
         ),
       )
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges))
+    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges, this.scene))
   }
 
   private setRegularPolygonOwnerPointPosition(
@@ -2816,6 +2825,7 @@ export class Editor {
   deleteLine(lineId: string) {
     const line = this.scene.lines.get(lineId)
     if (!line) return
+    this.removeConstrainedPointsReferencing('line', lineId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'line', id: lineId },
     ])
@@ -2835,6 +2845,7 @@ export class Editor {
   deleteRay(rayId: string) {
     const ray = this.scene.rays.get(rayId)
     if (!ray) return
+    this.removeConstrainedPointsReferencing('ray', rayId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'ray', id: rayId },
     ])
@@ -2844,12 +2855,14 @@ export class Editor {
   deleteCircle(circleId: string) {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
+    this.removeConstrainedPointsReferencing('circle', circleId)
     this.executeCommand(new DeleteCircleCommand(this.scene, circle))
   }
 
   deleteStraightLine(lineId: string) {
     const line = this.scene.straightLines.get(lineId)
     if (!line) return
+    this.removeConstrainedPointsReferencing('straightLine', lineId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'straightLine', id: lineId },
     ])
@@ -2863,6 +2876,9 @@ export class Editor {
     if (!face) return
     const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
     if (cubeConstraint) {
+      cubeConstraint.faceIds.forEach((fid) => {
+        this.removeConstrainedPointsReferencing('face', fid)
+      })
       const faces = cubeConstraint.faceIds
         .map((id) => this.scene.faces.get(id))
         .filter((item): item is PlanarPolygon => item !== undefined)
@@ -2883,6 +2899,7 @@ export class Editor {
       )
       return
     }
+    this.removeConstrainedPointsReferencing('face', faceId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'face', id: faceId },
     ])
@@ -2962,6 +2979,32 @@ export class Editor {
     const cmd = new AddElementCommand(this.scene, p, 'point')
     this.executeCommand(cmd)
     return p
+  }
+
+  createConstrainedPoint(position: Vec3, targetType: ConstrainedToRef['type'], targetId: string) {
+    const projected = this.projectPositionToConstraint(position, targetType, targetId)
+    const finalPosition = projected ?? position
+    const p = new Point3(
+      genId('p'),
+      genNextAvailableName(
+        [...this.scene.points.values()].map((point) => point.name),
+        65,
+      ),
+      finalPosition,
+      false,
+      true,
+    )
+    p.constrainedTo = { type: targetType, id: targetId }
+    const constraint = new ObjectConstrainedPointConstraint(this.scene, p.id, p.constrainedTo)
+    constraint.computeParametricDataFromPosition(finalPosition)
+    const cmd = new AddConstrainedPointCommand(this.scene, p, constraint)
+    this.executeCommand(cmd)
+    return p
+  }
+
+  projectPositionToConstraint(position: Vec3, targetType: ConstrainedToRef['type'], targetId: string): Vec3 | null {
+    const tempConstraint = new ObjectConstrainedPointConstraint(this.scene, '', { type: targetType, id: targetId })
+    return tempConstraint.projectPosition(position)
   }
 
   private getSelectedSolidOwnerPoints() {
@@ -3128,11 +3171,11 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(transforms))
+    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
   }
 
   applyPointTransformHistory(
@@ -3169,11 +3212,11 @@ export class Editor {
     if (commandTransforms.length === 0 && axisHintChanges.length === 0) return
     if (commandTransforms.length === 1 && axisHintChanges.length === 0) {
       const transform = commandTransforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges))
+    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges, this.scene))
   }
 
   updatePoint(
@@ -3692,9 +3735,20 @@ export class Editor {
 
   mergePoints(keepPointId: string, removePointId: string) {
     if (keepPointId === removePointId) return
-    const keepPoint = this.scene.points.get(keepPointId)
-    const removePoint = this.scene.points.get(removePointId)
+    let keepPoint = this.scene.points.get(keepPointId)
+    let removePoint = this.scene.points.get(removePointId)
     if (!keepPoint || !removePoint || (removePoint.locked && !removePoint.circleId)) return
+
+    const keepConstrained = keepPoint.isConstrainedPoint
+    const removeConstrained = removePoint.isConstrainedPoint
+    if (keepConstrained && removeConstrained) {
+      emitToast('两个约束点之间禁止合并')
+      return
+    }
+    if (removeConstrained) {
+      emitToast('约束点不支持被合并')
+      return
+    }
 
     const centerPoint =
       keepPoint.circleRole === 'center'
@@ -3841,6 +3895,7 @@ export class Editor {
   deleteVector(vectorId: string) {
     const vector = this.scene.vectors.get(vectorId)
     if (!vector) return
+    this.removeConstrainedPointsReferencing('vector', vectorId)
     this.executeCommand(new DeleteVectorCommand(this.scene, vector))
   }
 
@@ -4972,11 +5027,11 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after))
+      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(transforms))
+    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
   }
 
   resolveConstrainedPointPositions(updates: Array<{ id: string; position: Vec3 }>) {
@@ -5015,6 +5070,22 @@ export class Editor {
       this.applyCubeConstraintPositions(nextPositions)
       this.applyRegularPolygonConstraintPositions(nextPositions)
       this.applySphereConstraintPositions(nextPositions)
+
+      const savedPositions = new Map<string, Vec3>()
+      nextPositions.forEach((pos, id) => {
+        const point = this.scene.points.get(id)
+        if (point) {
+          savedPositions.set(id, point.position.clone())
+          point.setPosition(pos)
+        }
+      })
+
+      this.applyObjectConstrainedPointPositions(nextPositions)
+
+      savedPositions.forEach((pos, id) => {
+        const point = this.scene.points.get(id)
+        if (point) point.setPosition(pos)
+      })
 
       faceIds.forEach((faceId) => {
         const face = this.scene.faces.get(faceId)
@@ -5123,6 +5194,52 @@ export class Editor {
     }
 
     return nextPositions
+  }
+
+  private applyObjectConstrainedPointPositions(nextPositions: Map<string, Vec3>) {
+    this.scene.objectConstrainedPointConstraints.forEach((constraint) => {
+      const point = this.scene.points.get(constraint.pointId)
+      if (!point || this.isPointCoordinateLocked(point)) return
+
+      const depIds = constraint.getDependencyPointIds()
+      const hasDepMoved = depIds.some((id) => id !== constraint.pointId && nextPositions.has(id))
+      const isBeingDragged = this.scene.activeDraggedPointIds?.has(constraint.pointId) ?? false
+
+      if (hasDepMoved && !isBeingDragged && constraint.parametricData) {
+        const recomputed = constraint.recomputePosition()
+        if (recomputed) {
+          const finalPos = constraint.projectPosition(recomputed) ?? recomputed
+          nextPositions.set(constraint.pointId, finalPos)
+          constraint.computeParametricDataFromPosition(finalPos)
+          return
+        }
+      }
+
+      const position = nextPositions.get(constraint.pointId) ?? point.position
+      const projected = constraint.projectPosition(position)
+      if (projected) {
+        nextPositions.set(constraint.pointId, projected)
+        constraint.computeParametricDataFromPosition(projected)
+      }
+    })
+  }
+
+  removeConstrainedPointsReferencing(targetType: string, targetId: string) {
+    const pointsToRemove: string[] = []
+    this.scene.objectConstrainedPointConstraints.forEach((constraint) => {
+      if (constraint.target.type === targetType && constraint.target.id === targetId) {
+        pointsToRemove.push(constraint.pointId)
+      }
+    })
+    pointsToRemove.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (point) {
+        this.scene.removeObjectConstrainedPointConstraint(pointId)
+        this.scene.points.delete(pointId)
+        this.scene.selection.points.delete(pointId)
+        this.scene.markPointDirty(pointId)
+      }
+    })
   }
 
   resolveLockedLinePointPosition(

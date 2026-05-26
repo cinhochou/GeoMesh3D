@@ -14,6 +14,8 @@ import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
+import { ObjectConstrainedPointConstraint } from '../../../constraints/ObjectConstrainedPointConstraint'
+import type { ConstrainedToRef } from '../../../geometry/Point3'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
   item: T
@@ -109,6 +111,13 @@ type CylinderSnapshot = {
   topCircleDirectionId: string | null
 }
 
+type ObjectConstrainedPointSnapshot = {
+  constraint: ObjectConstrainedPointConstraint
+  pointId: string
+  target: ConstrainedToRef
+  parametricData: string
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
@@ -123,6 +132,7 @@ export class MergePointsCommand implements Command {
   private sphereSnapshots: SphereSnapshot[]
   private coneSnapshots: ConeSnapshot[]
   private cylinderSnapshots: CylinderSnapshot[]
+  private objectConstrainedPointSnapshots: ObjectConstrainedPointSnapshot[]
   private keepPointCircleId: string | null
   private keepPointCircleRole: 'center' | null
   private keepPointLocked: boolean
@@ -319,6 +329,17 @@ export class MergePointsCommand implements Command {
           topCircleDirectionId: topCircle?.directionId ?? null,
         }
       })
+
+    this.objectConstrainedPointSnapshots = [...scene.objectConstrainedPointConstraints.values()]
+      .filter((constraint) =>
+        constraint.pointId === keepPoint.id || constraint.pointId === removePoint.id,
+      )
+      .map((constraint) => ({
+        constraint,
+        pointId: constraint.pointId,
+        target: { ...constraint.target },
+        parametricData: constraint.parametricData ? JSON.stringify(constraint.parametricData) : '',
+      }))
   }
 
   private replacePointId(ids: string[]) {
@@ -631,6 +652,15 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.objectConstrainedPointSnapshots.forEach((snapshot) => {
+      if (snapshot.pointId === this.removePoint.id) {
+        this.scene.removeObjectConstrainedPointConstraint(this.removePoint.id)
+      }
+      if (snapshot.pointId === this.keepPoint.id) {
+        this.keepPoint.constrainedTo = snapshot.target
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
@@ -828,6 +858,27 @@ export class MergePointsCommand implements Command {
           cylinder.valueVisible,
         )
         this.scene.addCylinderConstraint(constraint)
+      }
+    })
+
+    this.objectConstrainedPointSnapshots.forEach((snapshot) => {
+      const point = this.scene.points.get(snapshot.pointId)
+      if (!point) return
+      point.constrainedTo = snapshot.target
+      const existing = this.scene.getObjectConstrainedPointConstraint(snapshot.pointId)
+      if (existing) {
+        existing.target = snapshot.target
+        if (snapshot.parametricData) {
+          existing.parametricData = JSON.parse(snapshot.parametricData)
+        } else {
+          existing.parametricData = null
+        }
+      } else {
+        const constraint = new ObjectConstrainedPointConstraint(this.scene, snapshot.pointId, snapshot.target)
+        if (snapshot.parametricData) {
+          constraint.parametricData = JSON.parse(snapshot.parametricData)
+        }
+        this.scene.addObjectConstrainedPointConstraint(constraint)
       }
     })
 

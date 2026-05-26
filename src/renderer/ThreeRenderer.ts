@@ -614,6 +614,7 @@ export class ThreeRenderer {
     this.updateSharedWorldRotation()
     this.updateResponsiveScales()
     this.geometrySyncer.updateScreenSpaceLabels()
+    this.geometrySyncer.updateDepthOcclusion()
     this.renderer.render(this.scene, this.getActiveCamera())
   }
 
@@ -771,6 +772,7 @@ export class ThreeRenderer {
           transparent: true,
         }),
       )
+      this.guideLabel.renderOrder = 12
       this.guideLabel.center.set(0, 0)
       const fovS = this.geometrySyncer.getFovSpriteScale()
       if (this.isMobileDevice) {
@@ -875,5 +877,22 @@ export class ThreeRenderer {
   }
   hideAxisGuides() {
     this.updateGuide(new THREE.Vector3(), false)
+  }
+  setGuideLabelVisible(visible: boolean) {
+    if (this.guideLabel) {
+      this.guideLabel.visible = visible
+    }
+  }
+
+  setGuideLinesVisible(visible: boolean) {
+    if (!this.projectionGroup) return
+    const line = this.projectionGroup.getObjectByName('guideLines') as THREE.LineSegments | undefined
+    if (line) line.visible = visible
+  }
+
+  setGuidePointColor(color: number) {
+    if (this.guidePoint) {
+      ;(this.guidePoint.material as THREE.SpriteMaterial).color.setHex(color)
+    }
   }
 }

@@ -10,6 +10,7 @@ import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3 } from '../geometry/Cone3'
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
+import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
 
@@ -59,6 +60,7 @@ export class Scene {
   cubeConstraints = new Map<string, SceneConstraint>()
   regularPolygonConstraints = new Map<string, SceneConstraint>()
   cylinderConstraints = new Map<string, CylinderConstraint>()
+  objectConstrainedPointConstraints = new Map<string, ObjectConstrainedPointConstraint>()
 
   private dirtyConstraints = new Set<SceneConstraint>()
   private dirtyIds: Record<DirtyKind, Set<string>> = {
@@ -234,6 +236,32 @@ export class Scene {
     this.dirtyConstraints.delete(existing)
   }
 
+  addObjectConstrainedPointConstraint(c: ObjectConstrainedPointConstraint) {
+    const existing = this.objectConstrainedPointConstraints.get(c.pointId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.objectConstrainedPointConstraints.set(c.pointId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+    this.markConstraintDirty(c)
+  }
+
+  removeObjectConstrainedPointConstraint(pointId: string) {
+    const existing = this.objectConstrainedPointConstraints.get(pointId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.objectConstrainedPointConstraints.delete(pointId)
+    this.dirtyConstraints.delete(existing)
+    this.markPointDirty(pointId)
+  }
+
+  getObjectConstrainedPointConstraint(pointId: string): ObjectConstrainedPointConstraint | null {
+    return this.objectConstrainedPointConstraints.get(pointId) ?? null
+  }
+
   addRegularPolygonConstraint(c: SceneConstraint & { constraintId: string }) {
     const existing = this.regularPolygonConstraints.get(c.constraintId)
     if (existing) {
@@ -314,6 +342,7 @@ export class Scene {
     this.cubeConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
+    this.objectConstrainedPointConstraints.clear()
     this.dirtyConstraints.clear()
   }
 
@@ -323,6 +352,7 @@ export class Scene {
     this.cubeConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
+    this.objectConstrainedPointConstraints.clear()
     this.constraints.forEach((constraint) => {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
@@ -332,6 +362,9 @@ export class Scene {
       }
       if (constraint instanceof CylinderConstraint) {
         this.cylinderConstraints.set((constraint as CylinderConstraint).cylinderId, constraint as CylinderConstraint)
+      }
+      if (constraint instanceof ObjectConstrainedPointConstraint) {
+        this.objectConstrainedPointConstraints.set((constraint as ObjectConstrainedPointConstraint).pointId, constraint as ObjectConstrainedPointConstraint)
       }
       this.markConstraintDirty(constraint)
     })
