@@ -22,6 +22,7 @@ const activeCategory = ref<RenderSettingsCategory>('graphics')
 const categories: { key: RenderSettingsCategory; label: string }[] = [
   { key: 'graphics', label: '画质' },
   { key: 'performance', label: '性能' },
+  { key: 'display', label: '显示' },
   { key: 'advanced', label: '高级' },
 ]
 
@@ -70,7 +71,9 @@ const hasChanges = computed(() => {
     localSettings.value.antialias !== renderSettings.value.antialias ||
     localSettings.value.pixelRatioScale !== renderSettings.value.pixelRatioScale ||
     localSettings.value.fpsCap !== renderSettings.value.fpsCap ||
-    localSettings.value.powerPreference !== renderSettings.value.powerPreference
+    localSettings.value.powerPreference !== renderSettings.value.powerPreference ||
+    localSettings.value.depthOcclusion !== renderSettings.value.depthOcclusion ||
+    localSettings.value.hiddenEdge !== renderSettings.value.hiddenEdge
   )
 })
 
@@ -100,7 +103,9 @@ const isDefaultSettings = computed(() => {
     localSettings.value.antialias === false &&
     localSettings.value.pixelRatioScale === 1.0 &&
     localSettings.value.fpsCap === 0 &&
-    localSettings.value.powerPreference === 'default'
+    localSettings.value.powerPreference === 'default' &&
+    localSettings.value.depthOcclusion === true &&
+    localSettings.value.hiddenEdge === true
   )
 })
 
@@ -122,6 +127,8 @@ const handleReset = () => {
       pixelRatioScale: 1.0,
       fpsCap: 0,
       powerPreference: 'default',
+      depthOcclusion: true,
+      hiddenEdge: true,
     }
     showConfirmDialog.value = false
   }
@@ -238,6 +245,40 @@ watch(
                   </div>
                 </div>
                 <p class="setting-desc">降低分辨率可提升性能，但画面会变得更模糊。</p>
+              </div>
+            </div>
+
+            <div v-if="activeCategory === 'display'" class="settings-section">
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">深度遮挡</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.depthOcclusion }"
+                    @click="localSettings.depthOcclusion = !localSettings.depthOcclusion"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，被几何体遮挡的点和标签会变暗，减少视觉干扰。
+                </p>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">隐藏边虚线</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.hiddenEdge }"
+                    @click="localSettings.hiddenEdge = !localSettings.hiddenEdge"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，被面遮挡的边会以虚线显示，帮助理解三维结构；关闭后所有边始终以实线显示。
+                </p>
               </div>
             </div>
 

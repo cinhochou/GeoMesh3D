@@ -205,6 +205,10 @@ export class GeometrySyncer {
   private pointOcclusionTarget = new Map<string, number>()
   private pointOcclusionLastResult = new Map<string, boolean>()
   private pointOcclusionStableCount = new Map<string, number>()
+  private pointBaseColor = new Map<string, THREE.Color>()
+  private pointCurrentDim = new Map<string, number>()
+  private depthOcclusionEnabled = true
+  private hiddenEdgeEnabled = true
 
   private currentSceneRef: GeoScene | null = null
   private activeLabelTarget: { type: string; geoId: string } | null = null
@@ -219,7 +223,8 @@ export class GeometrySyncer {
   private createSolidEdgeMaterial(color: number): THREE.LineBasicMaterial {
     return new THREE.LineBasicMaterial({
       color,
-      depthFunc: THREE.LessEqualDepth,
+      depthFunc: this.hiddenEdgeEnabled ? THREE.LessEqualDepth : THREE.AlwaysDepth,
+      depthTest: this.hiddenEdgeEnabled,
       transparent: true,
       opacity: 0.95,
     })
@@ -479,7 +484,9 @@ export class GeometrySyncer {
 
       const isSelected = scene.selection.points.has(p.id)
       const baseColor = computePointBaseColor(p, scene)
-      ;(sprite.material as THREE.SpriteMaterial).color.set(isSelected ? SELECTED_COLOR : baseColor)
+      const finalColor = isSelected ? SELECTED_COLOR : baseColor
+      ;(sprite.material as THREE.SpriteMaterial).color.set(finalColor)
+      this.pointBaseColor.set(p.id, new THREE.Color(finalColor))
 
       let pointSpriteVisible = true
       const isCircleCenterPoint = p.circleRole === 'center'
@@ -685,7 +692,7 @@ export class GeometrySyncer {
 
       const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenLine) {
-        hiddenLine.visible = lineData.visible !== false
+        hiddenLine.visible = this.hiddenEdgeEnabled && lineData.visible !== false
         ;(hiddenLine.material as THREE.LineDashedMaterial).color.set(edgeColor)
       }
 
@@ -753,7 +760,7 @@ export class GeometrySyncer {
 
       const hiddenRayObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenRayObj) {
-        hiddenRayObj.visible = rayData.visible
+        hiddenRayObj.visible = this.hiddenEdgeEnabled && rayData.visible
         ;(hiddenRayObj.material as THREE.LineDashedMaterial).color.set(rayColor)
       }
 
@@ -822,7 +829,7 @@ export class GeometrySyncer {
 
       const hiddenSlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenSlObj) {
-        hiddenSlObj.visible = lineData.visible
+        hiddenSlObj.visible = this.hiddenEdgeEnabled && lineData.visible
         ;(hiddenSlObj.material as THREE.LineDashedMaterial).color.set(slColor)
       }
 
@@ -894,7 +901,7 @@ export class GeometrySyncer {
 
       const hiddenVecObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenVecObj) {
-        hiddenVecObj.visible = vectorData.visible
+        hiddenVecObj.visible = this.hiddenEdgeEnabled && vectorData.visible
         ;(hiddenVecObj.material as THREE.LineDashedMaterial).color.set(vecColor)
       }
 
@@ -1020,7 +1027,7 @@ export class GeometrySyncer {
 
       const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
       if (hiddenCircle) {
-        hiddenCircle.visible = circleData.visible
+        hiddenCircle.visible = this.hiddenEdgeEnabled && circleData.visible
         ;(hiddenCircle.material as THREE.LineDashedMaterial).color.set(circleColor)
       }
       const isLabelActive =
@@ -2288,7 +2295,75 @@ export class GeometrySyncer {
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized)
   }
 
+  setDepthOcclusionEnabled(enabled: boolean): void {
+    this.depthOcclusionEnabled = enabled
+    if (!enabled) {
+      this.pointOcclusionTarget.clear()
+      this.pointOcclusionLastResult.clear()
+      this.pointOcclusionStableCount.clear()
+      this.pointCurrentDim.clear()
+      this.meshMap.forEach((obj) => {
+        if (obj.userData.type !== 'point' || !obj.visible) return
+        const geoId = obj.userData.geoId
+        if (!geoId) return
+        const sprite = obj as THREE.Sprite
+        const material = sprite.material as THREE.SpriteMaterial
+        material.opacity = 1.0
+        const baseColor = this.pointBaseColor.get(geoId)
+        if (baseColor) {
+          material.color.copy(baseColor)
+        }
+        const label = this.getRenderUserData(obj).__labelSprite
+        if (label && label.visible) {
+          ;(label.material as THREE.SpriteMaterial).opacity = 1.0
+        }
+      })
+    }
+  }
+
+  setHiddenEdgeEnabled(enabled: boolean): void {
+    this.hiddenEdgeEnabled = enabled
+    if (!enabled) {
+      this.hiddenLineMap.forEach((obj) => {
+        obj.visible = false
+      })
+    } else {
+      this.hiddenLineMap.forEach((obj, id) => {
+        const parentObj = this.meshMap.get(id) ?? this.groupMap.get(id)
+        if (parentObj) {
+          const type = parentObj.userData.type
+          const geoId = parentObj.userData.geoId
+          if (!type || !geoId || !this.currentSceneRef) {
+            obj.visible = true
+            return
+          }
+          const getCollection = TYPE_TO_SCENE_MAP[type]
+          const collection = getCollection ? getCollection(this.currentSceneRef) : null
+          const geoData = collection?.get(geoId)
+          obj.visible = geoData ? (geoData.visible ?? true) : true
+        } else {
+          obj.visible = true
+        }
+      })
+    }
+    const solidDepthFunc = enabled ? THREE.LessEqualDepth : THREE.AlwaysDepth
+    const solidDepthTest = enabled
+    this.meshMap.forEach((obj) => {
+      if (obj.userData.type === 'line' || obj.userData.type === 'straightLine' ||
+          obj.userData.type === 'ray' || obj.userData.type === 'vector' ||
+          obj.userData.type === 'circle') {
+        const mat = (obj as THREE.Line).material as THREE.LineBasicMaterial
+        if (mat) {
+          mat.depthFunc = solidDepthFunc
+          mat.depthTest = solidDepthTest
+          mat.needsUpdate = true
+        }
+      }
+    })
+  }
+
   updateDepthOcclusion(): void {
+    if (!this.depthOcclusionEnabled) return
     this.occlusionFrameCounter++
     const shouldCheck = this.occlusionFrameCounter % this.OCCLUSION_CHECK_INTERVAL === 0
 
@@ -2355,12 +2430,15 @@ export class GeometrySyncer {
           this.pointOcclusionTarget.delete(id)
           this.pointOcclusionLastResult.delete(id)
           this.pointOcclusionStableCount.delete(id)
+          this.pointBaseColor.delete(id)
+          this.pointCurrentDim.delete(id)
         }
       }
     }
 
     const LERP_SPEED = 0.15
     const OCCLUDED_LABEL_OPACITY = 0.2
+    const OCCLUDED_DIM_FACTOR = 0.35
 
     this.meshMap.forEach((obj) => {
       if (obj.userData.type !== 'point' || !obj.visible) return
@@ -2368,17 +2446,30 @@ export class GeometrySyncer {
       if (!geoId) return
 
       const targetOpacity = this.pointOcclusionTarget.get(geoId) ?? 1.0
+      const isOccluded = targetOpacity < 1.0
       const sprite = obj as THREE.Sprite
       const material = sprite.material as THREE.SpriteMaterial
 
-      const currentOpacity = material.opacity
-      const newOpacity = THREE.MathUtils.lerp(currentOpacity, targetOpacity, LERP_SPEED)
-      material.opacity = newOpacity
+      material.opacity = 1.0
+
+      const targetDim = isOccluded ? OCCLUDED_DIM_FACTOR : 1.0
+      const currentDim = this.pointCurrentDim.get(geoId) ?? 1.0
+      const newDim = THREE.MathUtils.lerp(currentDim, targetDim, LERP_SPEED)
+      this.pointCurrentDim.set(geoId, newDim)
+
+      const baseColor = this.pointBaseColor.get(geoId)
+      if (baseColor) {
+        material.color.setRGB(
+          baseColor.r * newDim,
+          baseColor.g * newDim,
+          baseColor.b * newDim,
+        )
+      }
 
       const label = this.getRenderUserData(obj).__labelSprite
       if (label && label.visible) {
         const labelMat = label.material as THREE.SpriteMaterial
-        const labelTarget = targetOpacity < 1.0 ? OCCLUDED_LABEL_OPACITY : 1.0
+        const labelTarget = isOccluded ? OCCLUDED_LABEL_OPACITY : 1.0
         const labelCurrent = labelMat.opacity
         const labelNew = THREE.MathUtils.lerp(labelCurrent, labelTarget, LERP_SPEED)
         labelMat.opacity = labelNew

@@ -213,6 +213,12 @@ const handlePreviewRenderSettings = (e: Event) => {
   if (detail.fpsCap !== renderSettings.value.fpsCap) {
     changes.fpsCap = detail.fpsCap
   }
+  if (detail.depthOcclusion !== renderSettings.value.depthOcclusion) {
+    changes.depthOcclusion = detail.depthOcclusion
+  }
+  if (detail.hiddenEdge !== renderSettings.value.hiddenEdge) {
+    changes.hiddenEdge = detail.hiddenEdge
+  }
   if (Object.keys(changes).length > 0) {
     renderer.setRenderSettings(changes)
   }
@@ -507,6 +513,12 @@ watch(
     }
     if (newSettings.powerPreference !== oldSettings?.powerPreference) {
       changes.powerPreference = newSettings.powerPreference
+    }
+    if (newSettings.depthOcclusion !== oldSettings?.depthOcclusion) {
+      changes.depthOcclusion = newSettings.depthOcclusion
+    }
+    if (newSettings.hiddenEdge !== oldSettings?.hiddenEdge) {
+      changes.hiddenEdge = newSettings.hiddenEdge
     }
     if (Object.keys(changes).length === 0) return
 

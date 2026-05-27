@@ -103,6 +103,8 @@ export class ThreeRenderer {
       pixelRatioScale: 1.0,
       fpsCap: 0,
       powerPreference: 'default',
+      depthOcclusion: true,
+      hiddenEdge: true,
     }
     this.pixelRatioScale = this.renderSettings.pixelRatioScale
     this.isMobileDevice =
@@ -546,6 +548,14 @@ export class ThreeRenderer {
       this.pixelRatioScale = Math.min(1.0, Math.max(0.5, settings.pixelRatioScale))
       this.updateRendererPixelRatio()
       this.refreshScreenSpaceScales()
+    }
+
+    if (typeof settings.depthOcclusion === 'boolean') {
+      this.geometrySyncer.setDepthOcclusionEnabled(settings.depthOcclusion)
+    }
+
+    if (typeof settings.hiddenEdge === 'boolean') {
+      this.geometrySyncer.setHiddenEdgeEnabled(settings.hiddenEdge)
     }
 
     // 抗锯齿与 GPU 偏好变更需要重建 WebGLRenderer，返回标志通知调用方刷新页面

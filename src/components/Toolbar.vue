@@ -365,6 +365,11 @@ const handleSaveScene = () => {
   closeSideMenu()
 }
 
+const handleOpenManual = () => {
+  closeSideMenu()
+  window.open('https://ycng2pgx3oo5.feishu.cn/wiki/YA7Nwlhi3iUNYSk9DMgcnblbnTh?from=from_copylink', '_blank')
+}
+
 /**
  * 打开渲染设置面板
  * 先关闭侧边菜单，再调用 store 打开设置面板
@@ -981,6 +986,13 @@ onUnmounted(() => {
           <span>导入</span>
         </button>
         <div class="side-menu-divider"></div>
+        <button class="side-menu-item" @click="handleOpenManual">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+          <span>用户手册</span>
+        </button>
       </div>
     </Transition>
   </Teleport>

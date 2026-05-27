@@ -5,17 +5,19 @@ import type { EditorMode } from '@/core/editor/Editor'
 export type ToastScope = 'global' | 'viewport'
 
 // 渲染设置分类：画质 / 性能 / 高级
-export type RenderSettingsCategory = 'graphics' | 'performance' | 'advanced'
+export type RenderSettingsCategory = 'graphics' | 'performance' | 'display' | 'advanced'
 
 // GPU 偏好选项：默认 / 高性能
 export type PowerPreference = 'default' | 'high-performance'
 
 // 渲染设置数据结构
 export interface RenderSettings {
-  antialias: boolean          // 是否开启抗锯齿（MSAA）
-  pixelRatioScale: number     // 分辨率缩放比例（0.5 ~ 1.0）
-  fpsCap: number              // 帧率限制（0=无限制, 30/60/90/120）
-  powerPreference: PowerPreference  // GPU 偏好
+  antialias: boolean
+  pixelRatioScale: number
+  fpsCap: number
+  powerPreference: PowerPreference
+  depthOcclusion: boolean
+  hiddenEdge: boolean
 }
 
 // localStorage 存储键名，用于持久化保存用户渲染设置
@@ -27,6 +29,8 @@ const defaultRenderSettings: RenderSettings = {
   pixelRatioScale: 1.0,
   fpsCap: 0,
   powerPreference: 'default',
+  depthOcclusion: true,
+  hiddenEdge: true,
 }
 
 // 从 localStorage 加载渲染设置
@@ -46,6 +50,8 @@ function loadRenderSettings(): RenderSettings {
       fpsCap: [0, 30, 60, 90, 120].includes(parsed.fpsCap as number) ? (parsed.fpsCap as number) : defaultRenderSettings.fpsCap,
       powerPreference:
         parsed.powerPreference === 'high-performance' ? 'high-performance' : defaultRenderSettings.powerPreference,
+      depthOcclusion: typeof parsed.depthOcclusion === 'boolean' ? parsed.depthOcclusion : defaultRenderSettings.depthOcclusion,
+      hiddenEdge: typeof parsed.hiddenEdge === 'boolean' ? parsed.hiddenEdge : defaultRenderSettings.hiddenEdge,
     }
   } catch {
     // 读取失败（如 JSON 损坏）时回退到默认值
