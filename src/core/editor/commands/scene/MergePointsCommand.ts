@@ -15,6 +15,8 @@ import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint } from '../../../constraints/ObjectConstrainedPointConstraint'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
 import type { ConstrainedToRef } from '../../../geometry/Point3'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
@@ -118,11 +120,20 @@ type ObjectConstrainedPointSnapshot = {
   parametricData: string
 }
 
+type PerpendicularLineSnapshot = {
+  line: PerpendicularLine3
+  p1: Point3
+  p2: Point3
+  targetType: string
+  targetId: string
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
   private raySnapshots: Array<LinearSnapshot<Ray3>>
   private vectorSnapshots: Array<LinearSnapshot<GeoVector3>>
+  private perpendicularLineSnapshots: PerpendicularLineSnapshot[]
   private faceSnapshots: FaceSnapshot[]
   private cubeSnapshots: CubeSnapshot[]
   private pointCubeSnapshots: PointCubeSnapshot[]
@@ -146,6 +157,7 @@ export class MergePointsCommand implements Command {
   private removedSpheres = new Set<string>()
   private removedCones = new Set<string>()
   private removedCylinders = new Set<string>()
+  private removedPerpendicularLines = new Set<string>()
 
   constructor(
     private scene: Scene,
@@ -339,6 +351,19 @@ export class MergePointsCommand implements Command {
         pointId: constraint.pointId,
         target: { ...constraint.target },
         parametricData: constraint.parametricData ? JSON.stringify(constraint.parametricData) : '',
+      }))
+
+    this.perpendicularLineSnapshots = [...scene.perpendicularLines.values()]
+      .filter((line) =>
+        line.p1.id === keepPoint.id || line.p1.id === removePoint.id ||
+        line.p2.id === keepPoint.id || line.p2.id === removePoint.id,
+      )
+      .map((line) => ({
+        line,
+        p1: line.p1,
+        p2: line.p2,
+        targetType: line.target.type,
+        targetId: line.target.id,
       }))
   }
 
@@ -661,9 +686,21 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.perpendicularLineSnapshots.forEach(({ line }) => {
+      if (line.p1.id === this.removePoint.id) line.p1 = this.keepPoint
+      if (line.p2.id === this.removePoint.id) line.p2 = this.keepPoint
+      if (line.p1.id === line.p2.id) {
+        this.scene.perpendicularLines.delete(line.id)
+        this.scene.selection.perpendicularLines.delete(line.id)
+        this.removedPerpendicularLines.add(line.id)
+      }
+    })
+
     this.scene.points.delete(this.removePoint.id)
     this.scene.selection.points.delete(this.removePoint.id)
     this.scene.markPointDirty(this.keepPoint.id)
+    this.scene.solveDirtyConstraints()
+    this.scene.markAllRenderDirty()
     this.scene.selection.selectPoint(this.keepPoint.id, true)
   }
 
@@ -882,8 +919,21 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    this.perpendicularLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
+      line.p1 = p1
+      line.p2 = p2
+      line.target = { type: targetType as PerpendicularLine3['target']['type'], id: targetId }
+      if (this.removedPerpendicularLines.has(line.id)) {
+        this.scene.addPerpendicularLine(line)
+        const constraint = new PerpendicularLineConstraint(this.scene, line.id, line.target)
+        this.scene.addPerpendicularLineConstraint(constraint)
+      }
+    })
+
     this.scene.markPointDirty(this.keepPoint.id)
     this.scene.markPointDirty(this.removePoint.id)
+    this.scene.solveDirtyConstraints()
+    this.scene.markAllRenderDirty()
 
     this.scene.selection.clear()
     this.scene.selection.selectPoint(this.keepPoint.id, true)

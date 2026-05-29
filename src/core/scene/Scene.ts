@@ -8,6 +8,8 @@ import { StraightLine3 } from '../geometry/StraightLine3'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3 } from '../geometry/Cone3'
+import { PerpendicularLine3 } from '../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../constraints/PerpendicularLineConstraint'
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
@@ -28,6 +30,7 @@ export type SceneRenderSyncState = {
   pointIds: Set<string>
   lineIds: Set<string>
   straightLineIds: Set<string>
+  perpendicularLineIds: Set<string>
   rayIds: Set<string>
   vectorIds: Set<string>
   circleIds: Set<string>
@@ -37,7 +40,7 @@ export type SceneRenderSyncState = {
   cylinderIds: Set<string>
 }
 
-type DirtyKind = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder'
+type DirtyKind = 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder'
 
 export class Scene {
   static readonly ORIGIN_ID = 'origin'
@@ -45,6 +48,7 @@ export class Scene {
   points = new Map<string, Point3>()
   lines = new Map<string, Line3>()
   straightLines = new Map<string, StraightLine3>()
+  perpendicularLines = new Map<string, PerpendicularLine3>()
   rays = new Map<string, Ray3>()
   vectors = new Map<string, GeoVector3>()
   circles = new Map<string, Circle3>()
@@ -61,12 +65,14 @@ export class Scene {
   regularPolygonConstraints = new Map<string, SceneConstraint>()
   cylinderConstraints = new Map<string, CylinderConstraint>()
   objectConstrainedPointConstraints = new Map<string, ObjectConstrainedPointConstraint>()
+  perpendicularLineConstraints = new Map<string, PerpendicularLineConstraint>()
 
   private dirtyConstraints = new Set<SceneConstraint>()
   private dirtyIds: Record<DirtyKind, Set<string>> = {
     point: new Set(),
     line: new Set(),
     straightLine: new Set(),
+    perpendicularLine: new Set(),
     ray: new Set(),
     vector: new Set(),
     circle: new Set(),
@@ -99,6 +105,18 @@ export class Scene {
   addStraightLine(line: StraightLine3) {
     this.straightLines.set(line.id, line)
     this.dirtyIds.straightLine.add(line.id)
+  }
+
+  addPerpendicularLine(line: PerpendicularLine3) {
+    this.perpendicularLines.set(line.id, line)
+    this.dirtyIds.perpendicularLine.add(line.id)
+  }
+
+  removePerpendicularLine(lineId: string) {
+    this.removePerpendicularLineConstraint(lineId)
+    this.perpendicularLines.delete(lineId)
+    this.selection.perpendicularLines.delete(lineId)
+    this.dirtyIds.perpendicularLine.add(lineId)
   }
 
   addRay(ray: Ray3) {
@@ -236,6 +254,27 @@ export class Scene {
     this.dirtyConstraints.delete(existing)
   }
 
+  addPerpendicularLineConstraint(c: PerpendicularLineConstraint) {
+    const existing = this.perpendicularLineConstraints.get(c.perpendicularLineId)
+    if (existing) {
+      this.constraints = this.constraints.filter((item) => item !== existing)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.perpendicularLineConstraints.set(c.perpendicularLineId, c)
+    if (!this.constraints.includes(c)) {
+      this.constraints.push(c)
+    }
+    this.markConstraintDirty(c)
+  }
+
+  removePerpendicularLineConstraint(lineId: string) {
+    const existing = this.perpendicularLineConstraints.get(lineId)
+    if (!existing) return
+    this.constraints = this.constraints.filter((item) => item !== existing)
+    this.perpendicularLineConstraints.delete(lineId)
+    this.dirtyConstraints.delete(existing)
+  }
+
   addObjectConstrainedPointConstraint(c: ObjectConstrainedPointConstraint) {
     const existing = this.objectConstrainedPointConstraints.get(c.pointId)
     if (existing) {
@@ -343,6 +382,7 @@ export class Scene {
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
+    this.perpendicularLineConstraints.clear()
     this.dirtyConstraints.clear()
   }
 
@@ -353,6 +393,7 @@ export class Scene {
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
+    this.perpendicularLineConstraints.clear()
     this.constraints.forEach((constraint) => {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
@@ -365,6 +406,9 @@ export class Scene {
       }
       if (constraint instanceof ObjectConstrainedPointConstraint) {
         this.objectConstrainedPointConstraints.set((constraint as ObjectConstrainedPointConstraint).pointId, constraint as ObjectConstrainedPointConstraint)
+      }
+      if (constraint instanceof PerpendicularLineConstraint) {
+        this.perpendicularLineConstraints.set((constraint as PerpendicularLineConstraint).perpendicularLineId, constraint as PerpendicularLineConstraint)
       }
       this.markConstraintDirty(constraint)
     })
@@ -419,6 +463,43 @@ export class Scene {
         }
       }
     })
+    this.perpendicularLines.forEach((perpendicularLine) => {
+      if (perpendicularLine.p1.id === pointId) {
+        this.dirtyIds.perpendicularLine.add(perpendicularLine.id)
+        this.markConstraintDirty(
+          this.perpendicularLineConstraints.get(perpendicularLine.id)!,
+        )
+      }
+    })
+    this.perpendicularLineConstraints.forEach((constraint) => {
+      let found = false
+      if (constraint.target.type === 'line') {
+        const line = this.lines.get(constraint.target.id)
+        if (line && (line.p1.id === pointId || line.p2.id === pointId)) found = true
+      } else if (constraint.target.type === 'straightLine') {
+        const sl = this.straightLines.get(constraint.target.id)
+        if (sl && (sl.p1.id === pointId || sl.p2.id === pointId)) found = true
+      } else if (constraint.target.type === 'ray') {
+        const ray = this.rays.get(constraint.target.id)
+        if (ray && (ray.p1.id === pointId || ray.p2.id === pointId)) found = true
+      } else if (constraint.target.type === 'vector') {
+        const vec = this.vectors.get(constraint.target.id)
+        if (vec && (vec.p1.id === pointId || vec.p2.id === pointId)) found = true
+      } else if (constraint.target.type === 'face') {
+        const face = this.faces.get(constraint.target.id)
+        if (face && face.memberPointIds.includes(pointId)) found = true
+      } else if (constraint.target.type === 'coneBase') {
+        const cone = this.cones.get(constraint.target.id)
+        if (cone && (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId)) found = true
+      } else if (constraint.target.type === 'cylinderBottom' || constraint.target.type === 'cylinderTop') {
+        const cylinder = this.cylinders.get(constraint.target.id)
+        if (cylinder && (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId)) found = true
+      }
+      if (found) {
+        this.dirtyIds.perpendicularLine.add(constraint.perpendicularLineId)
+        this.markConstraintDirty(constraint)
+      }
+    })
     this.constraints.forEach((constraint) => {
       if (constraint.pointId === pointId) {
         this.markConstraintDirty(constraint)
@@ -464,6 +545,7 @@ export class Scene {
         pointIds: new Set(this.points.keys()),
         lineIds: new Set(this.lines.keys()),
         straightLineIds: new Set(this.straightLines.keys()),
+        perpendicularLineIds: new Set(this.perpendicularLines.keys()),
         rayIds: new Set(this.rays.keys()),
         vectorIds: new Set(this.vectors.keys()),
         circleIds: new Set(this.circles.keys()),
@@ -477,6 +559,7 @@ export class Scene {
     const pointIds = new Set(this.dirtyIds.point)
     const lineIds = new Set(this.dirtyIds.line)
     const straightLineIds = new Set(this.dirtyIds.straightLine)
+    const perpendicularLineIds = new Set(this.dirtyIds.perpendicularLine)
     const rayIds = new Set(this.dirtyIds.ray)
     const vectorIds = new Set(this.dirtyIds.vector)
     const circleIds = new Set(this.dirtyIds.circle)
@@ -491,6 +574,9 @@ export class Scene {
       })
       this.straightLines.forEach((line, lineId) => {
         if (line.p1.id === pointId || line.p2.id === pointId) straightLineIds.add(lineId)
+      })
+      this.perpendicularLines.forEach((line, lineId) => {
+        if (line.p1.id === pointId || line.p2.id === pointId) perpendicularLineIds.add(lineId)
       })
       this.rays.forEach((ray, rayId) => {
         if (ray.p1.id === pointId || ray.p2.id === pointId) rayIds.add(rayId)
@@ -590,7 +676,7 @@ export class Scene {
       })
     })
 
-    if ([pointIds, lineIds, straightLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds].every((s) => s.size === 0)) {
+    if ([pointIds, lineIds, straightLineIds, perpendicularLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds].every((s) => s.size === 0)) {
       return null
     }
 
@@ -599,6 +685,7 @@ export class Scene {
       pointIds,
       lineIds,
       straightLineIds,
+      perpendicularLineIds,
       rayIds,
       vectorIds,
       circleIds,

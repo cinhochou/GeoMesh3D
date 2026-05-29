@@ -339,11 +339,15 @@ onMounted(() => {
 
   editor.undo = () => {
     originalUndo()
+    scene.solveDirtyConstraints()
+    scene.markAllRenderDirty()
     collabManager.value?.syncAction()
   }
 
   editor.redo = () => {
     originalRedo()
+    scene.solveDirtyConstraints()
+    scene.markAllRenderDirty()
     collabManager.value?.syncAction()
   }
 

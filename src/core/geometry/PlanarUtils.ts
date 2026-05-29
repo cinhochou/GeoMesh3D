@@ -253,6 +253,21 @@ export const triangulateFace = (pointIds: string[], pointMap: Map<string, Point3
   }
 }
 
+export const isPointInPolygon2D = (px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean => {
+  if (polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i]!.x
+    const yi = polygon[i]!.y
+    const xj = polygon[j]!.x
+    const yj = polygon[j]!.y
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
 export const cloneVec3Map = (map: Map<string, Vec3>) =>
   new Map([...map.entries()].map(([id, position]) => [id, position.clone()]))
 

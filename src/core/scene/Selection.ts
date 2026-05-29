@@ -3,6 +3,7 @@ export class Selection {
   points = new Set<string>()
   lines = new Set<string>()
   straightLines = new Set<string>()
+  perpendicularLines = new Set<string>()
   rays = new Set<string>()
   vectors = new Set<string>()
   circles = new Set<string>()
@@ -15,6 +16,7 @@ export class Selection {
     this.points.clear()
     this.lines.clear()
     this.straightLines.clear()
+    this.perpendicularLines.clear()
     this.rays.clear()
     this.vectors.clear()
     this.circles.clear()
@@ -49,6 +51,15 @@ export class Selection {
 
   deselectStraightLine(id: string) {
     this.straightLines.delete(id)
+  }
+
+  selectPerpendicularLine(id: string, additive = false) {
+    if (!additive) this.clear()
+    this.perpendicularLines.add(id)
+  }
+
+  deselectPerpendicularLine(id: string) {
+    this.perpendicularLines.delete(id)
   }
 
   selectRay(id: string, additive = false) {
@@ -119,6 +130,7 @@ export class Selection {
       this.points.size === 0 &&
       this.lines.size === 0 &&
       this.straightLines.size === 0 &&
+      this.perpendicularLines.size === 0 &&
       this.rays.size === 0 &&
       this.vectors.size === 0 &&
       this.circles.size === 0 &&

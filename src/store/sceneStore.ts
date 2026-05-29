@@ -7,6 +7,7 @@ type CountSummary = {
   point: number
   line: number
   straightLine: number
+  perpendicularLine: number
   ray: number
   vector: number
   circle: number
@@ -20,6 +21,7 @@ const createEmptyCounts = (): CountSummary => ({
   point: 0,
   line: 0,
   straightLine: 0,
+  perpendicularLine: 0,
   ray: 0,
   vector: 0,
   circle: 0,
@@ -49,6 +51,7 @@ const modeNameMap: Record<EditorMode, string> = {
   [EditorMode.CreateSphereRadius]: '创建半径球',
   [EditorMode.CreateCone]: '创建圆锥',
   [EditorMode.CreateCylinder]: '创建圆柱',
+  [EditorMode.CreatePerpendicularLine]: '创建垂线',
 }
 
 const modeHintMap: Record<EditorMode, string> = {
@@ -73,6 +76,7 @@ const modeHintMap: Record<EditorMode, string> = {
   [EditorMode.CreateCone]:
     '1.先选中一点作为底面圆心，再选中顶点，最后输入半径以创建圆锥 2.先选中一个法向圆，再选中一个顶点以创建圆锥',
   [EditorMode.CreateCylinder]: '先选中两点作为两底圆心，再输入底面半径以创建圆柱~',
+  [EditorMode.CreatePerpendicularLine]: '先选中要经过的点，再选中要垂直的线或平面以创建垂线~',
 }
 
 const getModeName = (mode: EditorMode) => modeNameMap[mode] ?? ''
@@ -147,6 +151,7 @@ export const useSceneStore = defineStore('scene', () => {
       point: scene.selection.points.size,
       line: scene.selection.lines.size,
       straightLine: scene.selection.straightLines.size,
+      perpendicularLine: scene.selection.perpendicularLines.size,
       ray: scene.selection.rays.size,
       vector: scene.selection.vectors.size,
       circle: scene.selection.circles.size,
@@ -159,6 +164,7 @@ export const useSceneStore = defineStore('scene', () => {
       point: scene.points.size,
       line: scene.lines.size,
       straightLine: scene.straightLines.size,
+      perpendicularLine: scene.perpendicularLines.size,
       ray: scene.rays.size,
       vector: scene.vectors.size,
       circle: scene.circles.size,

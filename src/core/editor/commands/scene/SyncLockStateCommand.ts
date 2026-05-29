@@ -4,6 +4,7 @@ import { Line3 } from '../../../geometry/Line3'
 import { Ray3 } from '../../../geometry/Ray3'
 import { GeoVector3 } from '../../../geometry/GeoVector3'
 import { StraightLine3 } from '../../../geometry/StraightLine3'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { Circle3 } from '../../../geometry/Circle3'
 import { Sphere3 } from '../../../geometry/Sphere3'
@@ -70,6 +71,12 @@ type CylinderLockTransform = {
   after: boolean
 }
 
+type PerpendicularLineLockTransform = {
+  line: PerpendicularLine3
+  before: boolean
+  after: boolean
+}
+
 export class SyncLockStateCommand implements Command {
   constructor(
     private pointTransforms: PointLockTransform[],
@@ -82,6 +89,7 @@ export class SyncLockStateCommand implements Command {
     private sphereTransforms: SphereLockTransform[] = [],
     private coneTransforms: ConeLockTransform[] = [],
     private cylinderTransforms: CylinderLockTransform[] = [],
+    private perpendicularLineTransforms: PerpendicularLineLockTransform[] = [],
   ) {}
 
   execute() {
@@ -115,6 +123,9 @@ export class SyncLockStateCommand implements Command {
     this.cylinderTransforms.forEach(({ cylinder, after }) => {
       cylinder.userLocked = after
     })
+    this.perpendicularLineTransforms.forEach(({ line, after }) => {
+      line.userLocked = after
+    })
   }
 
   undo() {
@@ -147,6 +158,9 @@ export class SyncLockStateCommand implements Command {
     })
     this.cylinderTransforms.forEach(({ cylinder, before }) => {
       cylinder.userLocked = before
+    })
+    this.perpendicularLineTransforms.forEach(({ line, before }) => {
+      line.userLocked = before
     })
   }
 }

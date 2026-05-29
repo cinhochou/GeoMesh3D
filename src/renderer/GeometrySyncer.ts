@@ -8,6 +8,8 @@ import { Cone3 } from '../core/geometry/Cone3'
 import { Cylinder3 } from '../core/geometry/Cylinder3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
+import { PerpendicularLineConstraint } from '../core/constraints/PerpendicularLineConstraint'
+import { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { FacePreviewData } from '../core/editor/Editor'
 import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
@@ -17,6 +19,7 @@ type RenderObjectType =
   | 'point'
   | 'line'
   | 'straightLine'
+  | 'perpendicularLine'
   | 'ray'
   | 'vector'
   | 'circle'
@@ -134,13 +137,14 @@ const HIDDEN_EDGE_RENDER_ORDER = 4
 const SURFACE_RENDER_ORDER = 0
 
 const LINEAR_TYPES = new Set<string>([
-  'line', 'straightLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
+  'line', 'straightLine', 'perpendicularLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
 ])
 
-const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX: number; labelOffsetY: number }>> = {
+const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX: number; labelOffsetY: number; visible?: boolean }>> = {
   point: (s) => s.points,
   line: (s) => s.lines,
   straightLine: (s) => s.straightLines,
+  perpendicularLine: (s) => s.perpendicularLines,
   ray: (s) => s.rays,
   vector: (s) => s.vectors,
   circle: (s) => s.circles,
@@ -153,12 +157,13 @@ const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { label
 const DIRECTION_TYPE_TO_COLLECTION: Record<string, (scene: GeoScene) => Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
   line: (s) => s.lines,
   straightLine: (s) => s.straightLines,
+  perpendicularLine: (s) => s.perpendicularLines,
   ray: (s) => s.rays,
   vector: (s) => s.vectors,
 }
 
 const TWO_POINT_COLLECTIONS: ((scene: GeoScene) => Map<string, { visible?: boolean; p1: { id: string }; p2: { id: string } }>)[]
-  = [(s) => s.lines, (s) => s.rays, (s) => s.vectors, (s) => s.straightLines]
+  = [(s) => s.lines, (s) => s.rays, (s) => s.vectors, (s) => s.straightLines, (s) => s.perpendicularLines]
 
 export function isLinearType(type: string | undefined): boolean {
   return type != null && LINEAR_TYPES.has(type)
@@ -198,6 +203,7 @@ export class GeometrySyncer {
   public pointMeshes = new Map<string, THREE.Points>()
   public facePreviewMesh: THREE.Mesh | null = null
   public rubberBandLine: THREE.Line | null = null
+  public footMarkerMap = new Map<string, THREE.Mesh>()
 
   private occlusionRaycaster = new THREE.Raycaster()
   private occlusionFrameCounter = 0
@@ -382,6 +388,7 @@ export class GeometrySyncer {
       this.syncPoints(geoScene, dirtyState)
       this.syncLines(geoScene, dirtyState)
       this.syncStraightLines(geoScene, dirtyState)
+      this.syncPerpendicularLines(geoScene, dirtyState)
       this.syncRays(geoScene, dirtyState)
       this.syncVectors(geoScene, dirtyState)
       this.syncCircles(geoScene, dirtyState)
@@ -840,6 +847,105 @@ export class GeometrySyncer {
       )
       const isLabelActive =
         this.activeLabelTarget?.type === 'straightLine' && this.activeLabelTarget.geoId === id
+      this.syncLinearLabel(
+        line,
+        lineData.name ?? '',
+        lineData.nameVisible && lineData.visible,
+        lineData.valueVisible === true && lineData.visible,
+        `=(${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.x)},${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.y)},${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.z)})+λ(${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().x)},${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().y)},${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().z)})`,
+        mid,
+        isLabelActive ? SELECTED_COLOR : LINEAR_COLOR,
+      )
+    })
+  }
+
+  syncPerpendicularLines(scene: GeoScene, dirtyState: SceneRenderSyncState): void {
+    dirtyState.perpendicularLineIds.forEach((id) => {
+      const lineData = scene.perpendicularLines.get(id)
+      if (!lineData) return
+      let line = this.meshMap.get(id) as THREE.Line | undefined
+      const display = lineData.getDisplayPoints(scene)
+      const start = display.start
+      const end = display.end
+      const points = [
+        new THREE.Vector3(start.x, start.y, start.z),
+        new THREE.Vector3(end.x, end.y, end.z),
+      ]
+
+      if (!line) {
+        const geo = new THREE.BufferGeometry().setFromPoints(points)
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
+        line = new THREE.Line(geo, mat)
+        line.renderOrder = SOLID_EDGE_RENDER_ORDER
+        line.userData = { geoId: id, type: 'perpendicularLine' }
+        this.deps.world.add(line)
+        this.meshMap.set(id, line)
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenLine = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenLine.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenLine.computeLineDistances()
+        this.deps.world.add(hiddenLine)
+        this.hiddenLineMap.set(id, hiddenLine)
+      } else {
+        line.geometry.setFromPoints(points)
+        line.geometry.attributes.position!.needsUpdate = true
+        line.geometry.computeBoundingBox()
+        line.geometry.computeBoundingSphere()
+
+        const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenLine) {
+          hiddenLine.geometry.setFromPoints(points)
+          hiddenLine.computeLineDistances()
+        }
+      }
+
+      line.visible = lineData.visible
+      const isSelected = scene.selection.perpendicularLines.has(id)
+      const plColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(line.material as THREE.LineBasicMaterial).color.set(plColor)
+
+      const hiddenPlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenPlObj) {
+        hiddenPlObj.visible = this.hiddenEdgeEnabled && lineData.visible
+        ;(hiddenPlObj.material as THREE.LineDashedMaterial).color.set(plColor)
+      }
+
+      let footMarker = this.footMarkerMap.get(id)
+      const constraint = scene.perpendicularLineConstraints.get(id)
+      const isFootOnTarget = constraint instanceof PerpendicularLineConstraint && constraint.isFootOnTarget()
+      const halfLength = PerpendicularLine3.normalizeDisplayLength(lineData.displayLength) / 2
+      const p1Pos = lineData.p1.position
+      const cachedFoot = constraint instanceof PerpendicularLineConstraint ? constraint.getLastComputedFoot() : null
+      const footPos = cachedFoot ?? lineData.p2.position
+      const footDist = Math.hypot(footPos.x - p1Pos.x, footPos.y - p1Pos.y, footPos.z - p1Pos.z)
+      const isFootInDisplayRange = footDist <= halfLength
+      if (!footMarker) {
+        const sphereGeo = new THREE.SphereGeometry(0.2, 16, 16)
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: 0xffaa00,
+          transparent: true,
+          opacity: 0.6,
+          depthTest: false,
+          depthWrite: false,
+        })
+        footMarker = new THREE.Mesh(sphereGeo, sphereMat)
+        footMarker.renderOrder = 6
+        footMarker.userData = { geoId: id, type: 'perpendicularLineFoot' }
+        this.deps.world.add(footMarker)
+        this.footMarkerMap.set(id, footMarker)
+      }
+      footMarker.position.set(footPos.x, footPos.y, footPos.z)
+      footMarker.visible = lineData.visible && isFootOnTarget && isFootInDisplayRange
+
+      const mid = new THREE.Vector3(
+        (lineData.p1.position.x + lineData.p2.position.x) / 2,
+        (lineData.p1.position.y + lineData.p2.position.y) / 2,
+        (lineData.p1.position.z + lineData.p2.position.z) / 2,
+      )
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'perpendicularLine' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         line,
         lineData.name ?? '',
@@ -1796,6 +1902,13 @@ export class GeometrySyncer {
         this.hiddenLineMap.delete(id)
       }
     })
+
+    this.footMarkerMap.forEach((mesh, id) => {
+      if (!scene.perpendicularLines.has(id)) {
+        this.deps.world.remove(mesh)
+        this.footMarkerMap.delete(id)
+      }
+    })
   }
 
   removeMeshWithLabels(obj: THREE.Object3D, userData: RenderObjectUserData, map: Map<string, THREE.Object3D>, id: string): void {
@@ -1810,6 +1923,12 @@ export class GeometrySyncer {
     if (hiddenLine) {
       this.deps.world.remove(hiddenLine)
       this.hiddenLineMap.delete(id)
+    }
+
+    const footMarker = this.footMarkerMap.get(id)
+    if (footMarker) {
+      this.deps.world.remove(footMarker)
+      this.footMarkerMap.delete(id)
     }
   }
 
@@ -2350,6 +2469,7 @@ export class GeometrySyncer {
     const solidDepthTest = enabled
     this.meshMap.forEach((obj) => {
       if (obj.userData.type === 'line' || obj.userData.type === 'straightLine' ||
+          obj.userData.type === 'perpendicularLine' ||
           obj.userData.type === 'ray' || obj.userData.type === 'vector' ||
           obj.userData.type === 'circle') {
         const mat = (obj as THREE.Line).material as THREE.LineBasicMaterial

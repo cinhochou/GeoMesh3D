@@ -3,6 +3,8 @@ import { Cylinder3 } from '../../../geometry/Cylinder3'
 import { Scene } from '../../../scene/Scene'
 import { Circle3 } from '../../../geometry/Circle3'
 import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
 
 export class DeleteCylinderCommand implements Command {
   private bottomCircle: Circle3 | null = null
@@ -12,9 +14,14 @@ export class DeleteCylinderCommand implements Command {
   constructor(
     private scene: Scene,
     private cylinder: Cylinder3,
+    private relatedPerpendicularLines: PerpendicularLine3[] = [],
   ) {}
 
   execute() {
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.removePerpendicularLine(line.id)
+      this.scene.selection.perpendicularLines.delete(line.id)
+    })
     if (this.cylinder.normalCircleId) {
       this.bottomCircle = this.scene.circles.get(this.cylinder.normalCircleId) ?? null
       if (this.bottomCircle) {
@@ -60,5 +67,11 @@ export class DeleteCylinderCommand implements Command {
     if (this.constraint) {
       this.scene.addCylinderConstraint(this.constraint)
     }
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.addPerpendicularLine(line)
+      this.scene.addPerpendicularLineConstraint(
+        new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
+    })
   }
 }

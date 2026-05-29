@@ -5,6 +5,8 @@ import { Line3 } from '../../../geometry/Line3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../../../constraints/IntersectionPointConstraint'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
 
 export class DeleteHexahedronCommand implements Command {
   private deletedBoundaryLines: Line3[] = []
@@ -18,9 +20,14 @@ export class DeleteHexahedronCommand implements Command {
       point: Point3
       constraint: IntersectionPointConstraint
     }> = [],
+    private relatedPerpendicularLines: PerpendicularLine3[] = [],
   ) {}
 
   execute() {
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.removePerpendicularLine(line.id)
+      this.scene.selection.perpendicularLines.delete(line.id)
+    })
     this.scene.removeCubeConstraint(this.constraint.cubeId)
     this.faces.forEach((face) => this.scene.removeFace(face.id))
 
@@ -50,6 +57,12 @@ export class DeleteHexahedronCommand implements Command {
     this.deletedBoundaryLines.forEach((line) => this.scene.addLine(line))
     this.faces.forEach((face) => this.scene.addFace(face))
     this.scene.addCubeConstraint(this.constraint)
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.addPerpendicularLine(line)
+      this.scene.addPerpendicularLineConstraint(
+        new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
+    })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.addPoint(point)
       this.scene.addIntersectionConstraint(constraint)

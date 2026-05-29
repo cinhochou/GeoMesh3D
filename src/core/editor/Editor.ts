@@ -30,6 +30,7 @@ import { UpdateRayCommand } from './commands/update/UpdateRayCommand'
 import { UpdateVectorCommand } from './commands/update/UpdateVectorCommand'
 import { UpdateCircleCommand } from './commands/update/UpdateCircleCommand'
 import { UpdateStraightLineCommand } from './commands/update/UpdateStraightLineCommand'
+import { UpdatePerpendicularLineCommand } from './commands/update/UpdatePerpendicularLineCommand'
 import { UpdateFaceCommand } from './commands/update/UpdateFaceCommand'
 import { DeletePointCommand } from './commands/delete/DeletePointCommand'
 import { DeleteLineCommand } from './commands/delete/DeleteLineCommand'
@@ -37,6 +38,7 @@ import { DeleteRayCommand } from './commands/delete/DeleteRayCommand'
 import { DeleteVectorCommand } from './commands/delete/DeleteVectorCommand'
 import { DeleteStraightLineCommand } from './commands/delete/DeleteStraightLineCommand'
 import { DeleteFaceCommand } from './commands/delete/DeleteFaceCommand'
+import { DeleteRegularPolygonCommand } from './commands/delete/DeleteRegularPolygonCommand'
 import { DeleteCircleCommand } from './commands/delete/DeleteCircleCommand'
 import { DeleteSphereCommand } from './commands/delete/DeleteSphereCommand'
 import { UpdateSphereCommand } from './commands/update/UpdateSphereCommand'
@@ -62,6 +64,7 @@ import { UpdateConeRadiusCommand } from './commands/update/UpdateConeRadiusComma
 import { UpdateConeHeightCommand } from './commands/update/UpdateConeHeightCommand'
 import { AddCylinderCommand } from './commands/add/AddCylinderCommand'
 import { DeleteCylinderCommand } from './commands/delete/DeleteCylinderCommand'
+import { DeletePerpendicularLineCommand } from './commands/delete/DeletePerpendicularLineCommand'
 import { UpdateCylinderCommand } from './commands/update/UpdateCylinderCommand'
 import { UpdateCylinderRadiusCommand } from './commands/update/UpdateCylinderRadiusCommand'
 import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHeightCommand'
@@ -76,6 +79,8 @@ import {
   type IntersectionTargetRef,
   type IntersectionTargetType,
 } from '../geometry/IntersectionPoint3'
+import { PerpendicularLine3, type PerpendicularLineTargetRef, type PerpendicularLineTargetType } from '../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../constraints/PerpendicularLineConstraint'
 
 export enum EditorMode {
   Select,
@@ -97,6 +102,7 @@ export enum EditorMode {
   CreateSphereRadius,
   CreateCone,
   CreateCylinder,
+  CreatePerpendicularLine,
 }
 
 export type FacePreviewData = {
@@ -756,6 +762,15 @@ export class Editor {
     return this.getRegularPolygonConstraint(point.regularPolygonId)
   }
 
+  private getRegularPolygonConstraintByFaceId(faceId: string) {
+    for (const constraint of this.scene.regularPolygonConstraints.values()) {
+      if (constraint instanceof RegularPolygonConstraint && constraint.faceId === faceId) {
+        return constraint
+      }
+    }
+    return null
+  }
+
   getSphere(sphereId: string): Sphere3 | null {
     return this.scene.spheres.get(sphereId) ?? null
   }
@@ -1110,7 +1125,10 @@ export class Editor {
     if (!cone) return
     this.removeConstrainedPointsReferencing('cone', coneId)
     this.removeConstrainedPointsReferencing('coneBase', coneId)
-    this.executeCommand(new DeleteConeCommand(this.scene, cone))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'coneBase' && pl.target.id === coneId,
+    )
+    this.executeCommand(new DeleteConeCommand(this.scene, cone, relatedPerpendicularLines))
   }
 
   tryCreateConeTwoPoint(baseCenterPoint: Point3, apexPoint: Point3, radius: number) {
@@ -1353,7 +1371,10 @@ export class Editor {
     this.removeConstrainedPointsReferencing('cylinder', cylinderId)
     this.removeConstrainedPointsReferencing('cylinderBottom', cylinderId)
     this.removeConstrainedPointsReferencing('cylinderTop', cylinderId)
-    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => (pl.target.type === 'cylinderBottom' || pl.target.type === 'cylinderTop') && pl.target.id === cylinderId,
+    )
+    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines))
   }
 
   tryCreateCylinderTwoPoint(bottomCenterPoint: Point3, topCenterPoint: Point3, radius: number) {
@@ -2366,6 +2387,9 @@ export class Editor {
     const relatedCones = [...this.scene.cones.values()].filter(
       (cone) => cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId,
     )
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.p1.id === pointId || pl.target.id === pointId,
+    )
     const relatedFaces = getFacesByPointId(this, pointId)
 
     if (!locked && relatedFaces.length > 0) {
@@ -2469,6 +2493,16 @@ export class Editor {
           }))
           .filter((transform) => transform.before !== transform.after)
 
+    const perpendicularLineTransforms = locked
+      ? []
+      : relatedPerpendicularLines
+          .map((line) => ({
+            line,
+            before: line.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
     if (
       pointTransforms.length === 0 &&
       lineTransforms.length === 0 &&
@@ -2477,7 +2511,8 @@ export class Editor {
       vectorTransforms.length === 0 &&
       circleTransforms.length === 0 &&
       sphereTransforms.length === 0 &&
-      coneTransforms.length === 0
+      coneTransforms.length === 0 &&
+      perpendicularLineTransforms.length === 0
     ) {
       return
     }
@@ -2493,6 +2528,8 @@ export class Editor {
         circleTransforms,
         sphereTransforms,
         coneTransforms,
+        [],
+        perpendicularLineTransforms,
       ),
     )
   }
@@ -2571,6 +2608,46 @@ export class Editor {
         [{ line, before: line.userLocked, after: locked }],
         [],
         [],
+      ),
+    )
+  }
+
+  setPerpendicularLineLockState(lineId: string, locked: boolean) {
+    const line = this.scene.perpendicularLines.get(lineId)
+    if (!line) return
+    const p1Transforms = locked
+      ? [line.p1]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: true,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : [line.p1]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
+    if (line.userLocked === locked && p1Transforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        p1Transforms,
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [{ line, before: line.userLocked, after: locked }],
       ),
     )
   }
@@ -2803,6 +2880,51 @@ export class Editor {
       ...relatedFaces.map((face) => ({ type: 'face' as const, id: face.id })),
     ]).filter(({ point }) => point.id !== pointId)
 
+    const dependentRegularPolygonConstraints = this.getRegularPolygonConstraints().filter(
+      (constraint) =>
+        constraint.ownerPointIds.includes(pointId) ||
+        constraint.dependentLayouts.some((layout) => layout.pointId === pointId),
+    )
+    const dependentRegularPolygons = dependentRegularPolygonConstraints
+      .map((constraint) => {
+        const face = this.scene.faces.get(constraint.faceId)
+        if (!face) return null
+        const dependentPoints = constraint.dependentLayouts
+          .map((layout) => this.scene.points.get(layout.pointId))
+          .filter((item): item is Point3 => item !== undefined)
+        const rpDependentIntersectionPoints = this.collectDependentIntersectionPoints([
+          { type: 'face', id: face.id },
+        ])
+        return {
+          face,
+          constraint,
+          dependentPoints,
+          dependentIntersectionPoints: rpDependentIntersectionPoints,
+        }
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+
+    const regularPolygonFaceIds = new Set(
+      dependentRegularPolygons.map((item) => item.face.id),
+    )
+    const filteredRelatedFaces = relatedFaces.filter(
+      (face) => !regularPolygonFaceIds.has(face.id),
+    )
+
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter((pl) => {
+      if (pl.p1.id === pointId) return true
+      if (pl.target.type === 'line' && relatedLines.some((l) => l.id === pl.target.id)) return true
+      if (pl.target.type === 'straightLine' && relatedStraightLines.some((l) => l.id === pl.target.id)) return true
+      if (pl.target.type === 'ray' && relatedRays.some((r) => r.id === pl.target.id)) return true
+      if (pl.target.type === 'vector' && relatedVectors.some((v) => v.id === pl.target.id)) return true
+      if (pl.target.type === 'face') {
+        if (filteredRelatedFaces.some((f) => f.id === pl.target.id)) return true
+        if (dependentCubes.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
+        if (dependentRegularPolygons.some(({ face }) => face.id === pl.target.id)) return true
+      }
+      return false
+    })
+
     this.executeCommand(
       new DeletePointCommand(
         this.scene,
@@ -2812,11 +2934,13 @@ export class Editor {
         relatedRays,
         relatedVectors,
         relatedCircles,
-        relatedFaces,
+        filteredRelatedFaces,
         pointConstraint,
         dependentIntersectionPoints,
         dependentCubes,
         relatedSpheres,
+        dependentRegularPolygons,
+        relatedPerpendicularLines,
       ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
@@ -2831,13 +2955,60 @@ export class Editor {
     ])
     const dependentCubes = this.collectDependentCubesByLineId(lineId)
     const dependentFaces = this.collectDependentFacesByLineId(lineId)
+
+    const dependentRegularPolygonConstraints = this.getRegularPolygonConstraints().filter(
+      (constraint) => {
+        const face = this.scene.faces.get(constraint.faceId)
+        if (!face) return false
+        return face.boundaryLineIds.includes(lineId)
+      },
+    )
+    const dependentRegularPolygons = dependentRegularPolygonConstraints
+      .map((constraint) => {
+        const face = this.scene.faces.get(constraint.faceId)
+        if (!face) return null
+        const dependentPoints = constraint.dependentLayouts
+          .map((layout) => this.scene.points.get(layout.pointId))
+          .filter((item): item is Point3 => item !== undefined)
+        const rpDependentIntersectionPoints = this.collectDependentIntersectionPoints([
+          { type: 'face', id: face.id },
+        ])
+        return {
+          face,
+          constraint,
+          dependentPoints,
+          dependentIntersectionPoints: rpDependentIntersectionPoints,
+        }
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+
+    const regularPolygonFaceIds = new Set(
+      dependentRegularPolygons.map((item) => item.face.id),
+    )
+    const filteredDependentFaces = dependentFaces.filter(
+      (face) => !regularPolygonFaceIds.has(face.id),
+    )
+
+    const allDeletedFaceIds = new Set([
+      ...filteredDependentFaces.map((f) => f.id),
+      ...dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)),
+      ...dependentRegularPolygons.map(({ face }) => face.id),
+    ])
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) =>
+        (pl.target.type === 'line' && pl.target.id === lineId) ||
+        (pl.target.type === 'face' && allDeletedFaceIds.has(pl.target.id)),
+    )
+
     this.executeCommand(
       new DeleteLineCommand(
         this.scene,
         line,
         dependentIntersectionPoints,
         dependentCubes,
-        dependentFaces,
+        filteredDependentFaces,
+        dependentRegularPolygons,
+        relatedPerpendicularLines,
       ),
     )
   }
@@ -2849,7 +3020,10 @@ export class Editor {
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'ray', id: rayId },
     ])
-    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'ray' && pl.target.id === rayId,
+    )
+    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines))
   }
 
   deleteCircle(circleId: string) {
@@ -2866,8 +3040,11 @@ export class Editor {
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'straightLine', id: lineId },
     ])
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'straightLine' && pl.target.id === lineId,
+    )
     this.executeCommand(
-      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints),
+      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines),
     )
   }
 
@@ -2888,6 +3065,9 @@ export class Editor {
       const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
         faces.map((cubeFace) => ({ type: 'face' as const, id: cubeFace.id })),
       )
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) => pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id),
+      )
       this.executeCommand(
         new DeleteHexahedronCommand(
           this.scene,
@@ -2895,15 +3075,44 @@ export class Editor {
           dependentPoints,
           cubeConstraint,
           dependentIntersectionPoints,
+          relatedPerpendicularLines,
         ),
       )
       return
     }
+
+    const regularPolygonConstraint = this.getRegularPolygonConstraintByFaceId(faceId)
+    if (regularPolygonConstraint) {
+      const dependentPoints = regularPolygonConstraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((item): item is Point3 => item !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+        { type: 'face', id: faceId },
+      ])
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) => pl.target.type === 'face' && pl.target.id === faceId,
+      )
+      this.executeCommand(
+        new DeleteRegularPolygonCommand(
+          this.scene,
+          face,
+          regularPolygonConstraint,
+          dependentPoints,
+          dependentIntersectionPoints,
+          relatedPerpendicularLines,
+        ),
+      )
+      return
+    }
+
     this.removeConstrainedPointsReferencing('face', faceId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'face', id: faceId },
     ])
-    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'face' && pl.target.id === faceId,
+    )
+    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines))
   }
 
   clearAll() {
@@ -3565,6 +3774,72 @@ export class Editor {
     )
   }
 
+  updatePerpendicularLine(
+    lineId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      displayLength?: number
+      userLocked?: boolean
+    },
+  ) {
+    const line = this.scene.perpendicularLines.get(lineId)
+    if (!line) return
+
+    const nextName = patch.name ?? line.name
+    const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextValueVisible = patch.valueVisible ?? line.valueVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
+    const nextVisible = patch.visible ?? line.visible
+    const nextDisplayLength = PerpendicularLine3.normalizeDisplayLength(
+      patch.displayLength ?? line.displayLength,
+    )
+    const nextUserLocked = patch.userLocked ?? line.userLocked
+    if (
+      nextName === line.name &&
+      nextNameVisible === line.nameVisible &&
+      nextValueVisible === line.valueVisible &&
+      nextLabelOffsetX === line.labelOffsetX &&
+      nextLabelOffsetY === line.labelOffsetY &&
+      nextVisible === line.visible &&
+      nextDisplayLength === line.displayLength &&
+      nextUserLocked === line.userLocked
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdatePerpendicularLineCommand(
+        line,
+        {
+          name: line.name,
+          nameVisible: line.nameVisible,
+          valueVisible: line.valueVisible,
+          labelOffsetX: line.labelOffsetX,
+          labelOffsetY: line.labelOffsetY,
+          visible: line.visible,
+          displayLength: line.displayLength,
+          userLocked: line.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
+          visible: nextVisible,
+          displayLength: nextDisplayLength,
+          userLocked: nextUserLocked,
+        },
+      ),
+    )
+  }
+
   updateFace(
     faceId: string,
     patch: {
@@ -3659,6 +3934,184 @@ export class Editor {
     this.selectedPoints = []
   }
 
+  private perpendicularLinePendingFaceTarget: PerpendicularLineTargetRef | null = null
+
+  getPerpendicularLineSelectionTargets() {
+    const targets: PerpendicularLineTargetRef[] = []
+    this.scene.selection.lines.forEach((id) => targets.push({ type: 'line', id }))
+    this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
+    this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
+    this.scene.selection.vectors.forEach((id) => targets.push({ type: 'vector', id }))
+    this.scene.selection.faces.forEach((id) => targets.push({ type: 'face', id }))
+    if (this.perpendicularLinePendingFaceTarget) {
+      targets.push(this.perpendicularLinePendingFaceTarget)
+    }
+    return targets
+  }
+
+  clearPerpendicularLineSelection() {
+    this.scene.selection.points.clear()
+    this.scene.selection.lines.clear()
+    this.scene.selection.straightLines.clear()
+    this.scene.selection.rays.clear()
+    this.scene.selection.vectors.clear()
+    this.scene.selection.faces.clear()
+    this.scene.selection.cones.clear()
+    this.scene.selection.cylinders.clear()
+    this.perpendicularLinePendingFaceTarget = null
+    this.selectedPoints = []
+  }
+
+  togglePerpendicularLineSelection(type: PerpendicularLineTargetType, geoId: string) {
+    if (this.mode !== EditorMode.CreatePerpendicularLine) return
+
+    if (type === 'coneBase') {
+      const isAlreadySelected = this.perpendicularLinePendingFaceTarget?.type === 'coneBase' && this.perpendicularLinePendingFaceTarget?.id === geoId
+      if (isAlreadySelected) {
+        this.perpendicularLinePendingFaceTarget = null
+        this.scene.selection.deselectCone(geoId)
+        return
+      }
+      if (this.getPerpendicularLineSelectionTargets().length >= 1) {
+        this.clearPerpendicularLineSelection()
+      }
+      this.perpendicularLinePendingFaceTarget = { type: 'coneBase', id: geoId }
+      this.scene.selection.selectCone(geoId, true)
+      this.tryCreatePerpendicularLineFromSelection()
+      return
+    }
+
+    if (type === 'cylinderBottom' || type === 'cylinderTop') {
+      const isAlreadySelected = this.perpendicularLinePendingFaceTarget?.type === type && this.perpendicularLinePendingFaceTarget?.id === geoId
+      if (isAlreadySelected) {
+        this.perpendicularLinePendingFaceTarget = null
+        this.scene.selection.deselectCylinder(geoId)
+        return
+      }
+      if (this.getPerpendicularLineSelectionTargets().length >= 1) {
+        this.clearPerpendicularLineSelection()
+      }
+      this.perpendicularLinePendingFaceTarget = { type, id: geoId }
+      this.scene.selection.selectCylinder(geoId, true)
+      this.tryCreatePerpendicularLineFromSelection()
+      return
+    }
+
+    const isSelected =
+      (type === 'line' && this.scene.selection.lines.has(geoId)) ||
+      (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
+      (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
+      (type === 'vector' && this.scene.selection.vectors.has(geoId)) ||
+      (type === 'face' && this.scene.selection.faces.has(geoId))
+
+    if (isSelected) {
+      if (type === 'line') this.scene.selection.deselectLine(geoId)
+      else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
+      else if (type === 'ray') this.scene.selection.deselectRay(geoId)
+      else if (type === 'vector') this.scene.selection.deselectVector(geoId)
+      else this.scene.selection.deselectFace(geoId)
+      return
+    }
+
+    if (this.getPerpendicularLineSelectionTargets().length >= 1) {
+      this.clearPerpendicularLineSelection()
+    }
+
+    if (type === 'line') this.scene.selection.selectLine(geoId, true)
+    else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
+    else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
+    else if (type === 'vector') this.scene.selection.selectVector(geoId, true)
+    else this.scene.selection.selectFace(geoId, true)
+
+    this.tryCreatePerpendicularLineFromSelection()
+  }
+
+  tryCreatePerpendicularLineWith(point: Point3) {
+    if (this.mode !== EditorMode.CreatePerpendicularLine) return
+    this.scene.selection.selectPoint(point.id, true)
+
+    if (!this.selectedPoints.includes(point)) {
+      this.selectedPoints.push(point)
+    }
+
+    if (this.selectedPoints.length > 1) {
+      this.selectedPoints = [point]
+      this.scene.selection.points.clear()
+      this.scene.selection.selectPoint(point.id, true)
+    }
+
+    this.tryCreatePerpendicularLineFromSelection()
+  }
+
+  tryCreatePerpendicularLineFromSelection() {
+    if (this.mode !== EditorMode.CreatePerpendicularLine) return
+
+    const targets = this.getPerpendicularLineSelectionTargets()
+    if (targets.length === 0) return
+    if (this.selectedPoints.length === 0) return
+
+    const target = targets[0]!
+    const point = this.selectedPoints[0]!
+    if (!target || !point) return
+
+    if (target.type === 'line' || target.type === 'straightLine' || target.type === 'ray' || target.type === 'vector') {
+      const entity =
+        target.type === 'line'
+          ? this.scene.lines.get(target.id)
+          : target.type === 'straightLine'
+            ? this.scene.straightLines.get(target.id)
+            : target.type === 'ray'
+              ? this.scene.rays.get(target.id)
+              : this.scene.vectors.get(target.id)
+      if (!entity) return
+
+      if (entity.p1.id === point.id || entity.p2.id === point.id) {
+        emitToast('垂点不能位于要垂直的线上')
+        return
+      }
+    }
+
+    const footPoint = new Point3(
+      genId('pf'),
+      '',
+      point.position.clone(),
+      false,
+      false,
+      false,
+    )
+
+    const perpendicularLineName = genNextAvailableName(
+      [...this.scene.perpendicularLines.values()].map((l) => l.name),
+      0,
+      (index) => (index === 0 ? 'z' : `z${index}`),
+    )
+
+    const perpendicularLine = new PerpendicularLine3(
+      genId('pl'),
+      perpendicularLineName,
+      point,
+      footPoint,
+      { type: target.type, id: target.id },
+      false,
+      true,
+    )
+    const constraint = new PerpendicularLineConstraint(this.scene, perpendicularLine.id, { type: target.type, id: target.id })
+
+    this.executeCommand(new AddElementCommand(this.scene, perpendicularLine, 'perpendicularLine'))
+    this.scene.addPerpendicularLineConstraint(constraint)
+    constraint.solve()
+
+    this.clearPerpendicularLineSelection()
+    this.scene.selection.clear()
+    this.scene.selection.selectPerpendicularLine(perpendicularLine.id)
+  }
+
+  deletePerpendicularLine(lineId: string) {
+    const line = this.scene.perpendicularLines.get(lineId)
+    if (!line) return
+    this.executeCommand(new DeletePerpendicularLineCommand(this.scene, line))
+  }
+
   toggleIntersectionSelection(type: IntersectionTargetType, geoId: string) {
     if (this.mode !== EditorMode.IntersectionPoint) return
 
@@ -3735,8 +4188,8 @@ export class Editor {
 
   mergePoints(keepPointId: string, removePointId: string) {
     if (keepPointId === removePointId) return
-    let keepPoint = this.scene.points.get(keepPointId)
-    let removePoint = this.scene.points.get(removePointId)
+    const keepPoint = this.scene.points.get(keepPointId)
+    const removePoint = this.scene.points.get(removePointId)
     if (!keepPoint || !removePoint || (removePoint.locked && !removePoint.circleId)) return
 
     const keepConstrained = keepPoint.isConstrainedPoint
@@ -3896,7 +4349,10 @@ export class Editor {
     const vector = this.scene.vectors.get(vectorId)
     if (!vector) return
     this.removeConstrainedPointsReferencing('vector', vectorId)
-    this.executeCommand(new DeleteVectorCommand(this.scene, vector))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'vector' && pl.target.id === vectorId,
+    )
+    this.executeCommand(new DeleteVectorCommand(this.scene, vector, relatedPerpendicularLines))
   }
 
   isVectorLocked(vector: GeoVector3 | null | undefined) {

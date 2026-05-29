@@ -21,7 +21,7 @@ export class MergeCubePointsCommand implements Command {
     removePoint: Point3,
     transforms: PointTransform[],
   ) {
-    this.transformCommand = new TransformPointsCommand(transforms)
+    this.transformCommand = new TransformPointsCommand(transforms, [], scene)
     this.mergeCommand = new MergePointsCommand(scene, keepPoint, removePoint)
   }
 

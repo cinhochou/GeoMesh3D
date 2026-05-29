@@ -295,6 +295,10 @@ const selectCreateVectorMode = () => {
   setMode(EditorMode.CreateVector)
 }
 
+const selectCreatePerpendicularLineMode = () => {
+  setMode(EditorMode.CreatePerpendicularLine)
+}
+
 const selectCreateThreePointCircleMode = () => {
   setMode(EditorMode.CreateCircleThreePoints)
 }
@@ -644,7 +648,8 @@ onUnmounted(() => {
             currentMode === EditorMode.CreateLine ||
             currentMode === EditorMode.CreateStraightLine ||
             currentMode === EditorMode.CreateRay ||
-            currentMode === EditorMode.CreateVector,
+            currentMode === EditorMode.CreateVector ||
+            currentMode === EditorMode.CreatePerpendicularLine,
           'is-open': isLineMenuOpen,
         }"
         @click="toggleLineMenu"
@@ -849,6 +854,13 @@ onUnmounted(() => {
         @click="selectCreateVectorMode"
       >
         向量
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreatePerpendicularLine }"
+        @click="selectCreatePerpendicularLineMode"
+      >
+        垂线
       </button>
     </div>
   </Teleport>

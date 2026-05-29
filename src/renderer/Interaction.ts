@@ -83,6 +83,7 @@ export class Interaction {
     point: (e, id) => e.scene.selection.deselectPoint(id),
     line: (e, id) => e.scene.selection.deselectLine(id),
     straightLine: (e, id) => e.scene.selection.deselectStraightLine(id),
+    perpendicularLine: (e, id) => e.scene.selection.deselectPerpendicularLine(id),
     ray: (e, id) => e.scene.selection.deselectRay(id),
     vector: (e, id) => e.scene.selection.deselectVector(id),
     circle: (e, id) => e.scene.selection.deselectCircle(id),
@@ -105,6 +106,7 @@ export class Interaction {
     point: (e, id) => e.scene.selection.selectPoint(id, true),
     line: (e, id) => e.scene.selection.selectLine(id, true),
     straightLine: (e, id) => e.scene.selection.selectStraightLine(id, true),
+    perpendicularLine: (e, id) => e.scene.selection.selectPerpendicularLine(id, true),
     ray: (e, id) => e.scene.selection.selectRay(id, true),
     vector: (e, id) => e.scene.selection.selectVector(id, true),
     circle: (e, id) => e.scene.selection.selectCircle(id, true),
@@ -121,6 +123,7 @@ export class Interaction {
     point: (e, id) => e.deletePoint(id),
     line: (e, id) => e.deleteLine(id),
     straightLine: (e, id) => e.deleteStraightLine(id),
+    perpendicularLine: (e, id) => e.deletePerpendicularLine(id),
     ray: (e, id) => e.deleteRay(id),
     vector: (e, id) => e.deleteVector(id),
     circle: (e, id) => e.deleteCircle(id),
@@ -137,6 +140,7 @@ export class Interaction {
     point: (e, id, o) => e.updatePoint(id, o),
     line: (e, id, o) => e.updateLine(id, o),
     straightLine: (e, id, o) => e.updateStraightLine(id, o),
+    perpendicularLine: (e, id, o) => e.updatePerpendicularLine(id, o),
     ray: (e, id, o) => e.updateRay(id, o),
     vector: (e, id, o) => e.updateVector(id, o),
     circle: (e, id, o) => e.updateCircle(id, o),
@@ -158,8 +162,9 @@ export class Interaction {
   draggingConeId: string | null = null
   draggingCylinderId: string | null = null
   draggingFaceId: string | null = null
+  draggingPerpendicularLineId: string | null = null
   private draggingLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
     startClientX: number
     startClientY: number
@@ -199,13 +204,13 @@ export class Interaction {
   private mobileInteractionStartedOnEmpty = false
   private mobileInteractionStartClient = new THREE.Vector2()
   private pendingToggleSelection: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
   } | null = null
   private readonly activeTouchPoints = new Map<number, THREE.Vector2>()
   private pinchZoomDistance: number | null = null
   private activeLabelTarget: {
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
     geoId: string
   } | null = null
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
@@ -641,6 +646,7 @@ export class Interaction {
     this.draggingConeId = null
     this.draggingCylinderId = null
     this.draggingFaceId = null
+    this.draggingPerpendicularLineId = null
     this.draggingLabelTarget = null
     this.pendingToggleSelection = null
   }
@@ -709,21 +715,21 @@ export class Interaction {
   }
 
   private isSameActiveLabelTarget(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     return this.activeLabelTarget?.type === type && this.activeLabelTarget?.geoId === geoId
   }
 
   private deselectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     Interaction.deselectByType[type]?.(this.editor, geoId)
   }
 
   private selectGeometry(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     Interaction.selectByType[type]?.(this.editor, geoId)
@@ -982,6 +988,7 @@ export class Interaction {
         (obj) =>
           obj.userData?.type === 'line' ||
           obj.userData?.type === 'straightLine' ||
+          obj.userData?.type === 'perpendicularLine' ||
           obj.userData?.type === 'ray' ||
           obj.userData?.type === 'vector',
       ),
@@ -1042,6 +1049,7 @@ export class Interaction {
       return (
         type === 'line' ||
         type === 'straightLine' ||
+        type === 'perpendicularLine' ||
         type === 'ray' ||
         type === 'vector' ||
         type === 'circle' ||
@@ -1056,6 +1064,7 @@ export class Interaction {
       (hit) =>
         hit.object.userData.type === 'line' ||
         hit.object.userData.type === 'straightLine' ||
+        hit.object.userData.type === 'perpendicularLine' ||
         hit.object.userData.type === 'ray',
     )
     if (linearHit) return linearHit.object
@@ -1184,6 +1193,12 @@ export class Interaction {
       addLinearCandidate(id, vec.p1.position, vec.p2.position, 'vector', nearPoint)
     }
 
+    for (const [id, pl] of this.editor.scene.perpendicularLines) {
+      const dp = pl.getDisplayPoints(this.editor.scene)
+      const nearPoint = isObjectProtected(id, [pl.p1.id])
+      addLinearCandidate(id, dp.start, dp.end, 'perpendicularLine', nearPoint)
+    }
+
     for (const [id, circle] of this.editor.scene.circles) {
       const frame = circle.getFrame(
         this.editor.resolveDirectionVector(
@@ -1259,7 +1274,7 @@ export class Interaction {
             geoId,
           })
         } else if (
-          type === 'line' || type === 'straightLine' || type === 'ray' ||
+          type === 'line' || type === 'straightLine' || type === 'perpendicularLine' || type === 'ray' ||
           type === 'vector' || type === 'circle'
         ) {
           const nearPoint = this.isLinearNearProtectedPoint(type, geoId, protectedPointIds, constrainedPointsOnObject)
@@ -1343,13 +1358,23 @@ export class Interaction {
         if (!rawType || !geoId) continue
         const cone = this.editor.scene.cones.get(geoId)
         if (cone && isObjectProtected(geoId, [cone.baseCenterPoint.id, cone.apexPoint.id])) continue
-        candidates.push({
-          object: obj,
-          screenDist: 0,
-          depth: hit.distance + cameraPos.length(),
-          type: rawType === 'coneBase' ? 'cone' : rawType,
-          geoId,
-        })
+        if (rawType === 'coneBase' && this.editor.mode === EditorMode.CreatePerpendicularLine) {
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length(),
+            type: 'coneBase',
+            geoId,
+          })
+        } else {
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length(),
+            type: rawType === 'coneBase' ? 'cone' : rawType,
+            geoId,
+          })
+        }
       }
 
       const cylinderCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter(
@@ -1364,13 +1389,23 @@ export class Interaction {
         if (!rawType || !geoId) continue
         const cylinder = this.editor.scene.cylinders.get(geoId)
         if (cylinder && isObjectProtected(geoId, [cylinder.bottomCenterPoint.id, cylinder.topCenterPoint.id])) continue
-        candidates.push({
-          object: obj,
-          screenDist: 0,
-          depth: hit.distance + cameraPos.length(),
-          type: rawType === 'cylinderBottom' || rawType === 'cylinderTop' ? 'cylinder' : rawType,
-          geoId,
-        })
+        if ((rawType === 'cylinderBottom' || rawType === 'cylinderTop') && this.editor.mode === EditorMode.CreatePerpendicularLine) {
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length(),
+            type: rawType,
+            geoId,
+          })
+        } else {
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length(),
+            type: rawType === 'cylinderBottom' || rawType === 'cylinderTop' ? 'cylinder' : rawType,
+            geoId,
+          })
+        }
       }
     }
 
@@ -1422,6 +1457,10 @@ export class Interaction {
     if (type === 'straightLine') {
       const sl = this.editor.scene.straightLines.get(geoId)
       return sl ? checkEndpoints([sl.p1.id, sl.p2.id]) : false
+    }
+    if (type === 'perpendicularLine') {
+      const pl = this.editor.scene.perpendicularLines.get(geoId)
+      return pl ? checkEndpoints([pl.p1.id, pl.p2.id]) : false
     }
     if (type === 'ray') {
       const ray = this.editor.scene.rays.get(geoId)
@@ -2064,6 +2103,75 @@ export class Interaction {
       return
     }
 
+    if (this.draggingPerpendicularLineId) {
+      const pl = this.editor.scene.perpendicularLines.get(this.draggingPerpendicularLineId)
+      if (!pl) return
+      if (pl.userLocked || this.editor.isPointCoordinateLocked(pl.p1)) return
+
+      this.handleDrag(
+        pl.p1.position,
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.perpendicularLines.forEach((plid) => {
+            const pLine = this.editor.scene.perpendicularLines.get(plid)
+            if (pLine && !pLine.userLocked && !this.editor.isPointCoordinateLocked(pLine.p1)) {
+              toMove.add(pLine.p1.id)
+            }
+          })
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const line = this.editor.scene.straightLines.get(sid)
+            if (line && !this.editor.isStraightLineGeometryLocked(line)) {
+              toMove.add(line.p1.id)
+              toMove.add(line.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(pl.p1.id)
+          this.previewMovePoints([...toMove], delta)
+        },
+        isAltPressed,
+      )
+      return
+    }
+
     if (this.draggingFaceId) {
       const face = this.editor.scene.faces.get(this.draggingFaceId)
       if (!face) return
@@ -2149,6 +2257,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
         this.editor.mode === EditorMode.CreateCylinder ||
+        this.editor.mode === EditorMode.CreatePerpendicularLine ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       return
@@ -2263,6 +2372,21 @@ export class Interaction {
             } else {
               this.draggingStraightLineId = geoId
               this.startDrag(this.getStraightLineDragReferencePoint(line))
+            }
+          }
+        } else if (type === 'perpendicularLine') {
+          const alreadySelected = this.editor.scene.selection.perpendicularLines.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+          this.editor.scene.selection.selectPerpendicularLine(geoId, true)
+          this.editor.scene.markAllRenderDirty()
+          const pl = this.editor.scene.perpendicularLines.get(geoId)
+          if (pl) {
+            if (pl.userLocked || this.editor.isPointCoordinateLocked(pl.p1)) {
+              this.renderer.renderer.domElement.style.cursor = 'default'
+            } else {
+              this.draggingPerpendicularLineId = geoId
+              const mid = pl.getMidPoint()
+              this.startDrag(new THREE.Vector3(mid.x, mid.y, mid.z))
             }
           }
         } else if (type === 'ray') {
@@ -2533,6 +2657,23 @@ export class Interaction {
         isIntersectionTargetType(type)
       ) {
         this.editor.toggleIntersectionSelection(type, geoId)
+      } else if (
+        this.editor.mode === EditorMode.CreatePerpendicularLine
+      ) {
+        if (type === 'point') {
+          this.editor.tryCreatePerpendicularLineWith(this.editor.scene.points.get(geoId)!)
+        } else if (
+          type === 'line' ||
+          type === 'straightLine' ||
+          type === 'ray' ||
+          type === 'vector' ||
+          type === 'face' ||
+          type === 'coneBase' ||
+          type === 'cylinderBottom' ||
+          type === 'cylinderTop'
+        ) {
+          this.editor.togglePerpendicularLineSelection(type, geoId)
+        }
       }
     } else {
       if (this.renderer.isARActive() && this.editor.mode === EditorMode.Select) {
@@ -2565,6 +2706,8 @@ export class Interaction {
         this.resetNormalCircleCreation()
       } else if (this.editor.mode === EditorMode.IntersectionPoint)
         this.editor.clearIntersectionSelection()
+      else if (this.editor.mode === EditorMode.CreatePerpendicularLine)
+        this.editor.clearPerpendicularLineSelection()
     }
   }
 
@@ -2606,6 +2749,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
         this.editor.mode === EditorMode.CreateCylinder ||
+        this.editor.mode === EditorMode.CreatePerpendicularLine ||
         this.editor.mode === EditorMode.IntersectionPoint)
     ) {
       this.rubberBandData = null
@@ -3304,6 +3448,35 @@ export class Interaction {
       return
     }
 
+    if (type === 'perpendicularLine') {
+      const alreadySelected = this.editor.scene.selection.perpendicularLines.has(geoId)
+      this.editor.scene.selection.selectPerpendicularLine(geoId, true)
+      this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
+
+      if (!alreadySelected) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+
+      this.renderer.controls.enabled = false
+      this.renderer.renderer.domElement.style.cursor = 'grabbing'
+      const pl = this.editor.scene.perpendicularLines.get(geoId)
+      if (!pl) {
+        this.syncControlLockState()
+        this.renderer.renderer.domElement.style.cursor = 'default'
+        return
+      }
+      this.draggingPerpendicularLineId = geoId
+      const mid = pl.getMidPoint()
+      this.startDrag(new THREE.Vector3(mid.x, mid.y, mid.z))
+      return
+    }
+
     if (type === 'ray') {
       const alreadySelected = this.editor.scene.selection.rays.has(geoId)
       this.editor.scene.selection.selectRay(geoId, true)
@@ -3686,6 +3859,7 @@ export class Interaction {
       this.draggingSphereId !== null ||
       this.draggingConeId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingPerpendicularLineId !== null ||
       this.draggingLabelTarget !== null
 
     if (hadDrag) {
@@ -3707,6 +3881,7 @@ export class Interaction {
         this.draggingConeId = null
         this.draggingCylinderId = null
         this.draggingFaceId = null
+        this.draggingPerpendicularLineId = null
         this.pendingToggleSelection = null
         this.clearActiveLabelTarget()
         this.clearActivePointValueTarget()
@@ -3919,6 +4094,8 @@ export class Interaction {
       }
       point.setPosition(position)
     })
+
+    this.editor.scene.solveDirtyConstraints()
   }
 
   private expandLockedLinePreviewPointIds(pointIds: string[]) {
@@ -4123,6 +4300,7 @@ export class Interaction {
       this.draggingConeId !== null ||
       this.draggingCylinderId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingPerpendicularLineId !== null ||
       this.draggingLabelTarget !== null ||
       performance.now() < this.liveSyncUntil
     )
@@ -4248,11 +4426,13 @@ export class Interaction {
       if (p1 && p2) return this.distanceToSegment2D(pointer, p1, p2)
     }
 
-    if (geoId && (type === 'ray' || type === 'straightLine')) {
+    if (geoId && (type === 'ray' || type === 'straightLine' || type === 'perpendicularLine')) {
       const linear =
         type === 'ray'
           ? this.editor.scene.rays.get(geoId)
-          : this.editor.scene.straightLines.get(geoId)
+          : type === 'straightLine'
+            ? this.editor.scene.straightLines.get(geoId)
+            : this.editor.scene.perpendicularLines.get(geoId)
       const p1 = getPointScreen(linear?.p1)
       const p2 = getPointScreen(linear?.p2)
       if (p1 && p2) return this.distanceToSegment2D(pointer, p1, p2)
@@ -4395,12 +4575,13 @@ export class Interaction {
   }
 
   private getGeometryByType(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
   ) {
     if (type === 'point') return this.editor.scene.points.get(geoId) ?? null
     if (type === 'line') return this.editor.scene.lines.get(geoId) ?? null
     if (type === 'straightLine') return this.editor.scene.straightLines.get(geoId) ?? null
+    if (type === 'perpendicularLine') return this.editor.scene.perpendicularLines.get(geoId) ?? null
     if (type === 'ray') return this.editor.scene.rays.get(geoId) ?? null
     if (type === 'vector') return this.editor.scene.vectors.get(geoId) ?? null
     if (type === 'circle') return this.editor.scene.circles.get(geoId) ?? null
@@ -4411,7 +4592,7 @@ export class Interaction {
   }
 
   private beginLabelDrag(
-    type: 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
+    type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face',
     geoId: string,
     clientX: number,
     clientY: number,

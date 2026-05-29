@@ -11,9 +11,13 @@ import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import type { SceneConstraint } from '../../../scene/Scene'
 import { IntersectionPointConstraint } from '../../../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
+import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
 
 export class DeletePointCommand implements Command {
   private centerPoints: Point3[] = []
+  private regularPolygonDeletedBoundaryLines: Map<string, Line3[]> = new Map()
 
   constructor(
     private scene: Scene,
@@ -39,6 +43,16 @@ export class DeletePointCommand implements Command {
       }>
     }> = [],
     private relatedSpheres: Sphere3[] = [],
+    private dependentRegularPolygons: Array<{
+      face: PlanarPolygon
+      constraint: RegularPolygonConstraint
+      dependentPoints: Point3[]
+      dependentIntersectionPoints: Array<{
+        point: Point3
+        constraint: IntersectionPointConstraint
+      }>
+    }> = [],
+    private relatedPerpendicularLines: PerpendicularLine3[] = [],
   ) {
     this.centerPoints = relatedCircles
       .map((circle) =>
@@ -99,6 +113,34 @@ export class DeletePointCommand implements Command {
         this.scene.selection.points.delete(point.id)
       })
     })
+    this.dependentRegularPolygons.forEach(({ face, constraint, dependentPoints, dependentIntersectionPoints }) => {
+      dependentIntersectionPoints.forEach(({ point, constraint }) => {
+        this.scene.removeIntersectionConstraint(constraint.pointId)
+        this.scene.points.delete(point.id)
+        this.scene.selection.points.delete(point.id)
+      })
+      dependentPoints.forEach((point) => {
+        this.scene.points.delete(point.id)
+        this.scene.selection.points.delete(point.id)
+      })
+      this.scene.removeRegularPolygonConstraint(constraint.constraintId)
+      this.scene.removeFace(face.id)
+
+      const deletedBoundaryLines = face.boundaryLineIds
+        .map((lineId) => this.scene.lines.get(lineId))
+        .filter((line): line is Line3 => line !== undefined && line.faceOwned)
+        .filter((line) => !PlanarPolygon.isBoundaryLineUsedByOtherFace(this.scene.faces, line.id, face.id))
+
+      deletedBoundaryLines.forEach((line) => {
+        this.scene.lines.delete(line.id)
+        this.scene.selection.lines.delete(line.id)
+      })
+      this.regularPolygonDeletedBoundaryLines.set(face.id, deletedBoundaryLines)
+    })
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.removePerpendicularLine(line.id)
+      this.scene.selection.perpendicularLines.delete(line.id)
+    })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.removeIntersectionConstraint(constraint.pointId)
       this.scene.points.delete(point.id)
@@ -140,9 +182,27 @@ export class DeletePointCommand implements Command {
         this.scene.addIntersectionConstraint(constraint)
       })
     })
+    this.dependentRegularPolygons.forEach(({ face, constraint, dependentPoints, dependentIntersectionPoints }) => {
+      const boundaryLines = this.regularPolygonDeletedBoundaryLines.get(face.id) ?? []
+      boundaryLines.forEach((line) => this.scene.addLine(line))
+      dependentPoints.forEach((point) => this.scene.addPoint(point))
+      this.scene.addFace(face)
+      this.scene.addRegularPolygonConstraint(constraint)
+      dependentIntersectionPoints.forEach(({ point, constraint }) => {
+        this.scene.addPoint(point)
+        this.scene.addIntersectionConstraint(constraint)
+      })
+    })
+    this.regularPolygonDeletedBoundaryLines.clear()
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.addPoint(point)
       this.scene.addIntersectionConstraint(constraint)
+    })
+    this.relatedPerpendicularLines.forEach((line) => {
+      this.scene.addPerpendicularLine(line)
+      this.scene.addPerpendicularLineConstraint(
+        new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
     })
     if (this.pointConstraint?.pointId) {
       this.scene.addIntersectionConstraint(this.pointConstraint as SceneConstraint & { pointId: string })

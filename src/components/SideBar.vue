@@ -14,6 +14,7 @@ import type { Cylinder3 } from '../core/geometry/Cylinder3'
 import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
+import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
@@ -139,6 +140,12 @@ const selectedStraightLines = computed(() => {
     .map((id) => props.scene.straightLines.get(id))
     .filter((line): line is StraightLine3 => line !== undefined)
 })
+const selectedPerpendicularLines = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.perpendicularLines]
+    .map((id) => props.scene.perpendicularLines.get(id))
+    .filter((line): line is PerpendicularLine3 => line !== undefined)
+})
 const selectedRays = computed(() => {
   void commandRevision.value
   return [...props.scene.selection.rays]
@@ -204,6 +211,10 @@ const hasHiddenConstrainedLines = computed(() => {
 const straightLinesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.straightLines.values()]
+})
+const perpendicularLinesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.perpendicularLines.values()]
 })
 const raysInScene = computed(() => {
   void commandRevision.value
@@ -275,6 +286,7 @@ const editing = ref<{
     | 'point'
     | 'line'
     | 'straightLine'
+    | 'perpendicularLine'
     | 'ray'
     | 'vector'
     | 'circle'
@@ -385,6 +397,7 @@ const getCylinderForNormalCircle = (circle: Circle3) => {
 const DIRECTION_TYPE_COLLECTION: Record<string, Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
   line: props.scene.lines,
   straightLine: props.scene.straightLines,
+  perpendicularLine: props.scene.perpendicularLines,
   ray: props.scene.rays,
   vector: props.scene.vectors,
 }
@@ -419,6 +432,7 @@ const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
 const DIRECTION_TYPE_LABEL: Record<string, string> = {
   line: '线段',
   straightLine: '直线',
+  perpendicularLine: '垂线',
   ray: '射线',
   vector: '向量',
 }
@@ -538,6 +552,15 @@ const editStraightLine = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editPerpendicularLine = reactive({
+  name: '',
+  nameVisible: true,
+  valueVisible: false,
+  visible: true,
+  userLocked: false,
+  displayLength: '',
+  p1: { x: '', y: '', z: '' },
+})
 const editFace = reactive({
   name: '',
   nameVisible: true,
@@ -643,6 +666,9 @@ const selectedLineIds = computed(() => selectedLines.value.map((l) => l?.id).fil
 const selectedStraightLineIds = computed(() =>
   selectedStraightLines.value.map((l) => l?.id).filter(Boolean),
 )
+const selectedPerpendicularLineIds = computed(() =>
+  selectedPerpendicularLines.value.map((l) => l?.id).filter(Boolean),
+)
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
 const selectedVectorIds = computed(() => selectedVectors.value.map((v) => v?.id).filter(Boolean))
 const selectedEditableFaceIds = computed(() =>
@@ -659,6 +685,7 @@ const totalContentCount = computed(
     pointsInScene.value.length +
     linesInScene.value.length +
     straightLinesInScene.value.length +
+    perpendicularLinesInScene.value.length +
     raysInScene.value.length +
     vectorsInScene.value.length +
     circlesInScene.value.length +
@@ -672,6 +699,7 @@ const contentGroupLabels: Record<
   | 'point'
   | 'line'
   | 'straightLine'
+  | 'perpendicularLine'
   | 'ray'
   | 'vector'
   | 'circle'
@@ -685,6 +713,7 @@ const contentGroupLabels: Record<
   point: '点',
   line: '线段',
   straightLine: '直线',
+  perpendicularLine: '垂线',
   ray: '射线',
   vector: '向量',
   circle: '圆',
@@ -703,6 +732,7 @@ const toggleContentGroup = (
     | 'point'
     | 'line'
     | 'straightLine'
+    | 'perpendicularLine'
     | 'ray'
     | 'vector'
     | 'circle'
@@ -727,6 +757,7 @@ const SELECT_FROM_CONTENT_MAP: Record<string, (id: string) => void> = {
   point: (id) => props.scene.selection.selectPoint(id),
   line: (id) => props.scene.selection.selectLine(id),
   straightLine: (id) => props.scene.selection.selectStraightLine(id),
+  perpendicularLine: (id) => props.scene.selection.selectPerpendicularLine(id),
   ray: (id) => props.scene.selection.selectRay(id),
   vector: (id) => props.scene.selection.selectVector(id),
   face: (id) => props.scene.selection.selectFace(id),
@@ -747,6 +778,8 @@ const selectPointFromContent = (id: string) => selectFromContent('point', id)
 const selectLineFromContent = (id: string) => selectFromContent('line', id)
 
 const selectStraightLineFromContent = (id: string) => selectFromContent('straightLine', id)
+
+const selectPerpendicularLineFromContent = (id: string) => selectFromContent('perpendicularLine', id)
 
 const selectRayFromContent = (id: string) => selectFromContent('ray', id)
 
@@ -861,6 +894,7 @@ watch(
     selectedPointIds,
     selectedLineIds,
     selectedStraightLineIds,
+    selectedPerpendicularLineIds,
     selectedRayIds,
     selectedVectorIds,
     selectedEditableFaceIds,
@@ -877,6 +911,7 @@ watch(
       point: selectedPointIds.value,
       line: selectedLineIds.value,
       straightLine: selectedStraightLineIds.value,
+      perpendicularLine: selectedPerpendicularLineIds.value,
       ray: selectedRayIds.value,
       vector: selectedVectorIds.value,
       face: selectedEditableFaceIds.value,
@@ -899,6 +934,7 @@ watch(
     if (pointsInScene.value.length > 0) activeKeys.push('point')
     if (linesInScene.value.length > 0) activeKeys.push('line')
     if (straightLinesInScene.value.length > 0) activeKeys.push('straightLine')
+    if (perpendicularLinesInScene.value.length > 0) activeKeys.push('perpendicularLine')
     if (raysInScene.value.length > 0) activeKeys.push('ray')
     if (vectorsInScene.value.length > 0) activeKeys.push('vector')
     if (circlesInScene.value.length > 0) activeKeys.push('circle')
@@ -1088,6 +1124,23 @@ const nudgeStraightLineCoord = (
   editStraightLine[which][axis] = nextValue
   applyEditStraightLine()
 }
+const handlePerpendicularLineCoordFocus = (axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`perpendicularLine.p1.${axis}`, true)
+}
+const handlePerpendicularLineCoordBlur = (axis: 'x' | 'y' | 'z') => {
+  editPerpendicularLine.p1[axis] = normalizeCoord(editPerpendicularLine.p1[axis])
+  setCoordFocus(`perpendicularLine.p1.${axis}`, false)
+  applyEditPerpendicularLine()
+}
+const nudgePerpendicularLineCoord = (
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const nextValue = stepCoordInput(`perpendicularLine.p1.${axis}`, direction)
+  if (nextValue === null) return
+  editPerpendicularLine.p1[axis] = nextValue
+  applyEditPerpendicularLine()
+}
 const handleRayDisplayLengthFocus = () => {
   setCoordFocus('ray.displayLength', true)
 }
@@ -1160,6 +1213,25 @@ const nudgeStraightLineDisplayLength = (direction: 'up' | 'down') => {
   const next = stepLengthValue(current, 1, direction)
   editStraightLine.displayLength = next.toFixed(2)
   applyEditStraightLine()
+}
+const handlePerpendicularLineDisplayLengthFocus = () => {
+  setCoordFocus('perpendicularLine.displayLength', true)
+}
+const handlePerpendicularLineDisplayLengthBlur = () => {
+  editPerpendicularLine.displayLength = clampLengthValue('perpendicularLine.displayLength', editPerpendicularLine.displayLength, editPerpendicularLine.displayLength)
+  editPerpendicularLine.displayLength = normalizeDisplayLength(editPerpendicularLine.displayLength)
+  setCoordFocus('perpendicularLine.displayLength', false)
+  applyEditPerpendicularLine()
+}
+const nudgePerpendicularLineDisplayLength = (direction: 'up' | 'down') => {
+  const current = Number(editPerpendicularLine.displayLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('perpendicularLine.displayLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editPerpendicularLine.displayLength = next.toFixed(2)
+  applyEditPerpendicularLine()
 }
 const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
   setCoordFocus(`face.edge.${edgeIndex}`, true)
@@ -1269,6 +1341,19 @@ const startEditStraightLine = (l: StraightLine3 | undefined) => {
   editStraightLine.p2.x = toFixed2(l.p2.position.x)
   editStraightLine.p2.y = toFixed2(l.p2.position.y)
   editStraightLine.p2.z = toFixed2(l.p2.position.z)
+}
+const startEditPerpendicularLine = (l: PerpendicularLine3 | undefined) => {
+  if (!l) return
+  editing.value = { type: 'perpendicularLine', id: l.id }
+  editPerpendicularLine.name = l.name ?? ''
+  editPerpendicularLine.nameVisible = l.nameVisible !== false
+  editPerpendicularLine.valueVisible = l.valueVisible === true
+  editPerpendicularLine.visible = l.visible !== false
+  editPerpendicularLine.userLocked = l.userLocked
+  editPerpendicularLine.displayLength = toFixed2(l.displayLength)
+  editPerpendicularLine.p1.x = toFixed2(l.p1.position.x)
+  editPerpendicularLine.p1.y = toFixed2(l.p1.position.y)
+  editPerpendicularLine.p1.z = toFixed2(l.p1.position.z)
 }
 const startEditRay = (r: Ray3 | undefined) => {
   if (!r) return
@@ -1395,6 +1480,8 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
   if (!point) return
   if (isPointCoordinateLocked(point)) return
   props.editor.setPointPosition(id, new Vec3(x, y, z))
+  props.scene.solveDirtyConstraints()
+  props.scene.markAllRenderDirty()
 }
 
 const applyEditPoint = () => {
@@ -1630,6 +1717,30 @@ const applyEditStraightLine = () => {
     editStraightLine.p2.x,
     editStraightLine.p2.y,
     editStraightLine.p2.z,
+  )
+}
+const applyEditPerpendicularLine = () => {
+  if (!editing.value || editing.value.type !== 'perpendicularLine') return
+  const line = props.scene.perpendicularLines.get(editing.value.id)
+  if (!line) return
+  const displayLength = Number(editPerpendicularLine.displayLength)
+  props.editor.updatePerpendicularLine(editing.value.id, {
+    name: editPerpendicularLine.name,
+    nameVisible: editPerpendicularLine.nameVisible,
+    valueVisible: editPerpendicularLine.valueVisible,
+    visible: editPerpendicularLine.visible,
+    displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
+  })
+  if (editPerpendicularLine.userLocked !== line.userLocked) {
+    props.editor.setPerpendicularLineLockState(editing.value.id, editPerpendicularLine.userLocked)
+  }
+  const updatedLine = props.scene.perpendicularLines.get(editing.value.id)
+  if (!updatedLine || updatedLine.userLocked) return
+  applyPointPosition(
+    line.p1.id,
+    editPerpendicularLine.p1.x,
+    editPerpendicularLine.p1.y,
+    editPerpendicularLine.p1.z,
   )
 }
 const applyEditFace = () => {
@@ -2366,6 +2477,39 @@ const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
 const getStraightLineDisplayPoints = (line: StraightLine3) => line.getDisplayPoints()
+const getPerpendicularLineDirection = (line: PerpendicularLine3) => line.getDirectionVector()
+const getPerpendicularLineDisplayPoints = (line: PerpendicularLine3) => line.getDisplayPoints()
+const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
+  const p1Name = line.p1.name ?? ''
+  const target = line.target
+  let targetLabel = ''
+  if (target.type === 'line') {
+    const obj = props.scene.lines.get(target.id)
+    targetLabel = obj ? `线段${obj.name ?? ''}` : '线段'
+  } else if (target.type === 'straightLine') {
+    const obj = props.scene.straightLines.get(target.id)
+    targetLabel = obj ? `直线${obj.name ?? ''}` : '直线'
+  } else if (target.type === 'ray') {
+    const obj = props.scene.rays.get(target.id)
+    targetLabel = obj ? `射线${obj.name ?? ''}` : '射线'
+  } else if (target.type === 'vector') {
+    const obj = props.scene.vectors.get(target.id)
+    targetLabel = obj ? `向量${obj.name ?? ''}` : '向量'
+  } else if (target.type === 'face') {
+    const obj = props.scene.faces.get(target.id)
+    targetLabel = obj ? `多边形${obj.name ?? ''}` : '多边形'
+  } else if (target.type === 'coneBase') {
+    const obj = props.scene.cones.get(target.id)
+    targetLabel = obj ? `圆锥底${obj.name ?? ''}` : '圆锥底'
+  } else if (target.type === 'cylinderBottom') {
+    const obj = props.scene.cylinders.get(target.id)
+    targetLabel = obj ? `圆柱底${obj.name ?? ''}` : '圆柱底'
+  } else if (target.type === 'cylinderTop') {
+    const obj = props.scene.cylinders.get(target.id)
+    targetLabel = obj ? `圆柱顶${obj.name ?? ''}` : '圆柱顶'
+  }
+  return `点${p1Name}-${targetLabel}`
+}
 const getPointIntersectionSummary = (point: Point3 | undefined) =>
   point ? props.editor.getIntersectionSummary(point.id) : null
 const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
@@ -2511,6 +2655,38 @@ watch(
     if (!focusedCoord['line.p2.x']) editLine.p2.x = toFixed2(newLine.p2.x)
     if (!focusedCoord['line.p2.y']) editLine.p2.y = toFixed2(newLine.p2.y)
     if (!focusedCoord['line.p2.z']) editLine.p2.z = toFixed2(newLine.p2.z)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'perpendicularLine') return null
+    const l = props.scene.perpendicularLines.get(editing.value.id)
+    if (!l) return null
+    return {
+      name: l.name ?? '',
+      nameVisible: l.nameVisible !== false,
+      valueVisible: l.valueVisible === true,
+      visible: l.visible !== false,
+      userLocked: l.userLocked,
+      displayLength: l.displayLength,
+      p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
+    }
+  },
+  (newLine) => {
+    if (!newLine) return
+    editPerpendicularLine.name = newLine.name
+    editPerpendicularLine.nameVisible = newLine.nameVisible
+    editPerpendicularLine.valueVisible = newLine.valueVisible
+    editPerpendicularLine.visible = newLine.visible
+    editPerpendicularLine.userLocked = newLine.userLocked
+    if (!focusedCoord['perpendicularLine.displayLength']) {
+      editPerpendicularLine.displayLength = toFixed2(newLine.displayLength)
+    }
+    if (!focusedCoord['perpendicularLine.p1.x']) editPerpendicularLine.p1.x = toFixed2(newLine.p1.x)
+    if (!focusedCoord['perpendicularLine.p1.y']) editPerpendicularLine.p1.y = toFixed2(newLine.p1.y)
+    if (!focusedCoord['perpendicularLine.p1.z']) editPerpendicularLine.p1.z = toFixed2(newLine.p1.z)
   },
   { immediate: true },
 )
@@ -3652,16 +3828,203 @@ onUnmounted(() => {
               {{ getStraightLineDirection(sl!).y.toFixed(2) }},
               {{ getStraightLineDirection(sl!).z.toFixed(2) }}）
             </div>
+          </div>
+        </div>
+
+        <div
+          v-for="pl in selectedPerpendicularLines"
+          :key="pl!.id"
+          class="selectedPerpendicularLine-info"
+          @dblclick="startEditPerpendicularLine(pl)"
+        >
+          <div v-if="editing?.type === 'perpendicularLine' && editing?.id === pl!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editPerpendicularLine.name" @input="applyEditPerpendicularLine" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPerpendicularLine.visible"
+                  @change="applyEditPerpendicularLine"
+                />
+                垂线显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPerpendicularLine.nameVisible"
+                  @change="applyEditPerpendicularLine"
+                />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPerpendicularLine.valueVisible"
+                  @change="applyEditPerpendicularLine"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPerpendicularLine.userLocked"
+                  @change="applyEditPerpendicularLine"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="name-row length-row">
+              <label>显示长度</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePerpendicularLineDisplayLength('down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('perpendicularLine.displayLength', el)"
+                  v-model="editPerpendicularLine.displayLength"
+                  @input="applyEditPerpendicularLine"
+                  @focus="handlePerpendicularLineDisplayLengthFocus"
+                  @blur="handlePerpendicularLineDisplayLengthBlur"
+                  step="1"
+                  min="0.1"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePerpendicularLineDisplayLength('up')"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div v-if="bubbleState['perpendicularLine.displayLength']?.show" class="length-bubble">{{ bubbleState['perpendicularLine.displayLength']?.message }}</div>
+                </Transition>
+              </div>
+            </div>
+            <div class="readonly-value-row">
+              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }},
+              {{ pl!.p2.position.y.toFixed(2) }}, {{ pl!.p2.position.z.toFixed(2) }}）
+            </div>
+            <div class="coord-row-title">
+              点{{ pl!.p1.name ?? '' }}(x,y,z)
+              <span v-if="isPointCoordinateLocked(pl!.p1)" class="lock-badge">🔒</span>
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('x', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('perpendicularLine.p1.x', el)"
+                    v-model="editPerpendicularLine.p1.x"
+                    @input="applyEditPerpendicularLine"
+                    @focus="handlePerpendicularLineCoordFocus('x')"
+                    @blur="handlePerpendicularLineCoordBlur('x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('x', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('y', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('perpendicularLine.p1.y', el)"
+                    v-model="editPerpendicularLine.p1.y"
+                    @input="applyEditPerpendicularLine"
+                    @focus="handlePerpendicularLineCoordFocus('y')"
+                    @blur="handlePerpendicularLineCoordBlur('y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('y', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('z', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('perpendicularLine.p1.z', el)"
+                    v-model="editPerpendicularLine.p1.z"
+                    @input="applyEditPerpendicularLine"
+                    @focus="handlePerpendicularLineCoordFocus('z')"
+                    @blur="handlePerpendicularLineCoordBlur('z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePerpendicularLineCoord('z', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
             <div>
-              显示起点（{{ getStraightLineDisplayPoints(sl!).start.x.toFixed(2) }},
-              {{ getStraightLineDisplayPoints(sl!).start.y.toFixed(2) }},
-              {{ getStraightLineDisplayPoints(sl!).start.z.toFixed(2) }}）
+              垂线{{ pl!.name ?? '' }}
+              <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+            </div>
+            <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
+            <div>
+              点{{ pl!.p1.name ?? '' }}（{{ pl!.p1.position.x.toFixed(2) }},
+              {{ pl!.p1.position.y.toFixed(2) }}, {{ pl!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              显示终点（{{ getStraightLineDisplayPoints(sl!).end.x.toFixed(2) }},
-              {{ getStraightLineDisplayPoints(sl!).end.y.toFixed(2) }},
-              {{ getStraightLineDisplayPoints(sl!).end.z.toFixed(2) }}）
+              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }},
+              {{ pl!.p2.position.y.toFixed(2) }}, {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
+            <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
           </div>
         </div>
 
@@ -5575,192 +5938,204 @@ onUnmounted(() => {
                 </Transition>
               </div>
             </div>
-            <div
-              class="line-editor-grid"
-              :class="{
-                'line-editor-grid--compact': isCompactLineEditor,
-                'line-editor-grid--single-col': !props.editor.getSphereRadiusPoint(s!.id),
-              }"
-            >
-              <div class="line-editor-head"></div>
-              <div class="line-editor-head">
-                球心{{ props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A' }}(x,y,z)
+            <div class="coord-row-title">
+              球心{{ props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A' }}(x,y,z)
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'x', 'down')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('sphere.centerPoint.x', el)"
+                    v-model="editSphere.centerPoint.x"
+                    @input="applySpherePointCoord('centerPoint')"
+                    @focus="handleSpherePointCoordFocus('centerPoint', 'x')"
+                    @blur="handleSpherePointCoordBlur('centerPoint', 'x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'x', 'up')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="line-editor-head">
-                半径{{ props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B' }}(x,y,z)
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'y', 'down')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('sphere.centerPoint.y', el)"
+                    v-model="editSphere.centerPoint.y"
+                    @input="applySpherePointCoord('centerPoint')"
+                    @focus="handleSpherePointCoordFocus('centerPoint', 'y')"
+                    @blur="handleSpherePointCoordBlur('centerPoint', 'y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'y', 'up')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-              <div class="line-axis-label">x</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.centerPoint.x', el)"
-                  v-model="editSphere.centerPoint.x"
-                  @input="applySpherePointCoord('centerPoint')"
-                  @focus="handleSpherePointCoordFocus('centerPoint', 'x')"
-                  @blur="handleSpherePointCoordBlur('centerPoint', 'x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  +
-                </button>
-              </div>
-              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.x', el)"
-                  v-model="editSphere.radiusPoint.x"
-                  @input="applySpherePointCoord('radiusPoint')"
-                  @focus="handleSpherePointCoordFocus('radiusPoint', 'x')"
-                  @blur="handleSpherePointCoordBlur('radiusPoint', 'x')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  +
-                </button>
-              </div>
-              <div class="line-axis-label">y</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.centerPoint.y', el)"
-                  v-model="editSphere.centerPoint.y"
-                  @input="applySpherePointCoord('centerPoint')"
-                  @focus="handleSpherePointCoordFocus('centerPoint', 'y')"
-                  @blur="handleSpherePointCoordBlur('centerPoint', 'y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  +
-                </button>
-              </div>
-              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.y', el)"
-                  v-model="editSphere.radiusPoint.y"
-                  @input="applySpherePointCoord('radiusPoint')"
-                  @focus="handleSpherePointCoordFocus('radiusPoint', 'y')"
-                  @blur="handleSpherePointCoordBlur('radiusPoint', 'y')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  +
-                </button>
-              </div>
-              <div class="line-axis-label">z</div>
-              <div class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.centerPoint.z', el)"
-                  v-model="editSphere.centerPoint.z"
-                  @input="applySpherePointCoord('centerPoint')"
-                  @focus="handleSpherePointCoordFocus('centerPoint', 'z')"
-                  @blur="handleSpherePointCoordBlur('centerPoint', 'z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('centerPoint', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
-                >
-                  +
-                </button>
-              </div>
-              <div v-if="props.editor.getSphereRadiusPoint(s!.id)" class="coord-input">
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  :ref="(el) => setCoordInputRef('sphere.radiusPoint.z', el)"
-                  v-model="editSphere.radiusPoint.z"
-                  @input="applySpherePointCoord('radiusPoint')"
-                  @focus="handleSpherePointCoordFocus('radiusPoint', 'z')"
-                  @blur="handleSpherePointCoordBlur('radiusPoint', 'z')"
-                  step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                />
-                <button
-                  type="button"
-                  class="step-btn"
-                  @click="nudgeSpherePointCoord('radiusPoint', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
-                >
-                  +
-                </button>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'z', 'down')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('sphere.centerPoint.z', el)"
+                    v-model="editSphere.centerPoint.z"
+                    @input="applySpherePointCoord('centerPoint')"
+                    @focus="handleSpherePointCoordFocus('centerPoint', 'z')"
+                    @blur="handleSpherePointCoordBlur('centerPoint', 'z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeSpherePointCoord('centerPoint', 'z', 'up')"
+                    :disabled="isPointCoordinateLocked(props.editor.getSphereCenterPoint(s!.id))"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
             </div>
+            <template v-if="props.editor.getSphereRadiusPoint(s!.id)">
+              <div class="coord-row-title">
+                半径{{ props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B' }}(x,y,z)
+              </div>
+              <div class="coord-row">
+                <div class="axis-field">
+                  <label>x</label>
+                  <div class="coord-input">
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'x', 'down')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      :ref="(el) => setCoordInputRef('sphere.radiusPoint.x', el)"
+                      v-model="editSphere.radiusPoint.x"
+                      @input="applySpherePointCoord('radiusPoint')"
+                      @focus="handleSpherePointCoordFocus('radiusPoint', 'x')"
+                      @blur="handleSpherePointCoordBlur('radiusPoint', 'x')"
+                      step="0.5"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    />
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'x', 'up')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div class="axis-field">
+                  <label>y</label>
+                  <div class="coord-input">
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'y', 'down')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      :ref="(el) => setCoordInputRef('sphere.radiusPoint.y', el)"
+                      v-model="editSphere.radiusPoint.y"
+                      @input="applySpherePointCoord('radiusPoint')"
+                      @focus="handleSpherePointCoordFocus('radiusPoint', 'y')"
+                      @blur="handleSpherePointCoordBlur('radiusPoint', 'y')"
+                      step="0.5"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    />
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'y', 'up')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div class="axis-field">
+                  <label>z</label>
+                  <div class="coord-input">
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'z', 'down')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      :ref="(el) => setCoordInputRef('sphere.radiusPoint.z', el)"
+                      v-model="editSphere.radiusPoint.z"
+                      @input="applySpherePointCoord('radiusPoint')"
+                      @focus="handleSpherePointCoordFocus('radiusPoint', 'z')"
+                      @blur="handleSpherePointCoordBlur('radiusPoint', 'z')"
+                      step="0.5"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    />
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeSpherePointCoord('radiusPoint', 'z', 'up')"
+                      :disabled="isPointCoordinateLocked(props.editor.getSphereRadiusPoint(s!.id))"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
           <div v-else>
             <div>
@@ -6636,6 +7011,7 @@ onUnmounted(() => {
             pointsInScene.length === 0 &&
             linesInScene.length === 0 &&
             straightLinesInScene.length === 0 &&
+            perpendicularLinesInScene.length === 0 &&
             raysInScene.length === 0 &&
             circlesInScene.length === 0 &&
             facesInScene.length === 0
@@ -6788,6 +7164,36 @@ onUnmounted(() => {
                 点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
                 {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
               </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="perpendicularLinesInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.perpendicularLine"
+            @click="toggleContentGroup('perpendicularLine')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.perpendicularLine ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.perpendicularLine }}</span>
+            <span class="content-group-count">{{ perpendicularLinesInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.perpendicularLine" class="content-group-body">
+            <div
+              v-for="pl in perpendicularLinesInScene"
+              :key="pl!.id"
+              class="perpendicular-line-info selectable-geo"
+              :class="{ 'is-selected': selectedPerpendicularLineIds.includes(pl!.id) }"
+              @click="selectPerpendicularLineFromContent(pl!.id)"
+            >
+              <div>
+                垂线{{ pl!.name ?? '' }}
+                <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              </div>
+              <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
+              <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
             </div>
           </div>
         </div>
@@ -7153,6 +7559,7 @@ hr {
 .point-info,
 .selectedLine-info,
 .selectedStraightLine-info,
+.selectedPerpendicularLine-info,
 .selectedRay-info,
 .selectedVector-info,
 .selectedCircle-info,
@@ -7161,6 +7568,7 @@ hr {
 .selectedFace-info,
 .line-info,
 .straight-line-info,
+.perpendicular-line-info,
 .ray-info,
 .vector-info,
 .circle-info,
@@ -7182,6 +7590,11 @@ hr {
 .straight-line-info {
   background-color: rgba(176, 118, 66, 0.22);
   border-left-color: #ff9460;
+}
+.selectedPerpendicularLine-info,
+.perpendicular-line-info {
+  background-color: rgba(0, 180, 150, 0.18);
+  border-left-color: rgb(0, 180, 150);
 }
 .selectedRay-info,
 .ray-info {
@@ -7469,6 +7882,12 @@ hr {
   margin-top: -4px;
   margin-bottom: 6px;
 }
+.readonly-value-row {
+  font-size: 12px;
+  color: #ffffff;
+  padding: 2px 0;
+  grid-column: 1 / -1;
+}
 .edit-grid {
   display: grid;
   grid-template-columns: auto auto;
@@ -7554,6 +7973,11 @@ hr {
   display: grid;
   grid-template-columns: 1fr;
   gap: 4px;
+  grid-column: 1 / -1;
+}
+.coord-row-title {
+  font-size: 12px;
+  color: #e6ffe9;
   grid-column: 1 / -1;
 }
 .name-row {
