@@ -142,8 +142,6 @@ export const useSceneStore = defineStore('scene', () => {
   const syncEditorState = (editor: Editor) => {
     currentMode.value = editor.mode
     isSnappingEnabled.value = editor.isSnappingEnabled
-    canUndo.value = editor.canUndo
-    canRedo.value = editor.canRedo
   }
 
   const syncSceneState = (scene: Scene) => {

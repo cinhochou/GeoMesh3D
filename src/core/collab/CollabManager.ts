@@ -25,6 +25,26 @@ import {
   isIntersectionTargetType,
   type IntersectionTargetRef,
 } from '../geometry/IntersectionPoint3'
+import {
+  importScene,
+  type SerializedScene,
+} from '../editor/SceneSerializer'
+
+export type SharedHistoryEntry = {
+  id: string
+  seq: number
+  actorClientId: number
+  actorName: string | null
+  createdAt: number
+  label: string
+  before: SerializedScene
+  after: SerializedScene
+}
+
+export type SharedHistoryState = {
+  entries: SharedHistoryEntry[]
+  historyIndex: number
+}
 
 export type CollabStatus = {
   room: string | null
@@ -99,6 +119,12 @@ export class CollabManager {
 
   private ydoc: Y.Doc
   private provider: WebsocketProvider | null = null
+  private yHistory: Y.Array<Y.Map<unknown>>
+  private yHistoryIndex: Y.Map<number>
+  private isApplyingSharedHistory = false
+  private localHistorySeq = 0
+  private historyObserver: ((event: Y.YArrayEvent<Y.Map<unknown>>) => void) | null = null
+  private historyIndexObserver: ((event: Y.YMapEvent<number>) => void) | null = null
   private yPoints: Y.Map<PointSharedMap>
   private yLines: Y.Map<LineSharedMap>
   private yStraightLines: Y.Map<StraightLineSharedMap>
@@ -197,9 +223,12 @@ export class CollabManager {
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
   public onLatencyUpdate: (latencyMs: number | null) => void = () => {}
   public onSharedWorldRotationUpdate: (state: SharedWorldRotationState) => void = () => {}
+  public onSharedHistoryUpdate: (state: SharedHistoryState) => void = () => {}
 
   constructor(private scene: Scene) {
     this.ydoc = new Y.Doc()
+    this.yHistory = this.ydoc.getArray<Y.Map<unknown>>('history')
+    this.yHistoryIndex = this.ydoc.getMap<number>('historyIndex')
     this.yPoints = this.ydoc.getMap<PointSharedMap>('points')
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
@@ -665,6 +694,15 @@ export class CollabManager {
     this.clearProviderBindings()
     this.stopWorldRotationOwnerHeartbeat()
     this.stopLatencySampling()
+
+    if (this.historyObserver) {
+      this.yHistory.unobserve(this.historyObserver)
+      this.historyObserver = null
+    }
+    if (this.historyIndexObserver) {
+      this.yHistoryIndex.unobserve(this.historyIndexObserver)
+      this.historyIndexObserver = null
+    }
 
     if (this.provider) {
       this.provider.disconnect()
@@ -1489,9 +1527,13 @@ export class CollabManager {
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
     if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
+    if (this.historyObserver) this.yHistory.unobserve(this.historyObserver)
+    if (this.historyIndexObserver) this.yHistoryIndex.unobserve(this.historyIndexObserver)
     this.cleanupAllRecordObservers()
 
     this.ydoc = new Y.Doc()
+    this.yHistory = this.ydoc.getArray<Y.Map<unknown>>('history')
+    this.yHistoryIndex = this.ydoc.getMap<number>('historyIndex')
     this.yPoints = this.ydoc.getMap<PointSharedMap>('points')
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
@@ -3716,6 +3758,7 @@ export class CollabManager {
 
   syncAction() {
     if (!this.provider || this.roomName === null) return
+    if (this.isApplyingSharedHistory) return
 
     this.markSceneDirty()
     this.syncPending = true
@@ -3731,6 +3774,7 @@ export class CollabManager {
 
   syncLivePreview(pointIds: Iterable<string>, labelTarget: LiveLabelTarget | null = null) {
     if (!this.provider || this.roomName === null) return
+    if (this.isApplyingSharedHistory) return
 
     this.markPreviewPointsDirty(pointIds)
     this.markPreviewLabelDirty(labelTarget)
@@ -4034,5 +4078,346 @@ export class CollabManager {
     deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))
     deletedCubeIds.forEach((id) => this.deletedCubeIds.delete(id))
     deletedRegularPolygonIds.forEach((id) => this.deletedRegularPolygonIds.delete(id))
+  }
+
+  getIsApplyingSharedHistory(): boolean {
+    return this.isApplyingSharedHistory
+  }
+
+  getProviderClientId(): number {
+    if (!this.provider) return 0
+    return this.provider.awareness.clientID
+  }
+
+  getLocalUserLabel(): string | null {
+    return this.localUserLabel
+  }
+
+  getSharedHistoryState(): SharedHistoryState {
+    const entries = this.readSharedHistoryEntries()
+    const historyIndex = this.yHistoryIndex.get('value') ?? -1
+    return { entries, historyIndex }
+  }
+
+  getSharedHistoryCanUndo(): boolean {
+    const idx = this.yHistoryIndex.get('value') ?? -1
+    return idx >= 0
+  }
+
+  getSharedHistoryCanRedo(): boolean {
+    const idx = this.yHistoryIndex.get('value') ?? -1
+    return idx < this.yHistory.length - 1
+  }
+
+  appendHistoryEntry(entry: Omit<SharedHistoryEntry, 'seq'>): void {
+    if (!this.provider || this.roomName === null) return
+
+    const seq = this.localHistorySeq + 1
+    this.localHistorySeq = seq
+
+    const currentIndex = this.yHistoryIndex.get('value') ?? -1
+    const fullEntry: SharedHistoryEntry = { ...entry, seq }
+
+    this.ydoc.transact(() => {
+      if (currentIndex < this.yHistory.length - 1) {
+        const deleteCount = this.yHistory.length - 1 - currentIndex
+        for (let i = 0; i < deleteCount; i++) {
+          this.yHistory.delete(this.yHistory.length - 1)
+        }
+      }
+
+      this.yHistory.push([this.serializeHistoryEntry(fullEntry)])
+
+      this.yHistoryIndex.set('value', this.yHistory.length - 1)
+    })
+
+    this.emitSharedHistoryState()
+  }
+
+  sharedUndo(): void {
+    if (!this.provider || this.roomName === null) return
+    const currentIndex = this.yHistoryIndex.get('value') ?? -1
+    if (currentIndex < 0) return
+
+    const entry = this.readSharedHistoryEntryAt(currentIndex)
+    if (!entry) return
+
+    this.isApplyingSharedHistory = true
+    try {
+      importScene(this.scene, entry.before)
+      this.scene.solveDirtyConstraints()
+      this.scene.markAllRenderDirty()
+    } finally {
+      this.isApplyingSharedHistory = false
+    }
+
+    this.yHistoryIndex.set('value', currentIndex - 1)
+    this.syncFullScene()
+    this.emitSharedHistoryState()
+  }
+
+  uploadLocalSnapshotHistory(
+    entries: Array<{
+      before: SerializedScene
+      after: SerializedScene
+      label: string
+    }>,
+    actorClientId: number,
+    actorName: string | null,
+  ): void {
+    if (!this.provider || this.roomName === null) return
+    if (entries.length === 0) return
+
+    const existingHistoryLength = this.yHistory.length
+    if (existingHistoryLength > 0) return
+
+    this.ydoc.transact(() => {
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i]!
+        const seq = this.localHistorySeq + 1
+        this.localHistorySeq = seq
+
+        const fullEntry: SharedHistoryEntry = {
+          id: crypto.randomUUID(),
+          seq,
+          actorClientId,
+          actorName,
+          createdAt: Date.now() - (entries.length - i) * 1000,
+          label: e.label,
+          before: e.before,
+          after: e.after,
+        }
+
+        this.yHistory.push([this.serializeHistoryEntry(fullEntry)])
+      }
+
+      this.yHistoryIndex.set('value', this.yHistory.length - 1)
+    })
+
+    this.emitSharedHistoryState()
+  }
+
+  sharedRedo(): void {
+    if (!this.provider || this.roomName === null) return
+    const currentIndex = this.yHistoryIndex.get('value') ?? -1
+    if (currentIndex >= this.yHistory.length - 1) return
+
+    const entry = this.readSharedHistoryEntryAt(currentIndex + 1)
+    if (!entry) return
+
+    this.isApplyingSharedHistory = true
+    try {
+      importScene(this.scene, entry.after)
+      this.scene.solveDirtyConstraints()
+      this.scene.markAllRenderDirty()
+    } finally {
+      this.isApplyingSharedHistory = false
+    }
+
+    this.yHistoryIndex.set('value', currentIndex + 1)
+    this.syncFullScene()
+    this.emitSharedHistoryState()
+  }
+
+  private syncFullScene(): void {
+    if (!this.provider || this.roomName === null) return
+
+    this.ydoc.transact(() => {
+      for (const id of [...this.yPoints.keys()]) {
+        if (id !== Scene.ORIGIN_ID && !this.scene.points.has(id)) {
+          this.yPoints.delete(id)
+        }
+      }
+      for (const id of [...this.yLines.keys()]) {
+        if (!this.scene.lines.has(id)) this.yLines.delete(id)
+      }
+      for (const id of [...this.yStraightLines.keys()]) {
+        if (!this.scene.straightLines.has(id)) this.yStraightLines.delete(id)
+      }
+      for (const id of [...this.yPerpendicularLines.keys()]) {
+        if (!this.scene.perpendicularLines.has(id)) this.yPerpendicularLines.delete(id)
+      }
+      for (const id of [...this.yRays.keys()]) {
+        if (!this.scene.rays.has(id)) this.yRays.delete(id)
+      }
+      for (const id of [...this.yVectors.keys()]) {
+        if (!this.scene.vectors.has(id)) this.yVectors.delete(id)
+      }
+      for (const id of [...this.yCircles.keys()]) {
+        if (!this.scene.circles.has(id)) this.yCircles.delete(id)
+      }
+      for (const id of [...this.ySpheres.keys()]) {
+        if (!this.scene.spheres.has(id)) this.ySpheres.delete(id)
+      }
+      for (const id of [...this.yCones.keys()]) {
+        if (!this.scene.cones.has(id)) this.yCones.delete(id)
+      }
+      for (const id of [...this.yCylinders.keys()]) {
+        if (!this.scene.cylinders.has(id)) this.yCylinders.delete(id)
+      }
+      for (const id of [...this.yIntersections.keys()]) {
+        if (!this.scene.getIntersectionConstraint(id)) this.yIntersections.delete(id)
+      }
+      for (const id of [...this.yObjectConstrainedPoints.keys()]) {
+        if (!this.scene.objectConstrainedPointConstraints.has(id)) this.yObjectConstrainedPoints.delete(id)
+      }
+      for (const id of [...this.yFaces.keys()]) {
+        if (!this.scene.faces.has(id)) this.yFaces.delete(id)
+      }
+      for (const id of [...this.yCubes.keys()]) {
+        if (!this.scene.getCubeConstraint(id)) this.yCubes.delete(id)
+      }
+      for (const id of [...this.yRegularPolygons.keys()]) {
+        if (!this.scene.regularPolygonConstraints.has(id)) this.yRegularPolygons.delete(id)
+      }
+
+      this.scene.points.forEach((p, id) => {
+        this.syncPointRecord(this.ensurePointRecord(id), p)
+      })
+      this.scene.lines.forEach((l, id) => {
+        this.syncLineRecord(this.ensureLineRecord(id), l)
+      })
+      this.scene.straightLines.forEach((l, id) => {
+        this.syncStraightLineRecord(this.ensureStraightLineRecord(id), l)
+      })
+      this.scene.perpendicularLines.forEach((l, id) => {
+        this.syncPerpendicularLineRecord(this.ensurePerpendicularLineRecord(id), l)
+      })
+      this.scene.rays.forEach((r, id) => {
+        this.syncRayRecord(this.ensureRayRecord(id), r)
+      })
+      this.scene.vectors.forEach((v, id) => {
+        this.syncVectorRecord(this.ensureVectorRecord(id), v)
+      })
+      this.scene.circles.forEach((c, id) => {
+        this.syncCircleRecord(this.ensureCircleRecord(id), c)
+      })
+      this.scene.spheres.forEach((s, id) => {
+        this.syncSphereRecord(this.ensureSphereRecord(id), s)
+      })
+      this.scene.cones.forEach((c, id) => {
+        this.syncConeRecord(this.ensureConeRecord(id), c)
+      })
+      this.scene.cylinders.forEach((c, id) => {
+        this.syncCylinderRecord(this.ensureCylinderRecord(id), c)
+      })
+      this.scene.intersectionConstraints.forEach((c) => {
+        if (c instanceof IntersectionPointConstraint) {
+          this.syncIntersectionRecord(this.ensureIntersectionRecord(c.pointId), c)
+        }
+      })
+      this.scene.objectConstrainedPointConstraints.forEach((c, id) => {
+        this.syncObjectConstrainedPointRecord(this.ensureObjectConstrainedPointRecord(id), c)
+      })
+      this.scene.faces.forEach((f, id) => {
+        this.syncFaceRecord(this.ensureFaceRecord(id), f)
+      })
+      this.scene.cubeConstraints.forEach((c) => {
+        if (c instanceof CubeConstraint && c.cubeId) {
+          this.syncCubeRecord(this.ensureCubeRecord(c.cubeId), c)
+        }
+      })
+      this.scene.regularPolygonConstraints.forEach((c, id) => {
+        if (c instanceof RegularPolygonConstraint) {
+          this.syncRegularPolygonRecord(this.ensureRegularPolygonRecord(id), c)
+        }
+      })
+    })
+
+    this.clearDirtyState()
+  }
+
+  private serializeHistoryEntry(entry: SharedHistoryEntry): Y.Map<unknown> {
+    const map = new Y.Map<unknown>()
+    map.set('id', entry.id)
+    map.set('seq', entry.seq)
+    map.set('actorClientId', entry.actorClientId)
+    map.set('actorName', entry.actorName ?? '')
+    map.set('createdAt', entry.createdAt)
+    map.set('label', entry.label)
+    map.set('before', JSON.stringify(entry.before))
+    map.set('after', JSON.stringify(entry.after))
+    return map
+  }
+
+  private deserializeHistoryEntry(map: Y.Map<unknown>): SharedHistoryEntry | null {
+    try {
+      const id = map.get('id')
+      const seq = map.get('seq')
+      const actorClientId = map.get('actorClientId')
+      const actorName = map.get('actorName')
+      const createdAt = map.get('createdAt')
+      const label = map.get('label')
+      const beforeRaw = map.get('before')
+      const afterRaw = map.get('after')
+
+      if (typeof id !== 'string' || typeof seq !== 'number' || typeof actorClientId !== 'number' ||
+          typeof createdAt !== 'number' || typeof label !== 'string' ||
+          typeof beforeRaw !== 'string' || typeof afterRaw !== 'string') {
+        return null
+      }
+
+      const before = JSON.parse(beforeRaw) as SerializedScene
+      const after = JSON.parse(afterRaw) as SerializedScene
+
+      return {
+        id,
+        seq,
+        actorClientId,
+        actorName: typeof actorName === 'string' && actorName !== '' ? actorName : null,
+        createdAt,
+        label,
+        before,
+        after,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private readSharedHistoryEntries(): SharedHistoryEntry[] {
+    const entries: SharedHistoryEntry[] = []
+    for (let i = 0; i < this.yHistory.length; i++) {
+      const map = this.yHistory.get(i)
+      const entry = this.deserializeHistoryEntry(map)
+      if (entry) entries.push(entry)
+    }
+    return entries
+  }
+
+  private readSharedHistoryEntryAt(index: number): SharedHistoryEntry | null {
+    if (index < 0 || index >= this.yHistory.length) return null
+    const map = this.yHistory.get(index)
+    return this.deserializeHistoryEntry(map)
+  }
+
+  private emitSharedHistoryState(): void {
+    this.onSharedHistoryUpdate(this.getSharedHistoryState())
+  }
+
+  setupHistoryObservers(): void {
+    this.historyObserver = () => {
+      this.emitSharedHistoryState()
+    }
+    this.yHistory.observe(this.historyObserver)
+
+    this.historyIndexObserver = () => {
+      this.emitSharedHistoryState()
+    }
+    this.yHistoryIndex.observe(this.historyIndexObserver)
+
+    this.emitSharedHistoryState()
+  }
+
+  syncLocalHistorySeqFromYjs(): void {
+    let maxSeq = 0
+    for (let i = 0; i < this.yHistory.length; i++) {
+      const map = this.yHistory.get(i)
+      const seq = map.get('seq')
+      if (typeof seq === 'number' && seq > maxSeq) {
+        maxSeq = seq
+      }
+    }
+    this.localHistorySeq = maxSeq
   }
 }

@@ -18,6 +18,7 @@ import {
   downloadSceneAsJson,
   openJsonFileForImport,
   validateSerializedScene,
+  exportScene,
   importScene,
   isSceneEmpty,
   isSerializedSceneEmpty,
@@ -79,6 +80,12 @@ let solverFlushRequested = false
 let solverFlushReady = false
 
 const collabManager = ref<CollabManager | null>(null)
+const localSnapshotHistory: Array<{
+  before: SerializedScene
+  after: SerializedScene
+  label: string
+}> = []
+let localSnapshotHistoryIndex = -1
 let lastFpsTime = performance.now()
 let frameCount = 0
 const sidebarWidth = ref<number | null>(null)
@@ -265,7 +272,7 @@ onMounted(() => {
   window.addEventListener('show-cylinder-radius-dialog', handleShowCylinderRadiusDialog)
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
-  // Ensure renderer rebuilds meshes when editor view is mounted again
+  updateLocalHistoryUI()
   scene.markAllRenderDirty()
 
   collabManager.value = new CollabManager(scene)
@@ -315,6 +322,10 @@ onMounted(() => {
         : ''
   }
 
+  collabManager.value.onSharedHistoryUpdate = (state) => {
+    sharedHistoryState.value = state
+  }
+
   interaction.onARSceneRotateStartRequest = () =>
     isARMode.value &&
     (collabManager.value?.getStatus().room
@@ -333,22 +344,66 @@ onMounted(() => {
   }
 
   editor.executeCommand = (cmd: Command) => {
-    originalExecuteCommand(cmd)
-    collabManager.value?.syncAction()
+    const cm = collabManager.value
+    const inRoom = cm && cm.getStatus().room !== null
+    if (inRoom && !cm!.getIsApplyingSharedHistory()) {
+      const before = exportScene(scene)
+      originalExecuteCommand(cmd)
+      const after = exportScene(scene)
+      cm!.syncAction()
+      const clientId = cm!.getProviderClientId()
+      cm!.appendHistoryEntry({
+        id: crypto.randomUUID(),
+        actorClientId: clientId,
+        actorName: cm!.getLocalUserLabel(),
+        createdAt: Date.now(),
+        label: cmd.constructor.name,
+        before,
+        after,
+      })
+    } else if (!inRoom) {
+      const before = exportScene(scene)
+      originalExecuteCommand(cmd)
+      const after = exportScene(scene)
+      const truncateAt = localSnapshotHistoryIndex + 1
+      if (truncateAt < localSnapshotHistory.length) {
+        localSnapshotHistory.splice(truncateAt)
+      }
+      localSnapshotHistory.push({ before, after, label: cmd.constructor.name })
+      localSnapshotHistoryIndex = localSnapshotHistory.length - 1
+      updateLocalHistoryUI()
+    } else {
+      originalExecuteCommand(cmd)
+      cm!.syncAction()
+    }
   }
 
   editor.undo = () => {
-    originalUndo()
-    scene.solveDirtyConstraints()
-    scene.markAllRenderDirty()
-    collabManager.value?.syncAction()
+    const cm = collabManager.value
+    if (cm && cm.getStatus().room !== null) {
+      cm.sharedUndo()
+    } else if (localSnapshotHistoryIndex >= 0) {
+      const entry = localSnapshotHistory[localSnapshotHistoryIndex]!
+      importScene(scene, entry.before)
+      localSnapshotHistoryIndex--
+      scene.solveDirtyConstraints()
+      scene.markAllRenderDirty()
+      updateLocalHistoryUI()
+    }
   }
 
   editor.redo = () => {
-    originalRedo()
-    scene.solveDirtyConstraints()
-    scene.markAllRenderDirty()
-    collabManager.value?.syncAction()
+    const cm = collabManager.value
+    if (cm && cm.getStatus().room !== null) {
+      cm.sharedRedo()
+    } else if (localSnapshotHistoryIndex < localSnapshotHistory.length - 1) {
+      const entry = localSnapshotHistory[localSnapshotHistoryIndex + 1]!
+      importScene(scene, entry.after)
+      localSnapshotHistoryIndex++
+      scene.solveDirtyConstraints()
+      scene.markAllRenderDirty()
+      updateLocalHistoryUI()
+    }
   }
 
   const loop = () => {
@@ -491,6 +546,46 @@ watch(
     scene.markAllRenderDirty()
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
+  },
+  { flush: 'post' },
+)
+
+const sharedHistoryState = ref<import('../core/collab/CollabManager').SharedHistoryState | null>(null)
+
+const updateLocalHistoryUI = () => {
+  sceneStore.setHistoryState({
+    canUndo: localSnapshotHistoryIndex >= 0,
+    canRedo: localSnapshotHistoryIndex < localSnapshotHistory.length - 1,
+  })
+}
+
+const updateSharedHistoryUI = () => {
+  const state = sharedHistoryState.value
+  if (!state) return
+  sceneStore.setHistoryState({
+    canUndo: state.historyIndex >= 0,
+    canRedo: state.historyIndex < state.entries.length - 1,
+  })
+}
+
+const updateHistoryUI = () => {
+  const cm = collabManager.value
+  if (cm && cm.getStatus().room !== null) {
+    updateSharedHistoryUI()
+  } else {
+    updateLocalHistoryUI()
+  }
+}
+
+watch(sharedHistoryState, () => {
+  updateSharedHistoryUI()
+  sceneStore.syncSceneState(scene)
+})
+
+watch(
+  [() => scene.points.size, () => scene.lines.size, () => scene.circles.size],
+  () => {
+    updateHistoryUI()
   },
   { flush: 'post' },
 )
@@ -830,12 +925,35 @@ const handleImportScene = async () => {
     editor.selectedPoints = []
     scene.selection.clear()
 
+    const cm = collabManager.value
+    const inRoom = cm && cm.getStatus().room !== null
+    const before = exportScene(scene)
     importScene(scene, result.data as SerializedScene)
 
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
     scene.markAllRenderDirty()
-    collabManager.value?.syncAction()
+    if (inRoom && before) {
+      const after = exportScene(scene)
+      cm!.syncAction()
+      cm!.appendHistoryEntry({
+        id: crypto.randomUUID(),
+        actorClientId: cm!.getProviderClientId(),
+        actorName: cm!.getLocalUserLabel(),
+        createdAt: Date.now(),
+        label: 'ImportScene',
+        before,
+        after,
+      })
+    } else if (!inRoom && before) {
+      const after = exportScene(scene)
+      localSnapshotHistory.length = 0
+      localSnapshotHistory.push({ before, after, label: 'ImportScene' })
+      localSnapshotHistoryIndex = 0
+      updateLocalHistoryUI()
+    } else {
+      collabManager.value?.syncAction()
+    }
 
     showToast('导入成功', 'global')
   } catch {
@@ -950,9 +1068,24 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
   if (open) {
     collabStore.openJoinDialog('正在加入房间中...')
     try {
+      const snapshotsToUpload = [...localSnapshotHistory]
       await collabManager.value?.joinRoom(room)
       scene.selection.clear()
       editor.selectedPoints = []
+      collabManager.value?.setupHistoryObservers()
+      collabManager.value?.syncLocalHistorySeqFromYjs()
+      if (collabManager.value) {
+        const sharedState = collabManager.value.getSharedHistoryState()
+        if (sharedState.entries.length === 0 && snapshotsToUpload.length > 0) {
+          collabManager.value.uploadLocalSnapshotHistory(
+            snapshotsToUpload,
+            collabManager.value.getProviderClientId(),
+            collabManager.value.getLocalUserLabel(),
+          )
+        }
+      }
+      localSnapshotHistory.length = 0
+      localSnapshotHistoryIndex = -1
       collabStore.closeJoinDialog()
       showToast(`成功加入房间: ${room}`, 'global')
     } catch (err) {
@@ -963,7 +1096,22 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
     return
   }
 
-  collabManager.value?.leaveRoom()
+  const cm = collabManager.value
+  if (cm) {
+    const sharedState = cm.getSharedHistoryState()
+    localSnapshotHistory.length = 0
+    for (const entry of sharedState.entries) {
+      localSnapshotHistory.push({
+        before: entry.before,
+        after: entry.after,
+        label: entry.label,
+      })
+    }
+    localSnapshotHistoryIndex = sharedState.historyIndex
+  }
+  cm?.leaveRoom()
+  sharedHistoryState.value = null
+  updateLocalHistoryUI()
   collabStore.setPeerCount(1)
   showToast('已成功退出协作', 'global')
 }

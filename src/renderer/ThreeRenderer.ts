@@ -105,6 +105,7 @@ export class ThreeRenderer {
       powerPreference: 'default',
       depthOcclusion: true,
       hiddenEdge: true,
+      confirmBeforeDelete: true,
     }
     this.pixelRatioScale = this.renderSettings.pixelRatioScale
     this.isMobileDevice =
@@ -562,7 +563,8 @@ export class ThreeRenderer {
     return {
       needsRecreate:
         (typeof settings.antialias === 'boolean' && settings.antialias !== prevAntialias) ||
-        (settings.powerPreference !== undefined && settings.powerPreference !== prevPowerPreference),
+        (settings.powerPreference !== undefined &&
+          settings.powerPreference !== prevPowerPreference),
     }
   }
 
@@ -896,7 +898,9 @@ export class ThreeRenderer {
 
   setGuideLinesVisible(visible: boolean) {
     if (!this.projectionGroup) return
-    const line = this.projectionGroup.getObjectByName('guideLines') as THREE.LineSegments | undefined
+    const line = this.projectionGroup.getObjectByName('guideLines') as
+      | THREE.LineSegments
+      | undefined
     if (line) line.visible = visible
   }
 
