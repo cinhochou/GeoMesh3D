@@ -26,8 +26,12 @@ const props = defineProps<{
 
 const uiStore = useUiStore()
 const sceneStore = useSceneStore()
-const { isCompactLineEditor, contentGroupsCollapsed, hasAutoCollapsedContentGroups } =
-  storeToRefs(uiStore)
+const {
+  isCompactLineEditor,
+  contentGroupsCollapsed,
+  hasAutoCollapsedContentGroups,
+  renderSettings,
+} = storeToRefs(uiStore)
 const { modeName, modeHint } = storeToRefs(sceneStore)
 const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
 const showHiddenPointHint = ref(false)
@@ -299,6 +303,45 @@ const editing = ref<{
   id: string
 } | null>(null)
 
+const showDeleteConfirmDialog = ref(false)
+const deleteConfirmTarget = ref<{ type: string; id: string; name: string } | null>(null)
+
+const deleteByType: Record<string, (editor: Editor, id: string) => void> = {
+  point: (e, id) => e.deletePoint(id),
+  line: (e, id) => e.deleteLine(id),
+  straightLine: (e, id) => e.deleteStraightLine(id),
+  perpendicularLine: (e, id) => e.deletePerpendicularLine(id),
+  ray: (e, id) => e.deleteRay(id),
+  vector: (e, id) => e.deleteVector(id),
+  circle: (e, id) => e.deleteCircle(id),
+  sphere: (e, id) => e.deleteSphere(id),
+  cone: (e, id) => e.deleteCone(id),
+  cylinder: (e, id) => e.deleteCylinder(id),
+  face: (e, id) => e.deleteFace(id),
+}
+
+const handleDeleteElement = (type: string, id: string, name: string) => {
+  if (renderSettings.value.confirmBeforeDelete) {
+    deleteConfirmTarget.value = { type, id, name }
+    showDeleteConfirmDialog.value = true
+  } else {
+    deleteByType[type]?.(props.editor, id)
+  }
+}
+
+const confirmDeleteElement = () => {
+  if (deleteConfirmTarget.value) {
+    deleteByType[deleteConfirmTarget.value.type]?.(props.editor, deleteConfirmTarget.value.id)
+  }
+  showDeleteConfirmDialog.value = false
+  deleteConfirmTarget.value = null
+}
+
+const cancelDeleteElement = () => {
+  showDeleteConfirmDialog.value = false
+  deleteConfirmTarget.value = null
+}
+
 const isPointCoordinateLocked = (point: Point3 | undefined) =>
   Boolean(point && props.editor.isPointCoordinateLocked(point))
 const isLineEndpointCoordinateLocked = (line: Line3 | undefined, point: Point3 | undefined) =>
@@ -389,12 +432,16 @@ const getConeForNormalCircle = (circle: Circle3) => {
 const getCylinderForNormalCircle = (circle: Circle3) => {
   if (!circle.isNormalCircle()) return null
   for (const cylinder of props.scene.cylinders.values()) {
-    if (cylinder.normalCircleId === circle.id || cylinder.topNormalCircleId === circle.id) return cylinder
+    if (cylinder.normalCircleId === circle.id || cylinder.topNormalCircleId === circle.id)
+      return cylinder
   }
   return null
 }
 
-const DIRECTION_TYPE_COLLECTION: Record<string, Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>> = {
+const DIRECTION_TYPE_COLLECTION: Record<
+  string,
+  Map<string, { p1: { position: Vec3 }; p2: { position: Vec3 } }>
+> = {
   line: props.scene.lines,
   straightLine: props.scene.straightLines,
   perpendicularLine: props.scene.perpendicularLines,
@@ -413,7 +460,11 @@ const resolveDirectionVec = (circle: Circle3): Vec3 | null => {
   if (cylinder) {
     const bottomCenter = cylinder.bottomCenterPoint.position
     const topCenter = cylinder.topCenterPoint.position
-    return new Vec3(topCenter.x - bottomCenter.x, topCenter.y - bottomCenter.y, topCenter.z - bottomCenter.z)
+    return new Vec3(
+      topCenter.x - bottomCenter.x,
+      topCenter.y - bottomCenter.y,
+      topCenter.z - bottomCenter.z,
+    )
   }
   if (!circle.directionType) return null
   if (circle.directionType === 'point') return new Vec3(0, 1, 0)
@@ -484,7 +535,8 @@ const formatPiCircumference = (radius: number): string => formatPiCoeff(2 * radi
 
 const formatPiArea = (radius: number): string => formatPiCoeff(radius * radius)
 
-const formatPiConeVolume = (radius: number, height: number): string => formatPiCoeff((1 / 3) * radius * radius * height)
+const formatPiConeVolume = (radius: number, height: number): string =>
+  formatPiCoeff((1 / 3) * radius * radius * height)
 
 const formatPiConeLateralArea = (radius: number, height: number): string => {
   const slantHeight = Math.hypot(radius, height)
@@ -493,14 +545,18 @@ const formatPiConeLateralArea = (radius: number, height: number): string => {
 
 const formatPiConeBaseArea = (radius: number): string => formatPiCoeff(radius * radius)
 
-const formatPiCylinderVolume = (radius: number, height: number): string => formatPiCoeff(radius * radius * height)
-const formatPiCylinderLateralArea = (radius: number, height: number): string => formatPiCoeff(2 * radius * height)
+const formatPiCylinderVolume = (radius: number, height: number): string =>
+  formatPiCoeff(radius * radius * height)
+const formatPiCylinderLateralArea = (radius: number, height: number): string =>
+  formatPiCoeff(2 * radius * height)
 const formatPiCylinderBaseArea = (radius: number): string => formatPiCoeff(radius * radius)
-const formatPiCylinderSurfaceArea = (radius: number, height: number): string => formatPiCoeff(2 * radius * height + 2 * radius * radius)
+const formatPiCylinderSurfaceArea = (radius: number, height: number): string =>
+  formatPiCoeff(2 * radius * height + 2 * radius * radius)
 
 const formatPiSphereArea = (radius: number): string => formatPiCoeff(4 * radius * radius)
 
-const formatPiSphereVolume = (radius: number): string => formatPiCoeff((4 / 3) * radius * radius * radius)
+const formatPiSphereVolume = (radius: number): string =>
+  formatPiCoeff((4 / 3) * radius * radius * radius)
 
 const editPoint = reactive({
   name: '',
@@ -679,7 +735,9 @@ const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id)
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
 const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).filter(Boolean))
-const selectedCylinderIds = computed(() => selectedCylinders.value.map((c) => c?.id).filter(Boolean))
+const selectedCylinderIds = computed(() =>
+  selectedCylinders.value.map((c) => c?.id).filter(Boolean),
+)
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
@@ -779,7 +837,8 @@ const selectLineFromContent = (id: string) => selectFromContent('line', id)
 
 const selectStraightLineFromContent = (id: string) => selectFromContent('straightLine', id)
 
-const selectPerpendicularLineFromContent = (id: string) => selectFromContent('perpendicularLine', id)
+const selectPerpendicularLineFromContent = (id: string) =>
+  selectFromContent('perpendicularLine', id)
 
 const selectRayFromContent = (id: string) => selectFromContent('ray', id)
 
@@ -1029,10 +1088,13 @@ const showLengthBubble = (key: string, message: string) => {
   bubbleState[key] = { show: true, message }
   const existing = bubbleTimers.get(key)
   if (existing) clearTimeout(existing)
-  bubbleTimers.set(key, setTimeout(() => {
-    if (bubbleState[key]) bubbleState[key].show = false
-    bubbleTimers.delete(key)
-  }, 3000))
+  bubbleTimers.set(
+    key,
+    setTimeout(() => {
+      if (bubbleState[key]) bubbleState[key].show = false
+      bubbleTimers.delete(key)
+    }, 3000),
+  )
 }
 
 const clampLengthValue = (key: string, value: string, previousValue: string): string => {
@@ -1093,7 +1155,11 @@ const handleLineLengthFocus = () => {
   setCoordFocus('line.lockedLength', true)
 }
 const handleLineLengthBlur = () => {
-  editLine.lockedLength = clampLengthValue('line.lockedLength', editLine.lockedLength, editLine.lockedLength)
+  editLine.lockedLength = clampLengthValue(
+    'line.lockedLength',
+    editLine.lockedLength,
+    editLine.lockedLength,
+  )
   editLine.lockedLength = normalizeDisplayLength(editLine.lockedLength)
   setCoordFocus('line.lockedLength', false)
   applyEditLine()
@@ -1132,10 +1198,7 @@ const handlePerpendicularLineCoordBlur = (axis: 'x' | 'y' | 'z') => {
   setCoordFocus(`perpendicularLine.p1.${axis}`, false)
   applyEditPerpendicularLine()
 }
-const nudgePerpendicularLineCoord = (
-  axis: 'x' | 'y' | 'z',
-  direction: 'up' | 'down',
-) => {
+const nudgePerpendicularLineCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
   const nextValue = stepCoordInput(`perpendicularLine.p1.${axis}`, direction)
   if (nextValue === null) return
   editPerpendicularLine.p1[axis] = nextValue
@@ -1145,7 +1208,11 @@ const handleRayDisplayLengthFocus = () => {
   setCoordFocus('ray.displayLength', true)
 }
 const handleRayDisplayLengthBlur = () => {
-  editRay.displayLength = clampLengthValue('ray.displayLength', editRay.displayLength, editRay.displayLength)
+  editRay.displayLength = clampLengthValue(
+    'ray.displayLength',
+    editRay.displayLength,
+    editRay.displayLength,
+  )
   editRay.displayLength = normalizeDisplayLength(editRay.displayLength)
   setCoordFocus('ray.displayLength', false)
   applyEditRay()
@@ -1199,7 +1266,11 @@ const handleStraightLineDisplayLengthFocus = () => {
   setCoordFocus('straightLine.displayLength', true)
 }
 const handleStraightLineDisplayLengthBlur = () => {
-  editStraightLine.displayLength = clampLengthValue('straightLine.displayLength', editStraightLine.displayLength, editStraightLine.displayLength)
+  editStraightLine.displayLength = clampLengthValue(
+    'straightLine.displayLength',
+    editStraightLine.displayLength,
+    editStraightLine.displayLength,
+  )
   editStraightLine.displayLength = normalizeDisplayLength(editStraightLine.displayLength)
   setCoordFocus('straightLine.displayLength', false)
   applyEditStraightLine()
@@ -1218,7 +1289,11 @@ const handlePerpendicularLineDisplayLengthFocus = () => {
   setCoordFocus('perpendicularLine.displayLength', true)
 }
 const handlePerpendicularLineDisplayLengthBlur = () => {
-  editPerpendicularLine.displayLength = clampLengthValue('perpendicularLine.displayLength', editPerpendicularLine.displayLength, editPerpendicularLine.displayLength)
+  editPerpendicularLine.displayLength = clampLengthValue(
+    'perpendicularLine.displayLength',
+    editPerpendicularLine.displayLength,
+    editPerpendicularLine.displayLength,
+  )
   editPerpendicularLine.displayLength = normalizeDisplayLength(editPerpendicularLine.displayLength)
   setCoordFocus('perpendicularLine.displayLength', false)
   applyEditPerpendicularLine()
@@ -1239,7 +1314,11 @@ const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
 const handleFaceEdgeLengthBlur = (faceId: string, edgeIndex: number) => {
   const key = `face.edge.${edgeIndex}`
   const prev = editFace.edgeLengths[edgeIndex] ?? ''
-  editFace.edgeLengths[edgeIndex] = clampLengthValue(key, editFace.edgeLengths[edgeIndex] ?? '', prev)
+  editFace.edgeLengths[edgeIndex] = clampLengthValue(
+    key,
+    editFace.edgeLengths[edgeIndex] ?? '',
+    prev,
+  )
   editFace.edgeLengths[edgeIndex] = normalizeFaceEdgeLength(editFace.edgeLengths[edgeIndex] ?? '')
   setCoordFocus(key, false)
   applyFaceEdgeLength(faceId, edgeIndex)
@@ -1259,9 +1338,15 @@ const handleHexahedronEdgeLengthFocus = () => {
   setCoordFocus('hexa.edgeLength', true)
 }
 const handleHexahedronEdgeLengthBlur = () => {
-  editHexahedron.edgeLength = clampLengthValue('hexa.edgeLength', editHexahedron.edgeLength, editHexahedron.edgeLength)
+  editHexahedron.edgeLength = clampLengthValue(
+    'hexa.edgeLength',
+    editHexahedron.edgeLength,
+    editHexahedron.edgeLength,
+  )
   const n = Number(editHexahedron.edgeLength)
-  editHexahedron.edgeLength = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editHexahedron.edgeLength
+  editHexahedron.edgeLength = Number.isFinite(n)
+    ? Math.max(LENGTH_MIN, n).toFixed(2)
+    : editHexahedron.edgeLength
   setCoordFocus('hexa.edgeLength', false)
   applyHexahedronEdgeLength()
 }
@@ -2022,9 +2107,15 @@ const handleRegularPolygonEdgeLengthFocus = () => {
 }
 
 const handleRegularPolygonEdgeLengthBlur = () => {
-  editRegularPolygon.edgeLength = clampLengthValue('rp.edgeLength', editRegularPolygon.edgeLength, editRegularPolygon.edgeLength)
+  editRegularPolygon.edgeLength = clampLengthValue(
+    'rp.edgeLength',
+    editRegularPolygon.edgeLength,
+    editRegularPolygon.edgeLength,
+  )
   const n = Number(editRegularPolygon.edgeLength)
-  editRegularPolygon.edgeLength = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editRegularPolygon.edgeLength
+  editRegularPolygon.edgeLength = Number.isFinite(n)
+    ? Math.max(LENGTH_MIN, n).toFixed(2)
+    : editRegularPolygon.edgeLength
   setCoordFocus('rp.edgeLength', false)
   applyRegularPolygonEdgeLength()
 }
@@ -2407,7 +2498,11 @@ const handleCylinderRadiusFocus = () => {
 }
 
 const handleCylinderRadiusBlur = () => {
-  editCylinder.radius = clampLengthValue('cylinder.radius', editCylinder.radius, editCylinder.radius)
+  editCylinder.radius = clampLengthValue(
+    'cylinder.radius',
+    editCylinder.radius,
+    editCylinder.radius,
+  )
   editCylinder.radius = normalizeDisplayLength(editCylinder.radius)
   setCoordFocus('cylinder.radius', false)
   applyEditCylinderRadius()
@@ -2429,7 +2524,11 @@ const handleCylinderHeightFocus = () => {
 }
 
 const handleCylinderHeightBlur = () => {
-  editCylinder.height = clampLengthValue('cylinder.height', editCylinder.height, editCylinder.height)
+  editCylinder.height = clampLengthValue(
+    'cylinder.height',
+    editCylinder.height,
+    editCylinder.height,
+  )
   editCylinder.height = normalizeDisplayLength(editCylinder.height)
   setCoordFocus('cylinder.height', false)
   applyEditCylinderHeight()
@@ -2476,9 +2575,6 @@ const nudgeCylinderPointCoord = (
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
-const getStraightLineDisplayPoints = (line: StraightLine3) => line.getDisplayPoints()
-const getPerpendicularLineDirection = (line: PerpendicularLine3) => line.getDirectionVector()
-const getPerpendicularLineDisplayPoints = (line: PerpendicularLine3) => line.getDisplayPoints()
 const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
   const p1Name = line.p1.name ?? ''
   const target = line.target
@@ -3236,7 +3332,31 @@ onUnmounted(() => {
                 >正多边形约束</span
               >
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
-              <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{ getPointConstraintBadge(p!) }}</span>
+              <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
+                getPointConstraintBadge(p!)
+              }}</span>
+              <button
+                v-if="p!.id !== Scene.ORIGIN_ID"
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('point', p!.id, '点' + (p!.name ?? ''))"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>
               x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
@@ -3308,7 +3428,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['line.lockedLength']?.show" class="length-bubble">{{ bubbleState['line.lockedLength']?.message }}</div>
+                  <div v-if="bubbleState['line.lockedLength']?.show" class="length-bubble">
+                    {{ bubbleState['line.lockedLength']?.message }}
+                  </div>
                 </Transition>
               </div>
               <label class="toggle-label">
@@ -3517,12 +3639,33 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               线段{{ l!.name ?? '' }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
               <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{
                 getLineConstraintBadge(l!)
               }}</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('line', l!.id, '线段' + (l!.name ?? ''))"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>
               长度：{{ l!.getLength().toFixed(2) }}
@@ -3610,7 +3753,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['straightLine.displayLength']?.show" class="length-bubble">{{ bubbleState['straightLine.displayLength']?.message }}</div>
+                  <div v-if="bubbleState['straightLine.displayLength']?.show" class="length-bubble">
+                    {{ bubbleState['straightLine.displayLength']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -3810,9 +3955,30 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               直线{{ sl!.name ?? '' }}
               <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('straightLine', sl!.id, '直线' + (sl!.name ?? ''))"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>显示长度：{{ sl!.displayLength.toFixed(2) }}</div>
             <div>
@@ -3837,10 +4003,17 @@ onUnmounted(() => {
           class="selectedPerpendicularLine-info"
           @dblclick="startEditPerpendicularLine(pl)"
         >
-          <div v-if="editing?.type === 'perpendicularLine' && editing?.id === pl!.id" class="edit-grid">
+          <div
+            v-if="editing?.type === 'perpendicularLine' && editing?.id === pl!.id"
+            class="edit-grid"
+          >
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editPerpendicularLine.name" @input="applyEditPerpendicularLine" />
+              <input
+                type="text"
+                v-model="editPerpendicularLine.name"
+                @input="applyEditPerpendicularLine"
+              />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -3902,13 +4075,18 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['perpendicularLine.displayLength']?.show" class="length-bubble">{{ bubbleState['perpendicularLine.displayLength']?.message }}</div>
+                  <div
+                    v-if="bubbleState['perpendicularLine.displayLength']?.show"
+                    class="length-bubble"
+                  >
+                    {{ bubbleState['perpendicularLine.displayLength']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
             <div class="readonly-value-row">
-              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }},
-              {{ pl!.p2.position.y.toFixed(2) }}, {{ pl!.p2.position.z.toFixed(2) }}）
+              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }}, {{ pl!.p2.position.y.toFixed(2) }},
+              {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
             <div class="coord-row-title">
               点{{ pl!.p1.name ?? '' }}(x,y,z)
@@ -4011,9 +4189,32 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               垂线{{ pl!.name ?? '' }}
               <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="
+                  handleDeleteElement('perpendicularLine', pl!.id, '垂线' + (pl!.name ?? ''))
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
             <div>
@@ -4021,8 +4222,8 @@ onUnmounted(() => {
               {{ pl!.p1.position.y.toFixed(2) }}, {{ pl!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }},
-              {{ pl!.p2.position.y.toFixed(2) }}, {{ pl!.p2.position.z.toFixed(2) }}）
+              垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }}, {{ pl!.p2.position.y.toFixed(2) }},
+              {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
             <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
           </div>
@@ -4075,7 +4276,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['ray.displayLength']?.show" class="length-bubble">{{ bubbleState['ray.displayLength']?.message }}</div>
+                  <div v-if="bubbleState['ray.displayLength']?.show" class="length-bubble">
+                    {{ bubbleState['ray.displayLength']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -4275,9 +4478,30 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               射线{{ r!.name ?? '' }}
               <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('ray', r!.id, '射线' + (r!.name ?? ''))"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
             <div>
@@ -4346,7 +4570,9 @@ onUnmounted(() => {
                 />
                 <button type="button" class="step-btn" @click="nudgeVectorLength('up')">+</button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['vector.length']?.show" class="length-bubble">{{ bubbleState['vector.length']?.message }}</div>
+                  <div v-if="bubbleState['vector.length']?.show" class="length-bubble">
+                    {{ bubbleState['vector.length']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -4546,9 +4772,30 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               向量{{ v!.name ?? '' }}
               <span v-if="props.editor.isVectorLocked(v!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('vector', v!.id, '向量' + (v!.name ?? ''))"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>长度：{{ v!.getLength().toFixed(2) }}</div>
             <div>
@@ -4640,22 +4887,28 @@ onUnmounted(() => {
                     +
                   </button>
                   <Transition name="bubble-fade">
-                    <div v-if="bubbleState['circle.lockedRadius']?.show" class="length-bubble">{{ bubbleState['circle.lockedRadius']?.message }}</div>
+                    <div v-if="bubbleState['circle.lockedRadius']?.show" class="length-bubble">
+                      {{ bubbleState['circle.lockedRadius']?.message }}
+                    </div>
                   </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">周长：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiCircumference(getNormalCircleRadius(c!))
-                    : getNormalCircleCircumference(c!).toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >周长：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiCircumference(getNormalCircleRadius(c!))
+                      : getNormalCircleCircumference(c!).toFixed(2)
+                  }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">面积：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiArea(getNormalCircleRadius(c!))
-                    : getNormalCircleArea(c!).toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >面积：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiArea(getNormalCircleRadius(c!))
+                      : getNormalCircleArea(c!).toFixed(2)
+                  }}</span
+                >
                 <label class="pi-mode-toggle"
                   ><input
                     type="checkbox"
@@ -4796,20 +5049,26 @@ onUnmounted(() => {
                     +
                   </button>
                   <Transition name="bubble-fade">
-                    <div v-if="bubbleState['circle.threePointRadius']?.show" class="length-bubble">{{ bubbleState['circle.threePointRadius']?.message }}</div>
+                    <div v-if="bubbleState['circle.threePointRadius']?.show" class="length-bubble">
+                      {{ bubbleState['circle.threePointRadius']?.message }}
+                    </div>
                   </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">周长：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiCircumference(c!.getRadius())
-                    : c!.getCircumference().toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >周长：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiCircumference(c!.getRadius())
+                      : c!.getCircumference().toFixed(2)
+                  }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">面积：{{
-                  getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >面积：{{
+                    getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
+                  }}</span
+                >
                 <label class="pi-mode-toggle"
                   ><input
                     type="checkbox"
@@ -5118,27 +5377,58 @@ onUnmounted(() => {
             </template>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
               <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
               <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="
+                  handleDeleteElement(
+                    'circle',
+                    c!.id,
+                    (c!.isNormalCircle() ? '法向圆' : '三点圆') + (c!.name ?? ''),
+                  )
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <template v-if="c!.isNormalCircle()">
               <div class="face-metric-row">
                 <span class="metric-item">半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</span>
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">周长：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiCircumference(getNormalCircleRadius(c!))
-                    : getNormalCircleCircumference(c!).toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >周长：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiCircumference(getNormalCircleRadius(c!))
+                      : getNormalCircleCircumference(c!).toFixed(2)
+                  }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">面积：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiArea(getNormalCircleRadius(c!))
-                    : getNormalCircleArea(c!).toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >面积：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiArea(getNormalCircleRadius(c!))
+                      : getNormalCircleArea(c!).toFixed(2)
+                  }}</span
+                >
               </div>
               <div>
                 圆心{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
@@ -5151,15 +5441,19 @@ onUnmounted(() => {
                 <span class="metric-item">半径：{{ c!.getRadius().toFixed(2) }}</span>
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">周长：{{
-                  getCirclePiMode(c!.id)
-                    ? formatPiCircumference(c!.getRadius())
-                    : c!.getCircumference().toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >周长：{{
+                    getCirclePiMode(c!.id)
+                      ? formatPiCircumference(c!.getRadius())
+                      : c!.getCircumference().toFixed(2)
+                  }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">面积：{{
-                  getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
-                }}</span>
+                <span class="metric-item"
+                  >面积：{{
+                    getCirclePiMode(c!.id) ? formatPiArea(c!.getRadius()) : c!.getArea().toFixed(2)
+                  }}</span
+                >
               </div>
               <div>
                 点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
@@ -5225,9 +5519,15 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">表面积：{{ props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2) }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span>
+              <span class="metric-item"
+                >体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span
+              >
             </div>
             <div class="length-row">
               <label>边长：</label>
@@ -5260,7 +5560,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['hexa.edgeLength']?.show" class="length-bubble">{{ bubbleState['hexa.edgeLength']?.message }}</div>
+                  <div v-if="bubbleState['hexa.edgeLength']?.show" class="length-bubble">
+                    {{ bubbleState['hexa.edgeLength']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -5450,19 +5752,46 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ cube.name }}
               <span
                 v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                 class="lock-badge"
                 >🔒</span
               >
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('face', cube.faceIds[0]!, cube.name)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
             <div class="face-metric-row">
-              <span class="metric-item">表面积：{{ props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2) }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  props.editor.getCubeConstraint(cube.cubeId)?.getArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span>
+              <span class="metric-item"
+                >体积：{{ getHexahedronVolume(cube.cubeId).toFixed(2) }}</span
+              >
             </div>
             <div>
               原始点：{{
@@ -5525,9 +5854,18 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">周长：{{ props.editor.getRegularPolygonConstraint(rp.constraintId)?.getPerimeter().toFixed(2) }}</span>
+              <span class="metric-item"
+                >周长：{{
+                  props.editor
+                    .getRegularPolygonConstraint(rp.constraintId)
+                    ?.getPerimeter()
+                    .toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">面积：{{ props.editor.getRegularPolygonArea(rp.constraintId).toFixed(2) }}</span>
+              <span class="metric-item"
+                >面积：{{ props.editor.getRegularPolygonArea(rp.constraintId).toFixed(2) }}</span
+              >
             </div>
             <div class="length-row">
               <label>边长：</label>
@@ -5560,7 +5898,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['rp.edgeLength']?.show" class="length-bubble">{{ bubbleState['rp.edgeLength']?.message }}</div>
+                  <div v-if="bubbleState['rp.edgeLength']?.show" class="length-bubble">
+                    {{ bubbleState['rp.edgeLength']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -5826,9 +6166,30 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ rp.name }}
               <span v-if="props.scene.faces.get(rp.faceId)?.userLocked" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('face', rp.faceId, rp.name)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div>边长：{{ rp.getEdgeLength().toFixed(2) }}</div>
             <div class="face-metric-row">
@@ -5884,17 +6245,21 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">表面积：{{
-                getSpherePiMode(s!.id)
-                  ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
-                  : s!.getArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  getSpherePiMode(s!.id)
+                    ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
+                    : s!.getArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{
-                getSpherePiMode(s!.id)
-                  ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
-                  : s!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getSpherePiMode(s!.id)
+                    ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
+                    : s!.getVolume().toFixed(2)
+                }}</span
+              >
               <label class="pi-mode-toggle"
                 ><input
                   type="checkbox"
@@ -5934,7 +6299,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['sphere.radius']?.show" class="length-bubble">{{ bubbleState['sphere.radius']?.message }}</div>
+                  <div v-if="bubbleState['sphere.radius']?.show" class="length-bubble">
+                    {{ bubbleState['sphere.radius']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -6138,25 +6505,52 @@ onUnmounted(() => {
             </template>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ s!.name ?? '' }}
               <span v-if="props.editor.isSphereGeometryLocked(s!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('sphere', s!.id, s!.name ?? '')"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">半径：{{ props.editor.getSphereRadius(s!.id).toFixed(2) }}</span>
+              <span class="metric-item"
+                >半径：{{ props.editor.getSphereRadius(s!.id).toFixed(2) }}</span
+              >
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">表面积：{{
-                getSpherePiMode(s!.id)
-                  ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
-                  : s!.getArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  getSpherePiMode(s!.id)
+                    ? formatPiSphereArea(props.editor.getSphereRadius(s!.id))
+                    : s!.getArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{
-                getSpherePiMode(s!.id)
-                  ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
-                  : s!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getSpherePiMode(s!.id)
+                    ? formatPiSphereVolume(props.editor.getSphereRadius(s!.id))
+                    : s!.getVolume().toFixed(2)
+                }}</span
+              >
             </div>
           </div>
         </div>
@@ -6172,11 +6566,7 @@ onUnmounted(() => {
               <label>名称</label>
               <input type="text" v-model="editCone.nameSuffix" @input="applyEditConeMeta" />
               <label class="toggle-label">
-                <input
-                  type="checkbox"
-                  v-model="editCone.nameVisible"
-                  @change="applyEditConeMeta"
-                />
+                <input type="checkbox" v-model="editCone.nameVisible" @change="applyEditConeMeta" />
                 {{ editCone.nameVisible ? '名称显示' : '名称隐藏' }}
               </label>
               <label class="toggle-label">
@@ -6188,32 +6578,40 @@ onUnmounted(() => {
                 数值显示
               </label>
               <label class="toggle-label">
-                <input
-                  type="checkbox"
-                  v-model="editCone.userLocked"
-                  @change="applyEditConeMeta"
-                />
+                <input type="checkbox" v-model="editCone.userLocked" @change="applyEditConeMeta" />
                 锁定
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">侧面积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeLateralArea(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
-                  : c!.getLateralArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >侧面积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeLateralArea(
+                        props.editor.getConeRadius(c!.id),
+                        props.editor.getConeHeight(c!.id),
+                      )
+                    : c!.getLateralArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">底面积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
-                  : c!.getBaseArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >底面积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
+                    : c!.getBaseArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeVolume(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
-                  : c!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeVolume(
+                        props.editor.getConeRadius(c!.id),
+                        props.editor.getConeHeight(c!.id),
+                      )
+                    : c!.getVolume().toFixed(2)
+                }}</span
+              >
               <label class="pi-mode-toggle"
                 ><input
                   type="checkbox"
@@ -6253,7 +6651,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cone.radius']?.show" class="length-bubble">{{ bubbleState['cone.radius']?.message }}</div>
+                  <div v-if="bubbleState['cone.radius']?.show" class="length-bubble">
+                    {{ bubbleState['cone.radius']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -6288,7 +6688,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cone.height']?.show" class="length-bubble">{{ bubbleState['cone.height']?.message }}</div>
+                  <div v-if="bubbleState['cone.height']?.show" class="length-bubble">
+                    {{ bubbleState['cone.height']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -6477,36 +6879,79 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ c!.name ?? '' }}
               <span v-if="props.editor.isConeGeometryLocked(c!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('cone', c!.id, c!.name ?? '')"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">半径：{{ props.editor.getConeRadius(c!.id).toFixed(2) }}</span>
+              <span class="metric-item"
+                >半径：{{ props.editor.getConeRadius(c!.id).toFixed(2) }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">高度：{{ props.editor.getConeHeight(c!.id).toFixed(2) }}</span>
+              <span class="metric-item"
+                >高度：{{ props.editor.getConeHeight(c!.id).toFixed(2) }}</span
+              >
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">体积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeVolume(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
-                  : c!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeVolume(
+                        props.editor.getConeRadius(c!.id),
+                        props.editor.getConeHeight(c!.id),
+                      )
+                    : c!.getVolume().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">表面积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeLateralArea(props.editor.getConeRadius(c!.id), props.editor.getConeHeight(c!.id))
-                  : c!.getLateralArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeLateralArea(
+                        props.editor.getConeRadius(c!.id),
+                        props.editor.getConeHeight(c!.id),
+                      )
+                    : c!.getLateralArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">底面积：{{
-                getConePiMode(c!.id)
-                  ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
-                  : c!.getBaseArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >底面积：{{
+                  getConePiMode(c!.id)
+                    ? formatPiConeBaseArea(props.editor.getConeRadius(c!.id))
+                    : c!.getBaseArea().toFixed(2)
+                }}</span
+              >
             </div>
             <div>
-              来源：点{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(c!.id)?.name ?? '' }}<template v-if="c!.isNormalCircleCone() && c!.normalCircleId">（法向圆{{ props.scene.circles.get(c!.normalCircleId)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(c!.id)?.name ?? '' }}）</template>
+              来源：点{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? '' }}-点{{
+                props.editor.getConeApexPoint(c!.id)?.name ?? ''
+              }}<template v-if="c!.isNormalCircleCone() && c!.normalCircleId"
+                >（法向圆{{ props.scene.circles.get(c!.normalCircleId)?.name ?? '' }}-点{{
+                  props.editor.getConeApexPoint(c!.id)?.name ?? ''
+                }}）</template
+              >
             </div>
           </div>
         </div>
@@ -6547,23 +6992,35 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">侧面积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderLateralArea(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
-                  : c!.getLateralArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >侧面积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderLateralArea(
+                        props.editor.getCylinderRadius(c!.id),
+                        props.editor.getCylinderHeight(c!.id),
+                      )
+                    : c!.getLateralArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">底面积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
-                  : c!.getBottomArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >底面积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
+                    : c!.getBottomArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">体积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderVolume(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
-                  : c!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderVolume(
+                        props.editor.getCylinderRadius(c!.id),
+                        props.editor.getCylinderHeight(c!.id),
+                      )
+                    : c!.getVolume().toFixed(2)
+                }}</span
+              >
               <label class="pi-mode-toggle"
                 ><input
                   type="checkbox"
@@ -6603,7 +7060,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cylinder.radius']?.show" class="length-bubble">{{ bubbleState['cylinder.radius']?.message }}</div>
+                  <div v-if="bubbleState['cylinder.radius']?.show" class="length-bubble">
+                    {{ bubbleState['cylinder.radius']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -6638,7 +7097,9 @@ onUnmounted(() => {
                   +
                 </button>
                 <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cylinder.height']?.show" class="length-bubble">{{ bubbleState['cylinder.height']?.message }}</div>
+                  <div v-if="bubbleState['cylinder.height']?.show" class="length-bubble">
+                    {{ bubbleState['cylinder.height']?.message }}
+                  </div>
                 </Transition>
               </div>
             </div>
@@ -6659,7 +7120,9 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'x', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   -
                 </button>
@@ -6671,13 +7134,17 @@ onUnmounted(() => {
                   @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'x')"
                   @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'x')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'x', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   +
                 </button>
@@ -6716,7 +7183,9 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'y', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   -
                 </button>
@@ -6728,13 +7197,17 @@ onUnmounted(() => {
                   @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'y')"
                   @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'y')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'y', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   +
                 </button>
@@ -6773,7 +7246,9 @@ onUnmounted(() => {
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'z', 'down')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   -
                 </button>
@@ -6785,13 +7260,17 @@ onUnmounted(() => {
                   @focus="handleCylinderPointCoordFocus('bottomCenterPoint', 'z')"
                   @blur="handleCylinderPointCoordBlur('bottomCenterPoint', 'z')"
                   step="0.5"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 />
                 <button
                   type="button"
                   class="step-btn"
                   @click="nudgeCylinderPointCoord('bottomCenterPoint', 'z', 'up')"
-                  :disabled="isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))"
+                  :disabled="
+                    isPointCoordinateLocked(props.editor.getCylinderBottomCenterPoint(c!.id))
+                  "
                 >
                   +
                 </button>
@@ -6827,36 +7306,75 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ c!.name ?? '' }}
               <span v-if="props.editor.isCylinderGeometryLocked(c!)" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('cylinder', c!.id, c!.name ?? '')"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">半径：{{ props.editor.getCylinderRadius(c!.id).toFixed(2) }}</span>
+              <span class="metric-item"
+                >半径：{{ props.editor.getCylinderRadius(c!.id).toFixed(2) }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">高度：{{ props.editor.getCylinderHeight(c!.id).toFixed(2) }}</span>
+              <span class="metric-item"
+                >高度：{{ props.editor.getCylinderHeight(c!.id).toFixed(2) }}</span
+              >
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">体积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderVolume(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
-                  : c!.getVolume().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >体积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderVolume(
+                        props.editor.getCylinderRadius(c!.id),
+                        props.editor.getCylinderHeight(c!.id),
+                      )
+                    : c!.getVolume().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">表面积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderSurfaceArea(props.editor.getCylinderRadius(c!.id), props.editor.getCylinderHeight(c!.id))
-                  : c!.getSurfaceArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >表面积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderSurfaceArea(
+                        props.editor.getCylinderRadius(c!.id),
+                        props.editor.getCylinderHeight(c!.id),
+                      )
+                    : c!.getSurfaceArea().toFixed(2)
+                }}</span
+              >
               <span class="metric-sep">/</span>
-              <span class="metric-item">底面积：{{
-                getCylinderPiMode(c!.id)
-                  ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
-                  : c!.getBottomArea().toFixed(2)
-              }}</span>
+              <span class="metric-item"
+                >底面积：{{
+                  getCylinderPiMode(c!.id)
+                    ? formatPiCylinderBaseArea(props.editor.getCylinderRadius(c!.id))
+                    : c!.getBottomArea().toFixed(2)
+                }}</span
+              >
             </div>
             <div>
-              来源：点{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? '' }}-点{{ props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? '' }}
+              来源：点{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? '' }}-点{{
+                props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? ''
+              }}
             </div>
           </div>
         </div>
@@ -6893,7 +7411,9 @@ onUnmounted(() => {
               </label>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span>
+              <span class="metric-item"
+                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
+              >
               <span class="metric-sep">/</span>
               <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
             </div>
@@ -6935,14 +7455,16 @@ onUnmounted(() => {
                     +
                   </button>
                   <Transition name="bubble-fade">
-                    <div v-if="bubbleState[`face.edge.${edgeIndex}`]?.show" class="length-bubble">{{ bubbleState[`face.edge.${edgeIndex}`]?.message }}</div>
+                    <div v-if="bubbleState[`face.edge.${edgeIndex}`]?.show" class="length-bubble">
+                      {{ bubbleState[`face.edge.${edgeIndex}`]?.message }}
+                    </div>
                   </Transition>
                 </div>
               </div>
             </div>
           </div>
           <div v-else>
-            <div>
+            <div class="card-summary-header">
               {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
               <span v-if="face!.isRegularPolygon" class="constraint-badge"
                 >正{{ face!.regularPolygonVertexCount }}边形</span
@@ -6951,9 +7473,38 @@ onUnmounted(() => {
               <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                 getSolidConstraintBadge(face!.cubeId)
               }}</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="
+                  handleDeleteElement(
+                    'face',
+                    face!.id,
+                    (face!.isRegularPolygon ? '正多边形' : '多边形') + (face!.name ?? ''),
+                  )
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
             </div>
             <div class="face-metric-row">
-              <span class="metric-item">周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span>
+              <span class="metric-item"
+                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
+              >
               <span class="metric-sep">/</span>
               <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
               <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
@@ -7036,9 +7587,21 @@ onUnmounted(() => {
                 class="hidden-hint-trigger"
                 :class="{ active: hiddenPointHintPinned }"
                 :ref="(el: any) => (hiddenPointHintTriggerRef = el)"
-                @pointerenter="(e: PointerEvent) => { if (e.pointerType !== 'touch') showHiddenPointHint = true }"
-                @pointerleave="(e: PointerEvent) => { if (e.pointerType !== 'touch' && !hiddenPointHintPinned) showHiddenPointHint = false }"
-                @click.stop="hiddenPointHintPinned = !hiddenPointHintPinned; showHiddenPointHint = hiddenPointHintPinned"
+                @pointerenter="
+                  (e: PointerEvent) => {
+                    if (e.pointerType !== 'touch') showHiddenPointHint = true
+                  }
+                "
+                @pointerleave="
+                  (e: PointerEvent) => {
+                    if (e.pointerType !== 'touch' && !hiddenPointHintPinned)
+                      showHiddenPointHint = false
+                  }
+                "
+                @click.stop="
+                  hiddenPointHintPinned = !hiddenPointHintPinned;
+                  showHiddenPointHint = hiddenPointHintPinned
+                "
               >
                 ?
               </button>
@@ -7075,7 +7638,9 @@ onUnmounted(() => {
                   >正多边形约束</span
                 >
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
-                <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{ getPointConstraintBadge(p!) }}</span>
+                <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
+                  getPointConstraintBadge(p!)
+                }}</span>
               </div>
             </div>
           </div>
@@ -7097,9 +7662,21 @@ onUnmounted(() => {
                 class="hidden-hint-trigger"
                 :class="{ active: hiddenLineHintPinned }"
                 :ref="(el: any) => (hiddenLineHintTriggerRef = el)"
-                @pointerenter="(e: PointerEvent) => { if (e.pointerType !== 'touch') showHiddenLineHint = true }"
-                @pointerleave="(e: PointerEvent) => { if (e.pointerType !== 'touch' && !hiddenLineHintPinned) showHiddenLineHint = false }"
-                @click.stop="hiddenLineHintPinned = !hiddenLineHintPinned; showHiddenLineHint = hiddenLineHintPinned"
+                @pointerenter="
+                  (e: PointerEvent) => {
+                    if (e.pointerType !== 'touch') showHiddenLineHint = true
+                  }
+                "
+                @pointerleave="
+                  (e: PointerEvent) => {
+                    if (e.pointerType !== 'touch' && !hiddenLineHintPinned)
+                      showHiddenLineHint = false
+                  }
+                "
+                @click.stop="
+                  hiddenLineHintPinned = !hiddenLineHintPinned;
+                  showHiddenLineHint = hiddenLineHintPinned
+                "
               >
                 ?
               </button>
@@ -7388,9 +7965,10 @@ onUnmounted(() => {
               </div>
               <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
               <div>
-                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? '' }}<template v-if="props.editor.getSphereRadiusPoint(sphere.id)">　半径点：{{
-                  props.editor.getSphereRadiusPoint(sphere.id)!.name
-                }}</template>
+                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? ''
+                }}<template v-if="props.editor.getSphereRadiusPoint(sphere.id)"
+                  >　半径点：{{ props.editor.getSphereRadiusPoint(sphere.id)!.name }}</template
+                >
               </div>
             </div>
           </div>
@@ -7418,17 +7996,25 @@ onUnmounted(() => {
             >
               <div>
                 {{ cone.name ?? '' }}
-                <span v-if="props.editor.isConeGeometryLocked(cone)" class="lock-badge"
-                  >🔒</span
-                >
+                <span v-if="props.editor.isConeGeometryLocked(cone)" class="lock-badge">🔒</span>
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">半径：{{ props.editor.getConeRadius(cone.id).toFixed(2) }}</span>
+                <span class="metric-item"
+                  >半径：{{ props.editor.getConeRadius(cone.id).toFixed(2) }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">高度：{{ props.editor.getConeHeight(cone.id).toFixed(2) }}</span>
+                <span class="metric-item"
+                  >高度：{{ props.editor.getConeHeight(cone.id).toFixed(2) }}</span
+                >
               </div>
               <div>
-                来源：点{{ props.editor.getConeBaseCenterPoint(cone.id)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}<template v-if="cone.isNormalCircleCone() && cone.normalCircleId">（法向圆{{ props.scene.circles.get(cone.normalCircleId)?.name ?? '' }}-点{{ props.editor.getConeApexPoint(cone.id)?.name ?? '' }}）</template>
+                来源：点{{ props.editor.getConeBaseCenterPoint(cone.id)?.name ?? '' }}-点{{
+                  props.editor.getConeApexPoint(cone.id)?.name ?? ''
+                }}<template v-if="cone.isNormalCircleCone() && cone.normalCircleId"
+                  >（法向圆{{ props.scene.circles.get(cone.normalCircleId)?.name ?? '' }}-点{{
+                    props.editor.getConeApexPoint(cone.id)?.name ?? ''
+                  }}）</template
+                >
               </div>
             </div>
           </div>
@@ -7461,12 +8047,18 @@ onUnmounted(() => {
                 >
               </div>
               <div class="face-metric-row">
-                <span class="metric-item">半径：{{ props.editor.getCylinderRadius(cylinder.id).toFixed(2) }}</span>
+                <span class="metric-item"
+                  >半径：{{ props.editor.getCylinderRadius(cylinder.id).toFixed(2) }}</span
+                >
                 <span class="metric-sep">/</span>
-                <span class="metric-item">高度：{{ props.editor.getCylinderHeight(cylinder.id).toFixed(2) }}</span>
+                <span class="metric-item"
+                  >高度：{{ props.editor.getCylinderHeight(cylinder.id).toFixed(2) }}</span
+                >
               </div>
               <div>
-                来源：点{{ props.editor.getCylinderBottomCenterPoint(cylinder.id)?.name ?? '' }}-点{{ props.editor.getCylinderTopCenterPoint(cylinder.id)?.name ?? '' }}
+                来源：点{{
+                  props.editor.getCylinderBottomCenterPoint(cylinder.id)?.name ?? ''
+                }}-点{{ props.editor.getCylinderTopCenterPoint(cylinder.id)?.name ?? '' }}
               </div>
             </div>
           </div>
@@ -7516,12 +8108,59 @@ onUnmounted(() => {
     </div>
   </div>
   <Teleport to="body">
-    <div v-if="showHiddenPointHint" ref="hiddenPointHintPopoverRef" class="hidden-hint-popover" :style="hiddenPointHintStyle" @mousedown.stop @touchstart.stop>
+    <div
+      v-if="showHiddenPointHint"
+      ref="hiddenPointHintPopoverRef"
+      class="hidden-hint-popover"
+      :style="hiddenPointHintStyle"
+      @mousedown.stop
+      @touchstart.stop
+    >
       已隐藏由复杂几何对象约束生成的点（圆心点、交点等除外），但是你仍然可以在选中区查看
     </div>
-    <div v-if="showHiddenLineHint" ref="hiddenLineHintPopoverRef" class="hidden-hint-popover" :style="hiddenLineHintStyle" @mousedown.stop @touchstart.stop>
+    <div
+      v-if="showHiddenLineHint"
+      ref="hiddenLineHintPopoverRef"
+      class="hidden-hint-popover"
+      :style="hiddenLineHintStyle"
+      @mousedown.stop
+      @touchstart.stop
+    >
       已隐藏由复杂几何对象约束生成的线段，但是你仍然可以在选中区查看
     </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <Transition name="confirm-fade">
+      <div
+        v-if="showDeleteConfirmDialog"
+        class="delete-confirm-overlay"
+        @click="cancelDeleteElement"
+      >
+        <div class="delete-confirm-dialog" @click.stop>
+          <div class="delete-confirm-header">
+            <h4 class="delete-confirm-title">确认删除</h4>
+          </div>
+          <div class="delete-confirm-body">
+            <p class="delete-confirm-message">确定要删除「{{ deleteConfirmTarget?.name }}」吗？</p>
+          </div>
+          <div class="delete-confirm-footer">
+            <button
+              class="delete-confirm-btn delete-confirm-btn-cancel"
+              @click="cancelDeleteElement"
+            >
+              取消
+            </button>
+            <button
+              class="delete-confirm-btn delete-confirm-btn-danger"
+              @click="confirmDeleteElement"
+            >
+              确认
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -8077,7 +8716,7 @@ hr {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 .point-summary-text {
   min-width: 0;
@@ -8638,23 +9277,32 @@ hr {
     width: 40px;
   }
 
-  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) {
+  .edit-grid
+    .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) {
     grid-template-columns: 12px max-content max-content;
   }
 
-  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input {
+  .edit-grid
+    .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col)
+    > .coord-input {
     width: auto !important;
     grid-template-columns: 22px 36px 22px;
   }
 
-  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input .step-btn {
+  .edit-grid
+    .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col)
+    > .coord-input
+    .step-btn {
     min-width: 22px;
     min-height: 22px;
     font-size: 12px;
     padding: 0 2px;
   }
 
-  .edit-grid .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col) > .coord-input input[type='number'] {
+  .edit-grid
+    .line-editor-grid--compact:not(.circle-editor-grid):not(.line-editor-grid--single-col)
+    > .coord-input
+    input[type='number'] {
     width: 36px;
     padding-left: 2px;
     padding-right: 2px;
@@ -8697,6 +9345,152 @@ hr {
     padding-right: 2px;
     font-size: 11px;
   }
+}
+
+.card-summary-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.card-delete-btn {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.card-delete-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.card-delete-btn:hover {
+  background: rgba(255, 77, 79, 0.2);
+  color: #ff4d4f;
+}
+
+.card-delete-btn:active {
+  background: rgba(255, 77, 79, 0.35);
+  color: #ff7875;
+}
+
+.delete-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.delete-confirm-dialog {
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.delete-confirm-header {
+  padding: 14px 16px 0;
+}
+
+.delete-confirm-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.delete-confirm-body {
+  padding: 10px 16px 14px;
+}
+
+.delete-confirm-message {
+  margin: 0;
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.5;
+}
+
+.delete-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid #333;
+}
+
+.delete-confirm-btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.delete-confirm-btn-cancel {
+  background: transparent;
+  color: #ccc;
+  border-color: #444;
+}
+
+.delete-confirm-btn-cancel:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.delete-confirm-btn-danger {
+  background: #ff4d4f;
+  color: #fff;
+  border-color: #ff4d4f;
+  font-weight: 600;
+}
+
+.delete-confirm-btn-danger:hover {
+  background: #ff7875;
+}
+
+.confirm-fade-enter-active,
+.confirm-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.confirm-fade-enter-from,
+.confirm-fade-leave-to {
+  opacity: 0;
+}
+
+.confirm-fade-enter-active .delete-confirm-dialog,
+.confirm-fade-leave-active .delete-confirm-dialog {
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.confirm-fade-enter-from .delete-confirm-dialog,
+.confirm-fade-leave-to .delete-confirm-dialog {
+  opacity: 0;
+  transform: scale(0.95);
 }
 </style>
 <style>

@@ -5,7 +5,7 @@ import type { EditorMode } from '@/core/editor/Editor'
 export type ToastScope = 'global' | 'viewport'
 
 // 渲染设置分类：画质 / 性能 / 高级
-export type RenderSettingsCategory = 'graphics' | 'performance' | 'display' | 'advanced'
+export type RenderSettingsCategory = 'graphics' | 'performance' | 'display' | 'advanced' | 'interaction'
 
 // GPU 偏好选项：默认 / 高性能
 export type PowerPreference = 'default' | 'high-performance'
@@ -18,6 +18,7 @@ export interface RenderSettings {
   powerPreference: PowerPreference
   depthOcclusion: boolean
   hiddenEdge: boolean
+  confirmBeforeDelete: boolean
 }
 
 // localStorage 存储键名，用于持久化保存用户渲染设置
@@ -31,6 +32,7 @@ const defaultRenderSettings: RenderSettings = {
   powerPreference: 'default',
   depthOcclusion: true,
   hiddenEdge: true,
+  confirmBeforeDelete: false,
 }
 
 // 从 localStorage 加载渲染设置
@@ -52,6 +54,7 @@ function loadRenderSettings(): RenderSettings {
         parsed.powerPreference === 'high-performance' ? 'high-performance' : defaultRenderSettings.powerPreference,
       depthOcclusion: typeof parsed.depthOcclusion === 'boolean' ? parsed.depthOcclusion : defaultRenderSettings.depthOcclusion,
       hiddenEdge: typeof parsed.hiddenEdge === 'boolean' ? parsed.hiddenEdge : defaultRenderSettings.hiddenEdge,
+      confirmBeforeDelete: typeof parsed.confirmBeforeDelete === 'boolean' ? parsed.confirmBeforeDelete : defaultRenderSettings.confirmBeforeDelete,
     }
   } catch {
     // 读取失败（如 JSON 损坏）时回退到默认值

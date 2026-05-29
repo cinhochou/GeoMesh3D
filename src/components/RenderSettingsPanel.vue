@@ -16,10 +16,11 @@ const uiStore = useUiStore()
 const { renderSettings, isRenderSettingsPanelOpen } = storeToRefs(uiStore)
 
 // 当前激活的设置分类标签
-const activeCategory = ref<RenderSettingsCategory>('graphics')
+const activeCategory = ref<RenderSettingsCategory>('interaction')
 
 // 设置分类选项：画质 / 性能 / 高级
 const categories: { key: RenderSettingsCategory; label: string }[] = [
+  { key: 'interaction', label: '交互' },
   { key: 'graphics', label: '画质' },
   { key: 'performance', label: '性能' },
   { key: 'display', label: '显示' },
@@ -73,7 +74,8 @@ const hasChanges = computed(() => {
     localSettings.value.fpsCap !== renderSettings.value.fpsCap ||
     localSettings.value.powerPreference !== renderSettings.value.powerPreference ||
     localSettings.value.depthOcclusion !== renderSettings.value.depthOcclusion ||
-    localSettings.value.hiddenEdge !== renderSettings.value.hiddenEdge
+    localSettings.value.hiddenEdge !== renderSettings.value.hiddenEdge ||
+    localSettings.value.confirmBeforeDelete !== renderSettings.value.confirmBeforeDelete
   )
 })
 
@@ -105,7 +107,8 @@ const isDefaultSettings = computed(() => {
     localSettings.value.fpsCap === 0 &&
     localSettings.value.powerPreference === 'default' &&
     localSettings.value.depthOcclusion === true &&
-    localSettings.value.hiddenEdge === true
+    localSettings.value.hiddenEdge === true &&
+    localSettings.value.confirmBeforeDelete === false
   )
 })
 
@@ -129,6 +132,7 @@ const handleReset = () => {
       powerPreference: 'default',
       depthOcclusion: true,
       hiddenEdge: true,
+      confirmBeforeDelete: false,
     }
     showConfirmDialog.value = false
   }
@@ -171,7 +175,7 @@ watch(
       <div v-if="isRenderSettingsPanelOpen" class="settings-overlay" @click="handleOverlayClick">
         <div class="settings-panel">
           <div class="settings-header">
-            <h3 class="settings-title">渲染设置</h3>
+            <h3 class="settings-title">设置</h3>
             <button class="settings-close" @click="handleClose" title="关闭">
               <svg
                 viewBox="0 0 24 24"
@@ -308,6 +312,24 @@ watch(
                 </select>
                 <p class="setting-desc">
                   选择高性能 GPU 可提升渲染性能，但会增加功耗。修改后需刷新页面生效。
+                </p>
+              </div>
+            </div>
+
+            <div v-if="activeCategory === 'interaction'" class="settings-section">
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">删除前确认</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.confirmBeforeDelete }"
+                    @click="localSettings.confirmBeforeDelete = !localSettings.confirmBeforeDelete"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，通过侧边栏选中区的删除按钮删除几何元素时，将弹出确认对话框；关闭则直接删除。
                 </p>
               </div>
             </div>

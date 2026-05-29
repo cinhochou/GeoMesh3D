@@ -953,8 +953,6 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
       await collabManager.value?.joinRoom(room)
       scene.selection.clear()
       editor.selectedPoints = []
-      editor.history = []
-      editor.historyIndex = -1
       collabStore.closeJoinDialog()
       showToast(`成功加入房间: ${room}`, 'global')
     } catch (err) {
