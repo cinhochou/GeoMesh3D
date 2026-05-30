@@ -20,6 +20,7 @@ type RenderObjectType =
   | 'line'
   | 'straightLine'
   | 'perpendicularLine'
+  | 'parallelLine'
   | 'ray'
   | 'vector'
   | 'circle'
@@ -137,7 +138,7 @@ const HIDDEN_EDGE_RENDER_ORDER = 4
 const SURFACE_RENDER_ORDER = 0
 
 const LINEAR_TYPES = new Set<string>([
-  'line', 'straightLine', 'perpendicularLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
+  'line', 'straightLine', 'perpendicularLine', 'parallelLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
 ])
 
 const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX: number; labelOffsetY: number; visible?: boolean }>> = {
@@ -145,6 +146,7 @@ const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { label
   line: (s) => s.lines,
   straightLine: (s) => s.straightLines,
   perpendicularLine: (s) => s.perpendicularLines,
+  parallelLine: (s) => s.parallelLines,
   ray: (s) => s.rays,
   vector: (s) => s.vectors,
   circle: (s) => s.circles,
@@ -158,6 +160,7 @@ const DIRECTION_TYPE_TO_COLLECTION: Record<string, (scene: GeoScene) => Map<stri
   line: (s) => s.lines,
   straightLine: (s) => s.straightLines,
   perpendicularLine: (s) => s.perpendicularLines,
+  parallelLine: (s) => s.parallelLines,
   ray: (s) => s.rays,
   vector: (s) => s.vectors,
 }
@@ -389,6 +392,7 @@ export class GeometrySyncer {
       this.syncLines(geoScene, dirtyState)
       this.syncStraightLines(geoScene, dirtyState)
       this.syncPerpendicularLines(geoScene, dirtyState)
+      this.syncParallelLines(geoScene, dirtyState)
       this.syncRays(geoScene, dirtyState)
       this.syncVectors(geoScene, dirtyState)
       this.syncCircles(geoScene, dirtyState)
@@ -946,6 +950,78 @@ export class GeometrySyncer {
       )
       const isLabelActive =
         this.activeLabelTarget?.type === 'perpendicularLine' && this.activeLabelTarget.geoId === id
+      this.syncLinearLabel(
+        line,
+        lineData.name ?? '',
+        lineData.nameVisible && lineData.visible,
+        lineData.valueVisible === true && lineData.visible,
+        `=(${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.x)},${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.y)},${this.deps.labelRenderer.formatMetricNumber(lineData.p1.position.z)})+λ(${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().x)},${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().y)},${this.deps.labelRenderer.formatMetricNumber(lineData.getDirectionVector().z)})`,
+        mid,
+        isLabelActive ? SELECTED_COLOR : LINEAR_COLOR,
+      )
+    })
+  }
+
+  syncParallelLines(scene: GeoScene, dirtyState: SceneRenderSyncState): void {
+    dirtyState.parallelLineIds.forEach((id) => {
+      const lineData = scene.parallelLines.get(id)
+      if (!lineData) return
+      let line = this.meshMap.get(id) as THREE.Line | undefined
+      const display = lineData.getDisplayPoints(scene)
+      const start = display.start
+      const end = display.end
+      const points = [
+        new THREE.Vector3(start.x, start.y, start.z),
+        new THREE.Vector3(end.x, end.y, end.z),
+      ]
+
+      if (!line) {
+        const geo = new THREE.BufferGeometry().setFromPoints(points)
+        const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
+        line = new THREE.Line(geo, mat)
+        line.renderOrder = SOLID_EDGE_RENDER_ORDER
+        line.userData = { geoId: id, type: 'parallelLine' }
+        this.deps.world.add(line)
+        this.meshMap.set(id, line)
+
+        const hiddenGeo = new THREE.BufferGeometry().setFromPoints(points)
+        const hiddenMat = this.createHiddenEdgeMaterial(LINEAR_COLOR)
+        const hiddenLine = new THREE.Line(hiddenGeo, hiddenMat)
+        hiddenLine.renderOrder = HIDDEN_EDGE_RENDER_ORDER
+        hiddenLine.computeLineDistances()
+        this.deps.world.add(hiddenLine)
+        this.hiddenLineMap.set(id, hiddenLine)
+      } else {
+        line.geometry.setFromPoints(points)
+        line.geometry.attributes.position!.needsUpdate = true
+        line.geometry.computeBoundingBox()
+        line.geometry.computeBoundingSphere()
+
+        const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
+        if (hiddenLine) {
+          hiddenLine.geometry.setFromPoints(points)
+          hiddenLine.computeLineDistances()
+        }
+      }
+
+      line.visible = lineData.visible
+      const isSelected = scene.selection.parallelLines.has(id)
+      const plColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
+      ;(line.material as THREE.LineBasicMaterial).color.set(plColor)
+
+      const hiddenPlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
+      if (hiddenPlObj) {
+        hiddenPlObj.visible = this.hiddenEdgeEnabled && lineData.visible
+        ;(hiddenPlObj.material as THREE.LineDashedMaterial).color.set(plColor)
+      }
+
+      const mid = new THREE.Vector3(
+        (lineData.p1.position.x + lineData.p2.position.x) / 2,
+        (lineData.p1.position.y + lineData.p2.position.y) / 2,
+        (lineData.p1.position.z + lineData.p2.position.z) / 2,
+      )
+      const isLabelActive =
+        this.activeLabelTarget?.type === 'parallelLine' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
         line,
         lineData.name ?? '',

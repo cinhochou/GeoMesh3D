@@ -10,6 +10,8 @@ import { Cone3, type ConeType } from '../geometry/Cone3'
 import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
 import { PerpendicularLine3 } from '../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../constraints/PerpendicularLineConstraint'
+import { ParallelLine3 } from '../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../constraints/ParallelLineConstraint'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint, type ParametricData } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
@@ -280,6 +282,29 @@ type SerializedPerpendicularLineConstraint = {
   targetId: string
 }
 
+type SerializedParallelLine = {
+  id: string
+  name: string
+  nameVisible: boolean
+  valueVisible: boolean
+  labelOffsetX: number
+  labelOffsetY: number
+  visible: boolean
+  userLocked: boolean
+  p1Id: string
+  p2Position: SerializedVec3
+  displayLength: number
+  targetType: string
+  targetId: string
+}
+
+type SerializedParallelLineConstraint = {
+  type: 'parallelLine'
+  parallelLineId: string
+  targetType: string
+  targetId: string
+}
+
 type SerializedConstraint =
   | SerializedCubeConstraint
   | SerializedIntersectionConstraint
@@ -288,6 +313,7 @@ type SerializedConstraint =
   | SerializedCylinderConstraint
   | SerializedObjectConstrainedPointConstraint
   | SerializedPerpendicularLineConstraint
+  | SerializedParallelLineConstraint
 
 type SceneMetadata = {
   exportedAt: string
@@ -296,6 +322,7 @@ type SceneMetadata = {
   lineCount: number
   straightLineCount: number
   perpendicularLineCount: number
+  parallelLineCount: number
   rayCount: number
   vectorCount: number
   circleCount: number
@@ -313,6 +340,7 @@ export type SerializedScene = {
   lines: SerializedLine[]
   straightLines: SerializedStraightLine[]
   perpendicularLines: SerializedPerpendicularLine[]
+  parallelLines: SerializedParallelLine[]
   rays: SerializedRay[]
   vectors: SerializedVector[]
   circles: SerializedCircle[]
@@ -495,6 +523,19 @@ function serializePerpendicularLine(l: PerpendicularLine3): SerializedPerpendicu
   }
 }
 
+function serializeParallelLine(l: ParallelLine3): SerializedParallelLine {
+  return {
+    ...pickBaseFields(l),
+    visible: l.visible,
+    userLocked: l.userLocked,
+    p1Id: l.p1.id,
+    p2Position: serializeVec3(l.p2.position),
+    displayLength: l.displayLength,
+    targetType: l.target.type,
+    targetId: l.target.id,
+  }
+}
+
 function serializeCylinder(c: Cylinder3): SerializedCylinder {
   return {
     ...pickBaseFields(c),
@@ -590,6 +631,14 @@ function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
       targetId: c.target.id,
     }
   }
+  if (c instanceof ParallelLineConstraint) {
+    return {
+      type: 'parallelLine',
+      parallelLineId: c.parallelLineId,
+      targetType: c.target.type,
+      targetId: c.target.id,
+    }
+  }
   return null
 }
 
@@ -598,6 +647,7 @@ export function exportScene(scene: Scene): SerializedScene {
   const lines = [...scene.lines.values()].map(serializeLine)
   const straightLines = [...scene.straightLines.values()].map(serializeStraightLine)
   const perpendicularLines = [...scene.perpendicularLines.values()].map(serializePerpendicularLine)
+  const parallelLines = [...scene.parallelLines.values()].map(serializeParallelLine)
   const rays = [...scene.rays.values()].map(serializeRay)
   const vectors = [...scene.vectors.values()].map(serializeVector)
   const circles = [...scene.circles.values()].map(serializeCircle)
@@ -613,11 +663,12 @@ export function exportScene(scene: Scene): SerializedScene {
 
   const metadata: SceneMetadata = {
     exportedAt,
-    totalElements: points.length + lines.length + straightLines.length + perpendicularLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length + cylinders.length,
+    totalElements: points.length + lines.length + straightLines.length + perpendicularLines.length + parallelLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length + cylinders.length,
     pointCount: points.length,
     lineCount: lines.length,
     straightLineCount: straightLines.length,
     perpendicularLineCount: perpendicularLines.length,
+    parallelLineCount: parallelLines.length,
     rayCount: rays.length,
     vectorCount: vectors.length,
     circleCount: circles.length,
@@ -635,6 +686,7 @@ export function exportScene(scene: Scene): SerializedScene {
     lines,
     straightLines,
     perpendicularLines,
+    parallelLines,
     rays,
     vectors,
     circles,
@@ -714,6 +766,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     'lines',
     'straightLines',
     'perpendicularLines',
+    'parallelLines',
     'rays',
     'vectors',
     'circles',
@@ -899,9 +952,40 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (typeof l.targetType !== 'string' || typeof l.targetId !== 'string' || l.targetId === '') {
       return { valid: false, error: `垂线 "${l.name}" 的 target 无效` }
     }
-    const validPerpTargetTypes = new Set(['line', 'straightLine', 'ray', 'vector', 'face', 'coneBase', 'cylinderBottom', 'cylinderTop'])
+    const validPerpTargetTypes = new Set(['line', 'straightLine', 'ray', 'vector', 'perpendicularLine', 'parallelLine', 'face', 'coneBase', 'cylinderBottom', 'cylinderTop'])
     if (!validPerpTargetTypes.has(l.targetType)) {
       return { valid: false, error: `垂线 "${l.name}" 的 targetType "${l.targetType}" 无效` }
+    }
+  }
+
+  const parallelLineIdSet = new Set<string>()
+  const parallelLines = (obj.parallelLines ?? []) as SerializedParallelLine[]
+  for (const l of parallelLines) {
+    let err = validateId(l.id, '平行线')
+    if (err) return { valid: false, error: err }
+    err = validateName(l.name, '平行线', l.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(l.id, parallelLineIdSet, '平行线')
+    if (err) return { valid: false, error: err }
+    parallelLineIdSet.add(l.id)
+    err = validateReference(l.p1Id, pointIdSet, `平行线 "${l.name}" 引用了不存在的经过点`)
+    if (err) return { valid: false, error: err }
+    if (!l.p2Position || typeof l.p2Position !== 'object') {
+      return { valid: false, error: `平行线 "${l.name}" 的 p2Position 无效` }
+    }
+    {
+      const pv = l.p2Position as SerializedVec3
+      if (typeof pv.x !== 'number' || typeof pv.y !== 'number' || typeof pv.z !== 'number' ||
+          !Number.isFinite(pv.x) || !Number.isFinite(pv.y) || !Number.isFinite(pv.z)) {
+        return { valid: false, error: `平行线 "${l.name}" 的 p2Position 坐标无效` }
+      }
+    }
+    if (typeof l.targetType !== 'string' || typeof l.targetId !== 'string' || l.targetId === '') {
+      return { valid: false, error: `平行线 "${l.name}" 的 target 无效` }
+    }
+    const validParallelTargetTypes = new Set(['line', 'straightLine', 'ray', 'vector', 'perpendicularLine', 'parallelLine'])
+    if (!validParallelTargetTypes.has(l.targetType)) {
+      return { valid: false, error: `平行线 "${l.name}" 的 targetType "${l.targetType}" 无效` }
     }
   }
 
@@ -1064,7 +1148,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
   }
 
   const constraints = obj.constraints as SerializedConstraint[]
-  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint', 'perpendicularLine'])
+  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint', 'perpendicularLine', 'parallelLine'])
   const constraintPointIds = new Set<string>()
   for (const c of constraints) {
     if (!validTypes.has(c.type)) {
@@ -1222,11 +1306,36 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
         if (type === 'straightLine') return straightLineIdSet.has(id)
         if (type === 'ray') return rayIdSet.has(id)
         if (type === 'vector') return vectorIdSet.has(id)
+        if (type === 'perpendicularLine') return perpendicularLineIdSet.has(id)
+        if (type === 'parallelLine') return parallelLineIdSet.has(id)
         if (type === 'face') return faceIdSet.has(id)
+        if (type === 'coneBase') return coneIdSet.has(id)
+        if (type === 'cylinderBottom' || type === 'cylinderTop') return cylinderIdSet.has(id)
         return false
       }
       if (!resolvePerpTargetId(plc.targetType, plc.targetId)) {
         return { valid: false, error: `垂线约束 (lineId=${plc.perpendicularLineId}) 引用了不存在的 target 对象` }
+      }
+    }
+    if (c.type === 'parallelLine') {
+      const plc = c as SerializedParallelLineConstraint
+      if (typeof plc.parallelLineId !== 'string' || plc.parallelLineId === '' || !parallelLineIdSet.has(plc.parallelLineId)) {
+        return { valid: false, error: '平行线约束引用了不存在的平行线' }
+      }
+      if (typeof plc.targetType !== 'string' || typeof plc.targetId !== 'string' || plc.targetId === '') {
+        return { valid: false, error: `平行线约束 (lineId=${plc.parallelLineId}) 的 target 无效` }
+      }
+      const resolveParallelTargetId = (type: string, id: string): boolean => {
+        if (type === 'line') return lineIdSet.has(id)
+        if (type === 'straightLine') return straightLineIdSet.has(id)
+        if (type === 'ray') return rayIdSet.has(id)
+        if (type === 'vector') return vectorIdSet.has(id)
+        if (type === 'perpendicularLine') return perpendicularLineIdSet.has(id)
+        if (type === 'parallelLine') return parallelLineIdSet.has(id)
+        return false
+      }
+      if (!resolveParallelTargetId(plc.targetType, plc.targetId)) {
+        return { valid: false, error: `平行线约束 (lineId=${plc.parallelLineId}) 引用了不存在的 target 对象` }
       }
     }
   }
@@ -1249,6 +1358,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.cones.clear()
   scene.cylinders.clear()
   scene.perpendicularLines.clear()
+  scene.parallelLines.clear()
 
   const pointMap = new Map<string, Point3>()
 
@@ -1548,6 +1658,34 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     scene.addPerpendicularLine(l)
   }
 
+  for (const sl of data.parallelLines ?? []) {
+    const p1 = scene.points.get(sl.p1Id)
+    if (!p1) continue
+    const p2 = new Point3(
+      `${sl.id}_p2`,
+      '',
+      new Vec3(sl.p2Position.x, sl.p2Position.y, sl.p2Position.z),
+      false,
+      false,
+      false,
+    )
+    const l = new ParallelLine3(
+      sl.id,
+      sl.name,
+      p1,
+      p2,
+      { type: sl.targetType as ParallelLine3['target']['type'], id: sl.targetId },
+      sl.nameVisible,
+      sl.visible,
+      sl.displayLength,
+      sl.userLocked,
+      sl.labelOffsetX,
+      sl.labelOffsetY,
+      sl.valueVisible,
+    )
+    scene.addParallelLine(l)
+  }
+
   for (const sc of data.constraints) {
     if (sc.type === 'cube') {
       const cc = sc as SerializedCubeConstraint
@@ -1623,6 +1761,14 @@ export function importScene(scene: Scene, data: SerializedScene): void {
         { type: plc.targetType as PerpendicularLineConstraint['target']['type'], id: plc.targetId },
       )
       scene.addPerpendicularLineConstraint(constraint)
+    } else if (sc.type === 'parallelLine') {
+      const plc = sc as SerializedParallelLineConstraint
+      const constraint = new ParallelLineConstraint(
+        scene,
+        plc.parallelLineId,
+        { type: plc.targetType as ParallelLineConstraint['target']['type'], id: plc.targetId },
+      )
+      scene.addParallelLineConstraint(constraint)
     }
   }
 
@@ -1634,6 +1780,7 @@ type SceneElementCounts = {
   lines: number
   straightLines: number
   perpendicularLines: number
+  parallelLines: number
   rays: number
   vectors: number
   circles: number
@@ -1648,6 +1795,7 @@ function checkSceneEmpty(counts: SceneElementCounts): boolean {
   if (counts.lines > 0) return false
   if (counts.straightLines > 0) return false
   if (counts.perpendicularLines > 0) return false
+  if (counts.parallelLines > 0) return false
   if (counts.rays > 0) return false
   if (counts.vectors > 0) return false
   if (counts.circles > 0) return false
@@ -1664,6 +1812,7 @@ export function isSceneEmpty(scene: Scene): boolean {
     lines: scene.lines.size,
     straightLines: scene.straightLines.size,
     perpendicularLines: scene.perpendicularLines.size,
+    parallelLines: scene.parallelLines.size,
     rays: scene.rays.size,
     vectors: scene.vectors.size,
     circles: scene.circles.size,
@@ -1680,6 +1829,7 @@ export function isSerializedSceneEmpty(data: SerializedScene): boolean {
     lines: data.lines.length,
     straightLines: data.straightLines.length,
     perpendicularLines: data.perpendicularLines?.length ?? 0,
+    parallelLines: data.parallelLines?.length ?? 0,
     rays: data.rays.length,
     vectors: data.vectors.length,
     circles: data.circles.length,

@@ -78,6 +78,22 @@ export class PerpendicularLineConstraint {
     return projectPointToPlane(pointPosition, { origin: planeOrigin, normal: frame.normal, uAxis: frame.uAxis, vAxis: frame.vAxis })
   }
 
+  private getLinearEntity() {
+    return this.target.type === 'line'
+      ? this.scene.lines.get(this.target.id)
+      : this.target.type === 'straightLine'
+        ? this.scene.straightLines.get(this.target.id)
+        : this.target.type === 'ray'
+          ? this.scene.rays.get(this.target.id)
+          : this.target.type === 'vector'
+            ? this.scene.vectors.get(this.target.id)
+            : this.target.type === 'perpendicularLine'
+              ? this.scene.perpendicularLines.get(this.target.id)
+              : this.target.type === 'parallelLine'
+                ? this.scene.parallelLines.get(this.target.id)
+                : undefined
+  }
+
   computeExpectedFoot(): Vec3 | null {
     const line = this.scene.perpendicularLines.get(this.perpendicularLineId)
     if (!line) return null
@@ -96,14 +112,7 @@ export class PerpendicularLineConstraint {
       return this.computeFootOnCylinderFace(p1.position, this.target.type)
     }
 
-    const entity =
-      this.target.type === 'line'
-        ? this.scene.lines.get(this.target.id)
-        : this.target.type === 'straightLine'
-          ? this.scene.straightLines.get(this.target.id)
-          : this.target.type === 'ray'
-            ? this.scene.rays.get(this.target.id)
-            : this.scene.vectors.get(this.target.id)
+    const entity = this.getLinearEntity()
     if (!entity) return null
     const origin = entity.p1.position
     const direction = new Vec3(
@@ -137,6 +146,20 @@ export class PerpendicularLineConstraint {
     return isPointInPolygon2D(projectedFoot.x, projectedFoot.y, boundary2D)
   }
 
+  private isFootOnDisplayRange(entity: { p1: { position: Vec3 }; p2: { position: Vec3 }; displayLength: number }, foot: Vec3): boolean {
+    const dx = entity.p2.position.x - entity.p1.position.x
+    const dy = entity.p2.position.y - entity.p1.position.y
+    const dz = entity.p2.position.z - entity.p1.position.z
+    const dirLenSq = dx * dx + dy * dy + dz * dz
+    if (dirLenSq <= PerpendicularLineConstraint.EPSILON ** 2) return false
+    const fx = foot.x - entity.p1.position.x
+    const fy = foot.y - entity.p1.position.y
+    const fz = foot.z - entity.p1.position.z
+    const t = (fx * dx + fy * dy + fz * dz) / dirLenSq
+    const projectionDist = Math.abs(t) * Math.sqrt(dirLenSq)
+    return projectionDist <= entity.displayLength / 2
+  }
+
   isFootOnTarget(): boolean {
     const foot = this.computeExpectedFoot()
     if (!foot || !this.isSafePosition(foot)) return false
@@ -164,14 +187,19 @@ export class PerpendicularLineConstraint {
       return dist <= frame.radius
     }
 
-    const entity =
-      this.target.type === 'line'
-        ? this.scene.lines.get(this.target.id)
-        : this.target.type === 'straightLine'
-          ? this.scene.straightLines.get(this.target.id)
-          : this.target.type === 'ray'
-            ? this.scene.rays.get(this.target.id)
-            : this.scene.vectors.get(this.target.id)
+    if (this.target.type === 'perpendicularLine') {
+      const pl = this.scene.perpendicularLines.get(this.target.id)
+      if (!pl) return false
+      return this.isFootOnDisplayRange(pl, foot)
+    }
+
+    if (this.target.type === 'parallelLine') {
+      const pll = this.scene.parallelLines.get(this.target.id)
+      if (!pll) return false
+      return this.isFootOnDisplayRange(pll, foot)
+    }
+
+    const entity = this.getLinearEntity()
     if (!entity) return false
 
     const origin = entity.p1.position
@@ -210,14 +238,7 @@ export class PerpendicularLineConstraint {
       }
       return ids
     }
-    const entity =
-      this.target.type === 'line'
-        ? this.scene.lines.get(this.target.id)
-        : this.target.type === 'straightLine'
-          ? this.scene.straightLines.get(this.target.id)
-          : this.target.type === 'ray'
-            ? this.scene.rays.get(this.target.id)
-            : this.scene.vectors.get(this.target.id)
+    const entity = this.getLinearEntity()
     if (entity) {
       ids.add(entity.p1.id)
       ids.add(entity.p2.id)

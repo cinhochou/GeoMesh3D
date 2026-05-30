@@ -299,6 +299,10 @@ const selectCreatePerpendicularLineMode = () => {
   setMode(EditorMode.CreatePerpendicularLine)
 }
 
+const selectCreateParallelLineMode = () => {
+  setMode(EditorMode.CreateParallelLine)
+}
+
 const selectCreateThreePointCircleMode = () => {
   setMode(EditorMode.CreateCircleThreePoints)
 }
@@ -649,7 +653,8 @@ onUnmounted(() => {
             currentMode === EditorMode.CreateStraightLine ||
             currentMode === EditorMode.CreateRay ||
             currentMode === EditorMode.CreateVector ||
-            currentMode === EditorMode.CreatePerpendicularLine,
+            currentMode === EditorMode.CreatePerpendicularLine ||
+            currentMode === EditorMode.CreateParallelLine,
           'is-open': isLineMenuOpen,
         }"
         @click="toggleLineMenu"
@@ -861,6 +866,13 @@ onUnmounted(() => {
         @click="selectCreatePerpendicularLineMode"
       >
         垂线
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreateParallelLine }"
+        @click="selectCreateParallelLineMode"
+      >
+        平行线
       </button>
     </div>
   </Teleport>

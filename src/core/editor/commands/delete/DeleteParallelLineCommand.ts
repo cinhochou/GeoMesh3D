@@ -1,14 +1,14 @@
 import type { Command } from '../../Command'
 import { Scene } from '../../../scene/Scene'
-import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
-import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
 
-export class DeletePerpendicularLineCommand implements Command {
+export class DeleteParallelLineCommand implements Command {
   constructor(
     private scene: Scene,
-    private line: PerpendicularLine3,
+    private line: ParallelLine3,
     private relatedPerpendicularLines: PerpendicularLine3[] = [],
     private relatedParallelLines: ParallelLine3[] = [],
   ) {}
@@ -22,14 +22,14 @@ export class DeletePerpendicularLineCommand implements Command {
       this.scene.removeParallelLine(l.id)
       this.scene.selection.parallelLines.delete(l.id)
     })
-    this.scene.removePerpendicularLine(this.line.id)
-    this.scene.selection.perpendicularLines.delete(this.line.id)
+    this.scene.removeParallelLine(this.line.id)
+    this.scene.selection.parallelLines.delete(this.line.id)
   }
 
   undo() {
-    this.scene.addPerpendicularLine(this.line)
-    this.scene.addPerpendicularLineConstraint(
-      new PerpendicularLineConstraint(this.scene, this.line.id, this.line.target),
+    this.scene.addParallelLine(this.line)
+    this.scene.addParallelLineConstraint(
+      new ParallelLineConstraint(this.scene, this.line.id, this.line.target),
     )
     this.relatedPerpendicularLines.forEach((l) => {
       this.scene.addPerpendicularLine(l)

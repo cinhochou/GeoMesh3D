@@ -2,7 +2,7 @@ import { Point3 } from './Point3'
 import { Vec3 } from './Vec3'
 import type { Scene } from '../scene/Scene'
 
-export type PerpendicularLineTargetType = 'line' | 'straightLine' | 'ray' | 'vector' | 'face' | 'coneBase' | 'cylinderBottom' | 'cylinderTop'
+export type PerpendicularLineTargetType = 'line' | 'straightLine' | 'ray' | 'vector' | 'perpendicularLine' | 'parallelLine' | 'face' | 'coneBase' | 'cylinderBottom' | 'cylinderTop'
 
 export type PerpendicularLineTargetRef = {
   type: PerpendicularLineTargetType
@@ -141,6 +141,38 @@ export class PerpendicularLine3 {
         const dx = vec.p2.position.x - vec.p1.position.x
         const dy = vec.p2.position.y - vec.p1.position.y
         const dz = vec.p2.position.z - vec.p1.position.z
+        const len = Math.hypot(dx, dy, dz)
+        if (len > 0) {
+          const nx = -dy / len
+          const ny = dx / len
+          const nz = 0
+          const nLen = Math.hypot(nx, ny, nz)
+          if (nLen > 0) return new Vec3(nx / nLen, ny / nLen, nz / nLen)
+          return new Vec3(0, 0, 1)
+        }
+      }
+    } else if (this.target.type === 'perpendicularLine') {
+      const pl = scene.perpendicularLines.get(this.target.id)
+      if (pl) {
+        const dx = pl.p2.position.x - pl.p1.position.x
+        const dy = pl.p2.position.y - pl.p1.position.y
+        const dz = pl.p2.position.z - pl.p1.position.z
+        const len = Math.hypot(dx, dy, dz)
+        if (len > 0) {
+          const nx = -dy / len
+          const ny = dx / len
+          const nz = 0
+          const nLen = Math.hypot(nx, ny, nz)
+          if (nLen > 0) return new Vec3(nx / nLen, ny / nLen, nz / nLen)
+          return new Vec3(0, 0, 1)
+        }
+      }
+    } else if (this.target.type === 'parallelLine') {
+      const pll = scene.parallelLines.get(this.target.id)
+      if (pll) {
+        const dx = pll.p2.position.x - pll.p1.position.x
+        const dy = pll.p2.position.y - pll.p1.position.y
+        const dz = pll.p2.position.z - pll.p1.position.z
         const len = Math.hypot(dx, dy, dz)
         if (len > 0) {
           const nx = -dy / len

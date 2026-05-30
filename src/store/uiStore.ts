@@ -77,6 +77,7 @@ type ContentGroupKey =
   | 'line'
   | 'straightLine'
   | 'perpendicularLine'
+  | 'parallelLine'
   | 'ray'
   | 'vector'
   | 'circle'
@@ -129,6 +130,7 @@ interface ContentGroupCollapseState {
   line: boolean
   straightLine: boolean
   perpendicularLine: boolean
+  parallelLine: boolean
   ray: boolean
   vector: boolean
   circle: boolean
@@ -145,6 +147,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   line: false,
   straightLine: false,
   perpendicularLine: false,
+  parallelLine: false,
   ray: false,
   vector: false,
   circle: false,
@@ -455,6 +458,7 @@ export const useUiStore = defineStore('ui', () => {
       line: collapsed,
       straightLine: collapsed,
       perpendicularLine: collapsed,
+      parallelLine: collapsed,
       ray: collapsed,
       vector: collapsed,
       circle: collapsed,

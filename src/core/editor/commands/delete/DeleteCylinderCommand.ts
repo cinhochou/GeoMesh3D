@@ -4,7 +4,9 @@ import { Scene } from '../../../scene/Scene'
 import { Circle3 } from '../../../geometry/Circle3'
 import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
 import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 
 export class DeleteCylinderCommand implements Command {
   private bottomCircle: Circle3 | null = null
@@ -15,12 +17,17 @@ export class DeleteCylinderCommand implements Command {
     private scene: Scene,
     private cylinder: Cylinder3,
     private relatedPerpendicularLines: PerpendicularLine3[] = [],
+    private relatedParallelLines: ParallelLine3[] = [],
   ) {}
 
   execute() {
     this.relatedPerpendicularLines.forEach((line) => {
       this.scene.removePerpendicularLine(line.id)
       this.scene.selection.perpendicularLines.delete(line.id)
+    })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.removeParallelLine(line.id)
+      this.scene.selection.parallelLines.delete(line.id)
     })
     if (this.cylinder.normalCircleId) {
       this.bottomCircle = this.scene.circles.get(this.cylinder.normalCircleId) ?? null
@@ -71,6 +78,12 @@ export class DeleteCylinderCommand implements Command {
       this.scene.addPerpendicularLine(line)
       this.scene.addPerpendicularLineConstraint(
         new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
+    })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.addParallelLine(line)
+      this.scene.addParallelLineConstraint(
+        new ParallelLineConstraint(this.scene, line.id, line.target),
       )
     })
   }

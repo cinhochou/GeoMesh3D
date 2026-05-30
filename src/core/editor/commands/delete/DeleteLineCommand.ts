@@ -8,6 +8,8 @@ import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 
 export class DeleteLineCommand implements Command {
   private deletedFaceBoundaryLines: Line3[] = []
@@ -40,6 +42,7 @@ export class DeleteLineCommand implements Command {
       }>
     }> = [],
     private relatedPerpendicularLines: PerpendicularLine3[] = [],
+    private relatedParallelLines: ParallelLine3[] = [],
   ) {}
 
   execute() {
@@ -104,6 +107,10 @@ export class DeleteLineCommand implements Command {
       this.scene.removePerpendicularLine(line.id)
       this.scene.selection.perpendicularLines.delete(line.id)
     })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.removeParallelLine(line.id)
+      this.scene.selection.parallelLines.delete(line.id)
+    })
     this.scene.lines.delete(this.line.id)
     this.scene.selection.lines.delete(this.line.id)
   }
@@ -138,6 +145,12 @@ export class DeleteLineCommand implements Command {
       this.scene.addPerpendicularLine(line)
       this.scene.addPerpendicularLineConstraint(
         new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
+    })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.addParallelLine(line)
+      this.scene.addParallelLineConstraint(
+        new ParallelLineConstraint(this.scene, line.id, line.target),
       )
     })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {

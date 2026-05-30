@@ -15,6 +15,7 @@ import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
+import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
@@ -150,6 +151,12 @@ const selectedPerpendicularLines = computed(() => {
     .map((id) => props.scene.perpendicularLines.get(id))
     .filter((line): line is PerpendicularLine3 => line !== undefined)
 })
+const selectedParallelLines = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.parallelLines]
+    .map((id) => props.scene.parallelLines.get(id))
+    .filter((line): line is ParallelLine3 => line !== undefined)
+})
 const selectedRays = computed(() => {
   void commandRevision.value
   return [...props.scene.selection.rays]
@@ -219,6 +226,10 @@ const straightLinesInScene = computed(() => {
 const perpendicularLinesInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.perpendicularLines.values()]
+})
+const parallelLinesInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.parallelLines.values()]
 })
 const raysInScene = computed(() => {
   void commandRevision.value
@@ -291,6 +302,7 @@ const editing = ref<{
     | 'line'
     | 'straightLine'
     | 'perpendicularLine'
+    | 'parallelLine'
     | 'ray'
     | 'vector'
     | 'circle'
@@ -311,6 +323,7 @@ const deleteByType: Record<string, (editor: Editor, id: string) => void> = {
   line: (e, id) => e.deleteLine(id),
   straightLine: (e, id) => e.deleteStraightLine(id),
   perpendicularLine: (e, id) => e.deletePerpendicularLine(id),
+  parallelLine: (e, id) => e.deleteParallelLine(id),
   ray: (e, id) => e.deleteRay(id),
   vector: (e, id) => e.deleteVector(id),
   circle: (e, id) => e.deleteCircle(id),
@@ -445,6 +458,7 @@ const DIRECTION_TYPE_COLLECTION: Record<
   line: props.scene.lines,
   straightLine: props.scene.straightLines,
   perpendicularLine: props.scene.perpendicularLines,
+  parallelLine: props.scene.parallelLines,
   ray: props.scene.rays,
   vector: props.scene.vectors,
 }
@@ -484,6 +498,7 @@ const DIRECTION_TYPE_LABEL: Record<string, string> = {
   line: '线段',
   straightLine: '直线',
   perpendicularLine: '垂线',
+  parallelLine: '平行线',
   ray: '射线',
   vector: '向量',
 }
@@ -617,6 +632,15 @@ const editPerpendicularLine = reactive({
   displayLength: '',
   p1: { x: '', y: '', z: '' },
 })
+const editParallelLine = reactive({
+  name: '',
+  nameVisible: true,
+  valueVisible: false,
+  visible: true,
+  userLocked: false,
+  displayLength: '',
+  p1: { x: '', y: '', z: '' },
+})
 const editFace = reactive({
   name: '',
   nameVisible: true,
@@ -725,6 +749,9 @@ const selectedStraightLineIds = computed(() =>
 const selectedPerpendicularLineIds = computed(() =>
   selectedPerpendicularLines.value.map((l) => l?.id).filter(Boolean),
 )
+const selectedParallelLineIds = computed(() =>
+  selectedParallelLines.value.map((l) => l?.id).filter(Boolean),
+)
 const selectedRayIds = computed(() => selectedRays.value.map((r) => r?.id).filter(Boolean))
 const selectedVectorIds = computed(() => selectedVectors.value.map((v) => v?.id).filter(Boolean))
 const selectedEditableFaceIds = computed(() =>
@@ -744,6 +771,7 @@ const totalContentCount = computed(
     linesInScene.value.length +
     straightLinesInScene.value.length +
     perpendicularLinesInScene.value.length +
+    parallelLinesInScene.value.length +
     raysInScene.value.length +
     vectorsInScene.value.length +
     circlesInScene.value.length +
@@ -758,6 +786,7 @@ const contentGroupLabels: Record<
   | 'line'
   | 'straightLine'
   | 'perpendicularLine'
+  | 'parallelLine'
   | 'ray'
   | 'vector'
   | 'circle'
@@ -772,6 +801,7 @@ const contentGroupLabels: Record<
   line: '线段',
   straightLine: '直线',
   perpendicularLine: '垂线',
+  parallelLine: '平行线',
   ray: '射线',
   vector: '向量',
   circle: '圆',
@@ -791,6 +821,7 @@ const toggleContentGroup = (
     | 'line'
     | 'straightLine'
     | 'perpendicularLine'
+    | 'parallelLine'
     | 'ray'
     | 'vector'
     | 'circle'
@@ -816,6 +847,7 @@ const SELECT_FROM_CONTENT_MAP: Record<string, (id: string) => void> = {
   line: (id) => props.scene.selection.selectLine(id),
   straightLine: (id) => props.scene.selection.selectStraightLine(id),
   perpendicularLine: (id) => props.scene.selection.selectPerpendicularLine(id),
+  parallelLine: (id) => props.scene.selection.selectParallelLine(id),
   ray: (id) => props.scene.selection.selectRay(id),
   vector: (id) => props.scene.selection.selectVector(id),
   face: (id) => props.scene.selection.selectFace(id),
@@ -839,6 +871,9 @@ const selectStraightLineFromContent = (id: string) => selectFromContent('straigh
 
 const selectPerpendicularLineFromContent = (id: string) =>
   selectFromContent('perpendicularLine', id)
+
+const selectParallelLineFromContent = (id: string) =>
+  selectFromContent('parallelLine', id)
 
 const selectRayFromContent = (id: string) => selectFromContent('ray', id)
 
@@ -954,6 +989,7 @@ watch(
     selectedLineIds,
     selectedStraightLineIds,
     selectedPerpendicularLineIds,
+    selectedParallelLineIds,
     selectedRayIds,
     selectedVectorIds,
     selectedEditableFaceIds,
@@ -971,6 +1007,7 @@ watch(
       line: selectedLineIds.value,
       straightLine: selectedStraightLineIds.value,
       perpendicularLine: selectedPerpendicularLineIds.value,
+      parallelLine: selectedParallelLineIds.value,
       ray: selectedRayIds.value,
       vector: selectedVectorIds.value,
       face: selectedEditableFaceIds.value,
@@ -994,6 +1031,7 @@ watch(
     if (linesInScene.value.length > 0) activeKeys.push('line')
     if (straightLinesInScene.value.length > 0) activeKeys.push('straightLine')
     if (perpendicularLinesInScene.value.length > 0) activeKeys.push('perpendicularLine')
+    if (parallelLinesInScene.value.length > 0) activeKeys.push('parallelLine')
     if (raysInScene.value.length > 0) activeKeys.push('ray')
     if (vectorsInScene.value.length > 0) activeKeys.push('vector')
     if (circlesInScene.value.length > 0) activeKeys.push('circle')
@@ -1308,6 +1346,43 @@ const nudgePerpendicularLineDisplayLength = (direction: 'up' | 'down') => {
   editPerpendicularLine.displayLength = next.toFixed(2)
   applyEditPerpendicularLine()
 }
+const handleParallelLineCoordFocus = (axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`parallelLine.p1.${axis}`, true)
+}
+const handleParallelLineCoordBlur = (axis: 'x' | 'y' | 'z') => {
+  editParallelLine.p1[axis] = normalizeCoord(editParallelLine.p1[axis])
+  setCoordFocus(`parallelLine.p1.${axis}`, false)
+  applyEditParallelLine()
+}
+const nudgeParallelLineCoord = (axis: 'x' | 'y' | 'z', direction: 'up' | 'down') => {
+  const nextValue = stepCoordInput(`parallelLine.p1.${axis}`, direction)
+  if (nextValue === null) return
+  editParallelLine.p1[axis] = nextValue
+  applyEditParallelLine()
+}
+const handleParallelLineDisplayLengthFocus = () => {
+  setCoordFocus('parallelLine.displayLength', true)
+}
+const handleParallelLineDisplayLengthBlur = () => {
+  editParallelLine.displayLength = clampLengthValue(
+    'parallelLine.displayLength',
+    editParallelLine.displayLength,
+    editParallelLine.displayLength,
+  )
+  editParallelLine.displayLength = normalizeDisplayLength(editParallelLine.displayLength)
+  setCoordFocus('parallelLine.displayLength', false)
+  applyEditParallelLine()
+}
+const nudgeParallelLineDisplayLength = (direction: 'up' | 'down') => {
+  const current = Number(editParallelLine.displayLength)
+  if (direction === 'down' && current <= LENGTH_MIN) {
+    showLengthBubble('parallelLine.displayLength', '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editParallelLine.displayLength = next.toFixed(2)
+  applyEditParallelLine()
+}
 const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
   setCoordFocus(`face.edge.${edgeIndex}`, true)
 }
@@ -1439,6 +1514,19 @@ const startEditPerpendicularLine = (l: PerpendicularLine3 | undefined) => {
   editPerpendicularLine.p1.x = toFixed2(l.p1.position.x)
   editPerpendicularLine.p1.y = toFixed2(l.p1.position.y)
   editPerpendicularLine.p1.z = toFixed2(l.p1.position.z)
+}
+const startEditParallelLine = (l: ParallelLine3 | undefined) => {
+  if (!l) return
+  editing.value = { type: 'parallelLine', id: l.id }
+  editParallelLine.name = l.name ?? ''
+  editParallelLine.nameVisible = l.nameVisible !== false
+  editParallelLine.valueVisible = l.valueVisible === true
+  editParallelLine.visible = l.visible !== false
+  editParallelLine.userLocked = l.userLocked
+  editParallelLine.displayLength = toFixed2(l.displayLength)
+  editParallelLine.p1.x = toFixed2(l.p1.position.x)
+  editParallelLine.p1.y = toFixed2(l.p1.position.y)
+  editParallelLine.p1.z = toFixed2(l.p1.position.z)
 }
 const startEditRay = (r: Ray3 | undefined) => {
   if (!r) return
@@ -1826,6 +1914,30 @@ const applyEditPerpendicularLine = () => {
     editPerpendicularLine.p1.x,
     editPerpendicularLine.p1.y,
     editPerpendicularLine.p1.z,
+  )
+}
+const applyEditParallelLine = () => {
+  if (!editing.value || editing.value.type !== 'parallelLine') return
+  const line = props.scene.parallelLines.get(editing.value.id)
+  if (!line) return
+  const displayLength = Number(editParallelLine.displayLength)
+  props.editor.updateParallelLine(editing.value.id, {
+    name: editParallelLine.name,
+    nameVisible: editParallelLine.nameVisible,
+    valueVisible: editParallelLine.valueVisible,
+    visible: editParallelLine.visible,
+    displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
+  })
+  if (editParallelLine.userLocked !== line.userLocked) {
+    props.editor.setParallelLineLockState(editing.value.id, editParallelLine.userLocked)
+  }
+  const updatedLine = props.scene.parallelLines.get(editing.value.id)
+  if (!updatedLine || updatedLine.userLocked) return
+  applyPointPosition(
+    line.p1.id,
+    editParallelLine.p1.x,
+    editParallelLine.p1.y,
+    editParallelLine.p1.z,
   )
 }
 const applyEditFace = () => {
@@ -2606,6 +2718,25 @@ const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
   }
   return `点${p1Name}-${targetLabel}`
 }
+const getParallelLineSourceLabel = (line: ParallelLine3) => {
+  const p1Name = line.p1.name ?? ''
+  const target = line.target
+  let targetLabel = ''
+  if (target.type === 'line') {
+    const obj = props.scene.lines.get(target.id)
+    targetLabel = obj ? `线段${obj.name ?? ''}` : '线段'
+  } else if (target.type === 'straightLine') {
+    const obj = props.scene.straightLines.get(target.id)
+    targetLabel = obj ? `直线${obj.name ?? ''}` : '直线'
+  } else if (target.type === 'ray') {
+    const obj = props.scene.rays.get(target.id)
+    targetLabel = obj ? `射线${obj.name ?? ''}` : '射线'
+  } else if (target.type === 'vector') {
+    const obj = props.scene.vectors.get(target.id)
+    targetLabel = obj ? `向量${obj.name ?? ''}` : '向量'
+  }
+  return `点${p1Name}-${targetLabel}`
+}
 const getPointIntersectionSummary = (point: Point3 | undefined) =>
   point ? props.editor.getIntersectionSummary(point.id) : null
 const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
@@ -2783,6 +2914,38 @@ watch(
     if (!focusedCoord['perpendicularLine.p1.x']) editPerpendicularLine.p1.x = toFixed2(newLine.p1.x)
     if (!focusedCoord['perpendicularLine.p1.y']) editPerpendicularLine.p1.y = toFixed2(newLine.p1.y)
     if (!focusedCoord['perpendicularLine.p1.z']) editPerpendicularLine.p1.z = toFixed2(newLine.p1.z)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
+    if (!editing.value || editing.value.type !== 'parallelLine') return null
+    const l = props.scene.parallelLines.get(editing.value.id)
+    if (!l) return null
+    return {
+      name: l.name ?? '',
+      nameVisible: l.nameVisible !== false,
+      valueVisible: l.valueVisible === true,
+      visible: l.visible !== false,
+      userLocked: l.userLocked,
+      displayLength: l.displayLength,
+      p1: { x: l.p1.position.x, y: l.p1.position.y, z: l.p1.position.z },
+    }
+  },
+  (newLine) => {
+    if (!newLine) return
+    editParallelLine.name = newLine.name
+    editParallelLine.nameVisible = newLine.nameVisible
+    editParallelLine.valueVisible = newLine.valueVisible
+    editParallelLine.visible = newLine.visible
+    editParallelLine.userLocked = newLine.userLocked
+    if (!focusedCoord['parallelLine.displayLength']) {
+      editParallelLine.displayLength = toFixed2(newLine.displayLength)
+    }
+    if (!focusedCoord['parallelLine.p1.x']) editParallelLine.p1.x = toFixed2(newLine.p1.x)
+    if (!focusedCoord['parallelLine.p1.y']) editParallelLine.p1.y = toFixed2(newLine.p1.y)
+    if (!focusedCoord['parallelLine.p1.z']) editParallelLine.p1.z = toFixed2(newLine.p1.z)
   },
   { immediate: true },
 )
@@ -4226,6 +4389,230 @@ onUnmounted(() => {
               {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
             <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
+          </div>
+        </div>
+
+        <div
+          v-for="pl in selectedParallelLines"
+          :key="pl!.id"
+          class="selectedParallelLine-info"
+          @dblclick="startEditParallelLine(pl)"
+        >
+          <div
+            v-if="editing?.type === 'parallelLine' && editing?.id === pl!.id"
+            class="edit-grid"
+          >
+            <div class="name-row">
+              <label>名称</label>
+              <input
+                type="text"
+                v-model="editParallelLine.name"
+                @input="applyEditParallelLine"
+              />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editParallelLine.visible"
+                  @change="applyEditParallelLine"
+                />
+                平行线显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editParallelLine.nameVisible"
+                  @change="applyEditParallelLine"
+                />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editParallelLine.valueVisible"
+                  @change="applyEditParallelLine"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editParallelLine.userLocked"
+                  @change="applyEditParallelLine"
+                />
+                锁定
+              </label>
+            </div>
+            <div class="name-row length-row">
+              <label>显示长度</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeParallelLineDisplayLength('down')"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  :ref="(el) => setCoordInputRef('parallelLine.displayLength', el)"
+                  v-model="editParallelLine.displayLength"
+                  @input="applyEditParallelLine"
+                  @focus="handleParallelLineDisplayLengthFocus"
+                  @blur="handleParallelLineDisplayLengthBlur"
+                  step="1"
+                  min="0.1"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgeParallelLineDisplayLength('up')"
+                >
+                  +
+                </button>
+                <Transition name="bubble-fade">
+                  <div
+                    v-if="bubbleState['parallelLine.displayLength']?.show"
+                    class="length-bubble"
+                  >
+                    {{ bubbleState['parallelLine.displayLength']?.message }}
+                  </div>
+                </Transition>
+              </div>
+            </div>
+            <div class="coord-row-title">
+              点{{ pl!.p1.name ?? '' }}(x,y,z)
+              <span v-if="isPointCoordinateLocked(pl!.p1)" class="lock-badge">🔒</span>
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('x', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('parallelLine.p1.x', el)"
+                    v-model="editParallelLine.p1.x"
+                    @input="applyEditParallelLine"
+                    @focus="handleParallelLineCoordFocus('x')"
+                    @blur="handleParallelLineCoordBlur('x')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('x', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('y', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('parallelLine.p1.y', el)"
+                    v-model="editParallelLine.p1.y"
+                    @input="applyEditParallelLine"
+                    @focus="handleParallelLineCoordFocus('y')"
+                    @blur="handleParallelLineCoordBlur('y')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('y', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('z', 'down')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('parallelLine.p1.z', el)"
+                    v-model="editParallelLine.p1.z"
+                    @input="applyEditParallelLine"
+                    @focus="handleParallelLineCoordFocus('z')"
+                    @blur="handleParallelLineCoordBlur('z')"
+                    step="0.5"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeParallelLineCoord('z', 'up')"
+                    :disabled="isPointCoordinateLocked(pl!.p1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div class="card-summary-header">
+              平行线{{ pl!.name ?? '' }}
+              <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="
+                  handleDeleteElement('parallelLine', pl!.id, '平行线' + (pl!.name ?? ''))
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
+            </div>
+            <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
+            <div>
+              点{{ pl!.p1.name ?? '' }}（{{ pl!.p1.position.x.toFixed(2) }},
+              {{ pl!.p1.position.y.toFixed(2) }}, {{ pl!.p1.position.z.toFixed(2) }}）
+            </div>
+            <div>来源：{{ getParallelLineSourceLabel(pl!) }}</div>
           </div>
         </div>
 
@@ -7774,6 +8161,35 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="parallelLinesInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.parallelLine"
+            @click="toggleContentGroup('parallelLine')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.parallelLine ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.parallelLine }}</span>
+            <span class="content-group-count">{{ parallelLinesInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.parallelLine" class="content-group-body">
+            <div
+              v-for="pl in parallelLinesInScene"
+              :key="pl!.id"
+              class="parallel-line-info selectable-geo"
+              :class="{ 'is-selected': selectedParallelLineIds.includes(pl!.id) }"
+              @click="selectParallelLineFromContent(pl!.id)"
+            >
+              <div>
+                平行线{{ pl!.name ?? '' }}
+                <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              </div>
+              <div>来源：{{ getParallelLineSourceLabel(pl!) }}</div>
+            </div>
+          </div>
+        </div>
         <div v-if="raysInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -8199,6 +8615,7 @@ hr {
 .selectedLine-info,
 .selectedStraightLine-info,
 .selectedPerpendicularLine-info,
+.selectedParallelLine-info,
 .selectedRay-info,
 .selectedVector-info,
 .selectedCircle-info,
@@ -8208,6 +8625,7 @@ hr {
 .line-info,
 .straight-line-info,
 .perpendicular-line-info,
+.parallel-line-info,
 .ray-info,
 .vector-info,
 .circle-info,
@@ -8234,6 +8652,11 @@ hr {
 .perpendicular-line-info {
   background-color: rgba(0, 180, 150, 0.18);
   border-left-color: rgb(0, 180, 150);
+}
+.selectedParallelLine-info,
+.parallel-line-info {
+  background-color: rgba(139, 124, 246, 0.18);
+  border-left-color: #8b7cf6;
 }
 .selectedRay-info,
 .ray-info {

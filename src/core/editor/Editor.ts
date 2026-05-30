@@ -31,6 +31,7 @@ import { UpdateVectorCommand } from './commands/update/UpdateVectorCommand'
 import { UpdateCircleCommand } from './commands/update/UpdateCircleCommand'
 import { UpdateStraightLineCommand } from './commands/update/UpdateStraightLineCommand'
 import { UpdatePerpendicularLineCommand } from './commands/update/UpdatePerpendicularLineCommand'
+import { UpdateParallelLineCommand } from './commands/update/UpdateParallelLineCommand'
 import { UpdateFaceCommand } from './commands/update/UpdateFaceCommand'
 import { DeletePointCommand } from './commands/delete/DeletePointCommand'
 import { DeleteLineCommand } from './commands/delete/DeleteLineCommand'
@@ -65,6 +66,7 @@ import { UpdateConeHeightCommand } from './commands/update/UpdateConeHeightComma
 import { AddCylinderCommand } from './commands/add/AddCylinderCommand'
 import { DeleteCylinderCommand } from './commands/delete/DeleteCylinderCommand'
 import { DeletePerpendicularLineCommand } from './commands/delete/DeletePerpendicularLineCommand'
+import { DeleteParallelLineCommand } from './commands/delete/DeleteParallelLineCommand'
 import { UpdateCylinderCommand } from './commands/update/UpdateCylinderCommand'
 import { UpdateCylinderRadiusCommand } from './commands/update/UpdateCylinderRadiusCommand'
 import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHeightCommand'
@@ -81,6 +83,8 @@ import {
 } from '../geometry/IntersectionPoint3'
 import { PerpendicularLine3, type PerpendicularLineTargetRef, type PerpendicularLineTargetType } from '../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../constraints/PerpendicularLineConstraint'
+import { ParallelLine3, type ParallelLineTargetRef, type ParallelLineTargetType } from '../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../constraints/ParallelLineConstraint'
 
 export enum EditorMode {
   Select,
@@ -103,6 +107,7 @@ export enum EditorMode {
   CreateCone,
   CreateCylinder,
   CreatePerpendicularLine,
+  CreateParallelLine,
 }
 
 export type FacePreviewData = {
@@ -1128,7 +1133,16 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'coneBase' && pl.target.id === coneId,
     )
-    this.executeCommand(new DeleteConeCommand(this.scene, cone, relatedPerpendicularLines))
+    const relatedParallelLines: ParallelLine3[] = []
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
+    })
+    this.executeCommand(new DeleteConeCommand(this.scene, cone, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateConeTwoPoint(baseCenterPoint: Point3, apexPoint: Point3, radius: number) {
@@ -1374,7 +1388,16 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => (pl.target.type === 'cylinderBottom' || pl.target.type === 'cylinderTop') && pl.target.id === cylinderId,
     )
-    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines))
+    const relatedParallelLines: ParallelLine3[] = []
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
+    })
+    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateCylinderTwoPoint(bottomCenterPoint: Point3, topCenterPoint: Point3, radius: number) {
@@ -2925,6 +2948,40 @@ export class Editor {
       return false
     })
 
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter((pl) => {
+      if (pl.p1.id === pointId) return true
+      if (pl.target.type === 'line' && relatedLines.some((l) => l.id === pl.target.id)) return true
+      if (pl.target.type === 'straightLine' && relatedStraightLines.some((l) => l.id === pl.target.id)) return true
+      if (pl.target.type === 'ray' && relatedRays.some((r) => r.id === pl.target.id)) return true
+      if (pl.target.type === 'vector' && relatedVectors.some((v) => v.id === pl.target.id)) return true
+      return false
+    })
+
+    const relatedPerpendicularLineIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const relatedParallelLineIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (relatedPerpendicularLineIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && relatedPerpendicularLineIds.has(pl.target.id)) {
+        relatedPerpendicularLines.push(pl)
+        relatedPerpendicularLineIds.add(pl.id)
+      }
+      if (pl.target.type === 'parallelLine' && relatedParallelLineIds.has(pl.target.id)) {
+        relatedPerpendicularLines.push(pl)
+        relatedPerpendicularLineIds.add(pl.id)
+      }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (relatedParallelLineIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && relatedPerpendicularLineIds.has(pl.target.id)) {
+        relatedParallelLines.push(pl)
+        relatedParallelLineIds.add(pl.id)
+      }
+      if (pl.target.type === 'parallelLine' && relatedParallelLineIds.has(pl.target.id)) {
+        relatedParallelLines.push(pl)
+        relatedParallelLineIds.add(pl.id)
+      }
+    })
+
     this.executeCommand(
       new DeletePointCommand(
         this.scene,
@@ -2941,6 +2998,7 @@ export class Editor {
         relatedSpheres,
         dependentRegularPolygons,
         relatedPerpendicularLines,
+        relatedParallelLines,
       ),
     )
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
@@ -2999,6 +3057,22 @@ export class Editor {
         (pl.target.type === 'line' && pl.target.id === lineId) ||
         (pl.target.type === 'face' && allDeletedFaceIds.has(pl.target.id)),
     )
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'line' && pl.target.id === lineId,
+    )
+
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_rllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+    })
 
     this.executeCommand(
       new DeleteLineCommand(
@@ -3009,6 +3083,7 @@ export class Editor {
         filteredDependentFaces,
         dependentRegularPolygons,
         relatedPerpendicularLines,
+        relatedParallelLines,
       ),
     )
   }
@@ -3023,7 +3098,22 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'ray' && pl.target.id === rayId,
     )
-    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines))
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'ray' && pl.target.id === rayId,
+    )
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_rllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+    })
+    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   deleteCircle(circleId: string) {
@@ -3043,8 +3133,23 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'straightLine' && pl.target.id === lineId,
     )
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'straightLine' && pl.target.id === lineId,
+    )
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_rllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+    })
     this.executeCommand(
-      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines),
+      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines),
     )
   }
 
@@ -3068,6 +3173,22 @@ export class Editor {
       const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
         (pl) => pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id),
       )
+      const allBoundaryLineIds = new Set(faces.flatMap((f) => f.boundaryLineIds))
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+      const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+      ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+        if (_rplIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      })
+      ;[...this.scene.parallelLines.values()].forEach((pl) => {
+        if (_rllIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      })
       this.executeCommand(
         new DeleteHexahedronCommand(
           this.scene,
@@ -3076,6 +3197,7 @@ export class Editor {
           cubeConstraint,
           dependentIntersectionPoints,
           relatedPerpendicularLines,
+          relatedParallelLines,
         ),
       )
       return
@@ -3092,6 +3214,22 @@ export class Editor {
       const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
         (pl) => pl.target.type === 'face' && pl.target.id === faceId,
       )
+      const boundaryLineIds = new Set(face.boundaryLineIds)
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && boundaryLineIds.has(pl.target.id),
+      )
+      const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+      const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+      ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+        if (_rplIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      })
+      ;[...this.scene.parallelLines.values()].forEach((pl) => {
+        if (_rllIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      })
       this.executeCommand(
         new DeleteRegularPolygonCommand(
           this.scene,
@@ -3100,6 +3238,7 @@ export class Editor {
           dependentPoints,
           dependentIntersectionPoints,
           relatedPerpendicularLines,
+          relatedParallelLines,
         ),
       )
       return
@@ -3112,7 +3251,23 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'face' && pl.target.id === faceId,
     )
-    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines))
+    const boundaryLineIds = new Set(face.boundaryLineIds)
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'line' && boundaryLineIds.has(pl.target.id),
+    )
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_rllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+    })
+    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   clearAll() {
@@ -3138,6 +3293,14 @@ export class Editor {
     const cylinders = [...this.scene.cylinders.values()]
     const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
     const cylinderConstraints = [...this.scene.cylinderConstraints.values()]
+    const perpendicularLines = [...this.scene.perpendicularLines.values()]
+    const parallelLines = [...this.scene.parallelLines.values()]
+    const perpendicularLineConstraints = [...this.scene.perpendicularLineConstraints.values()].filter(
+      (constraint): constraint is PerpendicularLineConstraint => constraint instanceof PerpendicularLineConstraint,
+    )
+    const parallelLineConstraints = [...this.scene.parallelLineConstraints.values()].filter(
+      (constraint): constraint is ParallelLineConstraint => constraint instanceof ParallelLineConstraint,
+    )
 
     if (
       points.length === 0 &&
@@ -3150,7 +3313,9 @@ export class Editor {
       faces.length === 0 &&
       cones.length === 0 &&
       cylinders.length === 0 &&
-      constraints.length === 0
+      constraints.length === 0 &&
+      perpendicularLines.length === 0 &&
+      parallelLines.length === 0
     )
       return
 
@@ -3169,6 +3334,10 @@ export class Editor {
         cones,
         cylinders,
         cylinderConstraints,
+        perpendicularLines,
+        parallelLines,
+        perpendicularLineConstraints,
+        parallelLineConstraints,
       ),
     )
     this.selectedPoints = []
@@ -3942,6 +4111,8 @@ export class Editor {
     this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
     this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
     this.scene.selection.vectors.forEach((id) => targets.push({ type: 'vector', id }))
+    this.scene.selection.perpendicularLines.forEach((id) => targets.push({ type: 'perpendicularLine', id }))
+    this.scene.selection.parallelLines.forEach((id) => targets.push({ type: 'parallelLine', id }))
     this.scene.selection.faces.forEach((id) => targets.push({ type: 'face', id }))
     if (this.perpendicularLinePendingFaceTarget) {
       targets.push(this.perpendicularLinePendingFaceTarget)
@@ -3955,6 +4126,8 @@ export class Editor {
     this.scene.selection.straightLines.clear()
     this.scene.selection.rays.clear()
     this.scene.selection.vectors.clear()
+    this.scene.selection.perpendicularLines.clear()
+    this.scene.selection.parallelLines.clear()
     this.scene.selection.faces.clear()
     this.scene.selection.cones.clear()
     this.scene.selection.cylinders.clear()
@@ -4002,6 +4175,8 @@ export class Editor {
       (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
       (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
       (type === 'vector' && this.scene.selection.vectors.has(geoId)) ||
+      (type === 'perpendicularLine' && this.scene.selection.perpendicularLines.has(geoId)) ||
+      (type === 'parallelLine' && this.scene.selection.parallelLines.has(geoId)) ||
       (type === 'face' && this.scene.selection.faces.has(geoId))
 
     if (isSelected) {
@@ -4009,6 +4184,8 @@ export class Editor {
       else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
       else if (type === 'ray') this.scene.selection.deselectRay(geoId)
       else if (type === 'vector') this.scene.selection.deselectVector(geoId)
+      else if (type === 'perpendicularLine') this.scene.selection.deselectPerpendicularLine(geoId)
+      else if (type === 'parallelLine') this.scene.selection.deselectParallelLine(geoId)
       else this.scene.selection.deselectFace(geoId)
       return
     }
@@ -4021,6 +4198,8 @@ export class Editor {
     else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
     else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
     else if (type === 'vector') this.scene.selection.selectVector(geoId, true)
+    else if (type === 'perpendicularLine') this.scene.selection.selectPerpendicularLine(geoId, true)
+    else if (type === 'parallelLine') this.scene.selection.selectParallelLine(geoId, true)
     else this.scene.selection.selectFace(geoId, true)
 
     this.tryCreatePerpendicularLineFromSelection()
@@ -4054,7 +4233,7 @@ export class Editor {
     const point = this.selectedPoints[0]!
     if (!target || !point) return
 
-    if (target.type === 'line' || target.type === 'straightLine' || target.type === 'ray' || target.type === 'vector') {
+    if (target.type === 'line' || target.type === 'straightLine' || target.type === 'ray' || target.type === 'vector' || target.type === 'perpendicularLine' || target.type === 'parallelLine') {
       const entity =
         target.type === 'line'
           ? this.scene.lines.get(target.id)
@@ -4062,7 +4241,11 @@ export class Editor {
             ? this.scene.straightLines.get(target.id)
             : target.type === 'ray'
               ? this.scene.rays.get(target.id)
-              : this.scene.vectors.get(target.id)
+              : target.type === 'vector'
+                ? this.scene.vectors.get(target.id)
+                : target.type === 'perpendicularLine'
+                  ? this.scene.perpendicularLines.get(target.id)
+                  : this.scene.parallelLines.get(target.id)
       if (!entity) return
 
       if (entity.p1.id === point.id || entity.p2.id === point.id) {
@@ -4109,7 +4292,291 @@ export class Editor {
   deletePerpendicularLine(lineId: string) {
     const line = this.scene.perpendicularLines.get(lineId)
     if (!line) return
-    this.executeCommand(new DeletePerpendicularLineCommand(this.scene, line))
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
+    )
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
+    )
+    this.executeCommand(new DeletePerpendicularLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+  }
+
+  private parallelLinePendingTarget: ParallelLineTargetRef | null = null
+
+  getParallelLineSelectionTargets() {
+    const targets: ParallelLineTargetRef[] = []
+    this.scene.selection.lines.forEach((id) => targets.push({ type: 'line', id }))
+    this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
+    this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
+    this.scene.selection.vectors.forEach((id) => targets.push({ type: 'vector', id }))
+    this.scene.selection.perpendicularLines.forEach((id) => targets.push({ type: 'perpendicularLine', id }))
+    this.scene.selection.parallelLines.forEach((id) => targets.push({ type: 'parallelLine', id }))
+    return targets
+  }
+
+  clearParallelLineSelection() {
+    this.scene.selection.points.clear()
+    this.scene.selection.lines.clear()
+    this.scene.selection.straightLines.clear()
+    this.scene.selection.rays.clear()
+    this.scene.selection.vectors.clear()
+    this.scene.selection.perpendicularLines.clear()
+    this.scene.selection.parallelLines.clear()
+    this.parallelLinePendingTarget = null
+    this.selectedPoints = []
+  }
+
+  toggleParallelLineSelection(type: ParallelLineTargetType, geoId: string) {
+    if (this.mode !== EditorMode.CreateParallelLine) return
+
+    const isSelected =
+      (type === 'line' && this.scene.selection.lines.has(geoId)) ||
+      (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
+      (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
+      (type === 'vector' && this.scene.selection.vectors.has(geoId)) ||
+      (type === 'perpendicularLine' && this.scene.selection.perpendicularLines.has(geoId)) ||
+      (type === 'parallelLine' && this.scene.selection.parallelLines.has(geoId))
+
+    if (isSelected) {
+      if (type === 'line') this.scene.selection.deselectLine(geoId)
+      else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
+      else if (type === 'ray') this.scene.selection.deselectRay(geoId)
+      else if (type === 'vector') this.scene.selection.deselectVector(geoId)
+      else if (type === 'perpendicularLine') this.scene.selection.deselectPerpendicularLine(geoId)
+      else this.scene.selection.deselectParallelLine(geoId)
+      return
+    }
+
+    if (this.getParallelLineSelectionTargets().length >= 1) {
+      this.clearParallelLineSelection()
+    }
+
+    if (type === 'line') this.scene.selection.selectLine(geoId, true)
+    else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
+    else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
+    else if (type === 'vector') this.scene.selection.selectVector(geoId, true)
+    else if (type === 'perpendicularLine') this.scene.selection.selectPerpendicularLine(geoId, true)
+    else this.scene.selection.selectParallelLine(geoId, true)
+
+    this.tryCreateParallelLineFromSelection()
+  }
+
+  tryCreateParallelLineWith(point: Point3) {
+    if (this.mode !== EditorMode.CreateParallelLine) return
+    this.scene.selection.selectPoint(point.id, true)
+
+    if (!this.selectedPoints.includes(point)) {
+      this.selectedPoints.push(point)
+    }
+
+    if (this.selectedPoints.length > 1) {
+      this.selectedPoints = [point]
+      this.scene.selection.points.clear()
+      this.scene.selection.selectPoint(point.id, true)
+    }
+
+    this.tryCreateParallelLineFromSelection()
+  }
+
+  tryCreateParallelLineFromSelection() {
+    if (this.mode !== EditorMode.CreateParallelLine) return
+
+    const targets = this.getParallelLineSelectionTargets()
+    if (targets.length === 0) return
+    if (this.selectedPoints.length === 0) return
+
+    const target = targets[0]!
+    const point = this.selectedPoints[0]!
+    if (!target || !point) return
+
+    const entity =
+      target.type === 'line'
+        ? this.scene.lines.get(target.id)
+        : target.type === 'straightLine'
+          ? this.scene.straightLines.get(target.id)
+          : target.type === 'ray'
+            ? this.scene.rays.get(target.id)
+            : target.type === 'vector'
+              ? this.scene.vectors.get(target.id)
+              : target.type === 'perpendicularLine'
+                ? this.scene.perpendicularLines.get(target.id)
+                : this.scene.parallelLines.get(target.id)
+    if (!entity) return
+
+    if (entity.p1.id === point.id || entity.p2.id === point.id) {
+      emitToast('通过点不能位于要平行的线上')
+      return
+    }
+
+    const targetDir = new Vec3(
+      entity.p2.position.x - entity.p1.position.x,
+      entity.p2.position.y - entity.p1.position.y,
+      entity.p2.position.z - entity.p1.position.z,
+    )
+    const targetDirLen = Math.hypot(targetDir.x, targetDir.y, targetDir.z)
+    if (targetDirLen <= 1e-5) {
+      emitToast('目标线方向向量长度为零，无法创建平行线')
+      return
+    }
+    const normalizedDir = new Vec3(targetDir.x / targetDirLen, targetDir.y / targetDirLen, targetDir.z / targetDirLen)
+
+    const p2Position = new Vec3(
+      point.position.x + normalizedDir.x * 10,
+      point.position.y + normalizedDir.y * 10,
+      point.position.z + normalizedDir.z * 10,
+    )
+    const footPoint = new Point3(
+      genId('pp2'),
+      '',
+      p2Position,
+      false,
+      false,
+      false,
+    )
+
+    const parallelLineName = genNextAvailableName(
+      [...this.scene.parallelLines.values()].map((l) => l.name),
+      0,
+      (index) => (index === 0 ? 'w' : `w${index}`),
+    )
+
+    const parallelLine = new ParallelLine3(
+      genId('pll'),
+      parallelLineName,
+      point,
+      footPoint,
+      { type: target.type, id: target.id },
+      false,
+      true,
+    )
+    const constraint = new ParallelLineConstraint(this.scene, parallelLine.id, { type: target.type, id: target.id })
+
+    this.executeCommand(new AddElementCommand(this.scene, parallelLine, 'parallelLine'))
+    this.scene.addParallelLineConstraint(constraint)
+    constraint.solve()
+
+    this.clearParallelLineSelection()
+    this.scene.selection.clear()
+    this.scene.selection.selectParallelLine(parallelLine.id)
+  }
+
+  deleteParallelLine(lineId: string) {
+    const line = this.scene.parallelLines.get(lineId)
+    if (!line) return
+    const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
+    )
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
+    )
+    this.executeCommand(new DeleteParallelLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+  }
+
+  updateParallelLine(
+    lineId: string,
+    patch: {
+      name?: string
+      nameVisible?: boolean
+      valueVisible?: boolean
+      labelOffsetX?: number
+      labelOffsetY?: number
+      visible?: boolean
+      displayLength?: number
+      userLocked?: boolean
+    },
+  ) {
+    const line = this.scene.parallelLines.get(lineId)
+    if (!line) return
+
+    const nextName = patch.name ?? line.name
+    const nextNameVisible = patch.nameVisible ?? line.nameVisible
+    const nextValueVisible = patch.valueVisible ?? line.valueVisible
+    const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
+    const nextLabelOffsetY = patch.labelOffsetY ?? line.labelOffsetY
+    const nextVisible = patch.visible ?? line.visible
+    const nextDisplayLength = ParallelLine3.normalizeDisplayLength(
+      patch.displayLength ?? line.displayLength,
+    )
+    const nextUserLocked = patch.userLocked ?? line.userLocked
+    if (
+      nextName === line.name &&
+      nextNameVisible === line.nameVisible &&
+      nextValueVisible === line.valueVisible &&
+      nextLabelOffsetX === line.labelOffsetX &&
+      nextLabelOffsetY === line.labelOffsetY &&
+      nextVisible === line.visible &&
+      nextDisplayLength === line.displayLength &&
+      nextUserLocked === line.userLocked
+    ) {
+      return
+    }
+
+    this.executeCommand(
+      new UpdateParallelLineCommand(
+        line,
+        {
+          name: line.name,
+          nameVisible: line.nameVisible,
+          valueVisible: line.valueVisible,
+          labelOffsetX: line.labelOffsetX,
+          labelOffsetY: line.labelOffsetY,
+          visible: line.visible,
+          displayLength: line.displayLength,
+          userLocked: line.userLocked,
+        },
+        {
+          name: nextName,
+          nameVisible: nextNameVisible,
+          valueVisible: nextValueVisible,
+          labelOffsetX: nextLabelOffsetX,
+          labelOffsetY: nextLabelOffsetY,
+          visible: nextVisible,
+          displayLength: nextDisplayLength,
+          userLocked: nextUserLocked,
+        },
+      ),
+    )
+  }
+
+  setParallelLineLockState(lineId: string, locked: boolean) {
+    const line = this.scene.parallelLines.get(lineId)
+    if (!line) return
+    const p1Transforms = locked
+      ? [line.p1]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: true,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+      : [line.p1]
+          .filter((point) => !point.locked)
+          .map((point) => ({
+            point,
+            before: point.userLocked,
+            after: false,
+          }))
+          .filter((transform) => transform.before !== transform.after)
+
+    if (line.userLocked === locked && p1Transforms.length === 0) return
+
+    this.executeCommand(
+      new SyncLockStateCommand(
+        p1Transforms,
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [{ line, before: line.userLocked, after: locked }],
+      ),
+    )
   }
 
   toggleIntersectionSelection(type: IntersectionTargetType, geoId: string) {
@@ -4275,6 +4742,19 @@ export class Editor {
       return
     }
 
+    for (const pl of this.scene.parallelLines.values()) {
+      const isSourcePoint = pl.p1.id === keepPoint.id || pl.p1.id === removePoint.id
+      if (!isSourcePoint) continue
+      const targetEntity = pl.getTargetEntity(this.scene)
+      if (!targetEntity) continue
+      const targetPointIds = [targetEntity.p1.id, targetEntity.p2.id]
+      const isTargetPoint = targetPointIds.includes(keepPoint.id) || targetPointIds.includes(removePoint.id)
+      if (isTargetPoint) {
+        emitToast('平行线来源点之间不支持合并')
+        return
+      }
+    }
+
     if (keepConstraint && removeConstraint && keepConstraint.cubeId !== removeConstraint.cubeId) {
       const mergeCommand = this.buildCubeTranslationMergeCommand(
         keepPoint,
@@ -4352,7 +4832,22 @@ export class Editor {
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'vector' && pl.target.id === vectorId,
     )
-    this.executeCommand(new DeleteVectorCommand(this.scene, vector, relatedPerpendicularLines))
+    const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.target.type === 'vector' && pl.target.id === vectorId,
+    )
+    const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+    const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_rplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_rllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+    })
+    this.executeCommand(new DeleteVectorCommand(this.scene, vector, relatedPerpendicularLines, relatedParallelLines))
   }
 
   isVectorLocked(vector: GeoVector3 | null | undefined) {

@@ -9,6 +9,10 @@ import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { Cone3 } from '../../../geometry/Cone3'
 import { Cylinder3 } from '../../../geometry/Cylinder3'
+import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { Scene, type SceneConstraint } from '../../../scene/Scene'
 
@@ -27,6 +31,10 @@ export class ClearSceneCommand implements Command {
     private cones: Cone3[] = [],
     private cylinders: Cylinder3[] = [],
     private cylinderConstraints: CylinderConstraint[] = [],
+    private perpendicularLines: PerpendicularLine3[] = [],
+    private parallelLines: ParallelLine3[] = [],
+    private perpendicularLineConstraints: PerpendicularLineConstraint[] = [],
+    private parallelLineConstraints: ParallelLineConstraint[] = [],
   ) {}
 
   execute() {
@@ -39,6 +47,8 @@ export class ClearSceneCommand implements Command {
     this.scene.faces.clear()
     this.scene.cones.clear()
     this.scene.cylinders.clear()
+    this.scene.perpendicularLines.clear()
+    this.scene.parallelLines.clear()
     this.points.forEach((point) => this.scene.points.delete(point.id))
     this.scene.clearAllConstraints()
     this.scene.selection.clear()
@@ -55,8 +65,12 @@ export class ClearSceneCommand implements Command {
     this.faces.forEach((face) => this.scene.addFace(face))
     this.cones.forEach((cone) => this.scene.addCone(cone))
     this.cylinders.forEach((cylinder) => this.scene.addCylinder(cylinder))
+    this.perpendicularLines.forEach((line) => this.scene.addPerpendicularLine(line))
+    this.parallelLines.forEach((line) => this.scene.addParallelLine(line))
     this.scene.constraints.push(...this.constraints)
     this.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
+    this.perpendicularLineConstraints.forEach((constraint) => this.scene.addPerpendicularLineConstraint(constraint))
+    this.parallelLineConstraints.forEach((constraint) => this.scene.addParallelLineConstraint(constraint))
     this.scene.rebuildConstraintIndexes()
   }
 }

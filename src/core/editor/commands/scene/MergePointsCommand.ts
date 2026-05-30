@@ -17,6 +17,8 @@ import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint } from '../../../constraints/ObjectConstrainedPointConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 import type { ConstrainedToRef } from '../../../geometry/Point3'
 
 type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
@@ -128,12 +130,21 @@ type PerpendicularLineSnapshot = {
   targetId: string
 }
 
+type ParallelLineSnapshot = {
+  line: ParallelLine3
+  p1: Point3
+  p2: Point3
+  targetType: string
+  targetId: string
+}
+
 export class MergePointsCommand implements Command {
   private lineSnapshots: Array<LinearSnapshot<Line3>>
   private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
   private raySnapshots: Array<LinearSnapshot<Ray3>>
   private vectorSnapshots: Array<LinearSnapshot<GeoVector3>>
   private perpendicularLineSnapshots: PerpendicularLineSnapshot[]
+  private parallelLineSnapshots: ParallelLineSnapshot[]
   private faceSnapshots: FaceSnapshot[]
   private cubeSnapshots: CubeSnapshot[]
   private pointCubeSnapshots: PointCubeSnapshot[]
@@ -158,6 +169,9 @@ export class MergePointsCommand implements Command {
   private removedCones = new Set<string>()
   private removedCylinders = new Set<string>()
   private removedPerpendicularLines = new Set<string>()
+  private removedParallelLines = new Set<string>()
+  private cascadePerpendicularLineSnapshots: PerpendicularLineSnapshot[] = []
+  private cascadeParallelLineSnapshots: ParallelLineSnapshot[] = []
 
   constructor(
     private scene: Scene,
@@ -354,6 +368,19 @@ export class MergePointsCommand implements Command {
       }))
 
     this.perpendicularLineSnapshots = [...scene.perpendicularLines.values()]
+      .filter((line) =>
+        line.p1.id === keepPoint.id || line.p1.id === removePoint.id ||
+        line.p2.id === keepPoint.id || line.p2.id === removePoint.id,
+      )
+      .map((line) => ({
+        line,
+        p1: line.p1,
+        p2: line.p2,
+        targetType: line.target.type,
+        targetId: line.target.id,
+      }))
+
+    this.parallelLineSnapshots = [...scene.parallelLines.values()]
       .filter((line) =>
         line.p1.id === keepPoint.id || line.p1.id === removePoint.id ||
         line.p2.id === keepPoint.id || line.p2.id === removePoint.id,
@@ -686,6 +713,63 @@ export class MergePointsCommand implements Command {
       }
     })
 
+    const deletedTargetIds = new Set<string>()
+    this.removedLines.forEach((id) => deletedTargetIds.add(`line:${id}`))
+    this.removedStraightLines.forEach((id) => deletedTargetIds.add(`straightLine:${id}`))
+    this.removedRays.forEach((id) => deletedTargetIds.add(`ray:${id}`))
+    this.removedVectors.forEach((id) => deletedTargetIds.add(`vector:${id}`))
+    this.removedFaces.forEach((id) => deletedTargetIds.add(`face:${id}`))
+    this.removedCones.forEach((id) => deletedTargetIds.add(`coneBase:${id}`))
+    this.removedCylinders.forEach((id) => {
+      deletedTargetIds.add(`cylinderBottom:${id}`)
+      deletedTargetIds.add(`cylinderTop:${id}`)
+    })
+    this.removedPerpendicularLines.forEach((id) => deletedTargetIds.add(`perpendicularLine:${id}`))
+    this.removedParallelLines.forEach((id) => deletedTargetIds.add(`parallelLine:${id}`))
+
+    const cascadeDeletePerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`),
+    )
+    const cascadeDeleteParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`),
+    )
+    const _cdPlIds = new Set(cascadeDeletePerpendicularLines.map((l) => l.id))
+    const _cdPllIds = new Set(cascadeDeleteParallelLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_cdPlIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _cdPlIds.has(pl.target.id)) { cascadeDeletePerpendicularLines.push(pl); _cdPlIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _cdPllIds.has(pl.target.id)) { cascadeDeletePerpendicularLines.push(pl); _cdPlIds.add(pl.id) }
+    })
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (_cdPllIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _cdPlIds.has(pl.target.id)) { cascadeDeleteParallelLines.push(pl); _cdPllIds.add(pl.id) }
+      if (pl.target.type === 'parallelLine' && _cdPllIds.has(pl.target.id)) { cascadeDeleteParallelLines.push(pl); _cdPllIds.add(pl.id) }
+    })
+    this.cascadePerpendicularLineSnapshots = cascadeDeletePerpendicularLines.map((pl) => ({
+      line: pl,
+      p1: pl.p1,
+      p2: pl.p2,
+      targetType: pl.target.type,
+      targetId: pl.target.id,
+    }))
+    this.cascadeParallelLineSnapshots = cascadeDeleteParallelLines.map((pl) => ({
+      line: pl,
+      p1: pl.p1,
+      p2: pl.p2,
+      targetType: pl.target.type,
+      targetId: pl.target.id,
+    }))
+    cascadeDeletePerpendicularLines.forEach((pl) => {
+      this.scene.perpendicularLines.delete(pl.id)
+      this.scene.selection.perpendicularLines.delete(pl.id)
+      this.removedPerpendicularLines.add(pl.id)
+    })
+    cascadeDeleteParallelLines.forEach((pl) => {
+      this.scene.parallelLines.delete(pl.id)
+      this.scene.selection.parallelLines.delete(pl.id)
+      this.removedParallelLines.add(pl.id)
+    })
+
     this.perpendicularLineSnapshots.forEach(({ line }) => {
       if (line.p1.id === this.removePoint.id) line.p1 = this.keepPoint
       if (line.p2.id === this.removePoint.id) line.p2 = this.keepPoint
@@ -693,6 +777,16 @@ export class MergePointsCommand implements Command {
         this.scene.perpendicularLines.delete(line.id)
         this.scene.selection.perpendicularLines.delete(line.id)
         this.removedPerpendicularLines.add(line.id)
+      }
+    })
+
+    this.parallelLineSnapshots.forEach(({ line }) => {
+      if (line.p1.id === this.removePoint.id) line.p1 = this.keepPoint
+      if (line.p2.id === this.removePoint.id) line.p2 = this.keepPoint
+      if (line.p1.id === line.p2.id) {
+        this.scene.parallelLines.delete(line.id)
+        this.scene.selection.parallelLines.delete(line.id)
+        this.removedParallelLines.add(line.id)
       }
     })
 
@@ -927,6 +1021,39 @@ export class MergePointsCommand implements Command {
         this.scene.addPerpendicularLine(line)
         const constraint = new PerpendicularLineConstraint(this.scene, line.id, line.target)
         this.scene.addPerpendicularLineConstraint(constraint)
+      }
+    })
+
+    this.parallelLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
+      line.p1 = p1
+      line.p2 = p2
+      line.target = { type: targetType as ParallelLine3['target']['type'], id: targetId }
+      if (this.removedParallelLines.has(line.id)) {
+        this.scene.addParallelLine(line)
+        const constraint = new ParallelLineConstraint(this.scene, line.id, line.target)
+        this.scene.addParallelLineConstraint(constraint)
+      }
+    })
+
+    this.cascadePerpendicularLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
+      line.p1 = p1
+      line.p2 = p2
+      line.target = { type: targetType as PerpendicularLine3['target']['type'], id: targetId }
+      if (this.removedPerpendicularLines.has(line.id) && !this.scene.perpendicularLines.has(line.id)) {
+        this.scene.addPerpendicularLine(line)
+        const constraint = new PerpendicularLineConstraint(this.scene, line.id, line.target)
+        this.scene.addPerpendicularLineConstraint(constraint)
+      }
+    })
+
+    this.cascadeParallelLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
+      line.p1 = p1
+      line.p2 = p2
+      line.target = { type: targetType as ParallelLine3['target']['type'], id: targetId }
+      if (this.removedParallelLines.has(line.id) && !this.scene.parallelLines.has(line.id)) {
+        this.scene.addParallelLine(line)
+        const constraint = new ParallelLineConstraint(this.scene, line.id, line.target)
+        this.scene.addParallelLineConstraint(constraint)
       }
     })
 

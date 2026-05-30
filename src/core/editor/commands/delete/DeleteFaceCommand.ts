@@ -6,6 +6,8 @@ import { Point3 } from '../../../geometry/Point3'
 import { IntersectionPointConstraint } from '../../../constraints/IntersectionPointConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 
 export class DeleteFaceCommand implements Command {
   private deletedBoundaryLines: Line3[] = []
@@ -18,12 +20,17 @@ export class DeleteFaceCommand implements Command {
       constraint: IntersectionPointConstraint
     }> = [],
     private relatedPerpendicularLines: PerpendicularLine3[] = [],
+    private relatedParallelLines: ParallelLine3[] = [],
   ) {}
 
   execute() {
     this.relatedPerpendicularLines.forEach((line) => {
       this.scene.removePerpendicularLine(line.id)
       this.scene.selection.perpendicularLines.delete(line.id)
+    })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.removeParallelLine(line.id)
+      this.scene.selection.parallelLines.delete(line.id)
     })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
       this.scene.removeIntersectionConstraint(constraint.pointId)
@@ -50,6 +57,12 @@ export class DeleteFaceCommand implements Command {
       this.scene.addPerpendicularLine(line)
       this.scene.addPerpendicularLineConstraint(
         new PerpendicularLineConstraint(this.scene, line.id, line.target),
+      )
+    })
+    this.relatedParallelLines.forEach((line) => {
+      this.scene.addParallelLine(line)
+      this.scene.addParallelLineConstraint(
+        new ParallelLineConstraint(this.scene, line.id, line.target),
       )
     })
     this.dependentIntersectionPoints.forEach(({ point, constraint }) => {

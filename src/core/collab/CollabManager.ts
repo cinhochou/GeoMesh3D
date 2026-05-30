@@ -9,6 +9,8 @@ import { GeoVector3 } from '../geometry/GeoVector3'
 import { StraightLine3 } from '../geometry/StraightLine3'
 import { PerpendicularLine3, type PerpendicularLineTargetRef } from '../geometry/PerpendicularLine3'
 import { PerpendicularLineConstraint } from '../constraints/PerpendicularLineConstraint'
+import { ParallelLine3, type ParallelLineTargetRef } from '../geometry/ParallelLine3'
+import { ParallelLineConstraint } from '../constraints/ParallelLineConstraint'
 import { Circle3, type CircleType, type DirectionType } from '../geometry/Circle3'
 import { Sphere3 } from '../geometry/Sphere3'
 import { Cone3, type ConeType } from '../geometry/Cone3'
@@ -53,7 +55,7 @@ export type CollabStatus = {
 }
 
 type LiveLabelTarget = {
-  type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
+  type: 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'parallelLine' | 'ray' | 'vector' | 'circle' | 'sphere' | 'cone' | 'cylinder' | 'face'
   geoId: string
 }
 
@@ -62,6 +64,7 @@ type LocalSceneSnapshot = {
   lines: Line3[]
   straightLines: StraightLine3[]
   perpendicularLines: PerpendicularLine3[]
+  parallelLines: ParallelLine3[]
   rays: Ray3[]
   vectors: GeoVector3[]
   circles: Circle3[]
@@ -74,6 +77,7 @@ type LocalSceneSnapshot = {
   regularPolygons: RegularPolygonConstraint[]
   cylinderConstraints: CylinderConstraint[]
   perpendicularLineConstraints: PerpendicularLineConstraint[]
+  parallelLineConstraints: ParallelLineConstraint[]
   objectConstrainedPoints: ObjectConstrainedPointConstraint[]
 }
 
@@ -81,6 +85,7 @@ type PointSharedMap = Y.Map<string | number | boolean>
 type LineSharedMap = Y.Map<string | number | boolean>
 type StraightLineSharedMap = Y.Map<string | number | boolean>
 type PerpendicularLineSharedMap = Y.Map<string | number | boolean>
+type ParallelLineSharedMap = Y.Map<string | number | boolean>
 type RaySharedMap = Y.Map<string | number | boolean>
 type VectorSharedMap = Y.Map<string | number | boolean>
 type CircleSharedMap = Y.Map<string | number | boolean>
@@ -129,6 +134,7 @@ export class CollabManager {
   private yLines: Y.Map<LineSharedMap>
   private yStraightLines: Y.Map<StraightLineSharedMap>
   private yPerpendicularLines: Y.Map<PerpendicularLineSharedMap>
+  private yParallelLines: Y.Map<ParallelLineSharedMap>
   private yRays: Y.Map<RaySharedMap>
   private yVectors: Y.Map<VectorSharedMap>
   private yCircles: Y.Map<CircleSharedMap>
@@ -145,6 +151,7 @@ export class CollabManager {
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
   private straightLinesObserver: ((event: Y.YMapEvent<StraightLineSharedMap>) => void) | null = null
   private perpendicularLinesObserver: ((event: Y.YMapEvent<PerpendicularLineSharedMap>) => void) | null = null
+  private parallelLinesObserver: ((event: Y.YMapEvent<ParallelLineSharedMap>) => void) | null = null
   private raysObserver: ((event: Y.YMapEvent<RaySharedMap>) => void) | null = null
   private vectorsObserver: ((event: Y.YMapEvent<VectorSharedMap>) => void) | null = null
   private circlesObserver: ((event: Y.YMapEvent<CircleSharedMap>) => void) | null = null
@@ -161,6 +168,7 @@ export class CollabManager {
   private readonly lineRecordCleanup = new Map<string, () => void>()
   private readonly straightLineRecordCleanup = new Map<string, () => void>()
   private readonly perpendicularLineRecordCleanup = new Map<string, () => void>()
+  private readonly parallelLineRecordCleanup = new Map<string, () => void>()
   private readonly rayRecordCleanup = new Map<string, () => void>()
   private readonly vectorRecordCleanup = new Map<string, () => void>()
   private readonly circleRecordCleanup = new Map<string, () => void>()
@@ -192,6 +200,7 @@ export class CollabManager {
   private readonly dirtyLineIds = new Set<string>()
   private readonly dirtyStraightLineIds = new Set<string>()
   private readonly dirtyPerpendicularLineIds = new Set<string>()
+  private readonly dirtyParallelLineIds = new Set<string>()
   private readonly dirtyRayIds = new Set<string>()
   private readonly dirtyVectorIds = new Set<string>()
   private readonly dirtyCircleIds = new Set<string>()
@@ -207,6 +216,7 @@ export class CollabManager {
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
   private readonly deletedPerpendicularLineIds = new Set<string>()
+  private readonly deletedParallelLineIds = new Set<string>()
   private readonly deletedRayIds = new Set<string>()
   private readonly deletedVectorIds = new Set<string>()
   private readonly deletedCircleIds = new Set<string>()
@@ -233,6 +243,7 @@ export class CollabManager {
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
     this.yPerpendicularLines = this.ydoc.getMap<PerpendicularLineSharedMap>('perpendicularLines')
+    this.yParallelLines = this.ydoc.getMap<ParallelLineSharedMap>('parallelLines')
     this.yRays = this.ydoc.getMap<RaySharedMap>('rays')
     this.yVectors = this.ydoc.getMap<VectorSharedMap>('vectors')
     this.yCircles = this.ydoc.getMap<CircleSharedMap>('circles')
@@ -259,6 +270,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.lineRecordCleanup)
     this.cleanupRecordObservers(this.straightLineRecordCleanup)
     this.cleanupRecordObservers(this.perpendicularLineRecordCleanup)
+    this.cleanupRecordObservers(this.parallelLineRecordCleanup)
     this.cleanupRecordObservers(this.rayRecordCleanup)
     this.cleanupRecordObservers(this.vectorRecordCleanup)
     this.cleanupRecordObservers(this.circleRecordCleanup)
@@ -502,6 +514,15 @@ export class CollabManager {
     if (!record) {
       record = new Y.Map<string | number | boolean>()
       this.yPerpendicularLines.set(id, record)
+    }
+    return record
+  }
+
+  private ensureParallelLineRecord(id: string) {
+    let record = this.yParallelLines.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yParallelLines.set(id, record)
     }
     return record
   }
@@ -887,6 +908,7 @@ export class CollabManager {
       lines: [...this.scene.lines.values()],
       straightLines: [...this.scene.straightLines.values()],
       perpendicularLines: [...this.scene.perpendicularLines.values()],
+      parallelLines: [...this.scene.parallelLines.values()],
       rays: [...this.scene.rays.values()],
       vectors: [...this.scene.vectors.values()],
       circles: [...this.scene.circles.values()],
@@ -913,6 +935,10 @@ export class CollabManager {
         (constraint): constraint is PerpendicularLineConstraint =>
           constraint instanceof PerpendicularLineConstraint,
       ),
+      parallelLineConstraints: [...this.scene.parallelLineConstraints.values()].filter(
+        (constraint): constraint is ParallelLineConstraint =>
+          constraint instanceof ParallelLineConstraint,
+      ),
       objectConstrainedPoints: [...this.scene.objectConstrainedPointConstraints.values()].filter(
         (constraint): constraint is ObjectConstrainedPointConstraint =>
           constraint instanceof ObjectConstrainedPointConstraint,
@@ -924,6 +950,7 @@ export class CollabManager {
     this.scene.lines.clear()
     this.scene.straightLines.clear()
     this.scene.perpendicularLines.clear()
+    this.scene.parallelLines.clear()
     this.scene.rays.clear()
     this.scene.vectors.clear()
     this.scene.circles.clear()
@@ -943,6 +970,7 @@ export class CollabManager {
     snapshot.lines.forEach((line) => this.scene.addLine(line))
     snapshot.straightLines.forEach((line) => this.scene.addStraightLine(line))
     snapshot.perpendicularLines.forEach((line) => this.scene.addPerpendicularLine(line))
+    snapshot.parallelLines.forEach((line) => this.scene.addParallelLine(line))
     snapshot.rays.forEach((ray) => this.scene.addRay(ray))
     snapshot.vectors.forEach((vector) => this.scene.addVector(vector))
     snapshot.circles.forEach((circle) => this.scene.addCircle(circle))
@@ -956,6 +984,7 @@ export class CollabManager {
     snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
     snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
     snapshot.perpendicularLineConstraints.forEach((constraint) => this.scene.addPerpendicularLineConstraint(constraint))
+    snapshot.parallelLineConstraints.forEach((constraint) => this.scene.addParallelLineConstraint(constraint))
   }
 
   private clearDirtyState() {
@@ -963,6 +992,7 @@ export class CollabManager {
     this.dirtyLineIds.clear()
     this.dirtyStraightLineIds.clear()
     this.dirtyPerpendicularLineIds.clear()
+    this.dirtyParallelLineIds.clear()
     this.dirtyRayIds.clear()
     this.dirtyVectorIds.clear()
     this.dirtyCircleIds.clear()
@@ -976,6 +1006,7 @@ export class CollabManager {
     this.deletedLineIds.clear()
     this.deletedStraightLineIds.clear()
     this.deletedPerpendicularLineIds.clear()
+    this.deletedParallelLineIds.clear()
     this.deletedRayIds.clear()
     this.deletedVectorIds.clear()
     this.deletedCircleIds.clear()
@@ -1041,6 +1072,11 @@ export class CollabManager {
     this.dirtyPerpendicularLineIds.add(id)
   }
 
+  private markParallelLineDirty(id: string) {
+    this.deletedParallelLineIds.delete(id)
+    this.dirtyParallelLineIds.add(id)
+  }
+
   private markFaceDirty(id: string) {
     this.deletedFaceIds.delete(id)
     this.dirtyFaceIds.add(id)
@@ -1104,6 +1140,11 @@ export class CollabManager {
   private markPerpendicularLineDeleted(id: string) {
     this.dirtyPerpendicularLineIds.delete(id)
     this.deletedPerpendicularLineIds.add(id)
+  }
+
+  private markParallelLineDeleted(id: string) {
+    this.dirtyParallelLineIds.delete(id)
+    this.deletedParallelLineIds.add(id)
   }
 
   private markFaceDeleted(id: string) {
@@ -1234,6 +1275,9 @@ export class CollabManager {
     for (const pl of this.scene.perpendicularLines.values()) {
       if (pl.p1.id === pointId || pl.p2.id === pointId) return true
     }
+    for (const pl of this.scene.parallelLines.values()) {
+      if (pl.p1.id === pointId || pl.p2.id === pointId) return true
+    }
     for (const circle of this.scene.circles.values()) {
       if (circle.id !== excludeCircleId &&
         (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId)) return true
@@ -1276,6 +1320,7 @@ export class CollabManager {
     this.scene.lines.forEach((_, id) => this.markLineDirty(id))
     this.scene.straightLines.forEach((_, id) => this.markStraightLineDirty(id))
     this.scene.perpendicularLines.forEach((_, id) => this.markPerpendicularLineDirty(id))
+    this.scene.parallelLines.forEach((_, id) => this.markParallelLineDirty(id))
     this.scene.rays.forEach((_, id) => this.markRayDirty(id))
     this.scene.vectors.forEach((_, id) => this.markVectorDirty(id))
     this.scene.circles.forEach((_, id) => this.markCircleDirty(id))
@@ -1307,6 +1352,9 @@ export class CollabManager {
     }
     for (const id of [...this.yPerpendicularLines.keys()]) {
       if (!this.scene.perpendicularLines.has(id)) this.markPerpendicularLineDeleted(id)
+    }
+    for (const id of [...this.yParallelLines.keys()]) {
+      if (!this.scene.parallelLines.has(id)) this.markParallelLineDeleted(id)
     }
     for (const id of [...this.yRays.keys()]) {
       if (!this.scene.rays.has(id)) this.markRayDeleted(id)
@@ -1373,6 +1421,10 @@ export class CollabManager {
       this.markPerpendicularLineDirty(target.geoId)
       return
     }
+    if (target.type === 'parallelLine') {
+      this.markParallelLineDirty(target.geoId)
+      return
+    }
     if (target.type === 'ray') {
       this.markRayDirty(target.geoId)
       return
@@ -1406,6 +1458,7 @@ export class CollabManager {
       this.yLines.size > 0 ||
       this.yStraightLines.size > 0 ||
       this.yPerpendicularLines.size > 0 ||
+      this.yParallelLines.size > 0 ||
       this.yRays.size > 0 ||
       this.yVectors.size > 0 ||
       this.yCircles.size > 0 ||
@@ -1427,6 +1480,7 @@ export class CollabManager {
       localSnapshot.lines.length === 0 &&
       localSnapshot.straightLines.length === 0 &&
       localSnapshot.perpendicularLines.length === 0 &&
+      localSnapshot.parallelLines.length === 0 &&
       localSnapshot.rays.length === 0 &&
       localSnapshot.vectors.length === 0 &&
       localSnapshot.circles.length === 0 &&
@@ -1439,6 +1493,7 @@ export class CollabManager {
       localSnapshot.regularPolygons.length === 0 &&
       localSnapshot.cylinderConstraints.length === 0 &&
       localSnapshot.perpendicularLineConstraints.length === 0 &&
+      localSnapshot.parallelLineConstraints.length === 0 &&
       localSnapshot.objectConstrainedPoints.length === 0
     ) {
       return
@@ -1515,6 +1570,7 @@ export class CollabManager {
     if (this.linesObserver) this.yLines.unobserve(this.linesObserver)
     if (this.straightLinesObserver) this.yStraightLines.unobserve(this.straightLinesObserver)
     if (this.perpendicularLinesObserver) this.yPerpendicularLines.unobserve(this.perpendicularLinesObserver)
+    if (this.parallelLinesObserver) this.yParallelLines.unobserve(this.parallelLinesObserver)
     if (this.raysObserver) this.yRays.unobserve(this.raysObserver)
     if (this.vectorsObserver) this.yVectors.unobserve(this.vectorsObserver)
     if (this.circlesObserver) this.yCircles.unobserve(this.circlesObserver)
@@ -1538,6 +1594,7 @@ export class CollabManager {
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
     this.yPerpendicularLines = this.ydoc.getMap<PerpendicularLineSharedMap>('perpendicularLines')
+    this.yParallelLines = this.ydoc.getMap<ParallelLineSharedMap>('parallelLines')
     this.yRays = this.ydoc.getMap<RaySharedMap>('rays')
     this.yVectors = this.ydoc.getMap<VectorSharedMap>('vectors')
     this.yCircles = this.ydoc.getMap<CircleSharedMap>('circles')
@@ -1658,6 +1715,11 @@ export class CollabManager {
     this.scene.perpendicularLines.forEach((line, lineId) => {
       if (line.p1.id === id || line.p2.id === id) {
         this.scene.removePerpendicularLine(lineId)
+      }
+    })
+    this.scene.parallelLines.forEach((line, lineId) => {
+      if (line.p1.id === id || line.p2.id === id) {
+        this.scene.removeParallelLine(lineId)
       }
     })
     this.scene.points.delete(id)
@@ -2211,6 +2273,92 @@ export class CollabManager {
     )
     this.scene.addPerpendicularLineConstraint(
       new PerpendicularLineConstraint(this.scene, id, target),
+    )
+  }
+
+  private applyParallelLineRecord(id: string, record: ParallelLineSharedMap) {
+    const p1Id = this.readString(record, 'p1Id', '')
+    const p2Id = this.readString(record, 'p2Id', '')
+    const targetType = this.readString(record, 'targetType', '') as ParallelLineTargetRef['type']
+    const targetId = this.readString(record, 'targetId', '')
+    if (!targetType || !targetId) return
+    const p1 = this.scene.points.get(p1Id)
+    if (!p1) return
+    let p2 = this.scene.points.get(p2Id)
+    if (!p2) {
+      const existing = this.scene.parallelLines.get(id)
+      if (existing && existing.p2.id === p2Id) {
+        p2 = existing.p2
+      } else {
+        p2 = new Point3(p2Id, '', p1.position.clone(), false, false, false)
+      }
+    }
+    const p2X = this.readNumber(record, 'p2X', p2.position.x)
+    const p2Y = this.readNumber(record, 'p2Y', p2.position.y)
+    const p2Z = this.readNumber(record, 'p2Z', p2.position.z)
+    if (Number.isFinite(p2X) && Number.isFinite(p2Y) && Number.isFinite(p2Z)) {
+      p2.setPosition(new Vec3(p2X, p2Y, p2Z))
+    }
+
+    const line = this.scene.parallelLines.get(id)
+    const name = this.readString(record, 'name', line?.name ?? '')
+    const nameVisible = this.readBoolean(record, 'nameVisible', line?.nameVisible ?? false)
+    const valueVisible = this.readBoolean(record, 'valueVisible', line?.valueVisible ?? false)
+    const labelOffsetX = this.readNumber(
+      record,
+      'labelOffsetX',
+      line?.labelOffsetX ?? ParallelLine3.DEFAULT_LABEL_OFFSET_X,
+    )
+    const labelOffsetY = this.readNumber(
+      record,
+      'labelOffsetY',
+      line?.labelOffsetY ?? ParallelLine3.DEFAULT_LABEL_OFFSET_Y,
+    )
+    const visible = this.readBoolean(record, 'visible', line?.visible ?? true)
+    const displayLength = ParallelLine3.normalizeDisplayLength(
+      this.readNumber(
+        record,
+        'displayLength',
+        line?.displayLength ?? ParallelLine3.DEFAULT_DISPLAY_LENGTH,
+      ),
+    )
+    const userLocked = this.readBoolean(record, 'userLocked', line?.userLocked ?? false)
+
+    if (line) {
+      line.name = name
+      line.nameVisible = nameVisible
+      line.valueVisible = valueVisible
+      line.labelOffsetX = labelOffsetX
+      line.labelOffsetY = labelOffsetY
+      line.visible = visible
+      line.displayLength = displayLength
+      line.userLocked = userLocked
+      line.p1 = p1
+      line.p2 = p2
+      line.target = { type: targetType, id: targetId }
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    const target: ParallelLineTargetRef = { type: targetType, id: targetId }
+    this.scene.addParallelLine(
+      new ParallelLine3(
+        id,
+        name,
+        p1,
+        p2,
+        target,
+        nameVisible,
+        visible,
+        displayLength,
+        userLocked,
+        labelOffsetX,
+        labelOffsetY,
+        valueVisible,
+      ),
+    )
+    this.scene.addParallelLineConstraint(
+      new ParallelLineConstraint(this.scene, id, target),
     )
   }
 
@@ -3043,6 +3191,15 @@ export class CollabManager {
     this.perpendicularLineRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
+  private observeParallelLineRecord(id: string, record: ParallelLineSharedMap) {
+    this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
+    const handler = () => {
+      this.applyParallelLineRecord(id, record)
+    }
+    record.observe(handler)
+    this.parallelLineRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
   private observeRayRecord(id: string, record: RaySharedMap) {
     this.releaseRecordObserver(id, this.rayRecordCleanup)
     const handler = () => {
@@ -3223,6 +3380,26 @@ export class CollabManager {
     this.yPerpendicularLines.forEach((record, id) => {
       this.observePerpendicularLineRecord(id, record)
       this.applyPerpendicularLineRecord(id, record)
+    })
+
+    this.parallelLinesObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
+          this.scene.removeParallelLine(id)
+          return
+        }
+
+        const record = this.yParallelLines.get(id)
+        if (!record) return
+        this.observeParallelLineRecord(id, record)
+        this.applyParallelLineRecord(id, record)
+      })
+    }
+    this.yParallelLines.observe(this.parallelLinesObserver)
+    this.yParallelLines.forEach((record, id) => {
+      this.observeParallelLineRecord(id, record)
+      this.applyParallelLineRecord(id, record)
     })
 
     this.raysObserver = (event) => {
@@ -3540,6 +3717,24 @@ export class CollabManager {
     this.setScalarField(record, 'userLocked', line.userLocked)
   }
 
+  private syncParallelLineRecord(record: ParallelLineSharedMap, line: ParallelLine3) {
+    this.setScalarField(record, 'p1Id', line.p1.id)
+    this.setScalarField(record, 'p2Id', line.p2.id)
+    this.setScalarField(record, 'p2X', line.p2.position.x)
+    this.setScalarField(record, 'p2Y', line.p2.position.y)
+    this.setScalarField(record, 'p2Z', line.p2.position.z)
+    this.setScalarField(record, 'targetType', line.target.type)
+    this.setScalarField(record, 'targetId', line.target.id)
+    this.setScalarField(record, 'name', line.name)
+    this.setScalarField(record, 'nameVisible', line.nameVisible)
+    this.setScalarField(record, 'valueVisible', line.valueVisible)
+    this.setScalarField(record, 'labelOffsetX', line.labelOffsetX)
+    this.setScalarField(record, 'labelOffsetY', line.labelOffsetY)
+    this.setScalarField(record, 'visible', line.visible)
+    this.setScalarField(record, 'displayLength', line.displayLength)
+    this.setScalarField(record, 'userLocked', line.userLocked)
+  }
+
   private syncRayRecord(record: RaySharedMap, ray: Ray3) {
     this.setScalarField(record, 'p1Id', ray.p1.id)
     this.setScalarField(record, 'p2Id', ray.p2.id)
@@ -3803,6 +3998,7 @@ export class CollabManager {
     const lineIds = [...this.dirtyLineIds]
     const straightLineIds = [...this.dirtyStraightLineIds]
     const perpendicularLineIds = [...this.dirtyPerpendicularLineIds]
+    const parallelLineIds = [...this.dirtyParallelLineIds]
     const rayIds = [...this.dirtyRayIds]
     const vectorIds = [...this.dirtyVectorIds]
     const circleIds = [...this.dirtyCircleIds]
@@ -3817,6 +4013,7 @@ export class CollabManager {
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
     const deletedPerpendicularLineIds = [...this.deletedPerpendicularLineIds]
+    const deletedParallelLineIds = [...this.deletedParallelLineIds]
     const deletedRayIds = [...this.deletedRayIds]
     const deletedVectorIds = [...this.deletedVectorIds]
     const deletedCircleIds = [...this.deletedCircleIds]
@@ -3835,6 +4032,7 @@ export class CollabManager {
       lineIds.length === 0 &&
       straightLineIds.length === 0 &&
       perpendicularLineIds.length === 0 &&
+      parallelLineIds.length === 0 &&
       rayIds.length === 0 &&
       vectorIds.length === 0 &&
       circleIds.length === 0 &&
@@ -3850,6 +4048,7 @@ export class CollabManager {
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
       deletedPerpendicularLineIds.length === 0 &&
+      deletedParallelLineIds.length === 0 &&
       deletedRayIds.length === 0 &&
       deletedVectorIds.length === 0 &&
       deletedCircleIds.length === 0 &&
@@ -3877,6 +4076,9 @@ export class CollabManager {
       })
       deletedPerpendicularLineIds.forEach((id) => {
         this.yPerpendicularLines.delete(id)
+      })
+      deletedParallelLineIds.forEach((id) => {
+        this.yParallelLines.delete(id)
       })
       deletedRayIds.forEach((id) => {
         this.yRays.delete(id)
@@ -3946,6 +4148,15 @@ export class CollabManager {
           return
         }
         this.syncPerpendicularLineRecord(this.ensurePerpendicularLineRecord(id), line)
+      })
+
+      parallelLineIds.forEach((id) => {
+        const line = this.scene.parallelLines.get(id)
+        if (!line) {
+          this.yParallelLines.delete(id)
+          return
+        }
+        this.syncParallelLineRecord(this.ensureParallelLineRecord(id), line)
       })
 
       rayIds.forEach((id) => {
@@ -4052,6 +4263,7 @@ export class CollabManager {
     lineIds.forEach((id) => this.dirtyLineIds.delete(id))
     straightLineIds.forEach((id) => this.dirtyStraightLineIds.delete(id))
     perpendicularLineIds.forEach((id) => this.dirtyPerpendicularLineIds.delete(id))
+    parallelLineIds.forEach((id) => this.dirtyParallelLineIds.delete(id))
     rayIds.forEach((id) => this.dirtyRayIds.delete(id))
     vectorIds.forEach((id) => this.dirtyVectorIds.delete(id))
     circleIds.forEach((id) => this.dirtyCircleIds.delete(id))
@@ -4067,6 +4279,7 @@ export class CollabManager {
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
     deletedPerpendicularLineIds.forEach((id) => this.deletedPerpendicularLineIds.delete(id))
+    deletedParallelLineIds.forEach((id) => this.deletedParallelLineIds.delete(id))
     deletedRayIds.forEach((id) => this.deletedRayIds.delete(id))
     deletedVectorIds.forEach((id) => this.deletedVectorIds.delete(id))
     deletedCircleIds.forEach((id) => this.deletedCircleIds.delete(id))
@@ -4237,6 +4450,9 @@ export class CollabManager {
       for (const id of [...this.yPerpendicularLines.keys()]) {
         if (!this.scene.perpendicularLines.has(id)) this.yPerpendicularLines.delete(id)
       }
+      for (const id of [...this.yParallelLines.keys()]) {
+        if (!this.scene.parallelLines.has(id)) this.yParallelLines.delete(id)
+      }
       for (const id of [...this.yRays.keys()]) {
         if (!this.scene.rays.has(id)) this.yRays.delete(id)
       }
@@ -4282,6 +4498,9 @@ export class CollabManager {
       })
       this.scene.perpendicularLines.forEach((l, id) => {
         this.syncPerpendicularLineRecord(this.ensurePerpendicularLineRecord(id), l)
+      })
+      this.scene.parallelLines.forEach((l, id) => {
+        this.syncParallelLineRecord(this.ensureParallelLineRecord(id), l)
       })
       this.scene.rays.forEach((r, id) => {
         this.syncRayRecord(this.ensureRayRecord(id), r)

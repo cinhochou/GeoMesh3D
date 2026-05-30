@@ -8,8 +8,9 @@ import { StraightLine3 } from '../../../geometry/StraightLine3'
 import { Circle3 } from '../../../geometry/Circle3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
+import { ParallelLine3 } from '../../../geometry/ParallelLine3'
 
-export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'perpendicularLine'
+export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'perpendicularLine' | 'parallelLine'
 
 export class AddElementCommand implements Command {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,6 +21,7 @@ export class AddElementCommand implements Command {
     vector: (scene, el) => scene.addVector(el),
     ray: (scene, el) => scene.addRay(el),
     perpendicularLine: (scene, el) => scene.addPerpendicularLine(el),
+    parallelLine: (scene, el) => scene.addParallelLine(el),
   }
 
   private static undoMap: Record<string, (scene: Scene, id: string) => void> = {
@@ -30,6 +32,7 @@ export class AddElementCommand implements Command {
     vector: (scene, id) => { scene.vectors.delete(id); scene.selection.vectors.delete(id) },
     circle: (scene, id) => { scene.circles.delete(id); scene.selection.circles.delete(id) },
     perpendicularLine: (scene, id) => { scene.perpendicularLines.delete(id); scene.selection.perpendicularLines.delete(id) },
+    parallelLine: (scene, id) => { scene.parallelLines.delete(id); scene.selection.parallelLines.delete(id) },
   }
 
   private centerPoint: Point3 | null = null
@@ -39,7 +42,7 @@ export class AddElementCommand implements Command {
 
   constructor(
     private scene: Scene,
-    private element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarPolygon | PerpendicularLine3,
+    private element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarPolygon | PerpendicularLine3 | ParallelLine3,
     private type: ElementType,
     boundaryLines: Line3[] = [],
   ) {
