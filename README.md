@@ -99,7 +99,7 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  ├─ App.vue
 │  ├─ components
 │  │  ├─ InputDialog.vue
-│  │  ├─ RenderSettingsPanel.vue
+│  │  ├─ SettingsPanel.vue
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
 │  │  └─ Toolbar.vue
@@ -114,6 +114,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ DistanceConstraint.ts
 │  │  │  ├─ IntersectionPointConstraint.ts
 │  │  │  ├─ ObjectConstrainedPointConstraint.ts
+│  │  │  ├─ ParallelLineConstraint.ts
+│  │  │  ├─ PerpendicularLineConstraint.ts
 │  │  │  ├─ PlanarFaceConstraint.ts
 │  │  │  └─ RegularPolygonConstraint.ts
 │  │  ├─ editor
@@ -137,9 +139,12 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │  │  ├─ DeleteFaceCommand.ts
 │  │  │  │  │  ├─ DeleteHexahedronCommand.ts
 │  │  │  │  │  ├─ DeleteLineCommand.ts
+│  │  │  │  │  ├─ DeleteParallelLineCommand.ts
+│  │  │  │  │  ├─ DeletePerpendicularLineCommand.ts
 │  │  │  │  │  ├─ DeletePointCommand.ts
 │  │  │  │  │  ├─ DeleteRadiusSphereCommand.ts
 │  │  │  │  │  ├─ DeleteRayCommand.ts
+│  │  │  │  │  ├─ DeleteRegularPolygonCommand.ts
 │  │  │  │  │  ├─ DeleteSphereCommand.ts
 │  │  │  │  │  ├─ DeleteStraightLineCommand.ts
 │  │  │  │  │  └─ DeleteVectorCommand.ts
@@ -161,6 +166,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  │     ├─ UpdateCylinderRadiusCommand.ts
 │  │  │  │     ├─ UpdateFaceCommand.ts
 │  │  │  │     ├─ UpdateLineCommand.ts
+│  │  │  │     ├─ UpdateParallelLineCommand.ts
+│  │  │  │     ├─ UpdatePerpendicularLineCommand.ts
 │  │  │  │     ├─ UpdatePointCommand.ts
 │  │  │  │     ├─ UpdateRayCommand.ts
 │  │  │  │     ├─ UpdateRegularPolygonCommand.ts
@@ -178,6 +185,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  │  ├─ GeoVector3.ts
 │  │  │  ├─ IntersectionPoint3.ts
 │  │  │  ├─ Line3.ts
+│  │  │  ├─ ParallelLine3.ts
+│  │  │  ├─ PerpendicularLine3.ts
 │  │  │  ├─ PlanarPolygon.ts
 │  │  │  ├─ PlanarUtils.ts
 │  │  │  ├─ Point3.ts

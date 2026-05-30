@@ -379,12 +379,12 @@ const handleOpenManual = () => {
 }
 
 /**
- * 打开渲染设置面板
+ * 打开设置面板
  * 先关闭侧边菜单，再调用 store 打开设置面板
  */
 const handleOpenSettings = () => {
   closeSideMenu()
-  uiStore.openRenderSettingsPanel()
+  uiStore.openSettingsPanel()
 }
 
 const toggleProfileMenu = () => {
@@ -976,7 +976,7 @@ onUnmounted(() => {
   <Teleport to="body">
     <Transition name="side-menu-slide">
       <div v-if="sideMenuOpen" ref="sideMenuRef" class="side-menu-panel">
-        <!-- 渲染设置入口：位于汉堡菜单顶部 -->
+        <!-- 设置入口：位于汉堡菜单顶部 -->
         <button class="side-menu-item" @click="handleOpenSettings">
           <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>

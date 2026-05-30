@@ -31,7 +31,7 @@ const {
   isCompactLineEditor,
   contentGroupsCollapsed,
   hasAutoCollapsedContentGroups,
-  renderSettings,
+  appSettings,
 } = storeToRefs(uiStore)
 const { modeName, modeHint } = storeToRefs(sceneStore)
 const collapsedContentGroups = computed(() => contentGroupsCollapsed.value)
@@ -334,7 +334,7 @@ const deleteByType: Record<string, (editor: Editor, id: string) => void> = {
 }
 
 const handleDeleteElement = (type: string, id: string, name: string) => {
-  if (renderSettings.value.confirmBeforeDelete) {
+  if (appSettings.value.confirmBeforeDelete) {
     deleteConfirmTarget.value = { type, id, name }
     showDeleteConfirmDialog.value = true
   } else {

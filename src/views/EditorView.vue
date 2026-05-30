@@ -8,7 +8,7 @@ import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/TimeLine.vue'
 import InputDialog from '../components/InputDialog.vue'
-import RenderSettingsPanel from '../components/RenderSettingsPanel.vue'
+import SettingsPanel from '../components/SettingsPanel.vue'
 
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
@@ -28,7 +28,7 @@ import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager } from '../core/collab/CollabManager'
 import SolverSchedulerWorker from '../core/perf/solverScheduler.worker?worker'
-import { useUiStore, type RenderSettings } from '@/store/uiStore' // 引入 UI store 及渲染设置类型
+import { useUiStore, type AppSettings } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
@@ -59,7 +59,7 @@ const {
   radiusSphereDialog,
   coneRadiusDialog,
   cylinderRadiusDialog,
-  renderSettings,
+  appSettings,
 } = storeToRefs(uiStore)
 const {
   latencyMs: collabLatencyMs,
@@ -206,28 +206,28 @@ const isEditableTarget = (target: EventTarget | null) => {
 }
 
 /**
- * 处理渲染设置实时预览事件
+ * 处理设置实时预览事件
  * 仅将 pixelRatioScale 与 fpsCap 的变更应用到 renderer，
  * antialias 与 powerPreference 的变更需要刷新页面才能生效，不在预览中处理
  */
-const handlePreviewRenderSettings = (e: Event) => {
-  const detail = (e as CustomEvent).detail as RenderSettings
+const handlePreviewSettings = (e: Event) => {
+  const detail = (e as CustomEvent).detail as AppSettings
   if (!renderer) return
-  const changes: Partial<RenderSettings> = {}
-  if (detail.pixelRatioScale !== renderSettings.value.pixelRatioScale) {
+  const changes: Partial<AppSettings> = {}
+  if (detail.pixelRatioScale !== appSettings.value.pixelRatioScale) {
     changes.pixelRatioScale = detail.pixelRatioScale
   }
-  if (detail.fpsCap !== renderSettings.value.fpsCap) {
+  if (detail.fpsCap !== appSettings.value.fpsCap) {
     changes.fpsCap = detail.fpsCap
   }
-  if (detail.depthOcclusion !== renderSettings.value.depthOcclusion) {
+  if (detail.depthOcclusion !== appSettings.value.depthOcclusion) {
     changes.depthOcclusion = detail.depthOcclusion
   }
-  if (detail.hiddenEdge !== renderSettings.value.hiddenEdge) {
+  if (detail.hiddenEdge !== appSettings.value.hiddenEdge) {
     changes.hiddenEdge = detail.hiddenEdge
   }
   if (Object.keys(changes).length > 0) {
-    renderer.setRenderSettings(changes)
+    renderer.applySettings(changes)
   }
 }
 
@@ -257,7 +257,7 @@ onMounted(() => {
       window.matchMedia('(hover: none)').matches,
   )
 
-  renderer = new ThreeRenderer(viewportRef.value!, renderSettings.value)
+  renderer = new ThreeRenderer(viewportRef.value!, appSettings.value)
   uiStore.setAxisGridSize(renderer.getAxisGridSize())
   uiStore.setGridVisible(renderer.isAxisGridVisible())
   uiStore.setCoordinateSystemVisible(renderer.isCoordinateSystemVisible())
@@ -408,7 +408,7 @@ onMounted(() => {
 
   const loop = () => {
     const now = performance.now()
-    const fpsCap = renderSettings.value.fpsCap
+    const fpsCap = appSettings.value.fpsCap
 
     if (fpsCap > 0) {
       const minFrameInterval = 1000 / fpsCap
@@ -486,8 +486,7 @@ onMounted(() => {
   window.addEventListener('pointermove', handleSidebarWidthDrag)
   window.addEventListener('pointerup', stopSidebarWidthDrag)
   window.addEventListener('pointercancel', stopSidebarWidthDrag)
-  // 监听渲染设置面板的实时预览事件
-  window.addEventListener('preview-render-settings', handlePreviewRenderSettings as EventListener)
+  window.addEventListener('preview-settings', handlePreviewSettings as EventListener)
 })
 
 watch(
@@ -595,13 +594,13 @@ watch(
 )
 
 /**
- * 监听渲染设置变化
- * 当 store 中的 renderSettings 被确认保存后，将变更同步到 ThreeRenderer
+ * 监听设置变化
+ * 当 store 中的 appSettings 被确认保存后，将变更同步到 ThreeRenderer
  * pixelRatioScale 与 fpsCap 可立即生效；
  * antialias 与 powerPreference 变更需要重建 WebGLRenderer，故提示用户刷新页面
  */
 watch(
-  renderSettings,
+  appSettings,
   (newSettings, oldSettings) => {
     if (!renderer) return
     const changes: Partial<typeof newSettings> = {}
@@ -625,7 +624,7 @@ watch(
     }
     if (Object.keys(changes).length === 0) return
 
-    const result = renderer.setRenderSettings(changes)
+    const result = renderer.applySettings(changes)
     if (result.needsRecreate) {
       // 拆分提示：分别提示抗锯齿和 GPU 偏好的变更
       const msgs: string[] = []
@@ -700,8 +699,7 @@ onUnmounted(() => {
   window.removeEventListener('pointermove', handleSidebarWidthDrag)
   window.removeEventListener('pointerup', stopSidebarWidthDrag)
   window.removeEventListener('pointercancel', stopSidebarWidthDrag)
-  // 移除渲染设置实时预览事件监听
-  window.removeEventListener('preview-render-settings', handlePreviewRenderSettings as EventListener)
+  window.removeEventListener('preview-settings', handlePreviewSettings as EventListener)
   document.body.classList.remove('sidebar-width-resizing')
 })
 
@@ -1360,7 +1358,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
 
     <Timeline />
 
-    <RenderSettingsPanel />
+    <SettingsPanel />
   </div>
 </template>
 

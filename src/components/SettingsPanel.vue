@@ -1,25 +1,23 @@
 <script setup lang="ts">
 /**
- * 渲染设置面板组件
- * 提供画质、性能、高级三类渲染参数的配置界面
+ * 设置面板组件
+ * 提供交互、画质、性能、显示、高级五类应用参数的配置界面
  * 支持实时预览、确认保存、恢复默认、二次确认等功能
  */
 import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useUiStore, type RenderSettingsCategory, type RenderSettings } from '@/store/uiStore'
+import { useUiStore, type SettingsCategory, type AppSettings } from '@/store/uiStore'
 
 defineOptions({
-  name: 'RenderSettingsPanel',
+  name: 'SettingsPanel',
 })
 
 const uiStore = useUiStore()
-const { renderSettings, isRenderSettingsPanelOpen } = storeToRefs(uiStore)
+const { appSettings, isSettingsPanelOpen } = storeToRefs(uiStore)
 
-// 当前激活的设置分类标签
-const activeCategory = ref<RenderSettingsCategory>('interaction')
+const activeCategory = ref<SettingsCategory>('interaction')
 
-// 设置分类选项：画质 / 性能 / 高级
-const categories: { key: RenderSettingsCategory; label: string }[] = [
+const categories: { key: SettingsCategory; label: string }[] = [
   { key: 'interaction', label: '交互' },
   { key: 'graphics', label: '画质' },
   { key: 'performance', label: '性能' },
@@ -50,7 +48,7 @@ const stepOptions = [
 ]
 
 // 本地预览状态（未点击确认前不保存到 store，仅用于面板内预览）
-const localSettings = ref<RenderSettings>({ ...renderSettings.value })
+const localSettings = ref<AppSettings>({ ...appSettings.value })
 const localStep = ref(10)
 
 // 二次确认弹窗相关状态
@@ -60,22 +58,22 @@ const confirmDialogMessage = ref('')
 const confirmDialogAction = ref<(() => void) | null>(null)
 
 // 面板打开时同步本地状态为当前已保存的设置
-watch(isRenderSettingsPanelOpen, (open) => {
+watch(isSettingsPanelOpen, (open) => {
   if (open) {
-    localSettings.value = { ...renderSettings.value }
+    localSettings.value = { ...appSettings.value }
   }
 })
 
 // 计算本地设置是否与已保存设置存在差异（用于控制确认按钮高亮与可用状态）
 const hasChanges = computed(() => {
   return (
-    localSettings.value.antialias !== renderSettings.value.antialias ||
-    localSettings.value.pixelRatioScale !== renderSettings.value.pixelRatioScale ||
-    localSettings.value.fpsCap !== renderSettings.value.fpsCap ||
-    localSettings.value.powerPreference !== renderSettings.value.powerPreference ||
-    localSettings.value.depthOcclusion !== renderSettings.value.depthOcclusion ||
-    localSettings.value.hiddenEdge !== renderSettings.value.hiddenEdge ||
-    localSettings.value.confirmBeforeDelete !== renderSettings.value.confirmBeforeDelete
+    localSettings.value.antialias !== appSettings.value.antialias ||
+    localSettings.value.pixelRatioScale !== appSettings.value.pixelRatioScale ||
+    localSettings.value.fpsCap !== appSettings.value.fpsCap ||
+    localSettings.value.powerPreference !== appSettings.value.powerPreference ||
+    localSettings.value.depthOcclusion !== appSettings.value.depthOcclusion ||
+    localSettings.value.hiddenEdge !== appSettings.value.hiddenEdge ||
+    localSettings.value.confirmBeforeDelete !== appSettings.value.confirmBeforeDelete
   )
 })
 
@@ -89,14 +87,13 @@ const pixelRatioPercent = computed({
 
 // 关闭设置面板
 const handleClose = () => {
-  uiStore.closeRenderSettingsPanel()
+  uiStore.closeSettingsPanel()
 }
 
-// 确认保存：将本地设置写入 store 并触发持久化
 const handleConfirm = () => {
   if (!hasChanges.value) return
-  uiStore.setRenderSettings({ ...localSettings.value })
-  uiStore.closeRenderSettingsPanel()
+  uiStore.setAppSettings({ ...localSettings.value })
+  uiStore.closeSettingsPanel()
 }
 
 // 判断当前本地设置是否已经是默认设置
@@ -123,7 +120,7 @@ const handleReset = () => {
     return
   }
   confirmDialogTitle.value = '恢复默认设置'
-  confirmDialogMessage.value = '确定要将所有渲染设置恢复为默认值吗？此操作不可撤销。'
+  confirmDialogMessage.value = '确定要将所有设置恢复为默认值吗？此操作不可撤销。'
   confirmDialogAction.value = () => {
     localSettings.value = {
       antialias: false,
@@ -163,7 +160,7 @@ const previewSettings = computed(() => ({ ...localSettings.value }))
 watch(
   previewSettings,
   (newSettings) => {
-    window.dispatchEvent(new CustomEvent('preview-render-settings', { detail: newSettings }))
+    window.dispatchEvent(new CustomEvent('preview-settings', { detail: newSettings }))
   },
   { deep: true },
 )
@@ -172,7 +169,7 @@ watch(
 <template>
   <Teleport to="body">
     <Transition name="settings-fade">
-      <div v-if="isRenderSettingsPanelOpen" class="settings-overlay" @click="handleOverlayClick">
+      <div v-if="isSettingsPanelOpen" class="settings-overlay" @click="handleOverlayClick">
         <div class="settings-panel">
           <div class="settings-header">
             <h3 class="settings-title">设置</h3>

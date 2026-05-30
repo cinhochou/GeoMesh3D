@@ -6,7 +6,7 @@ import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
 import { LabelRenderer } from './LabelRenderer'
 import { GeometrySyncer, isLinearType, DEFAULT_POINT_COLOR } from './GeometrySyncer'
-import type { RenderSettings } from '@/store/uiStore' // 引入渲染设置类型定义
+import type { AppSettings } from '@/store/uiStore'
 
 type Matrix4WithLegacyGetInverse = THREE.Matrix4 & {
   getInverse?: (m: THREE.Matrix4) => THREE.Matrix4
@@ -92,13 +92,12 @@ export class ThreeRenderer {
   private sharedWorldTargetQuaternion = new THREE.Quaternion()
   private sharedWorldRotationInitialized = false
   private readonly isMobileDevice: boolean
-  private renderSettings: RenderSettings // 当前渲染设置（抗锯齿、分辨率缩放、帧率限制、GPU 偏好）
+  private appSettings: AppSettings
   private pixelRatioScale = 1.0 // 分辨率缩放系数（0.5 ~ 1.0），用于动态调整渲染分辨率
 
-  constructor(container: HTMLElement, settings?: RenderSettings) {
+  constructor(container: HTMLElement, settings?: AppSettings) {
     this.container = container
-    // 初始化渲染设置，若未传入则使用默认值（抗锯齿关闭、分辨率 100%、帧率无限制、GPU 默认）
-    this.renderSettings = settings ?? {
+    this.appSettings = settings ?? {
       antialias: false,
       pixelRatioScale: 1.0,
       fpsCap: 0,
@@ -107,7 +106,7 @@ export class ThreeRenderer {
       hiddenEdge: true,
       confirmBeforeDelete: true,
     }
-    this.pixelRatioScale = this.renderSettings.pixelRatioScale
+    this.pixelRatioScale = this.appSettings.pixelRatioScale
     this.isMobileDevice =
       window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
     this.scene = new THREE.Scene()
@@ -125,9 +124,9 @@ export class ThreeRenderer {
 
     // 创建 WebGLRenderer，应用用户设置的抗锯齿与 GPU 偏好
     this.renderer = new THREE.WebGLRenderer({
-      antialias: this.renderSettings.antialias,
+      antialias: this.appSettings.antialias,
       alpha: true,
-      powerPreference: this.renderSettings.powerPreference,
+      powerPreference: this.appSettings.powerPreference,
     })
     this.renderer.setSize(w, h, false)
 
@@ -535,12 +534,12 @@ export class ThreeRenderer {
    * pixelRatioScale 与 fpsCap 可立即生效；
    * antialias 与 powerPreference 变更需要重建 WebGLRenderer，返回 needsRecreate 通知调用方
    */
-  setRenderSettings(settings: Partial<RenderSettings>) {
-    const prevAntialias = this.renderSettings.antialias
-    const prevPowerPreference = this.renderSettings.powerPreference
+  applySettings(settings: Partial<AppSettings>) {
+    const prevAntialias = this.appSettings.antialias
+    const prevPowerPreference = this.appSettings.powerPreference
 
-    this.renderSettings = {
-      ...this.renderSettings,
+    this.appSettings = {
+      ...this.appSettings,
       ...settings,
     }
 
@@ -568,11 +567,8 @@ export class ThreeRenderer {
     }
   }
 
-  /**
-   * 获取当前渲染设置的只读副本
-   */
-  getRenderSettings(): Readonly<RenderSettings> {
-    return { ...this.renderSettings }
+  getSettings(): Readonly<AppSettings> {
+    return { ...this.appSettings }
   }
 
   sync(
