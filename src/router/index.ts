@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
+import ProfileView from '@/views/ProfileView.vue'
 import { useAuthStore } from '@/store/authStore'
 
 const routes = [
@@ -22,6 +23,12 @@ const routes = [
     name: 'register',
     component: RegisterView,
     meta: { guestOnly: true },
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: ProfileView,
+    meta: { requiresAuth: true },
   },
   {
     path: '/logout',
@@ -63,10 +70,13 @@ router.beforeEach(async (to, from, next) => {
   }
 
   const guestOnly = to.matched.some((record) => record.meta.guestOnly)
+  const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
 
   if (guestOnly && authStore.isAuthenticated) {
     const redirect = isSafeRedirectPath(to.query.redirect) ? to.query.redirect : '/'
     next(redirect)
+  } else if (requiresAuth && !authStore.isAuthenticated) {
+    next({ name: 'login', query: { redirect: to.fullPath } })
   } else {
     next()
   }

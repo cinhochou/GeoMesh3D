@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/store/authStore'
+import { credentialStorage } from '@/utils/credentialStorage'
 
 const router = useRouter()
 const route = useRoute()
@@ -11,6 +12,7 @@ const { error, isLoading } = storeToRefs(authStore)
 
 const identifier = ref('')
 const password = ref('')
+const rememberPassword = ref(false)
 const formError = ref('')
 const isRedirecting = ref(false)
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -20,9 +22,26 @@ const redirect = computed(() => {
   return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/'
 })
 
+const successMsg = computed(() => {
+  const path = redirect.value
+  return path.includes('profile') ? '登录成功！正在进入个人中心...' : '登录成功！正在进入编辑器...'
+})
+
 watch([identifier, password], () => {
   formError.value = ''
   authStore.clearError()
+})
+
+onMounted(async () => {
+  const savedIdentifier = credentialStorage.getSavedIdentifier()
+  if (savedIdentifier) {
+    identifier.value = savedIdentifier
+    const savedPassword = await credentialStorage.load(savedIdentifier)
+    if (savedPassword) {
+      password.value = savedPassword
+      rememberPassword.value = true
+    }
+  }
 })
 
 const validateForm = () => {
@@ -44,17 +63,45 @@ const validateForm = () => {
   return true
 }
 
+const isSwitchingUser = computed(() => route.query.switchUser === '1')
+
 const handleSubmit = async () => {
   formError.value = ''
   authStore.clearError()
 
   if (!validateForm()) return
 
+  if (isSwitchingUser.value) {
+    const snapshotRaw = window.sessionStorage.getItem('auth_switch_snapshot')
+    if (snapshotRaw) {
+      try {
+        const snapshot = JSON.parse(snapshotRaw) as { user?: { username?: string; email?: string } | null }
+        const snapshotUser = snapshot.user
+        const inputId = identifier.value.trim().toLowerCase()
+        if (snapshotUser) {
+          const matchesUsername = snapshotUser.username?.toLowerCase() === inputId
+          const matchesEmail = snapshotUser.email?.toLowerCase() === inputId
+          if (matchesUsername || matchesEmail) {
+            formError.value = '该账号已登录，无需切换'
+            return
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }
+
   try {
     await authStore.login({
       identifier: identifier.value.trim(),
       password: password.value,
     })
+    if (rememberPassword.value) {
+      await credentialStorage.save(identifier.value.trim(), password.value)
+    } else {
+      credentialStorage.clear()
+    }
     isRedirecting.value = true
     await wait(520)
     await router.replace(redirect.value)
@@ -75,12 +122,12 @@ const handleBack = async () => {
 
 <template>
   <div class="auth-page">
-    <button type="button" class="back-link" @click="handleBack">&lt;返回</button>
+    <button type="button" class="back-link" @click="handleBack">返回</button>
     <Transition name="fade-overlay">
       <div v-if="isRedirecting" class="collab-wait-overlay">
         <div class="collab-wait-dialog">
           <div class="collab-spinner"></div>
-          <div class="collab-wait-text">登录成功！正在进入编辑器...</div>
+          <div class="collab-wait-text">{{ successMsg }}</div>
         </div>
       </div>
     </Transition>
@@ -128,6 +175,11 @@ const handleBack = async () => {
                 autocomplete="current-password"
                 :disabled="isLoading"
               />
+            </label>
+
+            <label class="remember-field">
+              <input v-model="rememberPassword" type="checkbox" class="remember-checkbox" :disabled="isLoading" />
+              <span class="remember-label">记住密码</span>
             </label>
 
             <div v-if="formError || error" class="error-box">
@@ -360,6 +412,61 @@ const handleBack = async () => {
 .field-input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.remember-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.remember-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #232323;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.remember-checkbox:checked {
+  border-color: #43f260;
+  background: #43f260;
+}
+
+.remember-checkbox:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid #081408;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.remember-checkbox:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.remember-label {
+  color: #9f9f9f;
+  font-size: 13px;
+}
+
+.remember-field:hover .remember-label {
+  color: #dcdcdc;
 }
 
 .error-box {

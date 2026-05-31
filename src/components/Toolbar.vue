@@ -8,6 +8,7 @@ import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
+import { getApiConfig } from '@/config/api'
 
 defineOptions({
   name: 'EditorToolbar',
@@ -115,9 +116,14 @@ const profileMenuStyle = ref({
   minWidth: '248px',
 })
 const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
-const displayEmail = computed(() => user.value?.email || '请先登录后查看账号信息')
+const displayEmail = computed(() => user.value?.username || '请先登录后查看账号信息')
 const userRoleText = computed(() => user.value?.role || 'GUEST')
-const avatarUrl = computed(() => user.value?.avatarUrl || '')
+const avatarUrl = computed(() => {
+  const url = user.value?.avatarUrl || ''
+  if (!url) return ''
+  if (url.startsWith('http')) return url
+  return getApiConfig().baseUrl + url
+})
 const defaultAvatarText = computed(() => {
   const source = displayName.value.trim()
   return source ? source.slice(0, 1).toUpperCase() : 'U'
@@ -408,6 +414,12 @@ const goLogin = async () => {
     name: 'login',
     query: { redirect: route.fullPath || '/' },
   })
+}
+
+const goProfilePage = () => {
+  profileMenuOpen.value = false
+  const resolved = router.resolve({ name: 'profile' })
+  window.open(resolved.href, '_blank')
 }
 
 const goPlaceholderPage = (path: string) => {
@@ -1073,7 +1085,7 @@ onUnmounted(() => {
         </div>
 
         <div class="profile-links">
-          <button class="profile-link-button" @click="goPlaceholderPage('Profile')">
+          <button class="profile-link-button" @click="goProfilePage">
             个人中心
           </button>
           <button class="profile-link-button" @click="goPlaceholderPage('项目列表')">

@@ -92,12 +92,17 @@ const handleSubmit = async () => {
     isRedirecting.value = false
   }
 }
-
 </script>
 
 <template>
   <div class="auth-page">
-    <button type="button" class="back-link" @click="router.push({ name: 'login', query: route.query })">&lt;返回</button>
+    <button
+      type="button"
+      class="back-link"
+      @click="router.push({ name: 'login', query: route.query })"
+    >
+      返回
+    </button>
     <Transition name="fade-overlay">
       <div v-if="isRedirecting" class="collab-wait-overlay">
         <div class="collab-wait-dialog">

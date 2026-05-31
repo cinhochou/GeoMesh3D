@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { authApi } from '@/api/auth'
 import { apiClient, ApiError } from '@/api/client'
 import { userApi } from '@/api/user'
+import { credentialStorage } from '@/utils/credentialStorage'
 import type {
   AuthResponse,
   ChangePasswordRequest,
@@ -14,6 +15,8 @@ import type {
 
 type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'error'
 const SWITCH_USER_SNAPSHOT_KEY = 'auth_switch_snapshot'
+const REFRESH_AHEAD_MS = 5 * 60 * 1000
+const REFRESH_CHECK_INTERVAL_MS = 60 * 1000
 
 type SwitchUserSnapshot = {
   accessToken: string
@@ -33,6 +36,7 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
   const error = ref<string | null>(null)
   let initializePromise: Promise<User | null> | null = null
+  let refreshTimer: ReturnType<typeof setInterval> | null = null
 
   const isAuthenticated = computed(() => Boolean(user.value && apiClient.getAccessToken()))
   const isLoading = computed(() => status.value === 'loading')
@@ -53,6 +57,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearSwitchSnapshot()
     setAuthenticated(response.user)
     clearError()
+    scheduleTokenRefresh()
     return response.user
   }
 
@@ -81,6 +86,31 @@ export const useAuthStore = defineStore('auth', () => {
     hasSwitchSnapshot.value = false
   }
 
+  const clearRefreshTimer = () => {
+    if (refreshTimer !== null) {
+      clearInterval(refreshTimer)
+      refreshTimer = null
+    }
+  }
+
+  const scheduleTokenRefresh = () => {
+    clearRefreshTimer()
+    if (!isAuthenticated.value) return
+    refreshTimer = setInterval(async () => {
+      if (!isAuthenticated.value) {
+        clearRefreshTimer()
+        return
+      }
+      if (apiClient.isTokenExpiringSoon(REFRESH_AHEAD_MS)) {
+        try {
+          await authApi.refresh()
+        } catch {
+          clearRefreshTimer()
+        }
+      }
+    }, REFRESH_CHECK_INTERVAL_MS)
+  }
+
   const initialize = async () => {
     if (initializePromise) return initializePromise
     if (initialized.value) return user.value
@@ -99,6 +129,7 @@ export const useAuthStore = defineStore('auth', () => {
       try {
         const currentUser = await authApi.me()
         setAuthenticated(currentUser)
+        scheduleTokenRefresh()
         initialized.value = true
         return currentUser
       } catch (err) {
@@ -146,11 +177,11 @@ export const useAuthStore = defineStore('auth', () => {
   const logout = async () => {
     status.value = 'loading'
     clearError()
+    clearRefreshTimer()
 
     try {
       await authApi.logout()
     } catch (err) {
-      // 退出登录以本地清理为准，不让后端异常阻断退出流程。
       error.value = null
     } finally {
       clearSwitchSnapshot()
@@ -167,6 +198,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearError()
     setAuthenticated(null)
     status.value = 'idle'
+    clearRefreshTimer()
   }
 
   const beginSwitchUser = () => {
@@ -194,6 +226,7 @@ export const useAuthStore = defineStore('auth', () => {
       setAuthenticated(snapshot.user)
       clearError()
       status.value = 'authenticated'
+      scheduleTokenRefresh()
     } else {
       await refreshCurrentUser()
     }
@@ -258,6 +291,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       await userApi.changePassword(userId, payload)
+      credentialStorage.clear()
       status.value = 'authenticated'
     } catch (err) {
       status.value = 'error'

@@ -1,5 +1,14 @@
 /// <reference types="vite/client" />
 
+import 'vue-router'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    guestOnly?: boolean
+    requiresAuth?: boolean
+  }
+}
+
 declare namespace THREEx {
   class ArToolkitSource {
     constructor(params: { sourceType: string })

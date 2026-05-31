@@ -12,6 +12,7 @@ export const authApi = {
     apiClient.setTokens({
       accessToken: response.accessToken,
       refreshToken: response.refreshToken,
+      expiresIn: response.expiresIn,
     })
     return response
   },
@@ -21,6 +22,7 @@ export const authApi = {
     apiClient.setTokens({
       accessToken: response.accessToken,
       refreshToken: response.refreshToken,
+      expiresIn: response.expiresIn,
     })
     return response
   },
@@ -37,6 +39,7 @@ export const authApi = {
     apiClient.setTokens({
       accessToken: response.accessToken,
       refreshToken: response.refreshToken,
+      expiresIn: response.expiresIn,
     })
     return response
   },
