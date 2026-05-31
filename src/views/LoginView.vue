@@ -87,7 +87,7 @@ const handleBack = async () => {
 
     <div class="auth-layout">
       <section class="auth-side">
-        <p class="side-tag">3D Geometry Editor</p>
+        <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="GeoMesh3D" class="side-tag" />
         <h1 class="side-title">登录后，编辑体验更完整</h1>
         <p class="side-text">获得身份、接入协作、AR体验、继续你的编辑进度...</p>
 
@@ -225,12 +225,12 @@ const handleBack = async () => {
 }
 
 .side-tag {
+  display: block;
+  width: 180px;
+  height: auto;
   margin: 0 0 18px;
-  color: #43f260;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  object-fit: contain;
+  user-select: none;
 }
 
 .side-title {

@@ -36,10 +36,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(user.value && apiClient.getAccessToken()))
   const isLoading = computed(() => status.value === 'loading')
-  const hasSwitchSnapshot = computed(() => {
-    if (typeof window === 'undefined') return false
-    return Boolean(window.sessionStorage.getItem(SWITCH_USER_SNAPSHOT_KEY))
-  })
+  const hasSwitchSnapshot = ref(
+    typeof window !== 'undefined' && Boolean(window.sessionStorage.getItem(SWITCH_USER_SNAPSHOT_KEY)),
+  )
 
   const clearError = () => {
     error.value = null
@@ -65,6 +64,7 @@ export const useAuthStore = defineStore('auth', () => {
       return JSON.parse(raw) as SwitchUserSnapshot
     } catch {
       window.sessionStorage.removeItem(SWITCH_USER_SNAPSHOT_KEY)
+      hasSwitchSnapshot.value = false
       return null
     }
   }
@@ -72,11 +72,13 @@ export const useAuthStore = defineStore('auth', () => {
   const saveSwitchSnapshot = (snapshot: SwitchUserSnapshot) => {
     if (typeof window === 'undefined') return
     window.sessionStorage.setItem(SWITCH_USER_SNAPSHOT_KEY, JSON.stringify(snapshot))
+    hasSwitchSnapshot.value = true
   }
 
   const clearSwitchSnapshot = () => {
     if (typeof window === 'undefined') return
     window.sessionStorage.removeItem(SWITCH_USER_SNAPSHOT_KEY)
+    hasSwitchSnapshot.value = false
   }
 
   const initialize = async () => {

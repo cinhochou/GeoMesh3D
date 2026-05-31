@@ -109,7 +109,7 @@ const handleSubmit = async () => {
 
     <div class="auth-layout">
       <section class="auth-side">
-        <p class="side-tag">3D Geometry Editor</p>
+        <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="GeoMesh3D" class="side-tag" />
         <h1 class="side-title">创建你的账号，后面的功能就能自然接上</h1>
         <p class="side-text">注册仅需要一步...</p>
 
@@ -290,12 +290,12 @@ const handleSubmit = async () => {
 }
 
 .side-tag {
+  display: block;
+  width: 180px;
+  height: auto;
   margin: 0 0 18px;
-  color: #43f260;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  object-fit: contain;
+  user-select: none;
 }
 
 .side-title {

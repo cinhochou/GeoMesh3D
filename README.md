@@ -1,4 +1,4 @@
-# 3D_editor
+# GeoMesh3D
 
 This template should help get you started developing with Vue 3 in Vite.
 
@@ -72,9 +72,10 @@ The project was created on December 25, 2025 at 17:55.
 Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 
 ```
-3D_editor
+GeoMesh3D
 ├─ .editorconfig
 ├─ .prettierrc.json
+├─ .uploads
 ├─ CodingPlan.txt
 ├─ env.d.ts
 ├─ eslint.config.ts
@@ -87,7 +88,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  └─ myTraining.patt
 │  ├─ data
 │  │  └─ camera_para.dat
-│  └─ favicon.ico
+│  ├─ favicon.ico
+│  └─ GeoMesh3D_logo_black_260x260.png
 ├─ README.md
 ├─ scripts
 │  └─ y-websocket-server.mjs
@@ -97,6 +99,8 @@ Ctrl+Shift+P然后输入Project Tree生成目录结构（每次都会加入）
 │  │  ├─ client.ts
 │  │  └─ user.ts
 │  ├─ App.vue
+│  ├─ assets
+│  │  └─ GeoMesh3D_logo_white_1240x300.png
 │  ├─ components
 │  │  ├─ InputDialog.vue
 │  │  ├─ SettingsPanel.vue

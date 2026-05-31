@@ -602,6 +602,8 @@ onUnmounted(() => {
       </span>
     </button>
 
+    <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="Logo" class="toolbar-logo" />
+
     <div class="divider"></div>
 
     <button
@@ -620,7 +622,7 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>删除</span>
-        <span class="menu-caret">▾</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -639,7 +641,7 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>点</span>
-        <span class="menu-caret">▾</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -661,7 +663,7 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>线</span>
-        <span class="menu-caret">▾</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -679,7 +681,7 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>圆</span>
-        <span class="menu-caret">▾</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -695,7 +697,7 @@ onUnmounted(() => {
         :disabled="isEditingLocked"
       >
         <span>面</span>
-        <span class="menu-caret">▾</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -716,7 +718,8 @@ onUnmounted(() => {
         @click="toggleSolidMenu"
         :disabled="isEditingLocked"
       >
-        <span>立体图▾</span>
+        <span>立体</span>
+        <span class="menu-caret">▸</span>
       </button>
     </div>
 
@@ -727,11 +730,11 @@ onUnmounted(() => {
       @click="emit('toggle-snapping')"
       :disabled="isEditingLocked"
     >
-      吸附: {{ isSnappingEnabled ? '开启' : '关闭' }}
+      吸附
     </button>
 
     <button :class="{ active: isCoordinateSystemVisible }" @click="toggleCoordinateSystem">
-      {{ isCoordinateSystemVisible ? '坐标系开' : '坐标系关' }}
+      坐标系
     </button>
 
     <button
@@ -739,7 +742,7 @@ onUnmounted(() => {
       @click="toggleGlobalPointValue"
       :disabled="isEditingLocked"
     >
-      {{ isGlobalPointValueOpen ? '全局数值开' : '全局数值关' }}
+      全局数值
     </button>
 
     <div class="divider"></div>
@@ -798,9 +801,13 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.Delete }"
         @click="selectDeleteMode"
       >
-        删除
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        <span>删除</span>
       </button>
-      <button class="menu-item menu-item-danger" @click="requestClearAll">清空</button>
+      <button class="menu-item menu-item-danger" @click="requestClearAll">
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+        <span>清空</span>
+      </button>
     </div>
   </Teleport>
 
@@ -811,21 +818,24 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.CreatePoint }"
         @click="selectCreateFreePointMode"
       >
-        自由点
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="16" r="3.5" fill="currentColor"/><text x="12" y="9" font-size="13" fill="currentColor" stroke="currentColor" stroke-width="0.1" font-weight="bold">A</text></svg>
+        <span>自由点</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.MergePoint }"
         @click="selectMergePointMode"
       >
-        合并点
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2" fill="currentColor"/><circle cx="5" cy="18" r="2" fill="currentColor"/><path d="M7 6 C12 6 12 12 17 12"/><path d="M7 18 C12 18 12 12 17 12"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg>
+        <span>合并点</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.IntersectionPoint }"
         @click="selectIntersectionPointMode"
       >
-        交点
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="4" x2="20" y2="20"/><line x1="20" y1="4" x2="4" y2="20"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>
+        <span>交点</span>
       </button>
     </div>
   </Teleport>
@@ -837,42 +847,48 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateLine }"
         @click="selectCreateLineMode"
       >
-        线段
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/><circle cx="5" cy="19" r="2" fill="currentColor"/><circle cx="19" cy="5" r="2" fill="currentColor"/></svg>
+        <span>线段</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateStraightLine }"
         @click="selectCreateStraightLineMode"
       >
-        直线
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="21" x2="21" y2="3"/><circle cx="7" cy="17" r="2" fill="currentColor"/><circle cx="17" cy="7" r="2" fill="currentColor"/></svg>
+        <span>直线</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateRay }"
         @click="selectCreateRayMode"
       >
-        射线
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="4"/><circle cx="4" cy="20" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><polyline points="16 4 20 4 20 8"/></svg>
+        <span>射线</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateVector }"
         @click="selectCreateVectorMode"
       >
-        向量
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5.5" y1="18.5" x2="18" y2="6"/><polyline points="13,6 18,6 18,11"/><circle cx="4" cy="20" r="2" fill="currentColor"/><circle cx="20" cy="4" r="2" fill="currentColor"/></svg>
+        <span>向量</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreatePerpendicularLine }"
         @click="selectCreatePerpendicularLineMode"
       >
-        垂线
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="16" x2="21" y2="16"/><line x1="12" y1="2" x2="12" y2="22"/><circle cx="12" cy="8" r="1.8" fill="currentColor"/></svg>
+        <span>垂线</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateParallelLine }"
         @click="selectCreateParallelLineMode"
       >
-        平行线
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="19" x2="21" y2="11"/><line x1="3" y1="13" x2="21" y2="5"/><circle cx="12" cy="15" r="2.5" fill="currentColor"/></svg>
+        <span>平行线</span>
       </button>
     </div>
   </Teleport>
@@ -884,14 +900,16 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateCircleThreePoints }"
         @click="selectCreateThreePointCircleMode"
       >
-        三点圆
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="4.2" cy="16.5" r="2" fill="currentColor" stroke-width="2"/><circle cx="19.8" cy="16.5" r="2" fill="currentColor" stroke-width="2"/><circle cx="12" cy="3" r="2" fill="currentColor" stroke-width="2"/></svg>
+        <span>三点圆</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateCircleNormal }"
         @click="selectCreateNormalCircleMode"
       >
-        法向圆
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="14" rx="9" ry="5"/><line x1="12" y1="14" x2="12" y2="3"/><polyline points="10 5 12 3 14 5"/><line x1="12" y1="14" x2="21" y2="14"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/></svg>
+        <span>法向圆</span>
       </button>
     </div>
   </Teleport>
@@ -903,14 +921,16 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.CreatePlane }"
         @click="selectCreatePolygonMode"
       >
-        多边形
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><polygon points="4,19 10,4 20,19"/><circle cx="4" cy="19" r="1.5" fill="currentColor"/><circle cx="10" cy="4" r="1.5" fill="currentColor"/><circle cx="20" cy="19" r="1.5" fill="currentColor"/></svg>
+        <span>多边形</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateRegularPolygon }"
         @click="selectCreateRegularPolygonMode"
       >
-        正多边形
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><polygon points="12,3 22,10.5 18.5,21.5 5.5,21.5 2,10.5"/><circle cx="12" cy="3" r="1.5" fill="currentColor"/><circle cx="22" cy="10.5" r="1.5" fill="currentColor"/><circle cx="18.5" cy="21.5" r="1.5" fill="currentColor"/><circle cx="5.5" cy="21.5" r="1.5" fill="currentColor"/><circle cx="2" cy="10.5" r="1.5" fill="currentColor"/></svg>
+        <span>正多边形</span>
       </button>
     </div>
   </Teleport>
@@ -922,42 +942,48 @@ onUnmounted(() => {
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateTetrahedron }"
         @click="createTetrahedron"
       >
-        正四面体
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="15.5" x2="16.5" y2="19.5"/><line x1="16.5" y1="19.5" x2="19.8" y2="12.9"/><line x1="19.8" y1="12.9" x2="12" y2="4.5"/><line x1="12" y1="4.5" x2="4" y2="15.5"/><line x1="12" y1="4.5" x2="16.5" y2="19.5"/><line x1="4" y1="15.5" x2="19.8" y2="12.9" stroke-dasharray="2 2"/><circle cx="4" cy="15.5" r="1.5" fill="currentColor"/><circle cx="16.5" cy="19.5" r="1.5" fill="currentColor"/><circle cx="12" cy="4.5" r="1.5" fill="currentColor"/><circle cx="19.8" cy="12.9" r="1.5" fill="currentColor"/></svg>
+        <span>正四面体</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateHexahedron }"
         @click="createHexahedron"
       >
-        正六面体
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3.5" y1="6.8" x2="14" y2="9.9"/><line x1="14" y1="9.9" x2="20.5" y2="5.8"/><line x1="20.5" y1="5.8" x2="10" y2="2.8"/><line x1="10" y1="2.8" x2="3.5" y2="6.8"/><line x1="3.5" y1="6.8" x2="3.5" y2="18.2"/><line x1="14" y1="9.9" x2="14" y2="21.2"/><line x1="20.5" y1="5.8" x2="20.5" y2="17.2"/><line x1="3.5" y1="18.2" x2="14" y2="21.2"/><line x1="14" y1="21.2" x2="20.5" y2="17.2"/><line x1="10" y1="2.8" x2="10" y2="14.1" stroke-dasharray="2 2"/><line x1="3.5" y1="18.2" x2="10" y2="14.1" stroke-dasharray="2 2"/><line x1="10" y1="14.1" x2="20.5" y2="17.2" stroke-dasharray="2 2"/><circle cx="3.5" cy="6.8" r="1.3" fill="currentColor"/><circle cx="14" cy="9.9" r="1.3" fill="currentColor"/><circle cx="20.5" cy="5.8" r="1.3" fill="currentColor"/><circle cx="10" cy="2.8" r="1.3" fill="currentColor"/><circle cx="3.5" cy="18.2" r="1.3" fill="currentColor"/><circle cx="14" cy="21.2" r="1.3" fill="currentColor"/><circle cx="20.5" cy="17.2" r="1.3" fill="currentColor"/><circle cx="10" cy="14.1" r="1.3" fill="currentColor"/></svg>
+        <span>正六面体</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateSphereTwoPoints }"
         @click="createSphereTwoPoints"
       >
-        两点球
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="3" r="1.5" fill="currentColor"/></svg>
+        <span>两点球</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateSphereRadius }"
         @click="createSphereRadius"
       >
-        半径球
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><line x1="12" y1="12" x2="21" y2="12"/></svg>
+        <span>半径球</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateCone }"
         @click="createCone"
       >
-        圆锥
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><line x1="12" y1="3" x2="4" y2="20"/><line x1="12" y1="3" x2="20" y2="20"/><ellipse cx="12" cy="20" rx="8" ry="3"/><circle cx="12" cy="20" r="1.5" fill="currentColor"/><circle cx="12" cy="3" r="1.5" fill="currentColor"/></svg>
+        <span>圆锥</span>
       </button>
       <button
         class="menu-item"
         :class="{ 'menu-item-active': currentMode === EditorMode.CreateCylinder }"
         @click="createCylinder"
       >
-        圆柱
+        <svg class="menu-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><line x1="4" y1="5" x2="4" y2="19"/><line x1="20" y1="5" x2="20" y2="19"/><ellipse cx="12" cy="19" rx="8" ry="3"/><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>
+        <span>圆柱</span>
       </button>
     </div>
   </Teleport>
@@ -1086,6 +1112,16 @@ onUnmounted(() => {
   -webkit-overflow-scrolling: touch;
 }
 
+.toolbar-logo {
+  height: 60%;
+  max-height: 28px;
+  width: auto;
+  object-fit: contain;
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
 .divider {
   width: 1px;
   height: 20px;
@@ -1097,7 +1133,7 @@ button {
   background: #333;
   color: #eee;
   border: none;
-  padding: 6px 12px;
+  padding: 4px 8px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1145,6 +1181,12 @@ button.is-active {
 .menu-caret {
   font-size: 12px;
   line-height: 1;
+  display: inline-block;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.menu-trigger.is-open .menu-caret {
+  transform: rotate(90deg);
 }
 
 .menu-panel {
@@ -1165,6 +1207,15 @@ button.is-active {
   width: 100%;
   text-align: left;
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-item-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .menu-item-active {
@@ -1364,7 +1415,7 @@ button.is-active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 10px;
+  padding: 4px 8px;
   background: #333;
   border: none;
   cursor: pointer;
