@@ -17,6 +17,7 @@ defineOptions({
 const props = defineProps<{
   isCoordinateSystemVisible: boolean
   isArMode: boolean
+  hasActiveProject?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,10 @@ const emit = defineEmits<{
   (e: 'redo'): void
   (e: 'export-scene'): void
   (e: 'import-scene'): void
+  (e: 'save-scene'): void
+  (e: 'new-project'): void
+  (e: 'exit-project'): void
+  (e: 'edit-project'): void
 }>()
 
 const uiStore = useUiStore()
@@ -377,6 +382,22 @@ const handleImportScene = () => {
 
 const handleSaveScene = () => {
   closeSideMenu()
+  emit('save-scene')
+}
+
+const handleNewProject = () => {
+  closeSideMenu()
+  emit('new-project')
+}
+
+const handleExitProject = () => {
+  closeSideMenu()
+  emit('exit-project')
+}
+
+const handleEditProject = () => {
+  closeSideMenu()
+  emit('edit-project')
 }
 
 const handleOpenManual = () => {
@@ -422,13 +443,10 @@ const goProfilePage = () => {
   window.open(resolved.href, '_blank')
 }
 
-const goPlaceholderPage = (path: string) => {
+const goProjectListPage = () => {
   profileMenuOpen.value = false
-  window.dispatchEvent(
-    new CustomEvent('toast', {
-      detail: { msg: `${path} 页面建设中`, scope: 'global' },
-    }),
-  )
+  const resolved = router.resolve({ name: 'projects' })
+  window.open(resolved.href, '_blank')
 }
 
 const handleLogout = async () => {
@@ -1031,6 +1049,30 @@ onUnmounted(() => {
           </svg>
           <span>保存</span>
         </button>
+        <button class="side-menu-item" @click="handleNewProject">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            <line x1="12" y1="11" x2="12" y2="17"/>
+            <line x1="9" y1="14" x2="15" y2="14"/>
+          </svg>
+          <span>新建项目</span>
+        </button>
+        <button v-if="hasActiveProject" class="side-menu-item" @click="handleEditProject">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          <span>编辑项目</span>
+        </button>
+        <button v-if="hasActiveProject" class="side-menu-item side-menu-item-danger" @click="handleExitProject">
+          <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          <span>退出项目</span>
+        </button>
+        <div class="side-menu-divider"></div>
         <button class="side-menu-item" @click="handleExportScene">
           <svg class="side-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -1086,9 +1128,9 @@ onUnmounted(() => {
 
         <div class="profile-links">
           <button class="profile-link-button" @click="goProfilePage">
-            个人中心
+            个人主页
           </button>
-          <button class="profile-link-button" @click="goPlaceholderPage('项目列表')">
+          <button class="profile-link-button" @click="goProjectListPage">
             项目列表
           </button>
         </div>
@@ -1539,6 +1581,11 @@ button.is-active {
 .side-menu-item:hover {
   background: #2a2a2a;
   color: #43f260;
+}
+
+.side-menu-item-danger:hover {
+  background: #2a2a2a;
+  color: #ff6b6b;
 }
 
 .side-menu-item:active {

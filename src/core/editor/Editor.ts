@@ -545,10 +545,12 @@ export class Editor {
 
     this.scene.cubeConstraints.forEach((constraint) => {
       if (!(constraint instanceof CubeConstraint)) return
-      if (constraint.sourceLineId !== lineId) return
+      const isSourceLine = constraint.sourceLineId === lineId
       const faces = constraint.faceIds
         .map((faceId) => this.scene.faces.get(faceId))
         .filter((face): face is PlanarPolygon => face !== undefined)
+      const isBoundaryLine = faces.some((face) => face.boundaryLineIds.includes(lineId))
+      if (!isSourceLine && !isBoundaryLine) return
       const dependentPoints = constraint.dependentLayouts
         .map((layout) => this.scene.points.get(layout.pointId))
         .filter((point): point is Point3 => point !== undefined)
@@ -3043,8 +3045,9 @@ export class Editor {
     const regularPolygonFaceIds = new Set(
       dependentRegularPolygons.map((item) => item.face.id),
     )
+    const cubeFaceIds = new Set(dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)))
     const filteredDependentFaces = dependentFaces.filter(
-      (face) => !regularPolygonFaceIds.has(face.id),
+      (face) => !cubeFaceIds.has(face.id) && !regularPolygonFaceIds.has(face.id),
     )
 
     const allDeletedFaceIds = new Set([

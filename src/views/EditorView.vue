@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
 import * as THREE from 'three'
 
 import Toolbar from '../components/Toolbar.vue'
@@ -9,6 +10,8 @@ import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/TimeLine.vue'
 import InputDialog from '../components/InputDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
+import NewProjectDialog from '../components/NewProjectDialog.vue'
+import EditProjectDialog from '../components/EditProjectDialog.vue'
 
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
@@ -32,10 +35,14 @@ import { useUiStore, type AppSettings } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
+import { projectApi } from '@/api/project'
+import { ApiError } from '@/api/client'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 const editorBodyRef = ref<HTMLDivElement | null>(null)
 const sidebarShellRef = ref<HTMLDivElement | null>(null)
+const route = useRoute()
+const router = useRouter()
 const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
@@ -99,6 +106,48 @@ let viewportResizeObserver: ResizeObserver | null = null
 // 提示框相关的响应式变量
 let toastTimer: number | null = null
 const sharedRotationOwnerNotice = ref('')
+
+const newProjectDialogVisible = ref(false)
+const currentProjectId = ref<string | null>(null)
+const isCreatingProject = ref(false)
+const lastSavedSceneJson = ref<string | null>(null)
+
+const sceneToJsonForCompare = (data: SerializedScene): string => {
+  const copy = { ...data }
+  if (copy.metadata) {
+    copy.metadata = { ...copy.metadata }
+    delete (copy.metadata as Record<string, unknown>).exportedAt
+  }
+  return JSON.stringify(copy)
+}
+const editProjectDialogVisible = ref(false)
+const editProjectName = ref('')
+const editProjectDescription = ref('')
+const editProjectIsPublic = ref(true)
+
+const captureThumbnailAsync = async (): Promise<Blob | null> => {
+  try {
+    const canvas = renderer?.renderer?.domElement
+    if (!canvas) return null
+    const tempCanvas = document.createElement('canvas')
+    const size = 1024
+    tempCanvas.width = size
+    tempCanvas.height = size
+    const ctx = tempCanvas.getContext('2d')
+    if (!ctx) return null
+    const srcW = canvas.width
+    const srcH = canvas.height
+    const minDim = Math.min(srcW, srcH)
+    const sx = (srcW - minDim) / 2
+    const sy = (srcH - minDim) / 2
+    ctx.drawImage(canvas, sx, sy, minDim, minDim, 0, 0, size, size)
+    return new Promise<Blob | null>((resolve) => {
+      tempCanvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.7)
+    })
+  } catch {
+    return null
+  }
+}
 
 // 帧率限制相关变量：记录上一次渲染时间点，用于控制最大帧率
 let lastRenderTime = 0
@@ -256,6 +305,16 @@ onMounted(() => {
       window.matchMedia('(pointer: coarse)').matches ||
       window.matchMedia('(hover: none)').matches,
   )
+
+  if (route.query.projectId) {
+    currentProjectId.value = route.query.projectId as string
+  }
+
+  if (route.query.newProject === 'true') {
+    newProjectDialogVisible.value = true
+  } else if (route.query.projectId) {
+    loadProjectScene(route.query.projectId as string)
+  }
 
   renderer = new ThreeRenderer(viewportRef.value!, appSettings.value)
   uiStore.setAxisGridSize(renderer.getAxisGridSize())
@@ -1134,6 +1193,264 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     uiStore.closeToast()
   }, 1000)
 }
+
+const handleNewProjectCancel = () => {
+  newProjectDialogVisible.value = false
+  router.replace({ query: {} })
+}
+
+const handleNewProjectConfirm = async (data: {
+  name: string
+  description: string
+  isPublic: boolean
+  sceneFile: File | null
+}) => {
+  isCreatingProject.value = true
+  try {
+    const project = await projectApi.createProject({
+      name: data.name,
+      description: data.description || undefined,
+      isPublic: data.isPublic,
+    })
+
+    currentProjectId.value = project.id
+    newProjectDialogVisible.value = false
+    router.replace({ query: { projectId: project.id } })
+
+    if (data.sceneFile) {
+      try {
+        const sceneFileText = await data.sceneFile.text()
+        const parsed = JSON.parse(sceneFileText)
+        const validation = validateSerializedScene(parsed)
+        if (!validation.valid) {
+          showToast(`场景文件格式无效：${validation.error}`, 'global')
+        } else if (isSerializedSceneEmpty(parsed as SerializedScene)) {
+          showToast('场景文件内容为空，已创建空项目', 'global')
+        } else {
+          importScene(scene, parsed as SerializedScene)
+          scene.solveDirtyConstraints()
+          scene.markAllRenderDirty()
+          sceneStore.syncEditorState(editor)
+          sceneStore.syncSceneState(scene)
+          const exportedScene = exportScene(scene)
+          const thumbnailBlob = await captureThumbnailAsync()
+          let thumbnailUrl: string | undefined
+          if (thumbnailBlob) {
+            try {
+              thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
+            } catch {
+              thumbnailUrl = undefined
+            }
+          }
+          await projectApi.saveScene(project.id, {
+            sceneData: JSON.stringify(exportedScene),
+            thumbnailUrl,
+          })
+          showToast('场景文件已加载并保存', 'global')
+        }
+      } catch (e) {
+        console.error('场景文件处理失败:', e)
+        showToast('场景文件解析失败', 'global')
+      }
+    }
+
+    showToast('项目创建成功', 'global')
+    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '创建项目失败'
+    showToast(msg, 'global')
+  } finally {
+    isCreatingProject.value = false
+  }
+}
+
+const handleNewProjectFromMenu = () => {
+  if (currentProjectId.value) {
+    showToast('当前场景已有正在编辑项目，请退出后创建', 'global')
+    return
+  }
+  newProjectDialogVisible.value = true
+}
+
+const handleExitProject = async () => {
+  if (!currentProjectId.value) return
+  const projectId = currentProjectId.value
+  try {
+    const sceneData = exportScene(scene)
+    const thumbnailBlob = await captureThumbnailAsync()
+    let thumbnailUrl: string | undefined
+    if (thumbnailBlob) {
+      try {
+        thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
+      } catch {
+        thumbnailUrl = undefined
+      }
+    }
+    await projectApi.saveScene(projectId, {
+      sceneData: JSON.stringify(sceneData),
+      thumbnailUrl,
+    })
+  } catch (err) {
+    console.error('退出前保存失败:', err)
+  }
+  const emptyScene: SerializedScene = {
+    version: 1,
+    points: [{
+      id: 'origin',
+      name: 'O',
+      position: { x: 0, y: 0, z: 0 },
+      locked: true,
+      userLocked: true,
+      nameVisible: true,
+      valueVisible: false,
+    }],
+    lines: [], straightLines: [], perpendicularLines: [], parallelLines: [],
+    rays: [], vectors: [], circles: [], faces: [], spheres: [], cones: [],
+    cylinders: [], constraints: [],
+  }
+  importScene(scene, emptyScene)
+  scene.solveDirtyConstraints()
+  scene.markAllRenderDirty()
+  sceneStore.syncEditorState(editor)
+  sceneStore.syncSceneState(scene)
+  currentProjectId.value = null
+  lastSavedSceneJson.value = null
+  router.replace({ query: {} })
+  showToast('已保存并退出项目', 'global')
+}
+
+const handleEditProject = async () => {
+  if (!currentProjectId.value) return
+  try {
+    const detail = await projectApi.getProject(currentProjectId.value)
+    editProjectName.value = detail.name
+    editProjectDescription.value = detail.description
+    editProjectIsPublic.value = detail.isPublic
+    editProjectDialogVisible.value = true
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '获取项目信息失败'
+    showToast(msg, 'global')
+  }
+}
+
+const handleEditProjectConfirm = async (data: { name: string; description: string; isPublic: boolean }) => {
+  if (!currentProjectId.value) return
+  try {
+    await projectApi.updateProject(currentProjectId.value, {
+      name: data.name,
+      description: data.description,
+      isPublic: data.isPublic,
+    })
+    editProjectDialogVisible.value = false
+    showToast('项目信息已更新', 'global')
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '更新项目信息失败'
+    showToast(msg, 'global')
+  }
+}
+
+const handleEditProjectCancel = () => {
+  editProjectDialogVisible.value = false
+}
+
+const handleEditProjectDelete = async () => {
+  if (!currentProjectId.value) return
+  const projectId = currentProjectId.value
+  try {
+    await projectApi.deleteProject(projectId)
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '删除项目失败'
+    showToast(msg, 'global')
+    return
+  }
+  const emptyScene: SerializedScene = {
+    version: 1,
+    points: [{
+      id: 'origin',
+      name: 'O',
+      position: { x: 0, y: 0, z: 0 },
+      locked: true,
+      userLocked: true,
+      nameVisible: true,
+      valueVisible: false,
+    }],
+    lines: [], straightLines: [], perpendicularLines: [], parallelLines: [],
+    rays: [], vectors: [], circles: [], faces: [], spheres: [], cones: [],
+    cylinders: [], constraints: [],
+  }
+  importScene(scene, emptyScene)
+  scene.solveDirtyConstraints()
+  scene.markAllRenderDirty()
+  sceneStore.syncEditorState(editor)
+  sceneStore.syncSceneState(scene)
+  currentProjectId.value = null
+  lastSavedSceneJson.value = null
+  editProjectDialogVisible.value = false
+  router.replace({ query: {} })
+  showToast('项目已删除', 'global')
+}
+
+const loadProjectScene = async (projectId: string) => {
+  try {
+    const detail = await projectApi.loadScene(projectId)
+    currentProjectId.value = detail.id
+    router.replace({ query: { projectId: detail.id } })
+    if (detail.sceneData) {
+      try {
+        const parsed = JSON.parse(detail.sceneData)
+        const validation = validateSerializedScene(parsed)
+        if (validation.valid && !isSerializedSceneEmpty(parsed as SerializedScene)) {
+          importScene(scene, parsed as SerializedScene)
+          scene.solveDirtyConstraints()
+          scene.markAllRenderDirty()
+          sceneStore.syncEditorState(editor)
+          sceneStore.syncSceneState(scene)
+        }
+      } catch (e) {
+        console.error('加载场景数据失败:', e)
+      }
+    }
+    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    showToast(`已加载项目：${detail.name}`, 'global')
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '加载项目失败'
+    showToast(msg, 'global')
+  }
+}
+
+const handleSaveScene = async () => {
+  if (!currentProjectId.value) {
+    showToast('当前未关联项目，无法保存', 'global')
+    return
+  }
+  try {
+    const sceneData = exportScene(scene)
+    const sceneJson = JSON.stringify(sceneData)
+    const compareJson = sceneToJsonForCompare(sceneData)
+    if (lastSavedSceneJson.value !== null && compareJson === lastSavedSceneJson.value) {
+      showToast('已是最新场景', 'global')
+      return
+    }
+    const thumbnailBlob = await captureThumbnailAsync()
+    let thumbnailUrl: string | undefined
+    if (thumbnailBlob) {
+      try {
+        thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
+      } catch {
+        thumbnailUrl = undefined
+      }
+    }
+    await projectApi.saveScene(currentProjectId.value, {
+      sceneData: sceneJson,
+      thumbnailUrl,
+    })
+    lastSavedSceneJson.value = compareJson
+    showToast('保存成功', 'global')
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '保存失败'
+    showToast(msg, 'global')
+  }
+}
 </script>
 
 <template>
@@ -1285,6 +1602,7 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     <Toolbar
       :is-coordinate-system-visible="isCoordinateSystemVisible"
       :is-ar-mode="isARMode"
+      :has-active-project="!!currentProjectId"
       @mode-change="onModeChange"
       @clear-all="handleClearAll"
       @undo="handleUndo"
@@ -1296,6 +1614,10 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
       @toggle-collab="handleToggleCollab"
       @export-scene="handleExportScene"
       @import-scene="handleImportScene"
+      @save-scene="handleSaveScene"
+      @new-project="handleNewProjectFromMenu"
+      @exit-project="handleExitProject"
+      @edit-project="handleEditProject"
     />
 
       <div ref="editorBodyRef" class="editor-body">
@@ -1359,6 +1681,22 @@ const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
     <Timeline />
 
     <SettingsPanel />
+
+    <NewProjectDialog
+      :visible="newProjectDialogVisible"
+      @confirm="handleNewProjectConfirm"
+      @cancel="handleNewProjectCancel"
+    />
+
+    <EditProjectDialog
+      :visible="editProjectDialogVisible"
+      :project-name="editProjectName"
+      :project-description="editProjectDescription"
+      :project-is-public="editProjectIsPublic"
+      @confirm="handleEditProjectConfirm"
+      @cancel="handleEditProjectCancel"
+      @delete="handleEditProjectDelete"
+    />
   </div>
 </template>
 

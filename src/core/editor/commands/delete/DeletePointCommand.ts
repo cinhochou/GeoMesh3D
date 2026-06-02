@@ -20,6 +20,7 @@ import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstra
 export class DeletePointCommand implements Command {
   private centerPoints: Point3[] = []
   private regularPolygonDeletedBoundaryLines: Map<string, Line3[]> = new Map()
+  private cubeDeletedBoundaryLines: Map<string, Line3[]> = new Map()
 
   constructor(
     private scene: Scene,
@@ -106,6 +107,18 @@ export class DeletePointCommand implements Command {
     this.dependentCubes.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {
       this.scene.removeCubeConstraint(constraint.cubeId)
       faces.forEach((face) => this.scene.removeFace(face.id))
+
+      const allBoundaryLineIds = new Set(faces.flatMap((face) => face.boundaryLineIds))
+      const deletedBoundaryLines = [...allBoundaryLineIds]
+        .map((lineId) => this.scene.lines.get(lineId))
+        .filter((line): line is Line3 => line !== undefined && line.faceOwned)
+
+      deletedBoundaryLines.forEach((line) => {
+        this.scene.lines.delete(line.id)
+        this.scene.selection.lines.delete(line.id)
+      })
+      this.cubeDeletedBoundaryLines.set(constraint.cubeId, deletedBoundaryLines)
+
       dependentIntersectionPoints.forEach(({ point, constraint }) => {
         this.scene.removeIntersectionConstraint(constraint.pointId)
         this.scene.points.delete(point.id)
@@ -181,6 +194,8 @@ export class DeletePointCommand implements Command {
     this.centerPoints.forEach((point) => this.scene.addPoint(point))
     this.relatedFaces.forEach((face) => this.scene.addFace(face))
     this.dependentCubes.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {
+      const boundaryLines = this.cubeDeletedBoundaryLines.get(constraint.cubeId) ?? []
+      boundaryLines.forEach((line) => this.scene.addLine(line))
       dependentPoints.forEach((point) => this.scene.addPoint(point))
       faces.forEach((face) => this.scene.addFace(face))
       this.scene.addCubeConstraint(constraint)
@@ -189,6 +204,7 @@ export class DeletePointCommand implements Command {
         this.scene.addIntersectionConstraint(constraint)
       })
     })
+    this.cubeDeletedBoundaryLines.clear()
     this.dependentRegularPolygons.forEach(({ face, constraint, dependentPoints, dependentIntersectionPoints }) => {
       const boundaryLines = this.regularPolygonDeletedBoundaryLines.get(face.id) ?? []
       boundaryLines.forEach((line) => this.scene.addLine(line))

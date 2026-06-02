@@ -97,7 +97,7 @@ export class ParallelLine3 {
     return null
   }
 
-  getTargetEntity(scene: Scene): { p1: { position: Vec3 }; p2: { position: Vec3 } } | null {
+  getTargetEntity(scene: Scene): { p1: { id: string; position: Vec3 }; p2: { id: string; position: Vec3 } } | null {
     if (this.target.type === 'line') return scene.lines.get(this.target.id) ?? null
     if (this.target.type === 'straightLine') return scene.straightLines.get(this.target.id) ?? null
     if (this.target.type === 'ray') return scene.rays.get(this.target.id) ?? null

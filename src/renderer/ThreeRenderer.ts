@@ -126,6 +126,7 @@ export class ThreeRenderer {
     this.renderer = new THREE.WebGLRenderer({
       antialias: this.appSettings.antialias,
       alpha: true,
+      preserveDrawingBuffer: true,
       powerPreference: this.appSettings.powerPreference,
     })
     this.renderer.setSize(w, h, false)

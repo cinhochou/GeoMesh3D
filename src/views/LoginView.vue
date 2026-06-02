@@ -24,7 +24,7 @@ const redirect = computed(() => {
 
 const successMsg = computed(() => {
   const path = redirect.value
-  return path.includes('profile') ? '登录成功！正在进入个人中心...' : '登录成功！正在进入编辑器...'
+  return path.includes('profile') ? '登录成功！正在进入个人主页...' : '登录成功！正在进入编辑器...'
 })
 
 watch([identifier, password], () => {

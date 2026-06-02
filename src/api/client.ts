@@ -53,6 +53,91 @@ class ApiClient {
     return this.request<T>(path, { method: 'DELETE' })
   }
 
+  async upload<T>(path: string, formData: FormData): Promise<T> {
+    if (!this.isAuthPath(path) && this.isTokenExpiringSoon()) {
+      await this.tryRefreshToken()
+    }
+
+    const accessToken = this.getAccessToken()
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: formData,
+    })
+
+    if (response.status === 401 && !this.isAuthPath(path)) {
+      const refreshed = await this.tryRefreshToken()
+      if (refreshed) {
+        const newToken = this.getAccessToken()
+        const retryResponse = await fetch(`${this.baseUrl}${path}`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
+          },
+          body: formData,
+        })
+
+        const retryRawText = await retryResponse.text()
+        const retryPayload = retryRawText ? (JSON.parse(retryRawText) as ApiResponse<T> | T) : null
+
+        if (!retryResponse.ok) {
+          const apiMessage =
+            retryPayload && typeof retryPayload === 'object' && 'message' in retryPayload
+              ? String(retryPayload.message)
+              : `Request failed with status ${retryResponse.status}`
+          const apiCode =
+            retryPayload && typeof retryPayload === 'object' && 'code' in retryPayload
+              ? Number(retryPayload.code)
+              : retryResponse.status
+          throw new ApiError(apiMessage, { code: apiCode, status: retryResponse.status })
+        }
+
+        if (retryPayload === null) return undefined as T
+        if (this.isApiResponse<T>(retryPayload)) {
+          if (retryPayload.code !== 200) {
+            throw new ApiError(retryPayload.message || 'Request failed', {
+              code: retryPayload.code,
+              status: retryResponse.status,
+            })
+          }
+          return retryPayload.data
+        }
+        return retryPayload
+      }
+    }
+
+    const rawText = await response.text()
+    const payload = rawText ? (JSON.parse(rawText) as ApiResponse<T> | T) : null
+
+    if (!response.ok) {
+      const apiMessage =
+        payload && typeof payload === 'object' && 'message' in payload
+          ? String(payload.message)
+          : `Request failed with status ${response.status}`
+      const apiCode =
+        payload && typeof payload === 'object' && 'code' in payload
+          ? Number(payload.code)
+          : response.status
+      throw new ApiError(apiMessage, { code: apiCode, status: response.status })
+    }
+
+    if (payload === null) return undefined as T
+    if (this.isApiResponse<T>(payload)) {
+      if (payload.code !== 200) {
+        throw new ApiError(payload.message || 'Request failed', {
+          code: payload.code,
+          status: response.status,
+        })
+      }
+      return payload.data
+    }
+    return payload
+  }
+
   getAccessToken(): string | null {
     return getStorage()?.getItem(ACCESS_TOKEN_KEY) ?? null
   }

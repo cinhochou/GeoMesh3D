@@ -105,6 +105,11 @@ const goToEditor = () => {
   router.push({ name: 'editor' })
 }
 
+const goToProjectList = () => {
+  const resolved = router.resolve({ name: 'projects' })
+  window.open(resolved.href, '_blank')
+}
+
 const loadStats = async () => {
   if (!user.value?.id) return
   statsLoading.value = true
@@ -293,7 +298,10 @@ const cancelEditPassword = () => {
 <template>
   <div class="profile-page">
     <header class="profile-header">
-      <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="GeoMesh3D" class="header-logo" @click="goToEditor" />
+      <div class="profile-header-inner">
+        <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="GeoMesh3D" class="header-logo" @click="goToEditor" />
+        <h1 class="profile-page-title">个人主页</h1>
+      </div>
     </header>
 
     <main class="profile-body">
@@ -351,7 +359,7 @@ const cancelEditPassword = () => {
                 <span class="date-popup" :class="{ 'is-active': datePopupVisible }" @click.stop>注册日期：{{ createdDateFormatted }}</span>
               </span>
               <span class="stat-sep">·</span>
-              <span class="stat-chip"><span class="stat-val">{{ statsLoading ? '-' : stats?.projectCount ?? 0 }}</span> 项目</span>
+              <span class="stat-chip stat-chip-clickable" @click="goToProjectList"><span class="stat-val">{{ statsLoading ? '-' : stats?.projectCount ?? 0 }}</span> 项目</span>
               <span class="stat-sep">·</span>
               <span class="stat-chip"><span class="stat-val">{{ statsLoading ? '-' : stats?.roomCount ?? 0 }}</span> 房间</span>
             </div>
@@ -472,6 +480,13 @@ const cancelEditPassword = () => {
   border-bottom: 1px solid #2a2a2a;
 }
 
+.profile-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
 .header-logo {
   height: 28px;
   width: auto;
@@ -479,10 +494,20 @@ const cancelEditPassword = () => {
   user-select: none;
   cursor: pointer;
   transition: opacity 0.15s ease;
+  position: absolute;
+  left: 28px;
 }
 
 .header-logo:hover {
   opacity: 0.7;
+}
+
+.profile-page-title {
+  color: #f5f5f5;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin: 0;
 }
 
 .profile-body {
@@ -710,6 +735,15 @@ const cancelEditPassword = () => {
 .stat-chip {
   color: #a0a0a0;
   font-size: 13px;
+}
+
+.stat-chip-clickable {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.stat-chip-clickable:hover {
+  color: #43f260;
 }
 
 .stat-chip-joined {
@@ -1050,6 +1084,11 @@ const cancelEditPassword = () => {
 
   .header-logo {
     height: 22px;
+    left: 16px;
+  }
+
+  .profile-page-title {
+    font-size: 17px;
   }
 
   .field-input {

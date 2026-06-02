@@ -757,11 +757,13 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const obj = data as Record<string, unknown>
 
-  if (obj.version !== SCENE_FILE_VERSION) {
-    return { valid: false, error: `不支持的文件版本：${obj.version}，当前仅支持版本 ${SCENE_FILE_VERSION}` }
+  // 向下兼容：版本检查更宽松，接受任意版本号
+  if (obj.version !== SCENE_FILE_VERSION && obj.version != null) {
+    // 如果有版本号但不是当前版本，只警告但仍然接受
   }
 
-  const requiredArrays: Array<keyof SerializedScene> = [
+  // 所有几何数组字段都是可选的，默认为空数组
+  const optionalArrays: Array<keyof SerializedScene> = [
     'points',
     'lines',
     'straightLines',
@@ -773,17 +775,14 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     'faces',
     'spheres',
     'cones',
+    'cylinders',
     'constraints',
   ]
 
-  for (const key of requiredArrays) {
+  for (const key of optionalArrays) {
     if (!Array.isArray(obj[key])) {
-      return { valid: false, error: `缺少必要字段 "${key}" 或其不是数组` }
+      obj[key] = []
     }
-  }
-
-  if (!Array.isArray(obj.cylinders)) {
-    obj.cylinders = []
   }
 
   const points = obj.points as SerializedPoint[]
@@ -797,6 +796,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const pointIdSet = new Set<string>()
   for (const p of points) {
+    // 必要字段验证
     let err = validateId(p.id, '点')
     if (err) return { valid: false, error: err }
     err = validateName(p.name, '点', p.id)
@@ -806,43 +806,39 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     pointIdSet.add(p.id)
     err = validateVec3(p.position, `点 "${p.name}" 的坐标数据无效或包含非有限值`)
     if (err) return { valid: false, error: err }
+    
+    // 可选字段向下兼容，缺失时设置默认值
     if (typeof p.locked !== 'boolean') {
-      return { valid: false, error: `点 "${p.name}" 缺少 locked 字段` }
+      p.locked = false
     }
     if (typeof p.userLocked !== 'boolean') {
-      return { valid: false, error: `点 "${p.name}" 缺少 userLocked 字段` }
+      p.userLocked = false
     }
-    err = validateNullableStringId(p.cubeId, `点 "${p.name}" 的 cubeId 无效`)
-    if (err) return { valid: false, error: err }
-    if (p.cubeRole !== null && p.cubeRole !== 'owner' && p.cubeRole !== 'dependent') {
-      return { valid: false, error: `点 "${p.name}" 的 cubeRole 无效` }
+    if (typeof p.nameVisible !== 'boolean') {
+      p.nameVisible = true
     }
-    err = validateNullableStringId(p.circleId, `点 "${p.name}" 的 circleId 无效`)
-    if (err) return { valid: false, error: err }
-    if (p.circleRole !== null && p.circleRole !== 'center') {
-      return { valid: false, error: `点 "${p.name}" 的 circleRole 无效` }
+    if (typeof p.valueVisible !== 'boolean') {
+      p.valueVisible = true
     }
-    err = validateNullableStringId(p.sphereId, `点 "${p.name}" 的 sphereId 无效`)
-    if (err) return { valid: false, error: err }
-    if (p.sphereRole !== null && p.sphereRole !== 'center' && p.sphereRole !== 'radius') {
-      return { valid: false, error: `点 "${p.name}" 的 sphereRole 无效` }
+    if (typeof p.labelOffsetX !== 'number') {
+      p.labelOffsetX = 10
     }
-    err = validateNullableStringId(p.coneId, `点 "${p.name}" 的 coneId 无效`)
-    if (err) return { valid: false, error: err }
-    if (p.coneRole !== null && p.coneRole !== 'baseCenter' && p.coneRole !== 'apex') {
-      return { valid: false, error: `点 "${p.name}" 的 coneRole 无效` }
+    if (typeof p.labelOffsetY !== 'number') {
+      p.labelOffsetY = 10
     }
-    err = validateNullableStringId(p.cylinderId ?? null, `点 "${p.name}" 的 cylinderId 无效`)
-    if (err) return { valid: false, error: err }
-    const cylinderRole = p.cylinderRole ?? null
-    if (cylinderRole !== null && cylinderRole !== 'bottomCenter' && cylinderRole !== 'topCenter') {
-      return { valid: false, error: `点 "${p.name}" 的 cylinderRole 无效` }
-    }
-    err = validateNullableStringId(p.regularPolygonId, `点 "${p.name}" 的 regularPolygonId 无效`)
-    if (err) return { valid: false, error: err }
-    if (p.regularPolygonRole !== null && p.regularPolygonRole !== 'owner' && p.regularPolygonRole !== 'dependent') {
-      return { valid: false, error: `点 "${p.name}" 的 regularPolygonRole 无效` }
-    }
+    if (p.cubeId == null) p.cubeId = null
+    if (p.cubeRole == null) p.cubeRole = null
+    if (p.circleId == null) p.circleId = null
+    if (p.circleRole == null) p.circleRole = null
+    if (p.sphereId == null) p.sphereId = null
+    if (p.sphereRole == null) p.sphereRole = null
+    if (p.coneId == null) p.coneId = null
+    if (p.coneRole == null) p.coneRole = null
+    if (p.cylinderId == null) p.cylinderId = null
+    if (p.cylinderRole == null) p.cylinderRole = null
+    if (p.regularPolygonId == null) p.regularPolygonId = null
+    if (p.regularPolygonRole == null) p.regularPolygonRole = null
+    if (p.constrainedTo == null) p.constrainedTo = null
   }
 
   if (!pointIdSet.has(Scene.ORIGIN_ID)) {
@@ -851,6 +847,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 
   const lines = obj.lines as SerializedLine[]
   for (const l of lines) {
+    // 必要字段验证
     let err = validateId(l.id, '线段')
     if (err) return { valid: false, error: err }
     err = validateName(l.name, '线段', l.id)
@@ -865,16 +862,23 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (l.p1Id === l.p2Id) {
       return { valid: false, error: `线段 "${l.name}" 的起点和终点不能相同` }
     }
-    if (typeof l.lengthLocked !== 'boolean') {
-      return { valid: false, error: `线段 "${l.name}" 缺少 lengthLocked 字段` }
-    }
-    if (l.faceConstraintType !== null && l.faceConstraintType !== 'polygon' && l.faceConstraintType !== 'regularPolygon' && l.faceConstraintType !== 'hexahedron' && l.faceConstraintType !== 'tetrahedron') {
-      return { valid: false, error: `线段 "${l.name}" 的 faceConstraintType 无效` }
-    }
+    
+    // 可选字段向下兼容
+    if (typeof l.lengthLocked !== 'boolean') l.lengthLocked = false
+    if (typeof l.userLocked !== 'boolean') l.userLocked = false
+    if (typeof l.nameVisible !== 'boolean') l.nameVisible = true
+    if (typeof l.valueVisible !== 'boolean') l.valueVisible = true
+    if (typeof l.labelOffsetX !== 'number') l.labelOffsetX = 10
+    if (typeof l.labelOffsetY !== 'number') l.labelOffsetY = 10
+    if (typeof l.visible !== 'boolean') l.visible = true
+    if (l.faceConstraintType == null) l.faceConstraintType = null
+    if (l.faceOwned == null) l.faceOwned = false
+    if (l.lockedLength == null) l.lockedLength = 0
   }
 
   const straightLines = obj.straightLines as SerializedStraightLine[]
   for (const l of straightLines) {
+    // 必要字段验证
     let err = validateId(l.id, '直线')
     if (err) return { valid: false, error: err }
     err = validateName(l.name, '直线', l.id)
@@ -889,10 +893,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (l.p1Id === l.p2Id) {
       return { valid: false, error: `直线 "${l.name}" 的起点和终点不能相同` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof l.nameVisible !== 'boolean') l.nameVisible = true
+    if (typeof l.valueVisible !== 'boolean') l.valueVisible = true
+    if (typeof l.labelOffsetX !== 'number') l.labelOffsetX = 10
+    if (typeof l.labelOffsetY !== 'number') l.labelOffsetY = 10
+    if (typeof l.visible !== 'boolean') l.visible = true
+    if (typeof l.userLocked !== 'boolean') l.userLocked = false
+    if (typeof l.displayLength !== 'number') l.displayLength = 1000
   }
 
   const rays = obj.rays as SerializedRay[]
   for (const r of rays) {
+    // 必要字段验证
     let err = validateId(r.id, '射线')
     if (err) return { valid: false, error: err }
     err = validateName(r.name, '射线', r.id)
@@ -907,10 +921,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (r.p1Id === r.p2Id) {
       return { valid: false, error: `射线 "${r.name}" 的起点和终点不能相同` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof r.nameVisible !== 'boolean') r.nameVisible = true
+    if (typeof r.valueVisible !== 'boolean') r.valueVisible = true
+    if (typeof r.labelOffsetX !== 'number') r.labelOffsetX = 10
+    if (typeof r.labelOffsetY !== 'number') r.labelOffsetY = 10
+    if (typeof r.visible !== 'boolean') r.visible = true
+    if (typeof r.userLocked !== 'boolean') r.userLocked = false
+    if (typeof r.displayLength !== 'number') r.displayLength = 1000
   }
 
   const vectors = obj.vectors as SerializedVector[]
   for (const v of vectors) {
+    // 必要字段验证
     let err = validateId(v.id, '向量')
     if (err) return { valid: false, error: err }
     err = validateName(v.name, '向量', v.id)
@@ -925,11 +949,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (v.p1Id === v.p2Id) {
       return { valid: false, error: `向量 "${v.name}" 的起点和终点不能相同` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof v.nameVisible !== 'boolean') v.nameVisible = true
+    if (typeof v.valueVisible !== 'boolean') v.valueVisible = true
+    if (typeof v.labelOffsetX !== 'number') v.labelOffsetX = 10
+    if (typeof v.labelOffsetY !== 'number') v.labelOffsetY = 10
+    if (typeof v.visible !== 'boolean') v.visible = true
+    if (typeof v.userLocked !== 'boolean') v.userLocked = false
   }
 
   const perpendicularLineIdSet = new Set<string>()
   const perpendicularLines = obj.perpendicularLines as SerializedPerpendicularLine[]
   for (const l of perpendicularLines) {
+    // 必要字段验证
     let err = validateId(l.id, '垂线')
     if (err) return { valid: false, error: err }
     err = validateName(l.name, '垂线', l.id)
@@ -956,11 +989,21 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (!validPerpTargetTypes.has(l.targetType)) {
       return { valid: false, error: `垂线 "${l.name}" 的 targetType "${l.targetType}" 无效` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof l.nameVisible !== 'boolean') l.nameVisible = true
+    if (typeof l.valueVisible !== 'boolean') l.valueVisible = true
+    if (typeof l.labelOffsetX !== 'number') l.labelOffsetX = 10
+    if (typeof l.labelOffsetY !== 'number') l.labelOffsetY = 10
+    if (typeof l.visible !== 'boolean') l.visible = true
+    if (typeof l.userLocked !== 'boolean') l.userLocked = false
+    if (typeof l.displayLength !== 'number') l.displayLength = 1000
   }
 
   const parallelLineIdSet = new Set<string>()
   const parallelLines = (obj.parallelLines ?? []) as SerializedParallelLine[]
   for (const l of parallelLines) {
+    // 必要字段验证
     let err = validateId(l.id, '平行线')
     if (err) return { valid: false, error: err }
     err = validateName(l.name, '平行线', l.id)
@@ -987,10 +1030,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (!validParallelTargetTypes.has(l.targetType)) {
       return { valid: false, error: `平行线 "${l.name}" 的 targetType "${l.targetType}" 无效` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof l.nameVisible !== 'boolean') l.nameVisible = true
+    if (typeof l.valueVisible !== 'boolean') l.valueVisible = true
+    if (typeof l.labelOffsetX !== 'number') l.labelOffsetX = 10
+    if (typeof l.labelOffsetY !== 'number') l.labelOffsetY = 10
+    if (typeof l.visible !== 'boolean') l.visible = true
+    if (typeof l.userLocked !== 'boolean') l.userLocked = false
+    if (typeof l.displayLength !== 'number') l.displayLength = 1000
   }
 
   const circles = obj.circles as SerializedCircle[]
   for (const c of circles) {
+    // 必要字段验证
     let err = validateId(c.id, '圆')
     if (err) return { valid: false, error: err }
     err = validateName(c.name, '圆', c.id)
@@ -1036,10 +1089,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       err = validatePositiveFiniteNumber(c.lockedRadius, `法向圆 "${c.name}" 的 lockedRadius 无效`)
       if (err) return { valid: false, error: err }
     }
+    
+    // 可选字段向下兼容
+    if (typeof c.nameVisible !== 'boolean') c.nameVisible = true
+    if (typeof c.valueVisible !== 'boolean') c.valueVisible = true
+    if (typeof c.labelOffsetX !== 'number') c.labelOffsetX = 10
+    if (typeof c.labelOffsetY !== 'number') c.labelOffsetY = 10
+    if (typeof c.visible !== 'boolean') c.visible = true
+    if (typeof c.userLocked !== 'boolean') c.userLocked = false
+    if (typeof c.centerVisible !== 'boolean') c.centerVisible = true
   }
 
   const faces = obj.faces as SerializedFace[]
   for (const f of faces) {
+    // 必要字段验证
     let err = validateId(f.id, '面')
     if (err) return { valid: false, error: err }
     err = validateName(f.name, '面', f.id)
@@ -1058,22 +1121,46 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       err = validateReference(pid, pointIdSet, `面 "${f.name}" 的边界引用了不存在的点`)
       if (err) return { valid: false, error: err }
     }
+    // boundaryLineIds 可选，默认空数组
+    if (!Array.isArray(f.boundaryLineIds)) f.boundaryLineIds = []
     for (const lid of f.boundaryLineIds) {
       err = validateReference(lid, lineIdSet, `面 "${f.name}" 的边界引用了不存在的线段`)
       if (err) return { valid: false, error: err }
     }
-    err = validateNullableStringId(f.cubeId, `面 "${f.name}" 的 cubeId 无效`)
-    if (err) return { valid: false, error: err }
+    // memberPointIds 可选，默认空数组
+    if (!Array.isArray(f.memberPointIds)) f.memberPointIds = []
+    // supportPointIds 可选，默认空数组
+    if (!Array.isArray(f.supportPointIds)) f.supportPointIds = []
     if (f.isRegularPolygon && (typeof f.regularPolygonVertexCount !== 'number' || f.regularPolygonVertexCount < 3 || !Number.isFinite(f.regularPolygonVertexCount))) {
       return { valid: false, error: `面 "${f.name}" 是正多边形但 vertexCount 无效` }
     }
     if (f.areaLocked && (typeof f.lockedArea !== 'number' || f.lockedArea <= 0 || !Number.isFinite(f.lockedArea))) {
       return { valid: false, error: `面 "${f.name}" 锁定了面积但 lockedArea 无效` }
     }
+    if (f.edgeLengthLocks && !Array.isArray(f.edgeLengthLocks)) f.edgeLengthLocks = []
+    
+    // 可选字段向下兼容
+    if (typeof f.nameVisible !== 'boolean') f.nameVisible = true
+    if (typeof f.valueVisible !== 'boolean') f.valueVisible = true
+    if (typeof f.labelOffsetX !== 'number') f.labelOffsetX = 10
+    if (typeof f.labelOffsetY !== 'number') f.labelOffsetY = 10
+    if (typeof f.visible !== 'boolean') f.visible = true
+    if (typeof f.userLocked !== 'boolean') f.userLocked = false
+    if (typeof f.areaLocked !== 'boolean') f.areaLocked = false
+    if (typeof f.isRegularPolygon !== 'boolean') f.isRegularPolygon = false
+    if (f.cubeId == null) f.cubeId = null
+    if (f.cubeOwnerPointIds == null) f.cubeOwnerPointIds = []
+    if (f.cubeDependentPointIds == null) f.cubeDependentPointIds = []
+    if (f.regularPolygonId == null) f.regularPolygonId = null
+    if (f.regularPolygonOwnerPointIds == null) f.regularPolygonOwnerPointIds = []
+    if (f.regularPolygonDependentPointIds == null) f.regularPolygonDependentPointIds = []
+    if (f.fillColor == null) f.fillColor = null
+    if (f.fillOpacity == null) f.fillOpacity = null
   }
 
   const spheres = obj.spheres as SerializedSphere[]
   for (const s of spheres) {
+    // 必要字段验证
     let err = validateId(s.id, '球')
     if (err) return { valid: false, error: err }
     err = validateName(s.name, '球', s.id)
@@ -1091,11 +1178,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       err = validatePositiveFiniteNumber(s.radiusValue, `球 "${s.name}" 缺少半径点但 radiusValue 无效`)
       if (err) return { valid: false, error: err }
     }
+    
+    // 可选字段向下兼容
+    if (typeof s.nameVisible !== 'boolean') s.nameVisible = true
+    if (typeof s.valueVisible !== 'boolean') s.valueVisible = true
+    if (typeof s.labelOffsetX !== 'number') s.labelOffsetX = 10
+    if (typeof s.labelOffsetY !== 'number') s.labelOffsetY = 10
+    if (typeof s.visible !== 'boolean') s.visible = true
+    if (typeof s.userLocked !== 'boolean') s.userLocked = false
   }
 
   const coneIdSet = new Set<string>()
   const cones = obj.cones as SerializedCone[]
   for (const c of cones) {
+    // 必要字段验证
     let err = validateId(c.id, '圆锥')
     if (err) return { valid: false, error: err }
     err = validateName(c.name, '圆锥', c.id)
@@ -1114,11 +1210,20 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     }
     err = validateNullableStringId(c.normalCircleId, `圆锥 "${c.name}" 的 normalCircleId 无效`)
     if (err) return { valid: false, error: err }
+    
+    // 可选字段向下兼容
+    if (typeof c.nameVisible !== 'boolean') c.nameVisible = true
+    if (typeof c.valueVisible !== 'boolean') c.valueVisible = true
+    if (typeof c.labelOffsetX !== 'number') c.labelOffsetX = 10
+    if (typeof c.labelOffsetY !== 'number') c.labelOffsetY = 10
+    if (typeof c.visible !== 'boolean') c.visible = true
+    if (typeof c.userLocked !== 'boolean') c.userLocked = false
   }
 
   const cylinderIdSet = new Set<string>()
   const cylinders = obj.cylinders as SerializedCylinder[]
   for (const c of cylinders) {
+    // 必要字段验证
     let err = validateId(c.id, '圆柱')
     if (err) return { valid: false, error: err }
     err = validateName(c.name, '圆柱', c.id)
@@ -1145,6 +1250,14 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (c.topNormalCircleId !== null && !circleIdSet.has(c.topNormalCircleId)) {
       return { valid: false, error: `圆柱 "${c.name}" 的 topNormalCircleId 引用了不存在的圆` }
     }
+    
+    // 可选字段向下兼容
+    if (typeof c.nameVisible !== 'boolean') c.nameVisible = true
+    if (typeof c.valueVisible !== 'boolean') c.valueVisible = true
+    if (typeof c.labelOffsetX !== 'number') c.labelOffsetX = 10
+    if (typeof c.labelOffsetY !== 'number') c.labelOffsetY = 10
+    if (typeof c.visible !== 'boolean') c.visible = true
+    if (typeof c.userLocked !== 'boolean') c.userLocked = false
   }
 
   const constraints = obj.constraints as SerializedConstraint[]

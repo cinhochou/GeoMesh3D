@@ -4,6 +4,7 @@ import EditorView from '@/views/EditorView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
 import ProfileView from '@/views/ProfileView.vue'
+import ProjectListView from '@/views/ProjectListView.vue'
 import { useAuthStore } from '@/store/authStore'
 
 const routes = [
@@ -28,6 +29,12 @@ const routes = [
     path: '/profile',
     name: 'profile',
     component: ProfileView,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/projects',
+    name: 'projects',
+    component: ProjectListView,
     meta: { requiresAuth: true },
   },
   {
