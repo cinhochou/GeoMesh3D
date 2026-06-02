@@ -1644,6 +1644,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           toMove.add(this.draggingPointId!)
           this.previewMovePoints([...toMove], delta)
@@ -1720,6 +1734,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(line.p1.id)
@@ -1788,6 +1816,20 @@ export class Interaction {
             const s = this.editor.scene.spheres.get(sid)
             if (s && !this.editor.isSphereGeometryLocked(s)) {
               toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -1860,6 +1902,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           if (canRotateAroundOrigin) {
@@ -1928,6 +1984,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(vector.p1.id)
@@ -1992,6 +2062,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(circle.p1.id)
@@ -2015,6 +2099,44 @@ export class Interaction {
         sphere.centerPoint.position,
         (delta) => {
           const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
           selection.spheres.forEach((sid) => {
             const s = this.editor.scene.spheres.get(sid)
             if (s && !this.editor.isSphereGeometryLocked(s)) {
@@ -2035,6 +2157,7 @@ export class Interaction {
               toMove.add(c.topCenterPoint.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(sphere.centerPoint.id)
           this.previewMovePoints([...toMove], delta)
@@ -2053,6 +2176,44 @@ export class Interaction {
         cone.baseCenterPoint.position,
         (delta) => {
           const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
           selection.cones.forEach((cid) => {
             const c = this.editor.scene.cones.get(cid)
             if (c && !this.editor.isConeGeometryLocked(c)) {
@@ -2073,6 +2234,7 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(cone.baseCenterPoint.id)
           toMove.add(cone.apexPoint.id)
@@ -2092,6 +2254,44 @@ export class Interaction {
         cylinder.bottomCenterPoint.position,
         (delta) => {
           const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
           selection.cylinders.forEach((cid) => {
             const c = this.editor.scene.cylinders.get(cid)
             if (c && !this.editor.isCylinderGeometryLocked(c)) {
@@ -2112,6 +2312,7 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(cylinder.bottomCenterPoint.id)
           toMove.add(cylinder.topCenterPoint.id)
@@ -2179,6 +2380,20 @@ export class Interaction {
             const s = this.editor.scene.spheres.get(sid)
             if (s && !this.editor.isSphereGeometryLocked(s)) {
               toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
             }
           })
           this.addSelectedFacePoints(toMove)
@@ -2250,6 +2465,20 @@ export class Interaction {
               toMove.add(s.centerPoint.id)
             }
           })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
           toMove.add(pl.p1.id)
@@ -2294,6 +2523,13 @@ export class Interaction {
               toMove.add(ray.p2.id)
             }
           })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
           selection.circles.forEach((cid) => {
             const c = this.editor.scene.circles.get(cid)
             if (c && !this.editor.isCircleGeometryLocked(c)) {
@@ -2308,6 +2544,20 @@ export class Interaction {
             const s = this.editor.scene.spheres.get(sid)
             if (s && !this.editor.isSphereGeometryLocked(s)) {
               toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
             }
           })
           this.addSelectedFacePoints(toMove)
