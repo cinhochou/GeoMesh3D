@@ -26,9 +26,6 @@ const sub = (a: Vec3, b: Vec3) => new Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
 
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 
-const cross = (a: Vec3, b: Vec3) =>
-  new Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
-
 const length = (v: Vec3) => Math.hypot(v.x, v.y, v.z)
 
 const normalize = (v: Vec3) => {
@@ -37,42 +34,75 @@ const normalize = (v: Vec3) => {
   return new Vec3(v.x / len, v.y / len, v.z / len)
 }
 
-const averagePoint = (points: Vec3[]) => {
-  const sum = points.reduce((acc, point) => acc.add(point), new Vec3())
-  return new Vec3(sum.x / points.length, sum.y / points.length, sum.z / points.length)
-}
-
-const chooseReferenceAxis = (normal: Vec3) => {
-  const absX = Math.abs(normal.x)
-  const absY = Math.abs(normal.y)
-  const absZ = Math.abs(normal.z)
-  if (absX <= absY && absX <= absZ) return new Vec3(1, 0, 0)
-  if (absY <= absX && absY <= absZ) return new Vec3(0, 1, 0)
-  return new Vec3(0, 0, 1)
-}
-
 export const computePlaneBasis = (positions: Vec3[]): PlaneBasis | null => {
   if (positions.length < 3) return null
 
-  for (let i = 0; i < positions.length - 2; i += 1) {
-    for (let j = i + 1; j < positions.length - 1; j += 1) {
-      for (let k = j + 1; k < positions.length; k += 1) {
-        const ab = sub(positions[j]!, positions[i]!)
-        const ac = sub(positions[k]!, positions[i]!)
-        const normal = normalize(cross(ab, ac))
-        if (!normal) continue
+  const n = positions.length
+  let sumX = 0
+  let sumY = 0
+  let sumZ = 0
+  for (let i = 0; i < n; i += 1) {
+    const p = positions[i]!
+    sumX += p.x
+    sumY += p.y
+    sumZ += p.z
+  }
+  const origin = new Vec3(sumX / n, sumY / n, sumZ / n)
 
-        const refAxis = chooseReferenceAxis(normal)
-        const uAxis = normalize(cross(refAxis, normal))
-        if (!uAxis) continue
-        const vAxis = normalize(cross(normal, uAxis))
-        if (!vAxis) continue
+  for (let i = 0; i < n - 2; i += 1) {
+    for (let j = i + 1; j < n - 1; j += 1) {
+      for (let k = j + 1; k < n; k += 1) {
+        const pi = positions[i]!
+        const pj = positions[j]!
+        const pk = positions[k]!
+        const abx = pj.x - pi.x
+        const aby = pj.y - pi.y
+        const abz = pj.z - pi.z
+        const acx = pk.x - pi.x
+        const acy = pk.y - pi.y
+        const acz = pk.z - pi.z
+        let nx = aby * acz - abz * acy
+        let ny = abz * acx - abx * acz
+        let nz = abx * acy - aby * acx
+        const nLen = Math.hypot(nx, ny, nz)
+        if (nLen <= PLANAR_EPSILON) continue
+        nx /= nLen
+        ny /= nLen
+        nz /= nLen
+
+        const absX = Math.abs(nx)
+        const absY = Math.abs(ny)
+        const absZ = Math.abs(nz)
+        let refX = 0
+        let refY = 0
+        let refZ = 0
+        if (absX <= absY && absX <= absZ) refX = 1
+        else if (absY <= absX && absY <= absZ) refY = 1
+        else refZ = 1
+
+        let ux = refY * nz - refZ * ny
+        let uy = refZ * nx - refX * nz
+        let uz = refX * ny - refY * nx
+        const uLen = Math.hypot(ux, uy, uz)
+        if (uLen <= PLANAR_EPSILON) continue
+        ux /= uLen
+        uy /= uLen
+        uz /= uLen
+
+        let vx = ny * uz - nz * uy
+        let vy = nz * ux - nx * uz
+        let vz = nx * uy - ny * ux
+        const vLen = Math.hypot(vx, vy, vz)
+        if (vLen <= PLANAR_EPSILON) continue
+        vx /= vLen
+        vy /= vLen
+        vz /= vLen
 
         return {
-          origin: averagePoint(positions),
-          normal,
-          uAxis,
-          vAxis,
+          origin,
+          normal: new Vec3(nx, ny, nz),
+          uAxis: new Vec3(ux, uy, uz),
+          vAxis: new Vec3(vx, vy, vz),
         }
       }
     }
@@ -239,6 +269,8 @@ export const triangulateFace = (pointIds: string[], pointMap: Map<string, Point3
   const points = pointIds
     .map((id) => pointMap.get(id))
     .filter((point): point is Point3 => point !== undefined)
+  if (points.length < 3) return null
+  const positions = points.map((point) => toThree(point.position))
   const basis = computePlaneBasis(points.map((point) => point.position))
   if (!basis) return null
   const contour = points.map((point) => {
@@ -246,11 +278,7 @@ export const triangulateFace = (pointIds: string[], pointMap: Map<string, Point3
     return new THREE.Vector2(projected.x, projected.y)
   })
   const faces = THREE.ShapeUtils.triangulateShape(contour, [])
-  return {
-    basis,
-    positions: points.map((point) => toThree(point.position)),
-    indices: faces.flat(),
-  }
+  return { basis, positions, indices: faces.flat() }
 }
 
 export const isPointInPolygon2D = (px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean => {

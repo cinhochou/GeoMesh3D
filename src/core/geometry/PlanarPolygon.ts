@@ -39,6 +39,10 @@ export class PlanarPolygon {
   regularPolygonOwnerPointIds: string[]
   regularPolygonDependentPointIds: string[]
 
+  _cachedIndices?: number[]
+  _cachedBoundaryKey?: string
+  _cachedNormalKey?: string
+
   constructor(
     id: string,
     name: string,

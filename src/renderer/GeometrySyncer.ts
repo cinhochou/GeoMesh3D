@@ -56,6 +56,8 @@ type LabelSpriteUserData = THREE.Object3D['userData'] & {
   textPixelHeight?: number
   canvasPixelWidth?: number
   canvasPixelHeight?: number
+  canvasResized?: boolean
+  __textureDirty?: boolean
 }
 
 export interface GeometrySyncerDeps {
@@ -208,6 +210,9 @@ export class GeometrySyncer {
   public rubberBandLine: THREE.Line | null = null
   public footMarkerMap = new Map<string, THREE.Mesh>()
 
+  private syncFrameCounter = 0
+  private static readonly DRAG_LABEL_UPDATE_INTERVAL = 3
+
   private occlusionRaycaster = new THREE.Raycaster()
   private occlusionFrameCounter = 0
   private readonly OCCLUSION_CHECK_INTERVAL = 3
@@ -215,6 +220,8 @@ export class GeometrySyncer {
   private pointOcclusionLastResult = new Map<string, boolean>()
   private pointOcclusionStableCount = new Map<string, number>()
   private pointBaseColor = new Map<string, THREE.Color>()
+  private pointRefCache = new Map<string, boolean>()
+  private pointRefCacheValid = false
   private pointCurrentDim = new Map<string, number>()
   private depthOcclusionEnabled = true
   private hiddenEdgeEnabled = true
@@ -224,6 +231,15 @@ export class GeometrySyncer {
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
   private facePreviewGroup: THREE.Group | null = null
   private rubberBand: THREE.Line | undefined
+
+  private _cachedOccluders: THREE.Object3D[] | null = null
+  private _cachedOccludersFrame = -1
+  private _screenOffsetTmpWorld = new THREE.Vector3()
+  private _screenOffsetTmpNdc = new THREE.Vector3()
+  private _syncTmpA = new THREE.Vector3()
+  private _syncTmpB = new THREE.Vector3()
+  private _syncTmpC = new THREE.Vector3()
+  private _syncTmpD = new THREE.Vector3()
 
   constructor(deps: GeometrySyncerDeps) {
     this.deps = deps
@@ -325,8 +341,7 @@ export class GeometrySyncer {
     const solid = parent.getObjectByName(name) as THREE.LineLoop | undefined
     if (solid) {
       solid.geometry.setFromPoints(points)
-      solid.geometry.computeBoundingBox()
-      solid.geometry.computeBoundingSphere()
+      this.updateBounds(solid.geometry)
     }
     const hidden = parent.getObjectByName(name + '_hidden') as THREE.LineLoop | undefined
     if (hidden) {
@@ -343,8 +358,7 @@ export class GeometrySyncer {
     const solid = parent.getObjectByName(name) as THREE.LineSegments | undefined
     if (solid) {
       solid.geometry.setFromPoints(points)
-      solid.geometry.computeBoundingBox()
-      solid.geometry.computeBoundingSphere()
+      this.updateBounds(solid.geometry)
     }
     const hidden = parent.getObjectByName(name + '_hidden') as THREE.LineSegments | undefined
     if (hidden) {
@@ -375,6 +389,16 @@ export class GeometrySyncer {
     return sprite.userData as LabelSpriteUserData
   }
 
+  isDragging(): boolean {
+    return (this.currentSceneRef?.activeDraggedPointIds.size ?? 0) > 0
+  }
+
+  private updateBounds(geo: THREE.BufferGeometry): void {
+    if (this.isDragging()) return
+    geo.computeBoundingBox()
+    geo.computeBoundingSphere()
+  }
+
   sync(
     geoScene: GeoScene,
     previewData?: { from: THREE.Vector3; to: THREE.Vector3 } | null,
@@ -382,10 +406,14 @@ export class GeometrySyncer {
     activeLabelTarget?: { type: string; geoId: string } | null,
     activePointValueTarget?: { type: 'point'; geoId: string } | null,
   ): void {
+    this.syncFrameCounter++
     this.currentSceneRef = geoScene
     this.activeLabelTarget = activeLabelTarget ?? null
     this.activePointValueTarget = activePointValueTarget ?? null
     const dirtyState = geoScene.consumeRenderSyncState()
+    if (dirtyState && dirtyState.fullSync) {
+      this.pointRefCacheValid = false
+    }
     if (dirtyState) {
       this.cleanupMissingMeshes(geoScene)
       this.syncPoints(geoScene, dirtyState)
@@ -447,10 +475,14 @@ export class GeometrySyncer {
             : undefined
           if (circle.isNormalCircle()) {
             let coneForCircle: Cone3 | null = null
-            const conesMap = scene.cones as unknown as Map<string, Cone3>
-            conesMap.forEach((c) => {
-              if (c.normalCircleId === p.circleId) coneForCircle = c
-            })
+            const coneIds = scene.getConesForCircle(p.circleId)
+            for (const id of coneIds) {
+              const c = scene.cones.get(id)
+              if (c) {
+                coneForCircle = c
+                break
+              }
+            }
             if (coneForCircle) {
               const cone = coneForCircle as Cone3
               const center = cone.baseCenterPoint.position
@@ -466,10 +498,14 @@ export class GeometrySyncer {
             }
             let cylinderForCircle: Cylinder3 | null = null
             if (!coneForCircle) {
-              const cylindersMap = scene.cylinders as unknown as Map<string, Cylinder3>
-              cylindersMap.forEach((c) => {
-                if (c.normalCircleId === p.circleId || c.topNormalCircleId === p.circleId) cylinderForCircle = c
-              })
+              const cylinderIds = scene.getCylindersForCircle(p.circleId)
+              for (const id of cylinderIds) {
+                const c = scene.cylinders.get(id)
+                if (c) {
+                  cylinderForCircle = c
+                  break
+                }
+              }
               if (cylinderForCircle) {
                 const cylinder = cylinderForCircle as Cylinder3
                 const bottomCenter = cylinder.bottomCenterPoint.position
@@ -507,7 +543,7 @@ export class GeometrySyncer {
         if (circleVisible) {
           pointSpriteVisible = true
         } else {
-          pointSpriteVisible = this.isPointReferencedByOtherVisibleGeometry(p.id, scene, p.circleId)
+          pointSpriteVisible = this.getCachedPointRef(p.id, scene, p.circleId)
         }
         sprite.visible = pointSpriteVisible
       }
@@ -520,8 +556,8 @@ export class GeometrySyncer {
       const existingLabel = spriteUserData[labelKey] as THREE.Sprite | undefined
       const existingValueLabel = spriteUserData.__valueLabelSprite
       if (existingValueLabel) existingValueLabel.visible = false
-      spriteUserData.__labelOffsetX = p.labelOffsetX
-      spriteUserData.__labelOffsetY = p.labelOffsetY
+      spriteUserData.__labelOffsetX = POINT_LABEL_OFFSET_X + p.labelOffsetX
+      spriteUserData.__labelOffsetY = POINT_LABEL_OFFSET_Y + p.labelOffsetY
       const pointValueText = `=(${this.deps.labelRenderer.formatMetricNumber(p.position.x)},${this.deps.labelRenderer.formatMetricNumber(p.position.y)},${this.deps.labelRenderer.formatMetricNumber(p.position.z)})`
       const pointValueVisible =
         p.valueVisible ||
@@ -532,7 +568,10 @@ export class GeometrySyncer {
           : 0
       const combinedPointText = pointValueVisible ? pointValueText : ''
       if (!pointSpriteVisible || (!p.nameVisible && !pointValueVisible)) {
-        if (existingLabel) existingLabel.visible = false
+        if (existingLabel) {
+          existingLabel.visible = false
+          this.getLabelUserData(existingLabel).__textureDirty = true
+        }
       } else if (!existingLabel) {
         const nameSprite = p.nameVisible
           ? this.deps.labelRenderer.makePointLabelSprite(p.name ?? '', labelColor, combinedPointText)
@@ -540,9 +579,9 @@ export class GeometrySyncer {
         nameSprite.position.copy(
           this.getScreenOffsetPosition(
             sprite.position,
-            POINT_LABEL_OFFSET_X +
+            spriteUserData.__labelOffsetX +
               (p.nameVisible ? 0 : POINT_VALUE_ONLY_EXTRA_OFFSET_X),
-            POINT_LABEL_OFFSET_Y,
+            spriteUserData.__labelOffsetY,
           ),
         )
         const nameSpriteData = this.getLabelUserData(nameSprite)
@@ -569,21 +608,30 @@ export class GeometrySyncer {
         existingLabel.position.copy(
           this.getScreenOffsetPosition(
             sprite.position,
-            POINT_LABEL_OFFSET_X +
+            spriteUserData.__labelOffsetX +
               (p.nameVisible ? 0 : POINT_VALUE_ONLY_EXTRA_OFFSET_X),
-            POINT_LABEL_OFFSET_Y,
+            spriteUserData.__labelOffsetY,
           ),
         )
+        const labelData = this.getLabelUserData(existingLabel)
+        const isDragging = scene.activeDraggedPointIds.size > 0
+        const wasDirty = labelData.__textureDirty
+        if (wasDirty) labelData.__textureDirty = false
         const nextText = p.nameVisible ? `${p.name ?? ''}${combinedPointText}` : pointValueText
         const labelText = this.getLabelUserData(existingLabel).text ?? ''
+        const textChanged = labelText !== nextText
+        const shouldUpdateTexture = wasDirty || textChanged || (!isDragging && (this.syncFrameCounter % GeometrySyncer.DRAG_LABEL_UPDATE_INTERVAL === 0))
+        if (!shouldUpdateTexture) return
         if (labelText !== nextText) {
           this.getLabelUserData(existingLabel).text = nextText
           const material = existingLabel.material as THREE.SpriteMaterial
+          const oldMap = material.map as THREE.CanvasTexture | null
           const newSprite = p.nameVisible
             ? this.deps.labelRenderer.makePointLabelSprite(p.name ?? '', labelColor, combinedPointText)
             : this.deps.labelRenderer.makeValueLabelSprite(pointValueText, labelColor, true)
           Object.assign(this.getLabelUserData(existingLabel), this.getLabelUserData(newSprite))
           material.map = (newSprite.material as THREE.SpriteMaterial).map
+          if (oldMap) oldMap.dispose()
           existingLabel.center.set(
             this.computePointLabelCenterX(p.nameVisible, combinedPointText, this.getLabelUserData(existingLabel).canvasPixelWidth ?? 256),
             POINT_LABEL_CENTER_Y,
@@ -595,26 +643,27 @@ export class GeometrySyncer {
           if (map) {
             const ctx = (map.image as HTMLCanvasElement).getContext('2d')
             if (ctx) {
-              Object.assign(
-                this.getLabelUserData(existingLabel),
-                p.nameVisible
-                  ? this.deps.labelRenderer.drawCombinedLabel(
-                      ctx,
-                      map.image as HTMLCanvasElement,
-                      p.name ?? '',
-                      combinedPointText,
-                      labelColor,
-                      72,
-                    )
-                  : this.deps.labelRenderer.drawPlainLabel(
-                      ctx,
-                      map.image as HTMLCanvasElement,
-                      pointValueText,
-                      labelColor,
-                      72,
-                    ),
+              const result = p.nameVisible
+                ? this.deps.labelRenderer.drawCombinedLabel(
+                    ctx,
+                    map.image as HTMLCanvasElement,
+                    p.name ?? '',
+                    combinedPointText,
+                    labelColor,
+                    72,
+                  )
+                : this.deps.labelRenderer.drawPlainLabel(
+                    ctx,
+                    map.image as HTMLCanvasElement,
+                    pointValueText,
+                    labelColor,
+                    72,
+                  )
+              Object.assign(this.getLabelUserData(existingLabel), result)
+              material.map = this.deps.labelRenderer.safeUpdateCanvasTexture(
+                map,
+                result.canvasResized ?? false,
               )
-              map.needsUpdate = true
               existingLabel.center.set(
                 this.computePointLabelCenterX(p.nameVisible, combinedPointText, this.getLabelUserData(existingLabel).canvasPixelWidth ?? 256),
                 POINT_LABEL_CENTER_Y,
@@ -650,12 +699,9 @@ export class GeometrySyncer {
       let line = this.meshMap.get(id) as THREE.Line
       const p1 = lineData.p1.position
       const p2 = lineData.p2.position
-      const points = [
-        new THREE.Vector3(p1.x, p1.y, p1.z),
-        new THREE.Vector3(p2.x, p2.y, p2.z),
-      ]
 
       if (!line) {
+        const points = [new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
@@ -673,15 +719,27 @@ export class GeometrySyncer {
         this.deps.world.add(line)
         this.meshMap.set(id, line)
       } else {
-        line.geometry.setFromPoints(points)
-        line.geometry.attributes.position!.needsUpdate = true
-        line.geometry.computeBoundingBox()
-        line.geometry.computeBoundingSphere()
+        const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, p1.x, p1.y, p1.z)
+          posAttr.setXYZ(1, p2.x, p2.y, p2.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(line.geometry)
+        } else {
+          line.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+          this.updateBounds(line.geometry)
+        }
 
         const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenLine) {
-          hiddenLine.geometry.setFromPoints(points)
-          hiddenLine.geometry.attributes.position!.needsUpdate = true
+          const hPosAttr = hiddenLine.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, p1.x, p1.y, p1.z)
+            hPosAttr.setXYZ(1, p2.x, p2.y, p2.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenLine.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+          }
           hiddenLine.computeLineDistances()
         }
       }
@@ -707,7 +765,7 @@ export class GeometrySyncer {
         ;(hiddenLine.material as THREE.LineDashedMaterial).color.set(edgeColor)
       }
 
-      const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      const mid = this._syncTmpA.set((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
       const isLabelActive =
         this.activeLabelTarget?.type === 'line' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -729,12 +787,12 @@ export class GeometrySyncer {
       let ray = this.meshMap.get(id) as THREE.Line | undefined
       const p1 = rayData.p1.position
       const end = rayData.getDisplayEndPoint()
-      const points = [
-        new THREE.Vector3(p1.x, p1.y, p1.z),
-        new THREE.Vector3(end.x, end.y, end.z),
-      ]
 
       if (!ray) {
+        const points = [
+          new THREE.Vector3(p1.x, p1.y, p1.z),
+          new THREE.Vector3(end.x, end.y, end.z),
+        ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         ray = new THREE.Line(geo, mat)
@@ -752,14 +810,27 @@ export class GeometrySyncer {
         this.deps.world.add(hiddenRay)
         this.hiddenLineMap.set(id, hiddenRay)
       } else {
-        ray.geometry.setFromPoints(points)
-        ray.geometry.attributes.position!.needsUpdate = true
-        ray.geometry.computeBoundingBox()
-        ray.geometry.computeBoundingSphere()
+        const posAttr = ray.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, p1.x, p1.y, p1.z)
+          posAttr.setXYZ(1, end.x, end.y, end.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(ray.geometry)
+        } else {
+          ray.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(end.x, end.y, end.z)])
+          this.updateBounds(ray.geometry)
+        }
 
         const hiddenRay = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenRay) {
-          hiddenRay.geometry.setFromPoints(points)
+          const hPosAttr = hiddenRay.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, p1.x, p1.y, p1.z)
+            hPosAttr.setXYZ(1, end.x, end.y, end.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenRay.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(end.x, end.y, end.z)])
+          }
           hiddenRay.computeLineDistances()
         }
       }
@@ -776,7 +847,7 @@ export class GeometrySyncer {
       }
 
       this.updateRayArrowHead(ray, rayData, isSelected)
-      const mid = new THREE.Vector3((p1.x + end.x) / 2, (p1.y + end.y) / 2, (p1.z + end.z) / 2)
+      const mid = this._syncTmpC.set((p1.x + end.x) / 2, (p1.y + end.y) / 2, (p1.z + end.z) / 2)
       const isLabelActive =
         this.activeLabelTarget?.type === 'ray' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -799,12 +870,12 @@ export class GeometrySyncer {
       const display = lineData.getDisplayPoints()
       const start = display.start
       const end = display.end
-      const points = [
-        new THREE.Vector3(start.x, start.y, start.z),
-        new THREE.Vector3(end.x, end.y, end.z),
-      ]
 
       if (!line) {
+        const points = [
+          new THREE.Vector3(start.x, start.y, start.z),
+          new THREE.Vector3(end.x, end.y, end.z),
+        ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
@@ -821,14 +892,27 @@ export class GeometrySyncer {
         this.deps.world.add(hiddenLine)
         this.hiddenLineMap.set(id, hiddenLine)
       } else {
-        line.geometry.setFromPoints(points)
-        line.geometry.attributes.position!.needsUpdate = true
-        line.geometry.computeBoundingBox()
-        line.geometry.computeBoundingSphere()
+        const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, start.x, start.y, start.z)
+          posAttr.setXYZ(1, end.x, end.y, end.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(line.geometry)
+        } else {
+          line.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          this.updateBounds(line.geometry)
+        }
 
         const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenLine) {
-          hiddenLine.geometry.setFromPoints(points)
+          const hPosAttr = hiddenLine.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, start.x, start.y, start.z)
+            hPosAttr.setXYZ(1, end.x, end.y, end.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenLine.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          }
           hiddenLine.computeLineDistances()
         }
       }
@@ -844,7 +928,7 @@ export class GeometrySyncer {
         ;(hiddenSlObj.material as THREE.LineDashedMaterial).color.set(slColor)
       }
 
-      const mid = new THREE.Vector3(
+      const mid = this._syncTmpC.set(
         (lineData.p1.position.x + lineData.p2.position.x) / 2,
         (lineData.p1.position.y + lineData.p2.position.y) / 2,
         (lineData.p1.position.z + lineData.p2.position.z) / 2,
@@ -871,12 +955,12 @@ export class GeometrySyncer {
       const display = lineData.getDisplayPoints(scene)
       const start = display.start
       const end = display.end
-      const points = [
-        new THREE.Vector3(start.x, start.y, start.z),
-        new THREE.Vector3(end.x, end.y, end.z),
-      ]
 
       if (!line) {
+        const points = [
+          new THREE.Vector3(start.x, start.y, start.z),
+          new THREE.Vector3(end.x, end.y, end.z),
+        ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
@@ -893,14 +977,27 @@ export class GeometrySyncer {
         this.deps.world.add(hiddenLine)
         this.hiddenLineMap.set(id, hiddenLine)
       } else {
-        line.geometry.setFromPoints(points)
-        line.geometry.attributes.position!.needsUpdate = true
-        line.geometry.computeBoundingBox()
-        line.geometry.computeBoundingSphere()
+        const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, start.x, start.y, start.z)
+          posAttr.setXYZ(1, end.x, end.y, end.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(line.geometry)
+        } else {
+          line.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          this.updateBounds(line.geometry)
+        }
 
         const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenLine) {
-          hiddenLine.geometry.setFromPoints(points)
+          const hPosAttr = hiddenLine.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, start.x, start.y, start.z)
+            hPosAttr.setXYZ(1, end.x, end.y, end.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenLine.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          }
           hiddenLine.computeLineDistances()
         }
       }
@@ -943,7 +1040,7 @@ export class GeometrySyncer {
       footMarker.position.set(footPos.x, footPos.y, footPos.z)
       footMarker.visible = lineData.visible && isFootOnTarget && isFootInDisplayRange
 
-      const mid = new THREE.Vector3(
+      const mid = this._syncTmpC.set(
         (lineData.p1.position.x + lineData.p2.position.x) / 2,
         (lineData.p1.position.y + lineData.p2.position.y) / 2,
         (lineData.p1.position.z + lineData.p2.position.z) / 2,
@@ -970,12 +1067,12 @@ export class GeometrySyncer {
       const display = lineData.getDisplayPoints(scene)
       const start = display.start
       const end = display.end
-      const points = [
-        new THREE.Vector3(start.x, start.y, start.z),
-        new THREE.Vector3(end.x, end.y, end.z),
-      ]
 
       if (!line) {
+        const points = [
+          new THREE.Vector3(start.x, start.y, start.z),
+          new THREE.Vector3(end.x, end.y, end.z),
+        ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         line = new THREE.Line(geo, mat)
@@ -992,14 +1089,27 @@ export class GeometrySyncer {
         this.deps.world.add(hiddenLine)
         this.hiddenLineMap.set(id, hiddenLine)
       } else {
-        line.geometry.setFromPoints(points)
-        line.geometry.attributes.position!.needsUpdate = true
-        line.geometry.computeBoundingBox()
-        line.geometry.computeBoundingSphere()
+        const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, start.x, start.y, start.z)
+          posAttr.setXYZ(1, end.x, end.y, end.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(line.geometry)
+        } else {
+          line.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          this.updateBounds(line.geometry)
+        }
 
         const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenLine) {
-          hiddenLine.geometry.setFromPoints(points)
+          const hPosAttr = hiddenLine.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, start.x, start.y, start.z)
+            hPosAttr.setXYZ(1, end.x, end.y, end.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenLine.geometry.setFromPoints([new THREE.Vector3(start.x, start.y, start.z), new THREE.Vector3(end.x, end.y, end.z)])
+          }
           hiddenLine.computeLineDistances()
         }
       }
@@ -1015,7 +1125,7 @@ export class GeometrySyncer {
         ;(hiddenPlObj.material as THREE.LineDashedMaterial).color.set(plColor)
       }
 
-      const mid = new THREE.Vector3(
+      const mid = this._syncTmpC.set(
         (lineData.p1.position.x + lineData.p2.position.x) / 2,
         (lineData.p1.position.y + lineData.p2.position.y) / 2,
         (lineData.p1.position.z + lineData.p2.position.z) / 2,
@@ -1041,12 +1151,12 @@ export class GeometrySyncer {
       let vector = this.meshMap.get(id) as THREE.Line | undefined
       const p1 = vectorData.p1.position
       const p2 = vectorData.p2.position
-      const points = [
-        new THREE.Vector3(p1.x, p1.y, p1.z),
-        new THREE.Vector3(p2.x, p2.y, p2.z),
-      ]
 
       if (!vector) {
+        const points = [
+          new THREE.Vector3(p1.x, p1.y, p1.z),
+          new THREE.Vector3(p2.x, p2.y, p2.z),
+        ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         vector = new THREE.Line(geo, mat)
@@ -1064,14 +1174,27 @@ export class GeometrySyncer {
         this.deps.world.add(hiddenVector)
         this.hiddenLineMap.set(id, hiddenVector)
       } else {
-        vector.geometry.setFromPoints(points)
-        vector.geometry.attributes.position!.needsUpdate = true
-        vector.geometry.computeBoundingBox()
-        vector.geometry.computeBoundingSphere()
+        const posAttr = vector.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (posAttr && posAttr.count >= 2) {
+          posAttr.setXYZ(0, p1.x, p1.y, p1.z)
+          posAttr.setXYZ(1, p2.x, p2.y, p2.z)
+          posAttr.needsUpdate = true
+          this.updateBounds(vector.geometry)
+        } else {
+          vector.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+          this.updateBounds(vector.geometry)
+        }
 
         const hiddenVector = this.hiddenLineMap.get(id) as THREE.Line | undefined
         if (hiddenVector) {
-          hiddenVector.geometry.setFromPoints(points)
+          const hPosAttr = hiddenVector.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count >= 2) {
+            hPosAttr.setXYZ(0, p1.x, p1.y, p1.z)
+            hPosAttr.setXYZ(1, p2.x, p2.y, p2.z)
+            hPosAttr.needsUpdate = true
+          } else {
+            hiddenVector.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+          }
           hiddenVector.computeLineDistances()
         }
       }
@@ -1088,7 +1211,7 @@ export class GeometrySyncer {
       }
 
       this.updateVectorArrowHead(vector, vectorData, isSelected)
-      const mid = new THREE.Vector3((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      const mid = this._syncTmpC.set((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
       const isLabelActive =
         this.activeLabelTarget?.type === 'vector' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -1158,21 +1281,23 @@ export class GeometrySyncer {
       }
 
       const segments = 128
-      const points = Array.from({ length: segments }, (_, index) => {
-        const angle = (Math.PI * 2 * index) / segments
-        const x =
-          frame.center.x +
-          (frame.uAxis.x * Math.cos(angle) + frame.vAxis.x * Math.sin(angle)) * frame.radius
-        const y =
-          frame.center.y +
-          (frame.uAxis.y * Math.cos(angle) + frame.vAxis.y * Math.sin(angle)) * frame.radius
-        const z =
-          frame.center.z +
-          (frame.uAxis.z * Math.cos(angle) + frame.vAxis.z * Math.sin(angle)) * frame.radius
-        return new THREE.Vector3(x, y, z)
-      })
+      const posAttr = circle ? (circle.geometry.getAttribute('position') as THREE.BufferAttribute | null) : null
+      const canDirectWrite = posAttr !== null && posAttr.count === segments
 
       if (!circle) {
+        const points = Array.from({ length: segments }, (_, index) => {
+          const angle = (Math.PI * 2 * index) / segments
+          const x =
+            frame.center.x +
+            (frame.uAxis.x * Math.cos(angle) + frame.vAxis.x * Math.sin(angle)) * frame.radius
+          const y =
+            frame.center.y +
+            (frame.uAxis.y * Math.cos(angle) + frame.vAxis.y * Math.sin(angle)) * frame.radius
+          const z =
+            frame.center.z +
+            (frame.uAxis.z * Math.cos(angle) + frame.vAxis.z * Math.sin(angle)) * frame.radius
+          return new THREE.Vector3(x, y, z)
+        })
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
         circle = new THREE.LineLoop(geo, mat)
@@ -1189,11 +1314,61 @@ export class GeometrySyncer {
 
         this.deps.world.add(circle)
         this.meshMap.set(id, circle)
+      } else if (canDirectWrite) {
+        for (let i = 0; i < segments; i++) {
+          const angle = (Math.PI * 2 * i) / segments
+          const cosA = Math.cos(angle)
+          const sinA = Math.sin(angle)
+          posAttr.setXYZ(
+            i,
+            frame.center.x + (frame.uAxis.x * cosA + frame.vAxis.x * sinA) * frame.radius,
+            frame.center.y + (frame.uAxis.y * cosA + frame.vAxis.y * sinA) * frame.radius,
+            frame.center.z + (frame.uAxis.z * cosA + frame.vAxis.z * sinA) * frame.radius,
+          )
+        }
+        posAttr.needsUpdate = true
+        this.updateBounds(circle.geometry)
+
+        const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
+        if (hiddenCircle) {
+          const hPosAttr = hiddenCircle.geometry.getAttribute('position') as THREE.BufferAttribute | null
+          if (hPosAttr && hPosAttr.count === segments) {
+            for (let i = 0; i < segments; i++) {
+              const angle = (Math.PI * 2 * i) / segments
+              const cosA = Math.cos(angle)
+              const sinA = Math.sin(angle)
+              hPosAttr.setXYZ(
+                i,
+                frame.center.x + (frame.uAxis.x * cosA + frame.vAxis.x * sinA) * frame.radius,
+                frame.center.y + (frame.uAxis.y * cosA + frame.vAxis.y * sinA) * frame.radius,
+                frame.center.z + (frame.uAxis.z * cosA + frame.vAxis.z * sinA) * frame.radius,
+              )
+            }
+            hPosAttr.needsUpdate = true
+          } else {
+            const points = Array.from({ length: segments }, (_, index) => {
+              const angle = (Math.PI * 2 * index) / segments
+              return new THREE.Vector3(
+                frame.center.x + (frame.uAxis.x * Math.cos(angle) + frame.vAxis.x * Math.sin(angle)) * frame.radius,
+                frame.center.y + (frame.uAxis.y * Math.cos(angle) + frame.vAxis.y * Math.sin(angle)) * frame.radius,
+                frame.center.z + (frame.uAxis.z * Math.cos(angle) + frame.vAxis.z * Math.sin(angle)) * frame.radius,
+              )
+            })
+            hiddenCircle.geometry.setFromPoints(points)
+          }
+          hiddenCircle.computeLineDistances()
+        }
       } else {
+        const points = Array.from({ length: segments }, (_, index) => {
+          const angle = (Math.PI * 2 * index) / segments
+          return new THREE.Vector3(
+            frame.center.x + (frame.uAxis.x * Math.cos(angle) + frame.vAxis.x * Math.sin(angle)) * frame.radius,
+            frame.center.y + (frame.uAxis.y * Math.cos(angle) + frame.vAxis.y * Math.sin(angle)) * frame.radius,
+            frame.center.z + (frame.uAxis.z * Math.cos(angle) + frame.vAxis.z * Math.sin(angle)) * frame.radius,
+          )
+        })
         circle.geometry.setFromPoints(points)
-        circle.geometry.attributes.position!.needsUpdate = true
-        circle.geometry.computeBoundingBox()
-        circle.geometry.computeBoundingSphere()
+        this.updateBounds(circle.geometry)
 
         const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
         if (hiddenCircle) {
@@ -1220,7 +1395,7 @@ export class GeometrySyncer {
         circleData.nameVisible && circleData.visible,
         circleData.valueVisible === true && circleData.visible,
         `=${this.deps.labelRenderer.formatMetricNumber(frame.radius)}`,
-        new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
+        this._syncTmpD.set(frame.center.x, frame.center.y, frame.center.z),
         isLabelActive ? SELECTED_COLOR : LINEAR_COLOR,
       )
     })
@@ -1231,8 +1406,12 @@ export class GeometrySyncer {
       const faceData = scene.faces.get(id)
       if (!faceData) return
       let faceMesh = this.meshMap.get(id) as THREE.Mesh | undefined
-      const triangulated = triangulateFace(faceData.boundaryPointIds, scene.points)
-      if (!triangulated) return
+      const cachedIndices = faceData._cachedIndices
+      const cachedBoundaryKey = faceData._cachedBoundaryKey
+      const currentBoundaryKey = faceData.boundaryPointIds.join(',')
+      const positions = faceData
+        .getBoundaryPoints(scene.points)
+        .map((p) => new THREE.Vector3(p.position.x, p.position.y, p.position.z))
 
       if (!faceMesh) {
         const geometry = new THREE.BufferGeometry()
@@ -1282,38 +1461,97 @@ export class GeometrySyncer {
         this.meshMap.set(id, faceMesh)
       }
 
+      let indices: number[]
+      if (cachedIndices && cachedBoundaryKey === currentBoundaryKey) {
+        indices = cachedIndices
+      } else {
+        const triangulated = triangulateFace(faceData.boundaryPointIds, scene.points)
+        if (!triangulated) return
+        indices = triangulated.indices
+        faceData._cachedIndices = indices
+        faceData._cachedBoundaryKey = currentBoundaryKey
+      }
+
       const geometry = faceMesh.geometry as THREE.BufferGeometry
-      geometry.setFromPoints(triangulated.positions)
-      geometry.setIndex(triangulated.indices)
-      geometry.computeVertexNormals()
-      geometry.computeBoundingBox()
-      geometry.computeBoundingSphere()
+      const gPosAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null
+      if (gPosAttr && gPosAttr.count === positions.length) {
+        for (let i = 0; i < positions.length; i++) {
+          const p = positions[i]!
+          gPosAttr.setXYZ(i, p.x, p.y, p.z)
+        }
+        gPosAttr.needsUpdate = true
+      } else {
+        geometry.setFromPoints(positions)
+      }
+      const gIndexAttr = geometry.getIndex()
+      if (!gIndexAttr || gIndexAttr.count !== indices.length) {
+        geometry.setIndex(indices)
+      }
+      const cachedNormalKey = faceData._cachedNormalKey
+      const p0 = positions[0]!; const p1 = positions[1]!; const p2 = positions[2]!
+      const d1x = p1.x - p0.x; const d1y = p1.y - p0.y; const d1z = p1.z - p0.z
+      const d2x = p2.x - p0.x; const d2y = p2.y - p0.y; const d2z = p2.z - p0.z
+      const currentNormalKey = `${d1x.toFixed(4)},${d1y.toFixed(4)},${d1z.toFixed(4)}|${d2x.toFixed(4)},${d2y.toFixed(4)},${d2z.toFixed(4)}`
+      const normalsChanged = cachedNormalKey !== currentNormalKey
+      if (normalsChanged) {
+        geometry.computeVertexNormals()
+        faceData._cachedNormalKey = currentNormalKey
+      }
+      this.updateBounds(geometry)
 
       const depthMesh = faceMesh.getObjectByName('faceDepthMesh') as THREE.Mesh | undefined
       if (depthMesh) {
         const depthGeo = depthMesh.geometry as THREE.BufferGeometry
-        depthGeo.setFromPoints(triangulated.positions)
-        depthGeo.setIndex(triangulated.indices)
-        depthGeo.computeVertexNormals()
-        depthGeo.computeBoundingBox()
-        depthGeo.computeBoundingSphere()
+        const dPosAttr = depthGeo.getAttribute('position') as THREE.BufferAttribute | null
+        if (dPosAttr && dPosAttr.count === positions.length) {
+          for (let i = 0; i < positions.length; i++) {
+            const p = positions[i]!
+            dPosAttr.setXYZ(i, p.x, p.y, p.z)
+          }
+          dPosAttr.needsUpdate = true
+        } else {
+          depthGeo.setFromPoints(positions)
+        }
+        const dIndexAttr = depthGeo.getIndex()
+        if (!dIndexAttr || dIndexAttr.count !== indices.length) {
+          depthGeo.setIndex(indices)
+        }
+        if (normalsChanged) {
+          depthGeo.computeVertexNormals()
+        }
+        this.updateBounds(depthGeo)
       }
 
       const outline = faceMesh.getObjectByName('faceOutline') as THREE.LineLoop | undefined
       const hiddenOutline = faceMesh.getObjectByName('faceHiddenOutline') as THREE.LineLoop | undefined
       const hasBoundaryLines = faceData.boundaryLineIds.length > 0 &&
         faceData.boundaryLineIds.some((lineId) => scene.lines.has(lineId))
-      const boundaryPoints = faceData
-        .getBoundaryPoints(scene.points)
-        .map((point) => new THREE.Vector3(point.position.x, point.position.y, point.position.z))
 
       if (outline) {
-        outline.geometry.setFromPoints(boundaryPoints)
-        outline.geometry.computeBoundingBox()
-        outline.geometry.computeBoundingSphere()
+        const oPosAttr = outline.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (oPosAttr && oPosAttr.count === positions.length) {
+          for (let i = 0; i < positions.length; i++) {
+            const p = positions[i]!
+            oPosAttr.setXYZ(i, p.x, p.y, p.z)
+          }
+          oPosAttr.needsUpdate = true
+          this.updateBounds(outline.geometry)
+        } else {
+          outline.geometry.setFromPoints(positions)
+          this.updateBounds(outline.geometry)
+        }
       }
       if (hiddenOutline) {
-        hiddenOutline.geometry.setFromPoints(boundaryPoints)
+        const hPosAttr = hiddenOutline.geometry.getAttribute('position') as THREE.BufferAttribute | null
+        if (hPosAttr && hPosAttr.count === positions.length) {
+          for (let i = 0; i < positions.length; i++) {
+            const p = positions[i]!
+            hPosAttr.setXYZ(i, p.x, p.y, p.z)
+          }
+          hPosAttr.needsUpdate = true
+        } else {
+          hiddenOutline.geometry.setFromPoints(positions)
+        }
         hiddenOutline.computeLineDistances()
       }
 
@@ -1352,17 +1590,15 @@ export class GeometrySyncer {
 
       const isLabelActive =
         this.activeLabelTarget?.type === 'face' && this.activeLabelTarget.geoId === id
+      const centroid = faceData.getCentroid(scene.points)
+      this._syncTmpA.set(centroid.x, centroid.y, centroid.z)
       this.syncLinearLabel(
         faceMesh,
         faceData.name ?? '',
         faceData.nameVisible && faceData.visible !== false,
         faceData.valueVisible === true && faceData.visible !== false,
         `=${this.deps.labelRenderer.formatMetricNumber(faceData.getArea(scene.points))}`,
-        new THREE.Vector3(
-          faceData.getCentroid(scene.points).x,
-          faceData.getCentroid(scene.points).y,
-          faceData.getCentroid(scene.points).z,
-        ),
+        this._syncTmpA,
         isLabelActive ? FACE_SELECTED_COLOR : LINEAR_COLOR,
       )
     })
@@ -1434,7 +1670,7 @@ export class GeometrySyncer {
         sphereData.nameVisible && sphereData.visible !== false,
         sphereData.valueVisible === true && sphereData.visible !== false,
         `=${this.deps.labelRenderer.formatMetricNumber(sphereData.getRadius())}`,
-        new THREE.Vector3(center.x, center.y + safeRadius, center.z),
+        this._syncTmpD.set(center.x, center.y + safeRadius, center.z),
         isLabelActive ? SPHERE_SELECTED_COLOR : LINEAR_COLOR,
       )
     })
@@ -1472,82 +1708,87 @@ export class GeometrySyncer {
       if (!coneGroup) {
         coneGroup = new THREE.Group()
         coneGroup.userData = { geoId: id, type: 'cone' }
+
+        const sideGeometry = new THREE.ConeGeometry(1, 1, CONE_SEGMENTS, 1, true)
+        const sideMaterial = new THREE.MeshPhongMaterial({
+          color: CONE_FILL_COLOR,
+          transparent: true,
+          opacity: CONE_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
+        })
+        const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
+        sideMesh.userData = { geoId: id, type: 'cone' }
+        sideMesh.renderOrder = SURFACE_RENDER_ORDER
+        sideMesh.name = 'coneSide'
+
+        const sideDepthMesh = new THREE.Mesh(
+          new THREE.ConeGeometry(1, 1, CONE_SEGMENTS, 1, true),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        sideDepthMesh.renderOrder = -1
+        sideDepthMesh.name = 'coneSideDepth'
+        sideDepthMesh.raycast = () => {}
+        sideMesh.add(sideDepthMesh)
+
+        const baseGeometry = new THREE.CircleGeometry(1, CONE_SEGMENTS)
+        const baseMaterial = new THREE.MeshPhongMaterial({
+          color: CONE_FILL_COLOR,
+          transparent: true,
+          opacity: CONE_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
+        })
+        const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
+        baseMesh.userData = { geoId: id, type: 'coneBase' }
+        baseMesh.renderOrder = SURFACE_RENDER_ORDER
+        baseMesh.name = 'coneBase'
+
+        const baseDepthMesh = new THREE.Mesh(
+          new THREE.CircleGeometry(1, CONE_SEGMENTS),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        baseDepthMesh.renderOrder = -1
+        baseDepthMesh.name = 'coneBaseDepth'
+        baseDepthMesh.raycast = () => {}
+        baseMesh.add(baseDepthMesh)
+
+        coneGroup.add(sideMesh)
+        coneGroup.add(baseMesh)
         this.deps.world.add(coneGroup)
         this.groupMap.set(id, coneGroup)
       }
 
-      while (coneGroup.children.length > 0) {
-        const child = coneGroup.children[0]
-        if (child) coneGroup.remove(child)
-      }
-
       const { center, radius, height, normal, apex } = frame
-      const segments = CONE_SEGMENTS
-
-      const sideGeometry = new THREE.ConeGeometry(1, 1, segments, 1, true)
-      const sideMaterial = new THREE.MeshPhongMaterial({
-        color: CONE_FILL_COLOR,
-        transparent: true,
-        opacity: CONE_FILL_OPACITY,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        shininess: 20,
-          specular: 0x222222,
-      })
-      const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
-      sideMesh.userData = { geoId: id, type: 'cone' }
-      sideMesh.renderOrder = SURFACE_RENDER_ORDER
-
-      const sideDepthMesh = new THREE.Mesh(
-        new THREE.ConeGeometry(1, 1, segments, 1, true),
-        new THREE.MeshBasicMaterial({
-          colorWrite: false,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-        }),
-      )
-      sideDepthMesh.renderOrder = -1
-      sideMesh.add(sideDepthMesh)
-
-      const baseGeometry = new THREE.CircleGeometry(1, segments)
-      const baseMaterial = new THREE.MeshPhongMaterial({
-        color: CONE_FILL_COLOR,
-        transparent: true,
-        opacity: CONE_FILL_OPACITY,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        shininess: 20,
-          specular: 0x222222,
-      })
-      const baseMesh = new THREE.Mesh(baseGeometry, baseMaterial)
-      baseMesh.userData = { geoId: id, type: 'coneBase' }
-      baseMesh.renderOrder = SURFACE_RENDER_ORDER
-
-      const baseDepthMesh = new THREE.Mesh(
-        new THREE.CircleGeometry(1, segments),
-        new THREE.MeshBasicMaterial({
-          colorWrite: false,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-        }),
-      )
-      baseDepthMesh.renderOrder = -1
-      baseMesh.add(baseDepthMesh)
-
       const safeRadius = Math.max(radius, 0.001)
       const safeHeight = Math.max(height, 0.001)
 
-      sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
-      sideMesh.position.set(0, safeHeight / 2, 0)
+      const sideMesh = coneGroup.getObjectByName('coneSide') as THREE.Mesh
+      if (sideMesh) {
+        sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
+        sideMesh.position.set(0, safeHeight / 2, 0)
+      }
 
-      baseMesh.scale.set(safeRadius, safeRadius, 1)
-      baseMesh.rotation.x = -Math.PI / 2
-      baseMesh.position.set(0, 0, 0)
-
-      coneGroup.add(sideMesh)
-      coneGroup.add(baseMesh)
+      const baseMesh = coneGroup.getObjectByName('coneBase') as THREE.Mesh
+      if (baseMesh) {
+        baseMesh.scale.set(safeRadius, safeRadius, 1)
+        baseMesh.rotation.x = -Math.PI / 2
+        baseMesh.position.set(0, 0, 0)
+      }
 
       const yAxis = new THREE.Vector3(0, 1, 0)
       const targetNormal = new THREE.Vector3(normal.x, normal.y, normal.z)
@@ -1561,16 +1802,20 @@ export class GeometrySyncer {
       const isBaseCircleSelected = coneData.normalCircleId
         ? scene.selection.circles.has(coneData.normalCircleId)
         : false
-      const sideMat = sideMesh.material as THREE.MeshPhongMaterial
-      const baseMat = baseMesh.material as THREE.MeshPhongMaterial
-      sideMat.color.set(isSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
-      sideMat.opacity = isSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
-      baseMat.color.set(isSelected || isBaseCircleSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
-      baseMat.opacity = isSelected || isBaseCircleSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
+      if (sideMesh) {
+        const sideMat = sideMesh.material as THREE.MeshPhongMaterial
+        sideMat.color.set(isSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
+        sideMat.opacity = isSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
+      }
+      if (baseMesh) {
+        const baseMat = baseMesh.material as THREE.MeshPhongMaterial
+        baseMat.color.set(isSelected || isBaseCircleSelected ? CONE_SELECTED_COLOR : CONE_FILL_COLOR)
+        baseMat.opacity = isSelected || isBaseCircleSelected ? CONE_SELECTED_OPACITY : CONE_FILL_OPACITY
+      }
 
       const isLabelActive =
         this.activeLabelTarget?.type === 'cone' && this.activeLabelTarget.geoId === id
-      const midPoint = new THREE.Vector3(
+      this._syncTmpD.set(
         (center.x + apex.x) / 2,
         (center.y + apex.y) / 2,
         (center.z + apex.z) / 2,
@@ -1581,7 +1826,7 @@ export class GeometrySyncer {
         coneData.nameVisible && coneData.visible !== false,
         coneData.valueVisible === true && coneData.visible !== false,
         `V=${this.deps.labelRenderer.formatMetricNumber(coneData.getVolume())}`,
-        midPoint,
+        this._syncTmpD,
         isLabelActive ? CONE_SELECTED_COLOR : LINEAR_COLOR,
       )
     })
@@ -1619,113 +1864,124 @@ export class GeometrySyncer {
       if (!cylinderGroup) {
         cylinderGroup = new THREE.Group()
         cylinderGroup.userData = { geoId: id, type: 'cylinder' }
+
+        const sideGeometry = new THREE.CylinderGeometry(1, 1, 1, CYLINDER_SEGMENTS, 1, true)
+        const sideMaterial = new THREE.MeshPhongMaterial({
+          color: CYLINDER_FILL_COLOR,
+          transparent: true,
+          opacity: CYLINDER_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
+        })
+        const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
+        sideMesh.userData = { geoId: id, type: 'cylinder' }
+        sideMesh.renderOrder = SURFACE_RENDER_ORDER
+        sideMesh.name = 'cylinderSide'
+
+        const sideDepthMesh = new THREE.Mesh(
+          new THREE.CylinderGeometry(1, 1, 1, CYLINDER_SEGMENTS, 1, true),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        sideDepthMesh.renderOrder = -1
+        sideDepthMesh.name = 'cylinderSideDepth'
+        sideDepthMesh.raycast = () => {}
+        sideMesh.add(sideDepthMesh)
+
+        const bottomGeometry = new THREE.CircleGeometry(1, CYLINDER_SEGMENTS)
+        const bottomMaterial = new THREE.MeshPhongMaterial({
+          color: CYLINDER_FILL_COLOR,
+          transparent: true,
+          opacity: CYLINDER_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
+        })
+        const bottomMesh = new THREE.Mesh(bottomGeometry, bottomMaterial)
+        bottomMesh.userData = { geoId: id, type: 'cylinderBottom' }
+        bottomMesh.renderOrder = SURFACE_RENDER_ORDER
+        bottomMesh.name = 'cylinderBottom'
+
+        const bottomDepthMesh = new THREE.Mesh(
+          new THREE.CircleGeometry(1, CYLINDER_SEGMENTS),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        bottomDepthMesh.renderOrder = -1
+        bottomDepthMesh.name = 'cylinderBottomDepth'
+        bottomDepthMesh.raycast = () => {}
+        bottomMesh.add(bottomDepthMesh)
+
+        const topGeometry = new THREE.CircleGeometry(1, CYLINDER_SEGMENTS)
+        const topMaterial = new THREE.MeshPhongMaterial({
+          color: CYLINDER_FILL_COLOR,
+          transparent: true,
+          opacity: CYLINDER_FILL_OPACITY,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+          shininess: 20,
+          specular: 0x222222,
+        })
+        const topMesh = new THREE.Mesh(topGeometry, topMaterial)
+        topMesh.userData = { geoId: id, type: 'cylinderTop' }
+        topMesh.renderOrder = SURFACE_RENDER_ORDER
+        topMesh.name = 'cylinderTop'
+
+        const topDepthMesh = new THREE.Mesh(
+          new THREE.CircleGeometry(1, CYLINDER_SEGMENTS),
+          new THREE.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: true,
+            side: THREE.DoubleSide,
+          }),
+        )
+        topDepthMesh.renderOrder = -1
+        topDepthMesh.name = 'cylinderTopDepth'
+        topDepthMesh.raycast = () => {}
+        topMesh.add(topDepthMesh)
+
+        cylinderGroup.add(sideMesh)
+        cylinderGroup.add(bottomMesh)
+        cylinderGroup.add(topMesh)
         this.deps.world.add(cylinderGroup)
         this.groupMap.set(id, cylinderGroup)
       }
 
-      while (cylinderGroup.children.length > 0) {
-        const child = cylinderGroup.children[0]
-        if (child) cylinderGroup.remove(child)
-      }
-
       const { bottomCenter, topCenter, radius, height, normal } = frame
-      const segments = CYLINDER_SEGMENTS
-
-      const sideGeometry = new THREE.CylinderGeometry(1, 1, 1, segments, 1, true)
-      const sideMaterial = new THREE.MeshPhongMaterial({
-        color: CYLINDER_FILL_COLOR,
-        transparent: true,
-        opacity: CYLINDER_FILL_OPACITY,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        shininess: 20,
-          specular: 0x222222,
-      })
-      const sideMesh = new THREE.Mesh(sideGeometry, sideMaterial)
-      sideMesh.userData = { geoId: id, type: 'cylinder' }
-      sideMesh.renderOrder = SURFACE_RENDER_ORDER
-
-      const sideDepthMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(1, 1, 1, segments, 1, true),
-        new THREE.MeshBasicMaterial({
-          colorWrite: false,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-        }),
-      )
-      sideDepthMesh.renderOrder = -1
-      sideMesh.add(sideDepthMesh)
-
-      const bottomGeometry = new THREE.CircleGeometry(1, segments)
-      const bottomMaterial = new THREE.MeshPhongMaterial({
-        color: CYLINDER_FILL_COLOR,
-        transparent: true,
-        opacity: CYLINDER_FILL_OPACITY,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        shininess: 20,
-          specular: 0x222222,
-      })
-      const bottomMesh = new THREE.Mesh(bottomGeometry, bottomMaterial)
-      bottomMesh.userData = { geoId: id, type: 'cylinderBottom' }
-      bottomMesh.renderOrder = SURFACE_RENDER_ORDER
-
-      const bottomDepthMesh = new THREE.Mesh(
-        new THREE.CircleGeometry(1, segments),
-        new THREE.MeshBasicMaterial({
-          colorWrite: false,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-        }),
-      )
-      bottomDepthMesh.renderOrder = -1
-      bottomMesh.add(bottomDepthMesh)
-
-      const topGeometry = new THREE.CircleGeometry(1, segments)
-      const topMaterial = new THREE.MeshPhongMaterial({
-        color: CYLINDER_FILL_COLOR,
-        transparent: true,
-        opacity: CYLINDER_FILL_OPACITY,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        depthTest: false,
-        shininess: 20,
-          specular: 0x222222,
-      })
-      const topMesh = new THREE.Mesh(topGeometry, topMaterial)
-      topMesh.userData = { geoId: id, type: 'cylinderTop' }
-      topMesh.renderOrder = SURFACE_RENDER_ORDER
-
-      const topDepthMesh = new THREE.Mesh(
-        new THREE.CircleGeometry(1, segments),
-        new THREE.MeshBasicMaterial({
-          colorWrite: false,
-          depthWrite: true,
-          side: THREE.DoubleSide,
-        }),
-      )
-      topDepthMesh.renderOrder = -1
-      topMesh.add(topDepthMesh)
-
       const safeRadius = Math.max(radius, 0.001)
       const safeHeight = Math.max(height, 0.001)
 
-      sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
-      sideMesh.position.set(0, safeHeight / 2, 0)
+      const sideMesh = cylinderGroup.getObjectByName('cylinderSide') as THREE.Mesh
+      if (sideMesh) {
+        sideMesh.scale.set(safeRadius, safeHeight, safeRadius)
+        sideMesh.position.set(0, safeHeight / 2, 0)
+      }
 
-      bottomMesh.scale.set(safeRadius, safeRadius, 1)
-      bottomMesh.rotation.x = -Math.PI / 2
-      bottomMesh.position.set(0, 0, 0)
+      const bottomMesh = cylinderGroup.getObjectByName('cylinderBottom') as THREE.Mesh
+      if (bottomMesh) {
+        bottomMesh.scale.set(safeRadius, safeRadius, 1)
+        bottomMesh.rotation.x = -Math.PI / 2
+        bottomMesh.position.set(0, 0, 0)
+      }
 
-      topMesh.scale.set(safeRadius, safeRadius, 1)
-      topMesh.rotation.x = Math.PI / 2
-      topMesh.position.set(0, safeHeight, 0)
-
-      cylinderGroup.add(sideMesh)
-      cylinderGroup.add(bottomMesh)
-      cylinderGroup.add(topMesh)
+      const topMesh = cylinderGroup.getObjectByName('cylinderTop') as THREE.Mesh
+      if (topMesh) {
+        topMesh.scale.set(safeRadius, safeRadius, 1)
+        topMesh.rotation.x = Math.PI / 2
+        topMesh.position.set(0, safeHeight, 0)
+      }
 
       const yAxis = new THREE.Vector3(0, 1, 0)
       const targetNormal = new THREE.Vector3(normal.x, normal.y, normal.z)
@@ -1743,22 +1999,27 @@ export class GeometrySyncer {
         ? scene.selection.circles.has(cylinderData.topNormalCircleId)
         : false
 
-      const sideMat = sideMesh.material as THREE.MeshPhongMaterial
-      const bottomMat = bottomMesh.material as THREE.MeshPhongMaterial
-      const topMat = topMesh.material as THREE.MeshPhongMaterial
-
       const fillColor = isSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR
       const fillOpacity = isSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
-      sideMat.color.set(fillColor)
-      sideMat.opacity = fillOpacity
-      bottomMat.color.set(isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
-      bottomMat.opacity = isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
-      topMat.color.set(isSelected || isTopCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
-      topMat.opacity = isSelected || isTopCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+      if (sideMesh) {
+        const sideMat = sideMesh.material as THREE.MeshPhongMaterial
+        sideMat.color.set(fillColor)
+        sideMat.opacity = fillOpacity
+      }
+      if (bottomMesh) {
+        const bottomMat = bottomMesh.material as THREE.MeshPhongMaterial
+        bottomMat.color.set(isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
+        bottomMat.opacity = isSelected || isBottomCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+      }
+      if (topMesh) {
+        const topMat = topMesh.material as THREE.MeshPhongMaterial
+        topMat.color.set(isSelected || isTopCircleSelected ? CYLINDER_SELECTED_COLOR : CYLINDER_FILL_COLOR)
+        topMat.opacity = isSelected || isTopCircleSelected ? CYLINDER_SELECTED_OPACITY : CYLINDER_FILL_OPACITY
+      }
 
       const isLabelActive =
         this.activeLabelTarget?.type === 'cylinder' && this.activeLabelTarget.geoId === id
-      const midPoint = new THREE.Vector3(
+      this._syncTmpD.set(
         (bottomCenter.x + topCenter.x) / 2,
         (bottomCenter.y + topCenter.y) / 2,
         (bottomCenter.z + topCenter.z) / 2,
@@ -1769,13 +2030,14 @@ export class GeometrySyncer {
         cylinderData.nameVisible && cylinderData.visible !== false,
         cylinderData.valueVisible === true && cylinderData.visible !== false,
         `V=${this.deps.labelRenderer.formatMetricNumber(cylinderData.getVolume())}`,
-        midPoint,
+        this._syncTmpD,
         isLabelActive ? CYLINDER_SELECTED_COLOR : LINEAR_COLOR,
       )
     })
   }
 
   syncCubeValueLabels(scene: GeoScene): void {
+    const isDragging = scene.activeDraggedPointIds.size > 0
     const cubes = [...scene.cubeConstraints.values()].filter(
       (constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint,
     )
@@ -1807,31 +2069,28 @@ export class GeometrySyncer {
         userData.isValueLabel = true
         userData.geoId = cube.faceIds[0] ?? cube.cubeId
         userData.geoType = 'face'
+        this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
         sprite.position.copy(
-          this.getScreenOffsetPosition(
-            new THREE.Vector3(centroid.x, centroid.y, centroid.z),
-            0,
-            LINE_LABEL_OFFSET_Y,
-          ),
+          this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
         )
         this.deps.labelRenderer.cubeValueLabels.set(cube.cubeId, sprite)
         this.deps.world.add(sprite)
         return
       }
       existing.visible = true
+      this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
       existing.position.copy(
-        this.getScreenOffsetPosition(
-          new THREE.Vector3(centroid.x, centroid.y, centroid.z),
-          0,
-          LINE_LABEL_OFFSET_Y,
-        ),
+        this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
       )
+      if (isDragging && this.syncFrameCounter % GeometrySyncer.DRAG_LABEL_UPDATE_INTERVAL !== 0) return
       const labelData = this.getLabelUserData(existing)
       if (labelData.text !== text) {
         labelData.text = text
         const material = existing.material as THREE.SpriteMaterial
+        const oldMap = material.map as THREE.CanvasTexture | null
         const nextSprite = this.deps.labelRenderer.makeValueLabelSprite(text, color, false)
         material.map = (nextSprite.material as THREE.SpriteMaterial).map
+        if (oldMap) oldMap.dispose()
         Object.assign(labelData, this.getLabelUserData(nextSprite))
         labelData.text = text
         labelData.isNameLabel = true
@@ -1864,7 +2123,10 @@ export class GeometrySyncer {
     const showAny = visible || valueVisible
     const combinedValueText = valueVisible ? valueText : ''
     if (!showAny) {
-      if (existingLabel) existingLabel.visible = false
+      if (existingLabel) {
+        existingLabel.visible = false
+        this.getLabelUserData(existingLabel).__textureDirty = true
+      }
     } else if (!existingLabel) {
       const nameSprite = visible
         ? this.deps.labelRenderer.makeLineLabelSprite(text, color, combinedValueText)
@@ -1900,16 +2162,25 @@ export class GeometrySyncer {
           objectUserData.__labelOffsetY ?? LINE_LABEL_OFFSET_Y,
         ),
       )
+      const labelData = this.getLabelUserData(existingLabel)
+      const isDragging = (this.currentSceneRef?.activeDraggedPointIds.size ?? 0) > 0
+      const wasDirty = labelData.__textureDirty
+      if (wasDirty) labelData.__textureDirty = false
       const nextText = visible ? `${text}${combinedValueText}` : valueText
       const labelText = this.getLabelUserData(existingLabel).text ?? ''
+      const textChanged = labelText !== nextText
+      const shouldUpdateTexture = wasDirty || textChanged || (!isDragging && (this.syncFrameCounter % GeometrySyncer.DRAG_LABEL_UPDATE_INTERVAL === 0))
+      if (!shouldUpdateTexture) return
       if (labelText !== nextText) {
         this.getLabelUserData(existingLabel).text = nextText
         const material = existingLabel.material as THREE.SpriteMaterial
+        const oldMap = material.map as THREE.CanvasTexture | null
         const newSprite = visible
           ? this.deps.labelRenderer.makeLineLabelSprite(text, color, combinedValueText)
           : this.deps.labelRenderer.makeValueLabelSprite(valueText, color, false)
         Object.assign(this.getLabelUserData(existingLabel), this.getLabelUserData(newSprite))
         material.map = (newSprite.material as THREE.SpriteMaterial).map
+        if (oldMap) oldMap.dispose()
         existingLabel.center.set(
           this.computeLinearLabelCenterX(visible, combinedValueText, this.getLabelUserData(existingLabel).canvasPixelWidth ?? 256),
           LINE_LABEL_CENTER_Y,
@@ -1921,20 +2192,21 @@ export class GeometrySyncer {
         if (map) {
           const ctx = (map.image as HTMLCanvasElement).getContext('2d')
           if (ctx) {
-            Object.assign(
-              this.getLabelUserData(existingLabel),
-              visible
-                ? this.deps.labelRenderer.drawCombinedLabel(
-                    ctx,
-                    map.image as HTMLCanvasElement,
-                    text,
-                    combinedValueText,
-                    color,
-                    56,
-                  )
-                : this.deps.labelRenderer.drawPlainLabel(ctx, map.image as HTMLCanvasElement, valueText, color, 56),
+            const result = visible
+              ? this.deps.labelRenderer.drawCombinedLabel(
+                  ctx,
+                  map.image as HTMLCanvasElement,
+                  text,
+                  combinedValueText,
+                  color,
+                  56,
+                )
+              : this.deps.labelRenderer.drawPlainLabel(ctx, map.image as HTMLCanvasElement, valueText, color, 56)
+            Object.assign(this.getLabelUserData(existingLabel), result)
+            material.map = this.deps.labelRenderer.safeUpdateCanvasTexture(
+              map,
+              result.canvasResized ?? false,
             )
-            map.needsUpdate = true
             existingLabel.center.set(
               this.computeLinearLabelCenterX(visible, combinedValueText, this.getLabelUserData(existingLabel).canvasPixelWidth ?? 256),
               LINE_LABEL_CENTER_Y,
@@ -1989,9 +2261,19 @@ export class GeometrySyncer {
 
   removeMeshWithLabels(obj: THREE.Object3D, userData: RenderObjectUserData, map: Map<string, THREE.Object3D>, id: string): void {
     const label = userData.__labelSprite
-    if (label) this.deps.world.remove(label)
+    if (label) {
+      const labelMat = (label as THREE.Sprite).material as THREE.SpriteMaterial
+      if (labelMat.map) (labelMat.map as THREE.CanvasTexture).dispose()
+      labelMat.dispose()
+      this.deps.world.remove(label)
+    }
     const valueLabel = userData.__valueLabelSprite
-    if (valueLabel) this.deps.world.remove(valueLabel)
+    if (valueLabel) {
+      const vlMat = (valueLabel as THREE.Sprite).material as THREE.SpriteMaterial
+      if (vlMat.map) (vlMat.map as THREE.CanvasTexture).dispose()
+      vlMat.dispose()
+      this.deps.world.remove(valueLabel)
+    }
     this.deps.world.remove(obj)
     map.delete(id)
 
@@ -2080,8 +2362,7 @@ export class GeometrySyncer {
     fillGeometry.setFromPoints(boundary)
     fillGeometry.setIndex(triangulated.flat())
     fillGeometry.computeVertexNormals()
-    fillGeometry.computeBoundingBox()
-    fillGeometry.computeBoundingSphere()
+    this.updateBounds(fillGeometry)
 
     outline.geometry.setFromPoints(boundary)
     outline.computeLineDistances()
@@ -2114,7 +2395,6 @@ export class GeometrySyncer {
     } else {
       this.rubberBand.visible = true
       this.rubberBand.geometry.setFromPoints([data.from, data.to])
-      this.rubberBand.geometry.attributes.position!.needsUpdate = true
       this.rubberBand.computeLineDistances()
     }
   }
@@ -2154,6 +2434,20 @@ export class GeometrySyncer {
     return false
   }
 
+  invalidatePointRefCache() {
+    this.pointRefCacheValid = false
+  }
+
+  getCachedPointRef(pointId: string, scene: GeoScene, excludeCircleId?: string): boolean {
+    if (this.pointRefCacheValid) {
+      const cached = this.pointRefCache.get(pointId)
+      if (cached !== undefined) return cached
+    }
+    const result = this.isPointReferencedByOtherVisibleGeometry(pointId, scene, excludeCircleId)
+    this.pointRefCache.set(pointId, result)
+    return result
+  }
+
   computePointBaseColor(p: Point3, scene: GeoScene): number {
     return computePointBaseColor(p, scene)
   }
@@ -2191,8 +2485,8 @@ export class GeometrySyncer {
 
   getScreenOffsetPosition(pointPos: THREE.Vector3, offsetXpx: number, offsetYpx: number): THREE.Vector3 {
     const camera = this.deps.getActiveCamera()
-    const worldPoint = this.deps.world.localToWorld(pointPos.clone())
-    const ndc = worldPoint.project(camera)
+    const worldPoint = this.deps.world.localToWorld(this._screenOffsetTmpWorld.copy(pointPos))
+    const ndc = this._screenOffsetTmpNdc.copy(worldPoint).project(camera)
     const w = this.deps.renderer.domElement.clientWidth || 1
     const h = this.deps.renderer.domElement.clientHeight || 1
     const offsetNdcX = (this.getZoomResponsivePixelOffset(offsetXpx) / w) * 2
@@ -2217,7 +2511,7 @@ export class GeometrySyncer {
           this.getScreenOffsetPosition(obj.position, offsetX + extraX, offsetY),
         )
       } else if (isLinearType(userData.type)) {
-        const anchor = userData.__labelAnchor?.clone()
+        const anchor = userData.__labelAnchor
         if (!anchor) return
         label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
       }
@@ -2560,6 +2854,11 @@ export class GeometrySyncer {
 
   updateDepthOcclusion(): void {
     if (!this.depthOcclusionEnabled) return
+    const isDragging = (this.currentSceneRef?.activeDraggedPointIds.size ?? 0) > 0
+    if (isDragging) {
+      this.occlusionFrameCounter = 0
+      return
+    }
     this.occlusionFrameCounter++
     const shouldCheck = this.occlusionFrameCounter % this.OCCLUSION_CHECK_INTERVAL === 0
 
@@ -2568,7 +2867,11 @@ export class GeometrySyncer {
       const cameraWorldPos = new THREE.Vector3()
       camera.getWorldPosition(cameraWorldPos)
 
-      const occluders = this.collectOccluders()
+      if (this._cachedOccludersFrame !== this.syncFrameCounter) {
+        this._cachedOccluders = this.collectOccluders()
+        this._cachedOccludersFrame = this.syncFrameCounter
+      }
+      const occluders = this._cachedOccluders!
       const activePointIds = new Set<string>()
       const scene = this.currentSceneRef
 

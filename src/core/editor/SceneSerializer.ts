@@ -1799,9 +1799,20 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     scene.addParallelLine(l)
   }
 
+  const seenFaceIds = new Set<string>()
+  const seenPointIds = new Set<string>()
+  const seenCubeIds = new Set<string>()
+  const seenRegularPolygonIds = new Set<string>()
+  const seenCylinderIds = new Set<string>()
+  const seenPerpendicularLineIds = new Set<string>()
+  const seenParallelLineIds = new Set<string>()
+  const seenObjectConstrainedPointIds = new Set<string>()
+
   for (const sc of data.constraints) {
     if (sc.type === 'cube') {
       const cc = sc as SerializedCubeConstraint
+      if (seenCubeIds.has(cc.cubeId)) continue
+      seenCubeIds.add(cc.cubeId)
       const constraint = new CubeConstraint(
         scene,
         cc.cubeId,
@@ -1819,6 +1830,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addCubeConstraint(constraint)
     } else if (sc.type === 'intersection') {
       const ic = sc as SerializedIntersectionConstraint
+      if (seenPointIds.has(ic.pointId)) continue
+      seenPointIds.add(ic.pointId)
       const constraint = new IntersectionPointConstraint(
         scene,
         ic.pointId,
@@ -1828,6 +1841,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addIntersectionConstraint(constraint)
     } else if (sc.type === 'regularPolygon') {
       const rc = sc as SerializedRegularPolygonConstraint
+      if (seenRegularPolygonIds.has(rc.constraintId)) continue
+      seenRegularPolygonIds.add(rc.constraintId)
       const constraint = new RegularPolygonConstraint(
         scene,
         rc.constraintId,
@@ -1844,10 +1859,14 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addRegularPolygonConstraint(constraint)
     } else if (sc.type === 'planar') {
       const pc = sc as SerializedPlanarConstraint
+      if (seenFaceIds.has(pc.faceId)) continue
+      seenFaceIds.add(pc.faceId)
       const constraint = new PlanarPolygonConstraint(scene, pc.faceId)
       scene.addConstraint(constraint)
     } else if (sc.type === 'cylinder') {
       const yc = sc as SerializedCylinderConstraint
+      if (seenCylinderIds.has(yc.cylinderId)) continue
+      seenCylinderIds.add(yc.cylinderId)
       const constraint = new CylinderConstraint(
         scene,
         yc.cylinderId,
@@ -1859,6 +1878,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addCylinderConstraint(constraint)
     } else if (sc.type === 'objectConstrainedPoint') {
       const oc = sc as SerializedObjectConstrainedPointConstraint
+      if (seenObjectConstrainedPointIds.has(oc.pointId)) continue
+      seenObjectConstrainedPointIds.add(oc.pointId)
       const point = scene.points.get(oc.pointId)
       if (point) {
         point.constrainedTo = { type: oc.targetType as ConstrainedToRef['type'], id: oc.targetId }
@@ -1868,6 +1889,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       }
     } else if (sc.type === 'perpendicularLine') {
       const plc = sc as SerializedPerpendicularLineConstraint
+      if (seenPerpendicularLineIds.has(plc.perpendicularLineId)) continue
+      seenPerpendicularLineIds.add(plc.perpendicularLineId)
       const constraint = new PerpendicularLineConstraint(
         scene,
         plc.perpendicularLineId,
@@ -1876,6 +1899,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addPerpendicularLineConstraint(constraint)
     } else if (sc.type === 'parallelLine') {
       const plc = sc as SerializedParallelLineConstraint
+      if (seenParallelLineIds.has(plc.parallelLineId)) continue
+      seenParallelLineIds.add(plc.parallelLineId)
       const constraint = new ParallelLineConstraint(
         scene,
         plc.parallelLineId,
@@ -1953,7 +1978,49 @@ export function isSerializedSceneEmpty(data: SerializedScene): boolean {
   })
 }
 
-function localTimestampFileName(): string {
+export function createEmptySerializedScene(): SerializedScene {
+  return {
+    version: 1,
+    points: [{
+      id: 'origin',
+      name: 'O',
+      nameVisible: true,
+      valueVisible: false,
+      labelOffsetX: 0,
+      labelOffsetY: 0,
+      position: { x: 0, y: 0, z: 0 },
+      locked: true,
+      userLocked: true,
+      cubeId: null,
+      cubeRole: null,
+      circleId: null,
+      circleRole: null,
+      regularPolygonId: null,
+      regularPolygonRole: null,
+      sphereId: null,
+      sphereRole: null,
+      coneId: null,
+      coneRole: null,
+      cylinderId: null,
+      cylinderRole: null,
+      constrainedTo: null,
+    }],
+    lines: [],
+    straightLines: [],
+    perpendicularLines: [],
+    parallelLines: [],
+    rays: [],
+    vectors: [],
+    circles: [],
+    faces: [],
+    spheres: [],
+    cones: [],
+    cylinders: [],
+    constraints: [],
+  }
+}
+
+function localTimestampFileName(prefix?: string): string {
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const y = now.getFullYear()
@@ -1962,17 +2029,22 @@ function localTimestampFileName(): string {
   const h = pad(now.getHours())
   const min = pad(now.getMinutes())
   const s = pad(now.getSeconds())
-  return `scene_${y}-${m}-${d}_${h}-${min}-${s}.json`
+  const base = prefix ? `${prefix}_scene_${y}-${m}-${d}_${h}-${min}-${s}` : `scene_${y}-${m}-${d}_${h}-${min}-${s}`
+  return `${base}.json`
 }
 
-export async function downloadSceneAsJson(scene: Scene): Promise<boolean> {
+export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Promise<boolean> {
   const serialized = exportScene(scene)
   const jsonStr = JSON.stringify(serialized, null, 2)
-  const fileName = localTimestampFileName()
+  const fileName = localTimestampFileName(namePrefix)
 
-  if (typeof window.showSaveFilePicker === 'function') {
+  const picker = (window as Window & { showSaveFilePicker?: (options?: {
+    suggestedName?: string
+    types?: Array<{ description?: string; accept?: Record<string, string[]> }>
+  }) => Promise<FileSystemFileHandle> }).showSaveFilePicker
+  if (typeof picker === 'function') {
     try {
-      const handle = await window.showSaveFilePicker({
+      const handle = await picker({
         suggestedName: fileName,
         types: [
           {

@@ -46,6 +46,7 @@ type LabelSpriteUserData = THREE.Object3D['userData'] & {
   textPixelHeight?: number
   canvasPixelWidth?: number
   canvasPixelHeight?: number
+  canvasResized?: boolean
 }
 
 const matrix4Prototype = THREE.Matrix4.prototype as Matrix4WithLegacyGetInverse
@@ -93,7 +94,9 @@ export class ThreeRenderer {
   private sharedWorldRotationInitialized = false
   private readonly isMobileDevice: boolean
   private appSettings: AppSettings
-  private pixelRatioScale = 1.0 // 分辨率缩放系数（0.5 ~ 1.0），用于动态调整渲染分辨率
+  private pixelRatioScale = 1.0
+  private _responsiveScaleFrameCounter = 0
+  private static readonly RESPONSIVE_SCALE_DRAG_INTERVAL = 4
 
   constructor(container: HTMLElement, settings?: AppSettings) {
     this.container = container
@@ -621,7 +624,16 @@ export class ThreeRenderer {
     }
 
     this.updateSharedWorldRotation()
-    this.updateResponsiveScales()
+    const isDragging = this.geometrySyncer.isDragging()
+    if (isDragging) {
+      this._responsiveScaleFrameCounter++
+      if (this._responsiveScaleFrameCounter % ThreeRenderer.RESPONSIVE_SCALE_DRAG_INTERVAL === 0) {
+        this.updateResponsiveScales()
+      }
+    } else {
+      this._responsiveScaleFrameCounter = 0
+      this.updateResponsiveScales()
+    }
     this.geometrySyncer.updateScreenSpaceLabels()
     this.geometrySyncer.updateDepthOcclusion()
     this.renderer.render(this.scene, this.getActiveCamera())
@@ -856,8 +868,10 @@ export class ThreeRenderer {
       const metrics = this.labelRenderer.drawPlainLabel(ctx, canvas, text, 0xffffff, 72)
       const texture = new THREE.CanvasTexture(canvas)
       texture.minFilter = THREE.LinearFilter
+      const oldMap = this.guideLabel!.material.map
       this.guideLabel!.material.map = texture
       this.guideLabel!.material.needsUpdate = true
+      if (oldMap && oldMap !== texture) (oldMap as THREE.CanvasTexture).dispose()
       const labelData = this.getLabelUserData(this.guideLabel!)
       Object.assign(labelData, metrics, { layoutMode: 'value' as const })
     } else {
@@ -877,7 +891,9 @@ export class ThreeRenderer {
       ctx.font = 'normal 24px monospace'
       ctx.fillText(`Tips: 放大缩小坐标轴`, 20, 145)
       ctx.fillText(`以更好确定落点`, 20, 175)
+      const oldMap = this.guideLabel!.material.map
       this.guideLabel!.material.map = new THREE.CanvasTexture(canvas)
+      if (oldMap) (oldMap as THREE.CanvasTexture).dispose()
     }
   }
 

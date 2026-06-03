@@ -1,13 +1,7 @@
-import { computePlaneBasis, polygonArea2D, projectPoint2D, projectPointToPlane, signedDistanceToPlane, PLANAR_EPSILON } from '../geometry/PlanarUtils'
+import { computePlaneBasis, polygonArea2D, PLANAR_EPSILON } from '../geometry/PlanarUtils'
 import { Vec3 } from '../geometry/Vec3'
+import { Point3 } from '../geometry/Point3'
 import { Scene } from '../scene/Scene'
-
-const toWorldPoint = (plane: NonNullable<ReturnType<typeof computePlaneBasis>>, x: number, y: number) =>
-  new Vec3(
-    plane.origin.x + plane.uAxis.x * x + plane.vAxis.x * y,
-    plane.origin.y + plane.uAxis.y * x + plane.vAxis.y * y,
-    plane.origin.z + plane.uAxis.z * x + plane.vAxis.z * y,
-  )
 
 export class PlanarPolygonConstraint {
   constructor(
@@ -25,56 +19,91 @@ export class PlanarPolygonConstraint {
     if (!face) return
 
     const supportPoints = face.getSupportPoints(this.scene.points)
-    const plane =
-      computePlaneBasis(supportPoints.map((point) => point.position)) ??
-      computePlaneBasis(face.getBoundaryPoints(this.scene.points).map((point) => point.position))
-    if (!plane) return
+    let plane = computePlaneBasis(supportPoints.map((point) => point.position))
+    let boundaryPoints: Point3[] | null = null
+    if (!plane) {
+      boundaryPoints = face.getBoundaryPoints(this.scene.points)
+      plane = computePlaneBasis(boundaryPoints.map((point) => point.position))
+      if (!plane) return
+    }
 
-    face
-      .getMemberPoints(this.scene.points)
-      .filter((point): boolean => !face.supportPointIds.includes(point.id))
-      .forEach((point) => {
-        if (point.locked || point.userLocked) return
-        if (Math.abs(signedDistanceToPlane(point.position, plane)) <= PLANAR_EPSILON) return
-        point.setPosition(projectPointToPlane(point.position, plane))
-      })
+    const supportSet = face.supportPointIds.length > 8 ? new Set(face.supportPointIds) : null
+    const memberPoints = face.getMemberPoints(this.scene.points)
+    const normal = plane.normal
+    const origin = plane.origin
+    for (let i = 0; i < memberPoints.length; i += 1) {
+      const point = memberPoints[i]!
+      if (supportSet ? supportSet.has(point.id) : face.supportPointIds.includes(point.id)) continue
+      if (point.locked || point.userLocked) continue
+      const dx = point.position.x - origin.x
+      const dy = point.position.y - origin.y
+      const dz = point.position.z - origin.z
+      const distance = dx * normal.x + dy * normal.y + dz * normal.z
+      if (Math.abs(distance) <= PLANAR_EPSILON) continue
+      point.setPosition(
+        new Vec3(
+          point.position.x - normal.x * distance,
+          point.position.y - normal.y * distance,
+          point.position.z - normal.z * distance,
+        ),
+      )
+    }
 
     if (!face.areaLocked || face.lockedArea <= PLANAR_EPSILON) return
 
-    const boundaryPoints = face.getBoundaryPoints(this.scene.points)
+    if (!boundaryPoints) {
+      boundaryPoints = face.getBoundaryPoints(this.scene.points)
+    }
     if (boundaryPoints.length < 3) return
-    const projected = boundaryPoints.map((point) => projectPoint2D(point.position, plane))
+    const uAxis = plane.uAxis
+    const vAxis = plane.vAxis
+    const projected: Array<{ x: number; y: number; id: string }> = new Array(boundaryPoints.length)
+    for (let i = 0; i < boundaryPoints.length; i += 1) {
+      const p = boundaryPoints[i]!
+      const dx = p.position.x - origin.x
+      const dy = p.position.y - origin.y
+      const dz = p.position.z - origin.z
+      projected[i] = {
+        id: p.id,
+        x: dx * uAxis.x + dy * uAxis.y + dz * uAxis.z,
+        y: dx * vAxis.x + dy * vAxis.y + dz * vAxis.z,
+      }
+    }
     const currentArea = polygonArea2D(projected)
     if (currentArea <= PLANAR_EPSILON) return
 
-    const lockedBoundaryIds = new Set(
-      boundaryPoints
-        .filter((point) => point.locked || point.userLocked)
-        .map((point) => point.id),
-    )
-    const movableProjected = new Map(
-      boundaryPoints
-        .filter((point) => !lockedBoundaryIds.has(point.id))
-        .map((point, index) => [point.id, projected[boundaryPoints.indexOf(point)]!]),
-    )
-    if (movableProjected.size === 0) return
+    const centroid2D = { x: 0, y: 0 }
+    for (let i = 0; i < projected.length; i += 1) {
+      centroid2D.x += projected[i]!.x / projected.length
+      centroid2D.y += projected[i]!.y / projected.length
+    }
 
-    const centroid2D = projected.reduce(
-      (acc, point) => ({ x: acc.x + point.x / projected.length, y: acc.y + point.y / projected.length }),
-      { x: 0, y: 0 },
-    )
+    const movableFlags = new Uint8Array(boundaryPoints.length)
+    let movableCount = 0
+    for (let i = 0; i < boundaryPoints.length; i += 1) {
+      const p = boundaryPoints[i]!
+      if (!p.locked && !p.userLocked) {
+        movableFlags[i] = 1
+        movableCount += 1
+      }
+    }
+    if (movableCount === 0) return
 
-    const computeAreaForScale = (scale: number) =>
-      polygonArea2D(
-        boundaryPoints.map((point, index) => {
-          const current = projected[index]!
-          if (!movableProjected.has(point.id)) return current
-          return {
-            x: centroid2D.x + (current.x - centroid2D.x) * scale,
-            y: centroid2D.y + (current.y - centroid2D.y) * scale,
-          }
-        }),
-      )
+    const n = projected.length
+    const computeAreaForScale = (scale: number) => {
+      let area = 0
+      for (let i = 0; i < n; i += 1) {
+        const cur = projected[i]!
+        const nxt = projected[(i + 1) % n]!
+        const nxtIdx = (i + 1) % n
+        const curX = movableFlags[i] ? centroid2D.x + (cur.x - centroid2D.x) * scale : cur.x
+        const curY = movableFlags[i] ? centroid2D.y + (cur.y - centroid2D.y) * scale : cur.y
+        const nxtX = movableFlags[nxtIdx] ? centroid2D.x + (nxt.x - centroid2D.x) * scale : nxt.x
+        const nxtY = movableFlags[nxtIdx] ? centroid2D.y + (nxt.y - centroid2D.y) * scale : nxt.y
+        area += curX * nxtY - nxtX * curY
+      }
+      return Math.abs(area) * 0.5
+    }
 
     let low = 0
     let high = Math.max(1, Math.sqrt(face.lockedArea / currentArea) * 2)
@@ -88,16 +117,22 @@ export class PlanarPolygonConstraint {
     }
 
     const scale = (low + high) * 0.5
-    face.getMemberPoints(this.scene.points).forEach((point) => {
-      if (point.locked || point.userLocked) return
-      const current = projectPoint2D(point.position, plane)
+    const memberAll = face.getMemberPoints(this.scene.points)
+    for (let i = 0; i < memberAll.length; i += 1) {
+      const point = memberAll[i]!
+      if (point.locked || point.userLocked) continue
+      const dx = point.position.x - origin.x
+      const dy = point.position.y - origin.y
+      const dz = point.position.z - origin.z
+      const px = dx * uAxis.x + dy * uAxis.y + dz * uAxis.z
+      const py = dx * vAxis.x + dy * vAxis.y + dz * vAxis.z
       point.setPosition(
-        toWorldPoint(
-          plane,
-          centroid2D.x + (current.x - centroid2D.x) * scale,
-          centroid2D.y + (current.y - centroid2D.y) * scale,
+        new Vec3(
+          origin.x + uAxis.x * (centroid2D.x + (px - centroid2D.x) * scale) + vAxis.x * (centroid2D.y + (py - centroid2D.y) * scale),
+          origin.y + uAxis.y * (centroid2D.x + (px - centroid2D.x) * scale) + vAxis.y * (centroid2D.y + (py - centroid2D.y) * scale),
+          origin.z + uAxis.z * (centroid2D.x + (px - centroid2D.x) * scale) + vAxis.z * (centroid2D.y + (py - centroid2D.y) * scale),
         ),
       )
-    })
+    }
   }
 }

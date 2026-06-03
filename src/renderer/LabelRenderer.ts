@@ -12,6 +12,7 @@ type LabelSpriteUserData = THREE.Object3D['userData'] & {
   textPixelHeight?: number
   canvasPixelWidth?: number
   canvasPixelHeight?: number
+  canvasResized?: boolean
 }
 
 export interface LabelRendererDeps {
@@ -164,8 +165,10 @@ export class LabelRenderer {
     const metrics = this.measureNameText(message, mainFontSize)
     const nextWidth = 256
     const nextHeight = 256
-    if (canvas.width !== nextWidth) canvas.width = nextWidth
-    if (canvas.height !== nextHeight) canvas.height = nextHeight
+    const widthChanged = canvas.width !== nextWidth
+    const heightChanged = canvas.height !== nextHeight
+    if (widthChanged) canvas.width = nextWidth
+    if (heightChanged) canvas.height = nextHeight
 
     const ctx = canvas.getContext('2d')!
     const baselineY = canvas.height / 2 + mainFontSize * 0.18
@@ -197,6 +200,7 @@ export class LabelRenderer {
       textPixelHeight: mainFontSize,
       canvasPixelWidth: canvas.width,
       canvasPixelHeight: canvas.height,
+      canvasResized: widthChanged || heightChanged,
     }
   }
 
@@ -217,8 +221,10 @@ export class LabelRenderer {
     const paddingX = Math.max(24, Math.round(mainFontSize * 0.44))
     const nextHeight = 256
     const nextWidth = Math.max(160, Math.ceil(totalWidth + paddingX * 2))
-    if (canvas.width !== nextWidth) canvas.width = nextWidth
-    if (canvas.height !== nextHeight) canvas.height = nextHeight
+    const widthChanged = canvas.width !== nextWidth
+    const heightChanged = canvas.height !== nextHeight
+    if (widthChanged) canvas.width = nextWidth
+    if (heightChanged) canvas.height = nextHeight
 
     const ctx = canvas.getContext('2d')!
     const baselineY = canvas.height / 2 + mainFontSize * 0.18
@@ -253,6 +259,7 @@ export class LabelRenderer {
       textPixelHeight: mainFontSize,
       canvasPixelWidth: canvas.width,
       canvasPixelHeight: canvas.height,
+      canvasResized: widthChanged || heightChanged,
     }
   }
 
@@ -269,8 +276,10 @@ export class LabelRenderer {
     const textWidth = Math.ceil(context.measureText(message).width)
     const textHeight = fontSize
     const width = Math.max(64, textWidth + paddingX * 2)
-    if (canvas.width !== width) canvas.width = width
-    if (canvas.height !== height) canvas.height = height
+    const widthChanged = canvas.width !== width
+    const heightChanged = canvas.height !== height
+    if (widthChanged) canvas.width = width
+    if (heightChanged) canvas.height = height
 
     const r = (color >> 16) & 255
     const g = (color >> 8) & 255
@@ -286,6 +295,7 @@ export class LabelRenderer {
       textPixelHeight: textHeight,
       canvasPixelWidth: canvas.width,
       canvasPixelHeight: canvas.height,
+      canvasResized: widthChanged || heightChanged,
     }
   }
 
@@ -392,6 +402,30 @@ export class LabelRenderer {
     texture.magFilter = THREE.LinearFilter
     texture.needsUpdate = true
     this.pointTextureCache.set(key, texture)
+    return texture
+  }
+
+  safeUpdateCanvasTexture(
+    texture: THREE.CanvasTexture,
+    canvasResized: boolean,
+  ): THREE.CanvasTexture {
+    if (canvasResized) {
+      const oldImage = texture.image as HTMLCanvasElement | undefined
+      if (!oldImage) {
+        texture.needsUpdate = true
+        return texture
+      }
+      const newCanvas = document.createElement('canvas')
+      newCanvas.width = oldImage.width
+      newCanvas.height = oldImage.height
+      const newCtx = newCanvas.getContext('2d')!
+      newCtx.drawImage(oldImage, 0, 0)
+      texture.dispose()
+      const newTexture = new THREE.CanvasTexture(newCanvas)
+      newTexture.minFilter = THREE.LinearFilter
+      return newTexture
+    }
+    texture.needsUpdate = true
     return texture
   }
 }

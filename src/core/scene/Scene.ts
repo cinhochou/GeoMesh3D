@@ -72,6 +72,162 @@ export class Scene {
   perpendicularLineConstraints = new Map<string, PerpendicularLineConstraint>()
   parallelLineConstraints = new Map<string, ParallelLineConstraint>()
 
+  private _pointRefIndex: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }> | null = null
+  private _lineRefIndex: Map<string, Set<string>> | null = null
+  private _circleRefIndex: Map<string, { cones: Set<string>; cylinders: Set<string> }> | null = null
+
+  private getPointRefIndex() {
+    if (this._pointRefIndex) return this._pointRefIndex
+    const idx = new Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }>()
+    for (const [id, line] of this.lines) {
+      this._addPointRefEntry(idx, line.p1.id, 'lines', id)
+      this._addPointRefEntry(idx, line.p2.id, 'lines', id)
+    }
+    for (const [id, line] of this.straightLines) {
+      this._addPointRefEntry(idx, line.p1.id, 'straightLines', id)
+      this._addPointRefEntry(idx, line.p2.id, 'straightLines', id)
+    }
+    for (const [id, line] of this.perpendicularLines) {
+      this._addPointRefEntry(idx, line.p1.id, 'perpendicularLines', id)
+      this._addPointRefEntry(idx, line.p2.id, 'perpendicularLines', id)
+    }
+    for (const [id, line] of this.parallelLines) {
+      this._addPointRefEntry(idx, line.p1.id, 'parallelLines', id)
+      this._addPointRefEntry(idx, line.p2.id, 'parallelLines', id)
+    }
+    for (const [id, ray] of this.rays) {
+      this._addPointRefEntry(idx, ray.p1.id, 'rays', id)
+    }
+    for (const [id, v] of this.vectors) {
+      this._addPointRefEntry(idx, v.p1.id, 'vectors', id)
+      this._addPointRefEntry(idx, v.p2.id, 'vectors', id)
+    }
+    for (const [id, c] of this.circles) {
+      this._addPointRefEntry(idx, c.p1.id, 'circles', id)
+      this._addPointRefEntry(idx, c.p2.id, 'circles', id)
+      this._addPointRefEntry(idx, c.p3.id, 'circles', id)
+    }
+    for (const [id, face] of this.faces) {
+      for (const pid of face.memberPointIds) {
+        this._addPointRefEntry(idx, pid, 'faces', id)
+      }
+    }
+    for (const [id, s] of this.spheres) {
+      this._addPointRefEntry(idx, s.centerPoint.id, 'spheres', id)
+      if (s.radiusPoint) this._addPointRefEntry(idx, s.radiusPoint.id, 'spheres', id)
+    }
+    for (const [id, c] of this.cones) {
+      this._addPointRefEntry(idx, c.baseCenterPoint.id, 'cones', id)
+      this._addPointRefEntry(idx, c.apexPoint.id, 'cones', id)
+    }
+    for (const [id, c] of this.cylinders) {
+      this._addPointRefEntry(idx, c.bottomCenterPoint.id, 'cylinders', id)
+      this._addPointRefEntry(idx, c.topCenterPoint.id, 'cylinders', id)
+    }
+    this._pointRefIndex = idx
+    return idx
+  }
+
+  private _addPointRefEntry(
+    idx: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }>,
+    pointId: string,
+    kind: 'lines' | 'straightLines' | 'perpendicularLines' | 'parallelLines' | 'rays' | 'vectors' | 'circles' | 'faces' | 'spheres' | 'cones' | 'cylinders',
+    geoId: string,
+  ) {
+    let entry = idx.get(pointId)
+    if (!entry) {
+      entry = { lines: new Set(), straightLines: new Set(), perpendicularLines: new Set(), parallelLines: new Set(), rays: new Set(), vectors: new Set(), circles: new Set(), faces: new Set(), spheres: new Set(), cones: new Set(), cylinders: new Set() }
+      idx.set(pointId, entry)
+    }
+    entry[kind].add(geoId)
+  }
+
+  invalidateRenderSyncCache() {
+    this._pointRefIndex = null
+    this._lineRefIndex = null
+    this._circleRefIndex = null
+    this._circleToConesIndex = null
+    this._circleToCylindersIndex = null
+  }
+
+  private getLineRefIndex() {
+    if (this._lineRefIndex) return this._lineRefIndex
+    const idx = new Map<string, Set<string>>()
+    for (const [id, c] of this.circles) {
+      if (c.isNormalCircle() && c.directionType && c.directionId) {
+        let set = idx.get(c.directionId)
+        if (!set) { set = new Set(); idx.set(c.directionId, set) }
+        set.add(id)
+      }
+    }
+    this._lineRefIndex = idx
+    return idx
+  }
+
+  private getCircleRefIndex() {
+    if (this._circleRefIndex) return this._circleRefIndex
+    const idx = new Map<string, { cones: Set<string>; cylinders: Set<string> }>()
+    for (const [id, c] of this.cones) {
+      if (c.normalCircleId) {
+        let entry = idx.get(c.normalCircleId)
+        if (!entry) { entry = { cones: new Set(), cylinders: new Set() }; idx.set(c.normalCircleId, entry) }
+        entry.cones.add(id)
+      }
+    }
+    for (const [id, c] of this.cylinders) {
+      if (c.normalCircleId) {
+        let entry = idx.get(c.normalCircleId)
+        if (!entry) { entry = { cones: new Set(), cylinders: new Set() }; idx.set(c.normalCircleId, entry) }
+        entry.cylinders.add(id)
+      }
+      if (c.topNormalCircleId) {
+        let entry = idx.get(c.topNormalCircleId)
+        if (!entry) { entry = { cones: new Set(), cylinders: new Set() }; idx.set(c.topNormalCircleId, entry) }
+        entry.cylinders.add(id)
+      }
+    }
+    this._circleRefIndex = idx
+    return idx
+  }
+
+  private _circleToConesIndex: Map<string, string[]> | null = null
+  private _circleToCylindersIndex: Map<string, string[]> | null = null
+
+  getConesForCircle(circleId: string): string[] {
+    if (!this._circleToConesIndex) {
+      const idx = new Map<string, string[]>()
+      for (const [id, c] of this.cones) {
+        if (c.normalCircleId) {
+          let arr = idx.get(c.normalCircleId)
+          if (!arr) { arr = []; idx.set(c.normalCircleId, arr) }
+          arr.push(id)
+        }
+      }
+      this._circleToConesIndex = idx
+    }
+    return this._circleToConesIndex.get(circleId) ?? []
+  }
+
+  getCylindersForCircle(circleId: string): string[] {
+    if (!this._circleToCylindersIndex) {
+      const idx = new Map<string, string[]>()
+      for (const [id, c] of this.cylinders) {
+        if (c.normalCircleId) {
+          let arr = idx.get(c.normalCircleId)
+          if (!arr) { arr = []; idx.set(c.normalCircleId, arr) }
+          arr.push(id)
+        }
+        if (c.topNormalCircleId) {
+          let arr = idx.get(c.topNormalCircleId)
+          if (!arr) { arr = []; idx.set(c.topNormalCircleId, arr) }
+          arr.push(id)
+        }
+      }
+      this._circleToCylindersIndex = idx
+    }
+    return this._circleToCylindersIndex.get(circleId) ?? []
+  }
+
   private dirtyConstraints = new Set<SceneConstraint>()
   private dirtyIds: Record<DirtyKind, Set<string>> = {
     point: new Set(),
@@ -106,11 +262,13 @@ export class Scene {
   addLine(l: Line3) {
     this.lines.set(l.id, l)
     this.dirtyIds.line.add(l.id)
+    this.invalidateRenderSyncCache()
   }
 
   addStraightLine(line: StraightLine3) {
     this.straightLines.set(line.id, line)
     this.dirtyIds.straightLine.add(line.id)
+    this.invalidateRenderSyncCache()
   }
 
   addPerpendicularLine(line: PerpendicularLine3) {
@@ -119,15 +277,17 @@ export class Scene {
     }
     this.perpendicularLines.set(line.id, line)
     this.dirtyIds.perpendicularLine.add(line.id)
+    this.invalidateRenderSyncCache()
   }
 
   removePerpendicularLine(lineId: string) {
     this.removePerpendicularLineConstraint(lineId)
     const line = this.perpendicularLines.get(lineId)
-    if (line) line.p2.onPositionChanged = undefined
+    if (line) line.p2.onPositionChanged = null
     this.perpendicularLines.delete(lineId)
     this.selection.perpendicularLines.delete(lineId)
     this.dirtyIds.perpendicularLine.add(lineId)
+    this.invalidateRenderSyncCache()
   }
 
   addParallelLine(line: ParallelLine3) {
@@ -136,57 +296,67 @@ export class Scene {
     }
     this.parallelLines.set(line.id, line)
     this.dirtyIds.parallelLine.add(line.id)
+    this.invalidateRenderSyncCache()
   }
 
   removeParallelLine(lineId: string) {
     this.removeParallelLineConstraint(lineId)
     const line = this.parallelLines.get(lineId)
-    if (line) line.p2.onPositionChanged = undefined
+    if (line) line.p2.onPositionChanged = null
     this.parallelLines.delete(lineId)
     this.selection.parallelLines.delete(lineId)
     this.dirtyIds.parallelLine.add(lineId)
+    this.invalidateRenderSyncCache()
   }
 
   addRay(ray: Ray3) {
     this.rays.set(ray.id, ray)
     this.dirtyIds.ray.add(ray.id)
+    this.invalidateRenderSyncCache()
   }
 
   addVector(vector: GeoVector3) {
     this.vectors.set(vector.id, vector)
     this.dirtyIds.vector.add(vector.id)
+    this.invalidateRenderSyncCache()
   }
 
   addCircle(circle: Circle3) {
     this.circles.set(circle.id, circle)
     this.dirtyIds.circle.add(circle.id)
+    this.invalidateRenderSyncCache()
   }
 
   addSphere(sphere: Sphere3) {
     this.spheres.set(sphere.id, sphere)
     this.dirtyIds.sphere.add(sphere.id)
+    this.invalidateRenderSyncCache()
   }
 
   removeSphere(sphereId: string) {
     this.spheres.delete(sphereId)
     this.selection.spheres.delete(sphereId)
     this.dirtyIds.sphere.add(sphereId)
+    this.invalidateRenderSyncCache()
   }
 
   addCone(cone: Cone3) {
     this.cones.set(cone.id, cone)
     this.dirtyIds.cone.add(cone.id)
+    this.invalidateRenderSyncCache()
   }
 
   removeCone(coneId: string) {
     this.cones.delete(coneId)
     this.selection.cones.delete(coneId)
     this.dirtyIds.cone.add(coneId)
+    this.invalidateRenderSyncCache()
   }
 
   addCylinder(cylinder: Cylinder3) {
     this.cylinders.set(cylinder.id, cylinder)
     this.dirtyIds.cylinder.add(cylinder.id)
+    this.invalidateRenderSyncCache()
   }
 
   removeCylinder(cylinderId: string) {
@@ -194,12 +364,14 @@ export class Scene {
     this.cylinders.delete(cylinderId)
     this.selection.cylinders.delete(cylinderId)
     this.dirtyIds.cylinder.add(cylinderId)
+    this.invalidateRenderSyncCache()
   }
 
   addFace(face: PlanarPolygon) {
     face.normalize(this.points)
     this.faces.set(face.id, face)
     this.dirtyIds.face.add(face.id)
+    this.invalidateRenderSyncCache()
     const existing = this.faceConstraints.get(face.id)
     if (existing) {
       if (!this.constraints.includes(existing)) this.constraints.push(existing)
@@ -216,14 +388,34 @@ export class Scene {
     this.faces.delete(faceId)
     this.selection.faces.delete(faceId)
     this.dirtyIds.face.add(faceId)
+    this.invalidateRenderSyncCache()
     const constraint = this.faceConstraints.get(faceId)
     if (!constraint) return
-    this.constraints = this.constraints.filter((item) => item !== constraint)
+    const idx = this.constraints.indexOf(constraint)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.dirtyConstraints.delete(constraint)
     this.faceConstraints.delete(faceId)
   }
 
   addConstraint(c: SceneConstraint) {
+    if (c.faceId && this.faceConstraints.has(c.faceId)) {
+      const existing = this.faceConstraints.get(c.faceId)!
+      const existingIndex = this.constraints.indexOf(existing)
+      if (existingIndex >= 0) this.constraints.splice(existingIndex, 1)
+      this.dirtyConstraints.delete(existing)
+    }
+    if (c.pointId && this.intersectionConstraints.has(c.pointId)) {
+      const existing = this.intersectionConstraints.get(c.pointId)!
+      const existingIndex = this.constraints.indexOf(existing)
+      if (existingIndex >= 0) this.constraints.splice(existingIndex, 1)
+      this.dirtyConstraints.delete(existing)
+    }
+    if (c.cubeId && this.cubeConstraints.has(c.cubeId)) {
+      const existing = this.cubeConstraints.get(c.cubeId)!
+      const existingIndex = this.constraints.indexOf(existing)
+      if (existingIndex >= 0) this.constraints.splice(existingIndex, 1)
+      this.dirtyConstraints.delete(existing)
+    }
     this.constraints.push(c)
     if (c.faceId) this.faceConstraints.set(c.faceId, c)
     if (c.pointId) this.intersectionConstraints.set(c.pointId, c)
@@ -234,20 +426,20 @@ export class Scene {
   addIntersectionConstraint(c: SceneConstraint & { pointId: string }) {
     const existing = this.intersectionConstraints.get(c.pointId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.intersectionConstraints.set(c.pointId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removeIntersectionConstraint(pointId: string) {
     const existing = this.intersectionConstraints.get(pointId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.intersectionConstraints.delete(pointId)
     this.dirtyConstraints.delete(existing)
     this.markPointDirty(pointId)
@@ -256,20 +448,20 @@ export class Scene {
   addCubeConstraint(c: SceneConstraint & { cubeId: string }) {
     const existing = this.cubeConstraints.get(c.cubeId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.cubeConstraints.set(c.cubeId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removeCubeConstraint(cubeId: string) {
     const existing = this.cubeConstraints.get(cubeId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.cubeConstraints.delete(cubeId)
     this.dirtyConstraints.delete(existing)
   }
@@ -277,7 +469,8 @@ export class Scene {
   removeCylinderConstraint(cylinderId: string) {
     const existing = this.cylinderConstraints.get(cylinderId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.cylinderConstraints.delete(cylinderId)
     this.dirtyConstraints.delete(existing)
   }
@@ -285,20 +478,20 @@ export class Scene {
   addPerpendicularLineConstraint(c: PerpendicularLineConstraint) {
     const existing = this.perpendicularLineConstraints.get(c.perpendicularLineId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.perpendicularLineConstraints.set(c.perpendicularLineId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removePerpendicularLineConstraint(lineId: string) {
     const existing = this.perpendicularLineConstraints.get(lineId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.perpendicularLineConstraints.delete(lineId)
     this.dirtyConstraints.delete(existing)
   }
@@ -306,20 +499,20 @@ export class Scene {
   addParallelLineConstraint(c: ParallelLineConstraint) {
     const existing = this.parallelLineConstraints.get(c.parallelLineId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.parallelLineConstraints.set(c.parallelLineId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removeParallelLineConstraint(lineId: string) {
     const existing = this.parallelLineConstraints.get(lineId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.parallelLineConstraints.delete(lineId)
     this.dirtyConstraints.delete(existing)
   }
@@ -327,20 +520,20 @@ export class Scene {
   addObjectConstrainedPointConstraint(c: ObjectConstrainedPointConstraint) {
     const existing = this.objectConstrainedPointConstraints.get(c.pointId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.objectConstrainedPointConstraints.set(c.pointId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removeObjectConstrainedPointConstraint(pointId: string) {
     const existing = this.objectConstrainedPointConstraints.get(pointId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.objectConstrainedPointConstraints.delete(pointId)
     this.dirtyConstraints.delete(existing)
     this.markPointDirty(pointId)
@@ -353,33 +546,32 @@ export class Scene {
   addRegularPolygonConstraint(c: SceneConstraint & { constraintId: string }) {
     const existing = this.regularPolygonConstraints.get(c.constraintId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.regularPolygonConstraints.set(c.constraintId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   addCylinderConstraint(c: CylinderConstraint) {
     const existing = this.cylinderConstraints.get(c.cylinderId)
     if (existing) {
-      this.constraints = this.constraints.filter((item) => item !== existing)
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
       this.dirtyConstraints.delete(existing)
     }
     this.cylinderConstraints.set(c.cylinderId, c)
-    if (!this.constraints.includes(c)) {
-      this.constraints.push(c)
-    }
+    this.constraints.push(c)
     this.markConstraintDirty(c)
   }
 
   removeRegularPolygonConstraint(constraintId: string) {
     const existing = this.regularPolygonConstraints.get(constraintId)
     if (!existing) return
-    this.constraints = this.constraints.filter((item) => item !== existing)
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
     this.regularPolygonConstraints.delete(constraintId)
     this.dirtyConstraints.delete(existing)
   }
@@ -664,84 +856,36 @@ export class Scene {
     const coneIds = new Set(this.dirtyIds.cone)
     const cylinderIds = new Set(this.dirtyIds.cylinder)
 
-    pointIds.forEach((pointId) => {
-      this.lines.forEach((line, lineId) => {
-        if (line.p1.id === pointId || line.p2.id === pointId) lineIds.add(lineId)
-      })
-      this.straightLines.forEach((line, lineId) => {
-        if (line.p1.id === pointId || line.p2.id === pointId) straightLineIds.add(lineId)
-      })
-      this.perpendicularLines.forEach((line, lineId) => {
-        if (line.p1.id === pointId || line.p2.id === pointId) perpendicularLineIds.add(lineId)
-      })
-      this.parallelLines.forEach((line, lineId) => {
-        if (line.p1.id === pointId || line.p2.id === pointId) parallelLineIds.add(lineId)
-      })
-      this.rays.forEach((ray, rayId) => {
-        if (ray.p1.id === pointId || ray.p2.id === pointId) rayIds.add(rayId)
-      })
-      this.vectors.forEach((vector, vectorId) => {
-        if (vector.p1.id === pointId || vector.p2.id === pointId) vectorIds.add(vectorId)
-      })
-      this.circles.forEach((circle, circleId) => {
-        if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId) {
-          circleIds.add(circleId)
-        }
-      })
-      this.faces.forEach((face, faceId) => {
-        if (face.includesPoint(pointId)) faceIds.add(faceId)
-      })
-    })
-
-    lineIds.forEach((lineId) => {
-      this.circles.forEach((circle, circleId) => {
-        if (circle.isNormalCircle() && circle.directionType === 'line' && circle.directionId === lineId) {
-          circleIds.add(circleId)
-        }
-      })
-    })
-
-    straightLineIds.forEach((straightLineId) => {
-      this.circles.forEach((circle, circleId) => {
-        if (circle.isNormalCircle() && circle.directionType === 'straightLine' && circle.directionId === straightLineId) {
-          circleIds.add(circleId)
-        }
-      })
-    })
-
-    rayIds.forEach((rayId) => {
-      this.circles.forEach((circle, circleId) => {
-        if (circle.isNormalCircle() && circle.directionType === 'ray' && circle.directionId === rayId) {
-          circleIds.add(circleId)
-        }
-      })
-    })
-
-    vectorIds.forEach((vectorId) => {
-      this.circles.forEach((circle, circleId) => {
-        if (circle.isNormalCircle() && circle.directionType === 'vector' && circle.directionId === vectorId) {
-          circleIds.add(circleId)
-        }
-      })
-    })
+    const pointRefIndex = this.getPointRefIndex()
+    const lineRefIndex = this.getLineRefIndex()
+    const circleRefIndex = this.getCircleRefIndex()
 
     pointIds.forEach((pointId) => {
-      this.spheres.forEach((sphere, sphereId) => {
-        if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) {
-          sphereIds.add(sphereId)
-        }
-      })
-      this.cones.forEach((cone, coneId) => {
-        if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
-          coneIds.add(coneId)
-        }
-      })
-      this.cylinders.forEach((cylinder, cylinderId) => {
-        if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
-          cylinderIds.add(cylinderId)
-        }
-      })
+      const refs = pointRefIndex.get(pointId)
+      if (!refs) return
+      refs.lines.forEach((id) => lineIds.add(id))
+      refs.straightLines.forEach((id) => straightLineIds.add(id))
+      refs.perpendicularLines.forEach((id) => perpendicularLineIds.add(id))
+      refs.parallelLines.forEach((id) => parallelLineIds.add(id))
+      refs.rays.forEach((id) => rayIds.add(id))
+      refs.vectors.forEach((id) => vectorIds.add(id))
+      refs.circles.forEach((id) => circleIds.add(id))
+      refs.faces.forEach((id) => faceIds.add(id))
+      refs.spheres.forEach((id) => sphereIds.add(id))
+      refs.cones.forEach((id) => coneIds.add(id))
+      refs.cylinders.forEach((id) => cylinderIds.add(id))
     })
+
+    const propagateLineTypeToCircles = (kind: 'line' | 'straightLine' | 'ray' | 'vector', ids: Set<string>) => {
+      ids.forEach((geoId) => {
+        const circles = lineRefIndex.get(geoId)
+        if (circles) circles.forEach((id) => circleIds.add(id))
+      })
+    }
+    propagateLineTypeToCircles('line', lineIds)
+    propagateLineTypeToCircles('straightLine', straightLineIds)
+    propagateLineTypeToCircles('ray', rayIds)
+    propagateLineTypeToCircles('vector', vectorIds)
 
     this.clearAllDirtyIds()
 
@@ -763,16 +907,10 @@ export class Scene {
     })
 
     circleIds.forEach((circleId) => {
-      this.cylinders.forEach((cylinder, cylinderId) => {
-        if (cylinder.normalCircleId === circleId || cylinder.topNormalCircleId === circleId) {
-          cylinderIds.add(cylinderId)
-        }
-      })
-      this.cones.forEach((cone, coneId) => {
-        if (cone.normalCircleId === circleId) {
-          coneIds.add(coneId)
-        }
-      })
+      const refs = circleRefIndex.get(circleId)
+      if (!refs) return
+      refs.cones.forEach((id) => coneIds.add(id))
+      refs.cylinders.forEach((id) => cylinderIds.add(id))
     })
 
     if ([pointIds, lineIds, straightLineIds, perpendicularLineIds, parallelLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds].every((s) => s.size === 0)) {

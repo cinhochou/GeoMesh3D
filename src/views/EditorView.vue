@@ -18,6 +18,7 @@ import type { Command } from '../core/editor/Command'
 import type { Point3 } from '../core/geometry/Point3'
 import { getEditorSession } from '../core/editor/editorSession'
 import {
+  createEmptySerializedScene,
   downloadSceneAsJson,
   openJsonFileForImport,
   validateSerializedScene,
@@ -109,6 +110,7 @@ const sharedRotationOwnerNotice = ref('')
 
 const newProjectDialogVisible = ref(false)
 const currentProjectId = ref<string | null>(null)
+const currentProjectName = ref('')
 const isCreatingProject = ref(false)
 const lastSavedSceneJson = ref<string | null>(null)
 
@@ -951,7 +953,8 @@ const handleExportScene = async () => {
     return
   }
   try {
-    const saved = await downloadSceneAsJson(scene)
+    const prefix = currentProjectId.value ? currentProjectName.value : undefined
+    const saved = await downloadSceneAsJson(scene, prefix)
     if (saved) {
       showToast('导出成功', 'global')
     }
@@ -1214,6 +1217,7 @@ const handleNewProjectConfirm = async (data: {
     })
 
     currentProjectId.value = project.id
+    currentProjectName.value = data.name
     newProjectDialogVisible.value = false
     router.replace({ query: { projectId: project.id } })
 
@@ -1293,27 +1297,14 @@ const handleExitProject = async () => {
   } catch (err) {
     console.error('退出前保存失败:', err)
   }
-  const emptyScene: SerializedScene = {
-    version: 1,
-    points: [{
-      id: 'origin',
-      name: 'O',
-      position: { x: 0, y: 0, z: 0 },
-      locked: true,
-      userLocked: true,
-      nameVisible: true,
-      valueVisible: false,
-    }],
-    lines: [], straightLines: [], perpendicularLines: [], parallelLines: [],
-    rays: [], vectors: [], circles: [], faces: [], spheres: [], cones: [],
-    cylinders: [], constraints: [],
-  }
+  const emptyScene = createEmptySerializedScene()
   importScene(scene, emptyScene)
   scene.solveDirtyConstraints()
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   currentProjectId.value = null
+  currentProjectName.value = ''
   lastSavedSceneJson.value = null
   router.replace({ query: {} })
   showToast('已保存并退出项目', 'global')
@@ -1341,6 +1332,7 @@ const handleEditProjectConfirm = async (data: { name: string; description: strin
       description: data.description,
       isPublic: data.isPublic,
     })
+    currentProjectName.value = data.name
     editProjectDialogVisible.value = false
     showToast('项目信息已更新', 'global')
   } catch (err) {
@@ -1363,27 +1355,14 @@ const handleEditProjectDelete = async () => {
     showToast(msg, 'global')
     return
   }
-  const emptyScene: SerializedScene = {
-    version: 1,
-    points: [{
-      id: 'origin',
-      name: 'O',
-      position: { x: 0, y: 0, z: 0 },
-      locked: true,
-      userLocked: true,
-      nameVisible: true,
-      valueVisible: false,
-    }],
-    lines: [], straightLines: [], perpendicularLines: [], parallelLines: [],
-    rays: [], vectors: [], circles: [], faces: [], spheres: [], cones: [],
-    cylinders: [], constraints: [],
-  }
+  const emptyScene = createEmptySerializedScene()
   importScene(scene, emptyScene)
   scene.solveDirtyConstraints()
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   currentProjectId.value = null
+  currentProjectName.value = ''
   lastSavedSceneJson.value = null
   editProjectDialogVisible.value = false
   router.replace({ query: {} })
@@ -1394,6 +1373,7 @@ const loadProjectScene = async (projectId: string) => {
   try {
     const detail = await projectApi.loadScene(projectId)
     currentProjectId.value = detail.id
+    currentProjectName.value = detail.name
     router.replace({ query: { projectId: detail.id } })
     if (detail.sceneData) {
       try {
