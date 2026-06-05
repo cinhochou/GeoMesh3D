@@ -22,8 +22,14 @@ export type ConstrainedToRef = {
 
 export class Point3 {
   private static readonly POSITION_EPSILON = 1e-8
-  static readonly DEFAULT_LABEL_OFFSET_X = 3
-  static readonly DEFAULT_LABEL_OFFSET_Y = 3
+  // Data-layer default label offset. Renderer adds POINT_LABEL_OFFSET_X/Y on
+  // top of this, so the rendered visual offset is (3 + 3) * zoomFactor
+  // (~6.6 px on a typical canvas). This keeps the label clearly offset to
+  // the upper-right of the point. The clamp range in Interaction.ts is wide
+  // enough to accommodate this default and still produce a drag range that
+  // is symmetric about the geometry.
+  static readonly DEFAULT_LABEL_OFFSET_X = 5
+  static readonly DEFAULT_LABEL_OFFSET_Y = 5
 
   id: string
   name: string

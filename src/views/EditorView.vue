@@ -38,6 +38,7 @@ import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
 import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
+import { DraftStorageService } from '@/core/editor/DraftStorageService'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 const editorBodyRef = ref<HTMLDivElement | null>(null)
@@ -113,6 +114,11 @@ const currentProjectId = ref<string | null>(null)
 const currentProjectName = ref('')
 const isCreatingProject = ref(false)
 const lastSavedSceneJson = ref<string | null>(null)
+
+// 草稿自动保存与意外关闭恢复
+const draftRecoveryVisible = ref(false)
+let autoSaveTimer: number | null = null
+const AUTO_SAVE_DEBOUNCE = 3_000
 
 const sceneToJsonForCompare = (data: SerializedScene): string => {
   const copy = { ...data }
@@ -301,6 +307,106 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
+// ---- 草稿自动保存与意外关闭恢复 ----
+
+/** 自动保存：根据设置和项目状态决定保存行为 */
+const autoSave = async () => {
+  if (currentProjectId.value) {
+    // 有项目：根据 autoSaveProject 设置决定是否自动保存到服务端
+    if (!appSettings.value.autoSaveProject) return
+    try {
+      const sceneData = exportScene(scene)
+      const compareJson = sceneToJsonForCompare(sceneData)
+      if (lastSavedSceneJson.value !== null && compareJson === lastSavedSceneJson.value) return
+      const thumbnailBlob = await captureThumbnailAsync()
+      let thumbnailUrl: string | undefined
+      if (thumbnailBlob) {
+        try {
+          thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
+        } catch {
+          thumbnailUrl = undefined
+        }
+      }
+      await projectApi.saveScene(currentProjectId.value, {
+        sceneData: JSON.stringify(sceneData),
+        thumbnailUrl,
+      })
+      lastSavedSceneJson.value = compareJson
+    } catch {
+      // 自动保存失败时静默处理，不打扰用户
+    }
+  } else {
+    // 无项目：根据 draftProtection 设置决定是否保存草稿到 localStorage
+    if (!appSettings.value.draftProtection) return
+    DraftStorageService.saveDraft(scene)
+  }
+}
+
+/** 场景有改动时调用，debounce 后执行自动保存 */
+const scheduleAutoSave = () => {
+  // 两个开关都关闭时不需要调度
+  if (!currentProjectId.value && !appSettings.value.draftProtection) return
+  if (currentProjectId.value && !appSettings.value.autoSaveProject) return
+  if (autoSaveTimer !== null) {
+    clearTimeout(autoSaveTimer)
+  }
+  autoSaveTimer = window.setTimeout(() => {
+    autoSaveTimer = null
+    autoSave()
+  }, AUTO_SAVE_DEBOUNCE)
+}
+
+/** 停止自动保存定时器 */
+const stopAutoSave = () => {
+  if (autoSaveTimer !== null) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+}
+
+/**
+ * beforeunload 处理：
+ * - draftProtection 开启时：保存草稿 + 标记 sessionStorage + 弹确认框
+ * - draftProtection 关闭时：不保存、不弹框
+ */
+const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+  if (!currentProjectId.value && appSettings.value.draftProtection) {
+    DraftStorageService.onBeforeUnload(scene)
+    if (!isSceneEmpty(scene)) {
+      e.preventDefault()
+    }
+  }
+}
+
+/**
+ * unload 处理：
+ * 用户确认离开后标记 graceful_exit
+ * 下次打开时据此清空草稿（不弹恢复提示）
+ */
+const handleUnload = () => {
+  if (!currentProjectId.value && appSettings.value.draftProtection && !isSceneEmpty(scene)) {
+    DraftStorageService.onUnload()
+  }
+}
+
+/** 用户点击恢复草稿 */
+const handleDraftRecoveryConfirm = () => {
+  const data = DraftStorageService.loadDraftData()
+  if (data) {
+    DraftStorageService.restoreDraft(scene, data)
+    sceneStore.syncEditorState(editor)
+    sceneStore.syncSceneState(scene)
+  }
+  draftRecoveryVisible.value = false
+  showToast('已恢复上一次的场景', 'global')
+}
+
+/** 用户点击取消恢复，清空草稿 */
+const handleDraftRecoveryCancel = () => {
+  DraftStorageService.clearDraft()
+  draftRecoveryVisible.value = false
+}
+
 onMounted(() => {
   uiStore.setTouchDevice(
     navigator.maxTouchPoints > 0 ||
@@ -316,6 +422,14 @@ onMounted(() => {
     newProjectDialogVisible.value = true
   } else if (route.query.projectId) {
     loadProjectScene(route.query.projectId as string)
+  }
+
+  // 草稿恢复：无项目且 draftProtection 开启时检查是否需要弹出恢复提示
+  if (!route.query.projectId && appSettings.value.draftProtection) {
+    const { needsRecovery } = DraftStorageService.initOnLoad()
+    if (needsRecovery) {
+      draftRecoveryVisible.value = true
+    }
   }
 
   renderer = new ThreeRenderer(viewportRef.value!, appSettings.value)
@@ -548,6 +662,8 @@ onMounted(() => {
   window.addEventListener('pointerup', stopSidebarWidthDrag)
   window.addEventListener('pointercancel', stopSidebarWidthDrag)
   window.addEventListener('preview-settings', handlePreviewSettings as EventListener)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('unload', handleUnload)
 })
 
 watch(
@@ -610,11 +726,15 @@ watch(
     scene.markAllRenderDirty()
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
+    // 场景有改动时 debounce 自动保存
+    scheduleAutoSave()
   },
   { flush: 'post' },
 )
 
-const sharedHistoryState = ref<import('../core/collab/CollabManager').SharedHistoryState | null>(null)
+const sharedHistoryState = ref<import('../core/collab/CollabManager').SharedHistoryState | null>(
+  null,
+)
 
 const updateLocalHistoryUI = () => {
   sceneStore.setHistoryState({
@@ -722,9 +842,27 @@ watch(
   { flush: 'post' },
 )
 
+// 监听设置变化：关闭 draftProtection 时清空草稿，关闭 autoSaveProject 时取消待保存定时器
+watch(
+  () => [appSettings.value.draftProtection, appSettings.value.autoSaveProject],
+  ([draftProtection, autoSaveProject]) => {
+    if (!draftProtection) {
+      DraftStorageService.clearDraft()
+      draftRecoveryVisible.value = false
+    }
+    if (!autoSaveProject && currentProjectId.value) {
+      stopAutoSave()
+    }
+    if (!draftProtection && !currentProjectId.value) {
+      stopAutoSave()
+    }
+  },
+)
+
 // 生命周期钩子，防止页面刷新或销毁后连接残留
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
+  stopAutoSave()
   collabManager.value?.leaveRoom()
   collabStore.resetCollabState()
   if (animationFrameId !== null) {
@@ -761,6 +899,8 @@ onUnmounted(() => {
   window.removeEventListener('pointerup', stopSidebarWidthDrag)
   window.removeEventListener('pointercancel', stopSidebarWidthDrag)
   window.removeEventListener('preview-settings', handlePreviewSettings as EventListener)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('unload', handleUnload)
   document.body.classList.remove('sidebar-width-resizing')
 })
 
@@ -885,7 +1025,10 @@ const cylinderRadiusError = computed(() =>
 const canConfirmCylinderRadius = computed(() => cylinderRadiusError.value === '')
 
 const normalCircleRadiusError = computed(() =>
-  validatePositiveRadius(normalCircleRadiusDialog.value.visible, normalCircleRadiusDialog.value.radius),
+  validatePositiveRadius(
+    normalCircleRadiusDialog.value.visible,
+    normalCircleRadiusDialog.value.radius,
+  ),
 )
 
 const canConfirmNormalCircleRadius = computed(() => normalCircleRadiusError.value === '')
@@ -898,7 +1041,11 @@ const handleShowConeRadiusDialog = (e: Event) => {
 const handleConfirmConeRadius = () => {
   if (!canConfirmConeRadius.value) return
   const r = Math.round(coneRadiusDialog.value.radius * 10) / 10
-  interaction.confirmConeRadius(coneRadiusDialog.value.baseCenterPointId, coneRadiusDialog.value.apexPointId, r)
+  interaction.confirmConeRadius(
+    coneRadiusDialog.value.baseCenterPointId,
+    coneRadiusDialog.value.apexPointId,
+    r,
+  )
   uiStore.closeConeRadiusDialog()
 }
 
@@ -915,7 +1062,11 @@ const handleShowCylinderRadiusDialog = (e: Event) => {
 const handleConfirmCylinderRadius = () => {
   if (!canConfirmCylinderRadius.value) return
   const r = Math.round(cylinderRadiusDialog.value.radius * 10) / 10
-  interaction.confirmCylinderRadius(cylinderRadiusDialog.value.bottomCenterPointId, cylinderRadiusDialog.value.topCenterPointId, r)
+  interaction.confirmCylinderRadius(
+    cylinderRadiusDialog.value.bottomCenterPointId,
+    cylinderRadiusDialog.value.topCenterPointId,
+    r,
+  )
   uiStore.closeCylinderRadiusDialog()
 }
 
@@ -1260,6 +1411,8 @@ const handleNewProjectConfirm = async (data: {
 
     showToast('项目创建成功', 'global')
     lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    // 项目创建成功后清除草稿
+    DraftStorageService.clearDraft()
   } catch (err) {
     const msg = err instanceof ApiError ? err.message : '创建项目失败'
     showToast(msg, 'global')
@@ -1306,6 +1459,7 @@ const handleExitProject = async () => {
   currentProjectId.value = null
   currentProjectName.value = ''
   lastSavedSceneJson.value = null
+  DraftStorageService.clearDraft()
   router.replace({ query: {} })
   showToast('已保存并退出项目', 'global')
 }
@@ -1324,7 +1478,11 @@ const handleEditProject = async () => {
   }
 }
 
-const handleEditProjectConfirm = async (data: { name: string; description: string; isPublic: boolean }) => {
+const handleEditProjectConfirm = async (data: {
+  name: string
+  description: string
+  isPublic: boolean
+}) => {
   if (!currentProjectId.value) return
   try {
     await projectApi.updateProject(currentProjectId.value, {
@@ -1400,7 +1558,7 @@ const loadProjectScene = async (projectId: string) => {
 
 const handleSaveScene = async () => {
   if (!currentProjectId.value) {
-    showToast('当前未关联项目，无法保存', 'global')
+    showToast('当前未关联项目，无需保存', 'global')
     return
   }
   try {
@@ -1454,8 +1612,8 @@ const handleSaveScene = async () => {
       <label v-for="point in mergePointSelection" :key="point.id" class="merge-point-option">
         <input v-model="mergePointDialog.targetId" type="radio" :value="point.id" />
         <span
-          >{{ point.name }}（{{ point.position.x.toFixed(2) }},
-          {{ point.position.y.toFixed(2) }}, {{ point.position.z.toFixed(2) }}）</span
+          >{{ point.name }}（{{ point.position.x.toFixed(2) }}, {{ point.position.y.toFixed(2) }},
+          {{ point.position.z.toFixed(2) }}）</span
         >
       </label>
       <div class="merge-point-warning">{{ mergePointWarning }}</div>
@@ -1600,7 +1758,7 @@ const handleSaveScene = async () => {
       @edit-project="handleEditProject"
     />
 
-      <div ref="editorBodyRef" class="editor-body">
+    <div ref="editorBodyRef" class="editor-body">
       <div ref="sidebarShellRef" class="sidebar-shell" :style="sidebarShellStyle">
         <Sidebar :scene="scene" :editor="editor" />
       </div>
@@ -1677,6 +1835,33 @@ const handleSaveScene = async () => {
       @cancel="handleEditProjectCancel"
       @delete="handleEditProjectDelete"
     />
+
+    <Transition name="fade-overlay">
+      <div v-if="draftRecoveryVisible" class="recovery-overlay">
+        <div class="recovery-dialog">
+          <div class="recovery-title">恢复场景</div>
+          <div class="recovery-desc">
+            编辑器可能被意外关闭，是否恢复上一次的场景？<br />若取消，则再也无法恢复。
+          </div>
+          <div class="recovery-actions">
+            <button
+              type="button"
+              class="recovery-btn recovery-btn-cancel"
+              @click="handleDraftRecoveryCancel"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="recovery-btn recovery-btn-confirm"
+              @click="handleDraftRecoveryConfirm"
+            >
+              恢复
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -2019,6 +2204,79 @@ select.axis-control option {
 .fade-overlay-enter-from,
 .fade-overlay-leave-to {
   opacity: 0;
+}
+
+/* 草稿恢复对话框 */
+.recovery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.recovery-dialog {
+  min-width: 320px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 24px 28px;
+  border: 1px solid #ffffff;
+  border-radius: 8px;
+  background: rgba(20, 20, 20, 0.96);
+  color: #ffffff;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.recovery-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.recovery-desc {
+  font-size: 14px;
+  color: #b0b0b0;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.recovery-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.recovery-btn {
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #444;
+  transition: all 0.15s ease;
+}
+
+.recovery-btn-cancel {
+  background: transparent;
+  color: #b0b0b0;
+}
+
+.recovery-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.recovery-btn-confirm {
+  background: #43f260;
+  color: #111111;
+  border-color: #43f260;
+}
+
+.recovery-btn-confirm:hover {
+  background: #5ff87a;
+  border-color: #5ff87a;
 }
 
 @media (max-width: 1024px) and (orientation: landscape) {

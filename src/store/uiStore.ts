@@ -17,9 +17,11 @@ export interface AppSettings {
   depthOcclusion: boolean
   hiddenEdge: boolean
   confirmBeforeDelete: boolean
+  autoSaveProject: boolean
+  draftProtection: boolean
 }
 
-const APP_SETTINGS_KEY = '3d-editor-settings'
+const APP_SETTINGS_KEY = 'geomesh3d-settings'
 
 const defaultAppSettings: AppSettings = {
   antialias: false,
@@ -29,6 +31,8 @@ const defaultAppSettings: AppSettings = {
   depthOcclusion: true,
   hiddenEdge: true,
   confirmBeforeDelete: false,
+  autoSaveProject: true,
+  draftProtection: true,
 }
 
 function loadAppSettings(): AppSettings {
@@ -48,6 +52,8 @@ function loadAppSettings(): AppSettings {
       depthOcclusion: typeof parsed.depthOcclusion === 'boolean' ? parsed.depthOcclusion : defaultAppSettings.depthOcclusion,
       hiddenEdge: typeof parsed.hiddenEdge === 'boolean' ? parsed.hiddenEdge : defaultAppSettings.hiddenEdge,
       confirmBeforeDelete: typeof parsed.confirmBeforeDelete === 'boolean' ? parsed.confirmBeforeDelete : defaultAppSettings.confirmBeforeDelete,
+      autoSaveProject: typeof parsed.autoSaveProject === 'boolean' ? parsed.autoSaveProject : defaultAppSettings.autoSaveProject,
+      draftProtection: typeof parsed.draftProtection === 'boolean' ? parsed.draftProtection : defaultAppSettings.draftProtection,
     }
   } catch {
     return { ...defaultAppSettings }

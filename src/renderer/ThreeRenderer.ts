@@ -67,7 +67,10 @@ export class ThreeRenderer {
   private static readonly POINT_LABEL_CENTER_Y = 0.32
   private static readonly LINE_LABEL_CENTER_X = 0.5
   private static readonly LINE_LABEL_CENTER_Y = 0.3
-  static readonly LABEL_DRAG_LIMIT = 30
+  // 1.5x the previous value of 30. With a default canvas of ~675px height and
+  // a typical zoom factor near 1.1, this gives the user a label drag range
+  // of roughly ±50 screen pixels in each direction (vs. ~±33 before).
+  static readonly LABEL_DRAG_LIMIT = 45
   private static readonly BACKGROUND_COLOR = 0x111111
   private static readonly SHARED_WORLD_ROTATION_LERP = 0.22
   private static readonly POINT_SCALE_REFERENCE_DISTANCE =
@@ -108,6 +111,8 @@ export class ThreeRenderer {
       depthOcclusion: true,
       hiddenEdge: true,
       confirmBeforeDelete: true,
+      autoSaveProject: true,
+      draftProtection: true,
     }
     this.pixelRatioScale = this.appSettings.pixelRatioScale
     this.isMobileDevice =
@@ -320,8 +325,16 @@ export class ThreeRenderer {
     const object = this.geometrySyncer.meshMap.get(geoId) ?? this.geometrySyncer.groupMap.get(geoId)
     if (!object) return
     const userData = this.getRenderUserData(object)
-    userData.__labelOffsetX = offsetX
-    userData.__labelOffsetY = offsetY
+    const zoomFactor = this.geometrySyncer.getPointZoomFactor()
+
+    if (userData.type === 'point') {
+      const base = this.geometrySyncer.getPointLabelBaseOffset()
+      userData.__labelOffsetX = base.x + offsetX
+      userData.__labelOffsetY = base.y + offsetY
+    } else {
+      userData.__labelOffsetX = offsetX
+      userData.__labelOffsetY = offsetY
+    }
 
     const label = userData.__labelSprite
     const valueLabel = userData.__valueLabelSprite
@@ -333,17 +346,20 @@ export class ThreeRenderer {
     )
 
     if (userData.type === 'point') {
+      const base = this.geometrySyncer.getPointLabelBaseOffset()
+      const totalOffsetX = (base.x + offsetX) * zoomFactor
+      const totalOffsetY = (base.y + offsetY) * zoomFactor
       if (label?.visible) {
         label.position.copy(
-          this.geometrySyncer.getScreenOffsetPosition(object.position, offsetX, offsetY),
+          this.geometrySyncer.getScreenOffsetPosition(object.position, totalOffsetX, totalOffsetY),
         )
       }
       if (valueLabel?.visible) {
         valueLabel.position.copy(
           this.geometrySyncer.getScreenOffsetPosition(
             object.position,
-            offsetX + valueExtraOffset,
-            offsetY,
+            totalOffsetX + valueExtraOffset,
+            totalOffsetY,
           ),
         )
       }
@@ -353,12 +369,20 @@ export class ThreeRenderer {
     if (isLinearType(userData.type)) {
       const anchor = userData.__labelAnchor?.clone()
       if (!anchor) return
+      const totalOffsetX = offsetX * zoomFactor
+      const totalOffsetY = offsetY * zoomFactor
       if (label?.visible) {
-        label.position.copy(this.geometrySyncer.getScreenOffsetPosition(anchor, offsetX, offsetY))
+        label.position.copy(
+          this.geometrySyncer.getScreenOffsetPosition(anchor, totalOffsetX, totalOffsetY),
+        )
       }
       if (valueLabel?.visible) {
         valueLabel.position.copy(
-          this.geometrySyncer.getScreenOffsetPosition(anchor, offsetX + valueExtraOffset, offsetY),
+          this.geometrySyncer.getScreenOffsetPosition(
+            anchor,
+            totalOffsetX + valueExtraOffset,
+            totalOffsetY,
+          ),
         )
       }
     }

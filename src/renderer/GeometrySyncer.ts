@@ -88,15 +88,18 @@ const POINT_LABEL_SCALE_MULTIPLIER = 5.6
 const LINE_LABEL_SCALE_MULTIPLIER = 5.4
 const LABEL_MIN_SCALE_FACTOR = 0.3
 const LABEL_MAX_SCALE_FACTOR = 2.2
-const LABEL_OFFSET_EXPONENT = 0.65
-const LABEL_OFFSET_MIN_FACTOR = 0.7
-const LABEL_OFFSET_MAX_FACTOR = 1.15
 const POINT_LABEL_OFFSET_X = 3
 const POINT_LABEL_OFFSET_Y = 3
 const POINT_VALUE_ONLY_EXTRA_OFFSET_X = 20
 const LINE_LABEL_OFFSET_Y = 3
-const POINT_LABEL_CENTER_X = 0.32
-const POINT_LABEL_CENTER_Y = 0.32
+// Use center (0.5, 0.5) so the sprite canvas is centered on `sprite.position`.
+// This keeps the label visually centered on its anchor in any direction,
+// and (more importantly) makes the drag-range symmetric about the point.
+// The "label is offset to the upper-right of the point" look is provided
+// by POINT_LABEL_OFFSET_X / POINT_LABEL_OFFSET_Y instead of shifting the
+// sprite center.
+const POINT_LABEL_CENTER_X = 0.5
+const POINT_LABEL_CENTER_Y = 0.5
 const LINE_LABEL_CENTER_X = 0.5
 const LINE_LABEL_CENTER_Y = 0.3
 const LINEAR_COLOR = 0xffffff
@@ -235,6 +238,8 @@ export class GeometrySyncer {
   private _cachedOccluders: THREE.Object3D[] | null = null
   private _cachedOccludersFrame = -1
   private _screenOffsetTmpWorld = new THREE.Vector3()
+  private _screenOffsetTmpView = new THREE.Vector3()
+  private _screenOffsetTmpResult = new THREE.Vector3()
   private _screenOffsetTmpNdc = new THREE.Vector3()
   private _syncTmpA = new THREE.Vector3()
   private _syncTmpB = new THREE.Vector3()
@@ -644,14 +649,22 @@ export class GeometrySyncer {
             const ctx = (map.image as HTMLCanvasElement).getContext('2d')
             if (ctx) {
               const result = p.nameVisible
-                ? this.deps.labelRenderer.drawCombinedLabel(
-                    ctx,
-                    map.image as HTMLCanvasElement,
-                    p.name ?? '',
-                    combinedPointText,
-                    labelColor,
-                    72,
-                  )
+                ? combinedPointText
+                  ? this.deps.labelRenderer.drawCombinedLabel(
+                      ctx,
+                      map.image as HTMLCanvasElement,
+                      p.name ?? '',
+                      combinedPointText,
+                      labelColor,
+                      72,
+                    )
+                  : this.deps.labelRenderer.drawNameLabel(
+                      ctx,
+                      map.image as HTMLCanvasElement,
+                      p.name ?? '',
+                      labelColor,
+                      72,
+                    )
                 : this.deps.labelRenderer.drawPlainLabel(
                     ctx,
                     map.image as HTMLCanvasElement,
@@ -1437,6 +1450,7 @@ export class GeometrySyncer {
         )
         depthMesh.name = 'faceDepthMesh'
         depthMesh.renderOrder = -1
+        depthMesh.raycast = () => {}
         faceMesh.add(depthMesh)
 
         const outline = new THREE.LineLoop(
@@ -1645,6 +1659,7 @@ export class GeometrySyncer {
         )
         depthMesh.name = 'sphereDepthMesh'
         depthMesh.renderOrder = -1
+        depthMesh.raycast = () => {}
         sphereMesh.add(depthMesh)
 
         this.deps.world.add(sphereMesh)
@@ -2193,14 +2208,22 @@ export class GeometrySyncer {
           const ctx = (map.image as HTMLCanvasElement).getContext('2d')
           if (ctx) {
             const result = visible
-              ? this.deps.labelRenderer.drawCombinedLabel(
-                  ctx,
-                  map.image as HTMLCanvasElement,
-                  text,
-                  combinedValueText,
-                  color,
-                  56,
-                )
+              ? combinedValueText
+                ? this.deps.labelRenderer.drawCombinedLabel(
+                    ctx,
+                    map.image as HTMLCanvasElement,
+                    text,
+                    combinedValueText,
+                    color,
+                    56,
+                  )
+                : this.deps.labelRenderer.drawNameLabel(
+                    ctx,
+                    map.image as HTMLCanvasElement,
+                    text,
+                    color,
+                    56,
+                  )
               : this.deps.labelRenderer.drawPlainLabel(ctx, map.image as HTMLCanvasElement, valueText, color, 56)
             Object.assign(this.getLabelUserData(existingLabel), result)
             material.map = this.deps.labelRenderer.safeUpdateCanvasTexture(
@@ -2474,6 +2497,14 @@ export class GeometrySyncer {
     return THREE.MathUtils.clamp(baseCenter / Math.max(canvasWidth, 1), 0, 0.5)
   }
 
+  getPointLabelBaseOffset() {
+    return { x: POINT_LABEL_OFFSET_X, y: POINT_LABEL_OFFSET_Y } as const
+  }
+
+  getLinearLabelBaseOffsetY() {
+    return LINE_LABEL_OFFSET_Y
+  }
+
   getLinearLabelSource(object: THREE.Object3D) {
     const geoId = object.userData.geoId
     const type = object.userData.type
@@ -2486,17 +2517,45 @@ export class GeometrySyncer {
   getScreenOffsetPosition(pointPos: THREE.Vector3, offsetXpx: number, offsetYpx: number): THREE.Vector3 {
     const camera = this.deps.getActiveCamera()
     const worldPoint = this.deps.world.localToWorld(this._screenOffsetTmpWorld.copy(pointPos))
-    const ndc = this._screenOffsetTmpNdc.copy(worldPoint).project(camera)
+    const v = this._screenOffsetTmpView.copy(worldPoint).applyMatrix4(camera.matrixWorldInverse)
+
     const w = this.deps.renderer.domElement.clientWidth || 1
     const h = this.deps.renderer.domElement.clientHeight || 1
-    const offsetNdcX = (this.getZoomResponsivePixelOffset(offsetXpx) / w) * 2
-    const offsetNdcY = (this.getZoomResponsivePixelOffset(offsetYpx) / h) * 2
-    ndc.x += offsetNdcX
-    ndc.y += offsetNdcY
-    return this.deps.world.worldToLocal(ndc.unproject(camera))
+    const aspect = w / h
+    const perspectiveCam = (camera as THREE.PerspectiveCamera).isPerspectiveCamera
+      ? (camera as THREE.PerspectiveCamera)
+      : null
+    const orthoCam = (camera as THREE.OrthographicCamera).isOrthographicCamera
+      ? (camera as THREE.OrthographicCamera)
+      : null
+
+    let offsetViewX: number
+    let offsetViewY: number
+    if (perspectiveCam) {
+      const depth = -v.z
+      const halfH = depth * Math.tan(((perspectiveCam.fov * Math.PI) / 180) / 2)
+      const halfW = halfH * aspect
+      offsetViewX = (offsetXpx / w) * 2 * halfW
+      offsetViewY = (offsetYpx / h) * 2 * halfH
+    } else if (orthoCam) {
+      const halfH = (orthoCam.top - orthoCam.bottom) / 2
+      const halfW = (orthoCam.right - orthoCam.left) / 2
+      offsetViewX = (offsetXpx / w) * 2 * halfW
+      offsetViewY = (offsetYpx / h) * 2 * halfH
+    } else {
+      offsetViewX = 0
+      offsetViewY = 0
+    }
+
+    v.x += offsetViewX
+    v.y += offsetViewY
+
+    this._screenOffsetTmpResult.copy(v).applyMatrix4(camera.matrixWorld)
+    return this.deps.world.worldToLocal(this._screenOffsetTmpResult)
   }
 
   updateScreenSpaceLabels(): void {
+    const zoomFactor = this.getPointZoomFactor()
     this.meshMap.forEach((obj) => {
       const userData = this.getRenderUserData(obj)
       const label = userData.__labelSprite
@@ -2508,12 +2567,22 @@ export class GeometrySyncer {
       if (userData.type === 'point') {
         const extraX = Number(userData.__valueOnlyExtraOffsetX ?? 0)
         label.position.copy(
-          this.getScreenOffsetPosition(obj.position, offsetX + extraX, offsetY),
+          this.getScreenOffsetPosition(
+            obj.position,
+            offsetX * zoomFactor + extraX,
+            offsetY * zoomFactor,
+          ),
         )
       } else if (isLinearType(userData.type)) {
         const anchor = userData.__labelAnchor
         if (!anchor) return
-        label.position.copy(this.getScreenOffsetPosition(anchor, offsetX, offsetY))
+        label.position.copy(
+          this.getScreenOffsetPosition(
+            anchor,
+            offsetX * zoomFactor,
+            offsetY * zoomFactor,
+          ),
+        )
       }
     })
   }
@@ -2582,18 +2651,30 @@ export class GeometrySyncer {
       return baseScale * AR_POINT_SCALE_FACTOR * zoomFactor
     }
 
+    return baseScale * this.getPointZoomFactor()
+  }
+
+  getPointZoomFactor(): number {
+    if (this.deps.arManager.isARMode) {
+      const safeInitialScale = Math.max(this.deps.arManager.initialWorldScale, 0.0001)
+      const zoomRatio = this.deps.arManager.currentWorldScale / safeInitialScale
+      return THREE.MathUtils.clamp(
+        Math.pow(zoomRatio, AR_POINT_ZOOM_RESPONSE_EXPONENT),
+        AR_POINT_ZOOM_MIN_FACTOR,
+        AR_POINT_ZOOM_MAX_FACTOR,
+      )
+    }
+
     const distance = this.deps.camera.position.distanceTo(this.deps.controls.target)
     const safeDistance = Math.max(distance, 0.001)
     const rawFactor = Math.pow(
       POINT_SCALE_REFERENCE_DISTANCE / safeDistance,
       POINT_SCALE_EXPONENT,
     )
-    const clampedFactor = Math.min(
+    return Math.min(
       POINT_MAX_SCALE_FACTOR,
       Math.max(POINT_MIN_SCALE_FACTOR, rawFactor),
     )
-
-    return baseScale * clampedFactor
   }
 
   getPointLabelScale(): number {
@@ -2656,19 +2737,7 @@ export class GeometrySyncer {
   }
 
   private getZoomResponsivePixelOffset(basePixel: number): number {
-    if (this.deps.arManager.isARMode) return basePixel
-
-    const distance = this.deps.camera.position.distanceTo(this.deps.controls.target)
-    const safeDistance = Math.max(distance, 0.001)
-    const rawFactor = Math.pow(
-      POINT_SCALE_REFERENCE_DISTANCE / safeDistance,
-      LABEL_OFFSET_EXPONENT,
-    )
-    const clampedFactor = Math.min(
-      LABEL_OFFSET_MAX_FACTOR,
-      Math.max(LABEL_OFFSET_MIN_FACTOR, rawFactor),
-    )
-    return basePixel * clampedFactor
+    return basePixel
   }
 
   private attachRayArrowHead(ray: THREE.Line): void {

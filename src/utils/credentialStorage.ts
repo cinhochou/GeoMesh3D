@@ -42,7 +42,7 @@ const deriveKey = async (identifier: string, salt: Uint8Array): Promise<CryptoKe
     ['deriveKey'],
   )
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -91,7 +91,7 @@ export const credentialStorage = {
       const iv = fromBase64(payload.iv)
       const cipher = fromBase64(payload.cipher)
       const key = await deriveKey(identifier, salt)
-      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher)
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, cipher as BufferSource)
       return new TextDecoder().decode(decrypted)
     } catch {
       return null

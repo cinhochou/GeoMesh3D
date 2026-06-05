@@ -171,7 +171,14 @@ export class LabelRenderer {
     if (heightChanged) canvas.height = nextHeight
 
     const ctx = canvas.getContext('2d')!
-    const baselineY = canvas.height / 2 + mainFontSize * 0.18
+    // Place the baseline so that the *visual center* of the glyph sits at
+    // canvas.height/2. For a bold sans-serif, the cap-height is roughly
+    // 0.4 * fontSize above the baseline, so baselineY = center + 0.4*size
+    // centers the glyph in the sprite (combined with sprite.center = 0.5).
+    // Keeping glyphs centered matters for the label drag range: with the
+    // previous 0.18 offset the visual range was shifted ~1.6px upward and
+    // was no longer symmetric about the geometry in screen space.
+    const baselineY = canvas.height / 2 + mainFontSize * 0.4
     const r = (color >> 16) & 255
     const g = (color >> 8) & 255
     const b = color & 255
@@ -227,7 +234,9 @@ export class LabelRenderer {
     if (heightChanged) canvas.height = nextHeight
 
     const ctx = canvas.getContext('2d')!
-    const baselineY = canvas.height / 2 + mainFontSize * 0.18
+    // See drawNameLabel: bias the baseline so the visual center of the glyph
+    // sits at canvas.height/2 (combined with sprite.center = 0.5).
+    const baselineY = canvas.height / 2 + mainFontSize * 0.4
     const nameStartX = paddingX + (nameSlotWidth - nameMetrics.width) / 2
     const valueStartX = nameStartX + nameMetrics.width + valueGap
     const r = (color >> 16) & 255
