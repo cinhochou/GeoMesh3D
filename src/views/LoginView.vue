@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/store/authStore'
 import { credentialStorage } from '@/utils/credentialStorage'
+import { projectApi } from '@/api/project'
+import { crossTabLoginEvents } from '@/utils/sessionEvents'
 
 const router = useRouter()
 const route = useRoute()
@@ -17,14 +19,72 @@ const formError = ref('')
 const isRedirecting = ref(false)
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
+// O5：安全校验 redirect 路径，防止开放重定向到外站
+// 拒绝：
+//   - 非字符串
+//   - 非以 / 开头（绝对路径必须是同源）
+//   - 以 // 开头（协议相对 URL，会被浏览器解析为外站）
+//   - 以 /\ 开头（Windows 风格路径分隔，浏览器可能解析为外站）
+//   - 包含 ://（显式协议）
+const isSafeRedirectPath = (path: unknown): path is string => {
+  if (typeof path !== 'string') return false
+  if (!path.startsWith('/')) return false
+  if (path.startsWith('//') || path.startsWith('/\\')) return false
+  if (path.includes('://')) return false
+  return true
+}
+
+// 解析重定向目标（query.redirect 默认 /）
+//   /profile        -> 正在进入个人主页
+//   /projects       -> 正在进入项目列表
+//   /editor 或 /    -> 正在进入编辑器（无项目时）/ 正在进入"项目名"项目（有 projectId 时）
 const redirect = computed(() => {
   const value = route.query.redirect
-  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/'
+  return isSafeRedirectPath(value) ? value : '/'
 })
 
+// 会话失效 reason → 提示文案
+const sessionInvalidationReason = computed(() => {
+  const value = route.query.reason
+  if (typeof value !== 'string') return null
+  if (value === 'manual') return '你已退出登录，请重新登录'
+  if (value === 'other_tab') return '账号在另一标签页退出，已自动失效'
+  if (value === 'expired' || value === 'refresh_failed') return '登录状态已过期，请重新登录'
+  return null
+})
+
+// 从 redirect URL 中解析出 projectId（用于预取项目名以填充成功文案）
+const redirectProjectId = computed(() => {
+  const path = redirect.value
+  try {
+    // 构造 dummy base 让相对路径也能被 URL 解析
+    const url = new URL(path, 'http://dummy.local')
+    return url.searchParams.get('projectId')
+  } catch {
+    return null
+  }
+})
+
+// 登录成功后异步拉取项目名；successMsg 通过 redirectProjectName 自动刷新
+const redirectProjectName = ref<string | null>(null)
+
+// successMsg 会随 redirectProjectName 异步填充而刷新
 const successMsg = computed(() => {
   const path = redirect.value
-  return path.includes('profile') ? '登录成功！正在进入个人主页...' : '登录成功！正在进入编辑器...'
+  if (path.includes('/profile')) {
+    return '登录成功！正在进入个人主页...'
+  }
+  if (path.includes('/projects')) {
+    return '登录成功！正在进入项目列表...'
+  }
+  if (path.startsWith('/editor') || path === '/') {
+    const name = redirectProjectName.value
+    if (name) {
+      return `登录成功！正在进入"${name}"项目...`
+    }
+    return '登录成功！正在进入编辑器...'
+  }
+  return '登录成功！'
 })
 
 watch([identifier, password], () => {
@@ -42,7 +102,34 @@ onMounted(async () => {
       rememberPassword.value = true
     }
   }
+  // 跨 Tab 重新登录：当其他 Tab 登录/重新登录（覆盖"同账号重登"和"切换账号"）后，
+  // 当前 Tab 如果停留在 /login（说明是被会话失效拦截后跳过来的），
+  // 需要自动跳回 redirect URL，回到用户原本要去的页面。
+  //
+  // 注：本 Tab 自己登录成功时，form 的 handleSubmit 走的是 router.replace 路径，
+  // 与本订阅是不同的事件来源（form 不会触发 storage 事件），所以不会重复跳转。
+  crossTabLoginEvents.on(handleCrossTabLogin)
 })
+
+onBeforeUnmount(() => {
+  crossTabLoginEvents.off(handleCrossTabLogin)
+})
+
+const handleCrossTabLogin = async () => {
+  // 仅当当前用户已经被认定为已登录（store.isAuthenticated）时跳转：
+  // 防止罕见的、跨 Tab 广播与本 Tab 自身初始化之间的竞争导致
+  // "还没真正登录"就被跳转走的边界情况
+  if (!authStore.isAuthenticated) return
+  // 二次校验 redirect 路径：与 computed redirect 共用 isSafeRedirectPath
+  // （理论上一致，但显式校验防御未来逻辑分叉）
+  const target = redirect.value
+  if (!isSafeRedirectPath(target)) return
+  // B7：跨 Tab 重登的体验对齐 form 登录后的 520ms 等待。
+  // 给用户视觉上的"正在为你跳转"反馈（遮罩 isRedirecting 已经显示），与 form 路径一致
+  isRedirecting.value = true
+  await wait(200)
+  await router.replace(target)
+}
 
 const validateForm = () => {
   if (!identifier.value.trim()) {
@@ -102,6 +189,20 @@ const handleSubmit = async () => {
     } else {
       credentialStorage.clear()
     }
+    // 若重定向到带 projectId 的编辑器，后台拉一次项目名用于填充"正在进入xxx项目"文案
+    // 不阻塞 520ms 等待：successMsg 会随 redirectProjectName 异步更新而刷新
+    const pid = redirectProjectId.value
+    if (pid) {
+      redirectProjectName.value = null
+      void projectApi
+        .getProject(pid)
+        .then((p) => {
+          if (p?.name) redirectProjectName.value = p.name
+        })
+        .catch(() => {
+          // 拉取失败：保留通用文案"正在进入编辑器..."
+        })
+    }
     isRedirecting.value = true
     await wait(520)
     await router.replace(redirect.value)
@@ -151,6 +252,11 @@ const handleBack = async () => {
           <div class="card-badge">欢迎回来</div>
           <h2 class="card-title">登录</h2>
           <p class="card-text">输入账号信息以验证你的身份</p>
+
+          <!-- 会话失效原因提示：当从 useSessionGuard 跳转过来时显示 -->
+          <div v-if="sessionInvalidationReason" class="session-banner">
+            {{ sessionInvalidationReason }}
+          </div>
 
           <form class="auth-form" @submit.prevent="handleSubmit">
             <label class="field">
@@ -363,6 +469,18 @@ const handleBack = async () => {
   margin: 0 0 24px;
   color: #8f8f8f;
   font-size: 14px;
+}
+
+.session-banner {
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  background: rgba(246, 178, 60, 0.12);
+  border: 1px solid rgba(246, 178, 60, 0.4);
+  color: #f6b23c;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
 }
 
 .auth-form {

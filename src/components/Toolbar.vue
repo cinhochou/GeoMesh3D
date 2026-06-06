@@ -442,11 +442,18 @@ const goProjectListPage = () => {
 
 const handleLogout = async () => {
   profileMenuOpen.value = false
+  // 二次确认：避免误触（项目未保存等场景下用户可能不希望立即退出）
+  const confirmed = window.confirm('确定要退出登录吗？')
+  if (!confirmed) return
   // 退出登录前：若编辑器有打开的项目，有变化则保存并关闭
   // 通过 done 回调等待编辑器完成保存/关闭（监听器始终在 Toolbar 挂载期间存在）
+  // O4：done 现在回传 { saved } 表示本次是否实际执行了服务端保存，便于未来做统计/提示
   await new Promise<void>((resolve) => {
     const event = new CustomEvent('editor:save-and-close', {
-      detail: { done: () => resolve() },
+      detail: {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        done: (_result: { saved: boolean }) => resolve(),
+      },
     })
     window.dispatchEvent(event)
     // 兜底超时：若监听器异常未调用 done，1s 后强制继续
@@ -1509,13 +1516,16 @@ onUnmounted(() => {
 
 <style scoped>
 .toolbar {
+  /* 垂直 padding 用变量驱动，scrollable 的负 margin 引用同一个变量，
+     保证溢出量始终等于 padding，避免小窗口下滚动条被 overflow:hidden 切掉 */
+  --toolbar-padding-y: 8px;
   display: flex;
   flex-wrap: nowrap;
   gap: 0;
-  padding: 8px;
+  padding: var(--toolbar-padding-y) 8px;
   background: #1e1e1e;
   border-bottom: 1px solid #333;
-  align-items: center;
+  /* 默认 stretch：让所有子项撑满 toolbar 高度；fixed-left 和 profile 单独 align-self: center 保持居中 */
   overflow: hidden;
 }
 
@@ -1525,6 +1535,7 @@ onUnmounted(() => {
   gap: 8px;
   flex-shrink: 0;
   padding-right: 8px;
+  align-self: center;
 }
 
 .toolbar-scrollable {
@@ -1536,8 +1547,11 @@ onUnmounted(() => {
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: 8px;
-  margin-bottom: -8px;
+  /* 撑满 toolbar 高度，再用负 margin 下边缘溢出当前 padding 到 toolbar 底 padding；
+     配合 .toolbar 的 overflow:hidden，滚动条被"挤"到 toolbar 最底端（紧贴 border-bottom）。
+     溢出量用 calc(--toolbar-padding-y * -1) 跟随媒体查询同步，避免小窗口下被切掉 */
+  align-self: stretch;
+  margin-bottom: calc(var(--toolbar-padding-y) * -1);
 }
 
 .toolbar-logo {
@@ -1564,6 +1578,8 @@ button {
   padding: 4px 8px;
   cursor: pointer;
   transition: all 0.2s;
+  /* 防止按钮文字在容器宽度不足时被压缩换行；窄到放不下时由 .toolbar-scrollable 横向滚动 */
+  white-space: nowrap;
 }
 
 button:hover {
@@ -1715,6 +1731,7 @@ button.is-active {
   cursor: pointer;
   flex-shrink: 0;
   margin-left: 8px;
+  align-self: center;
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease;
@@ -2004,7 +2021,7 @@ button.is-active {
 
 @media (max-width: 1024px) and (orientation: landscape) {
   .toolbar {
-    padding: 6px;
+    --toolbar-padding-y: 6px;
   }
 
   .toolbar-fixed-left,
@@ -2019,7 +2036,6 @@ button.is-active {
   button {
     padding: 5px 9px;
     font-size: 12px;
-    white-space: nowrap;
   }
 
   .hamburger-btn {
@@ -2040,7 +2056,7 @@ button.is-active {
 
 @media (max-width: 768px) {
   .toolbar {
-    padding: 5px;
+    --toolbar-padding-y: 5px;
   }
 
   .toolbar-fixed-left,
@@ -2055,7 +2071,6 @@ button.is-active {
   button {
     padding: 4px 7px;
     font-size: 11px;
-    white-space: nowrap;
   }
 
   .hamburger-btn {

@@ -113,6 +113,8 @@ export class ThreeRenderer {
       confirmBeforeDelete: true,
       autoSaveProject: true,
       draftProtection: true,
+      enableSnapping: false,
+      globalPointValue: false,
     }
     this.pixelRatioScale = this.appSettings.pixelRatioScale
     this.isMobileDevice =
@@ -554,7 +556,10 @@ export class ThreeRenderer {
    */
   private updateRendererPixelRatio() {
     const deviceRatio = window.devicePixelRatio || 1
-    this.renderer.setPixelRatio(deviceRatio * this.pixelRatioScale)
+    const newRatio = deviceRatio * this.pixelRatioScale
+    // 像素比未变时直接返回，避免 setPixelRatio 内部触发 setSize 清空 canvas
+    if (this.renderer.getPixelRatio() === newRatio) return
+    this.renderer.setPixelRatio(newRatio)
   }
 
   /**
@@ -702,6 +707,9 @@ export class ThreeRenderer {
     }
 
     this.refreshScreenSpaceScales()
+    // 修复拖动 DevTools/控制台时的闪烁：setSize 会清空 canvas，
+    // 立即重渲一帧，确保 paint 前 canvas 不处于空白状态
+    this.render()
   }
 
   resize(w: number, h: number) {

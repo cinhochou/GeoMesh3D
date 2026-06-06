@@ -1,6 +1,6 @@
 <!-- src/views/EditorView.vue -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
+import { onBeforeUnmount, onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import * as THREE from 'three'
@@ -16,7 +16,7 @@ import EditProjectDialog from '../components/EditProjectDialog.vue'
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
 import type { Point3 } from '../core/geometry/Point3'
-import { getEditorSession } from '../core/editor/editorSession'
+import { getEditorSession, resetEditorSession } from '../core/editor/editorSession'
 import {
   createEmptySerializedScene,
   downloadSceneAsJson,
@@ -40,6 +40,8 @@ import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
 import { DraftStorageService } from '@/core/editor/DraftStorageService'
 import { useOrientationLock } from '@/composables/useOrientationLock'
+import { useSessionGuard } from '@/composables/useSessionGuard'
+import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 const editorBodyRef = ref<HTMLDivElement | null>(null)
@@ -50,6 +52,99 @@ const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
 const authStore = useAuthStore()
+
+// 会话失效状态与善后：useSessionGuard 提供 isInvalidated / reason 的响应式状态；
+// 重登成功后 store.clearSessionInvalidation() 会让 isInvalidated 自动变 false。
+// useSessionGuard 内部用 handled 标记保证 onInvalidated 同周期内只触发一次。
+const {
+  isInvalidated,
+  reason: invalidationReason,
+} = useSessionGuard({
+  onInvalidated: (reason) => {
+    void handleSessionInvalidated(reason)
+  },
+})
+const sessionInvalidationReasonText = computed(() => {
+  switch (invalidationReason.value) {
+    case 'manual':
+      return '你已退出登录'
+    case 'other_tab':
+      return '账号在另一标签页退出，已自动失效'
+    case 'refresh_failed':
+      return '会话已过期'
+    default:
+      return '会话已失效'
+  }
+})
+
+// 会话失效后的善后流程：best-effort 保存（S2/S4）→ 断开 Yjs 协作 → 重置场景 → 跳登录
+// S1（用户主动退出）的保存由 Toolbar.handleLogout → editor:save-and-close 事件统一处理，
+// 这里只负责会话失效后真正需要做的清理；不去重登成功后登录页根据 redirect 回到当前项目
+const handleSessionInvalidated = async (reason: string) => {
+  // 临时编辑器（无项目 ID）场景：
+  //   - 用户是否登录不影响此页面状态（编辑器本身允许未登录访问）
+  //   - 临时场景数据已由 DraftStorageService 自动保存到 localStorage
+  //   - authStore.logout() 已经在外部清完本地用户态
+  // 因此不需要任何额外的"保存/断开协作/重定向"流程：
+  //   - 不弹占位遮罩（避免用户被卡在"会话已失效"上）
+  //   - 不调用 server 保存接口（没项目可保存）
+  //   - 不跳转登录页（留在临时编辑器即可，草稿不会丢）
+  if (!currentProjectId.value) {
+    return
+  }
+
+  // 1) S2（其他 Tab 退出）/ S4（refresh 失败）的最后保存窗口：
+  //   - S2/S4 路径上 Toolbar.handleExternalSaveAndClose 没机会被触发，所以这里是唯一一次兜底
+  //   - 项目场景走 3s 去抖动的 auto-save（见 triggerAutoSave），最后一次操作和会话失效之间的
+  //     < 3s 窗口由这里的 saveScene 兜住
+  //   - S1（'manual'）时 Toolbar 已经走完 saveProjectIfChangedAndClose，跳过避免重复保存
+  if (reason !== 'manual') {
+    try {
+      const sceneData = exportScene(scene)
+      const sceneJson = JSON.stringify(sceneData)
+      // 不重生成缩略图，避免 401 路径上的额外请求
+      await projectApi.saveScene(currentProjectId.value, {
+        sceneData: sceneJson,
+      })
+    } catch {
+      // 保存失败不影响后续清理
+    }
+  }
+
+  // 2) 断开 Yjs 协作连接（不做权限校验）
+  try {
+    collabStore.leave()
+  } catch {
+    // ignore
+  }
+
+  // 3) 清理自动保存
+  // 不清 DraftStorageService 的本地草稿：项目场景只走服务端，草稿字段对项目来说永远是 no-op；
+  // 对临时编辑器（有项目 id 才走到这里）也不会写入草稿。保持空操作避免无谓的 localStorage 写入。
+  stopAutoSave()
+
+  // 4) 重置场景与 undo/redo
+  resetEditorSession()
+  // resetEditorSession 只清了 editor.history；EditorView 内部的 localSnapshotHistory 是
+  // 非协作模式下的本地 undo/redo 栈，会话失效时必须一并清空，否则重登后还能"撤销"出旧内容。
+  localSnapshotHistory.length = 0
+  localSnapshotHistoryIndex = -1
+  updateLocalHistoryUI()
+  sceneStore.syncEditorState(editor)
+  sceneStore.syncSceneState(scene)
+  // 5) 最后清 currentProjectId / 跳登录页
+  // 顺序：先 router.replace 启动跳转，再清 currentProjectId，
+  // 让占位遮罩（v-if="isInvalidated && currentProjectId"）在跳转前一直可见，避免
+  // "遮罩消失但还在原页面"的闪烁中间态。
+  const redirect = route.fullPath
+  const reasonParam = reason === 'manual' ? 'manual' : 'expired'
+  router.replace({
+    path: '/login',
+    query: { reason: reasonParam, redirect },
+  })
+  currentProjectId.value = null
+  currentProjectName.value = ''
+}
 const {
   fps,
   axisGridSize,
@@ -407,11 +502,19 @@ const handleDraftRecoveryConfirm = () => {
 
 /** 外部请求：有变化时保存当前项目并关闭（如退出登录场景） */
 const handleExternalSaveAndClose = async (event: Event) => {
+  // O4：把"是否有项目被保存"作为结果回传给 Toolbar，让 Toolbar / handleSessionInvalidated 知道
+  // 这次主动退出是否已经走过服务端保存。false 时可能意味着：
+  //   - 没有打开的项目（currentProjectId 为空）
+  //   - 项目没变化（hasChanges=false，saveProjectIfChangedAndClose 早 return）
+  //   - 保存过程抛错被 catch 吞掉
+  let saved = false
   try {
-    await saveProjectIfChangedAndClose()
+    saved = await saveProjectIfChangedAndClose()
   } finally {
-    const detail = (event as CustomEvent<{ done?: () => void }>).detail
-    detail?.done?.()
+    const detail = (event as CustomEvent<{
+      done?: (result: { saved: boolean }) => void
+    }>).detail
+    detail?.done?.({ saved })
   }
 }
 
@@ -471,6 +574,8 @@ onMounted(() => {
 
   collabManager.value = new CollabManager(scene)
   collabManager.value.setLocalUserLabel(user.value?.nickname || user.value?.username || null)
+  // 注册到 collabStore，使会话失效时可由 collabStore.leave() 触发断网
+  collabStore.setManager(collabManager.value)
   solverWorker = new SolverSchedulerWorker()
   scheduleSolverFlush = () => {
     if (solverFlushRequested || !solverWorker) return
@@ -684,6 +789,12 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('unload', handleUnload)
   window.addEventListener('editor:save-and-close', handleExternalSaveAndClose)
+
+  // 跨 Tab 重新登录：当其他 Tab 登录/重新登录并切换到当前 Tab 的 user 后：
+  //   - 有项目：重新走一遍 loadProjectScene（拉最新数据，避免显示的是旧 user 的旧项目）
+  //   - 临时编辑器：本地草稿属于当前 localStorage token 的 user，无需重拉；
+  //     但若切换账号会导致"草稿归属新 user"的语义问题，因此弹出 toast 提示。
+  crossTabLoginEvents.on(handleCrossTabLogin)
 })
 
 watch(
@@ -891,7 +1002,8 @@ watch(
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
   stopAutoSave()
-  collabManager.value?.leaveRoom()
+  // 离开协作房间：优先通过 collabStore 走统一通道（它内部已持有 manager 引用）
+  collabStore.leave()
   collabStore.resetCollabState()
   if (animationFrameId !== null) {
     cancelAnimationFrame(animationFrameId)
@@ -930,7 +1042,17 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('unload', handleUnload)
   window.removeEventListener('editor:save-and-close', handleExternalSaveAndClose)
+  crossTabLoginEvents.off(handleCrossTabLogin)
   document.body.classList.remove('sidebar-width-resizing')
+})
+
+// P3：onBeforeUnmount 时清空非协作模式下的本地 undo/redo 栈，
+// 释放其中每个 snapshot 持有的 scene 引用，缩短大场景下的内存驻留时间。
+// 注意：localSnapshotHistory / localSnapshotHistoryIndex 本身已经在 setup 闭包里（每次挂载
+// 重新初始化为 [] / -1），但数组里的对象引用如果不清，GC 仍要等整个闭包被释放才会回收。
+onBeforeUnmount(() => {
+  localSnapshotHistory.length = 0
+  localSnapshotHistoryIndex = -1
 })
 
 function onModeChange(mode: EditorMode) {
@@ -1457,13 +1579,17 @@ const handleExitProject = async () => {
   await saveProjectIfChangedAndClose()
 }
 
-/** 有变化时保存当前项目并退出（用于退出登录等场景） */
-const saveProjectIfChangedAndClose = async () => {
-  if (!currentProjectId.value) return
+/**
+ * 有变化时保存当前项目并退出（用于退出登录等场景）
+ * @returns saved=true 表示本次实际执行了服务端保存且成功；saved=false 表示无项目/无变化/保存失败
+ */
+const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
+  if (!currentProjectId.value) return false
   const projectId = currentProjectId.value
   const sceneData = exportScene(scene)
   const compareJson = sceneToJsonForCompare(sceneData)
   const hasChanges = lastSavedSceneJson.value === null || compareJson !== lastSavedSceneJson.value
+  let saved = false
   if (hasChanges) {
     try {
       const thumbnailBlob = await captureThumbnailAsync()
@@ -1479,10 +1605,12 @@ const saveProjectIfChangedAndClose = async () => {
         sceneData: JSON.stringify(sceneData),
         thumbnailUrl,
       })
+      saved = true
     } catch (err) {
       console.error('退出前保存失败:', err)
     }
   }
+  // 不管保存是否成功，都继续清理场景（这与"主动退出"语义一致；草稿仅在保存成功时清除）
   const emptyScene = createEmptySerializedScene()
   importScene(scene, emptyScene)
   scene.solveDirtyConstraints()
@@ -1492,11 +1620,16 @@ const saveProjectIfChangedAndClose = async () => {
   currentProjectId.value = null
   currentProjectName.value = ''
   lastSavedSceneJson.value = null
-  DraftStorageService.clearDraft()
+  // O4：保存成功时清草稿（虽然项目场景不走草稿路径，这里仍然清理以防未来扩展引入），
+  // 保存失败时保留草稿作为最后一道防线——下次用户打开编辑器还能从草稿恢复
+  if (saved) {
+    DraftStorageService.clearDraft()
+  }
   router.replace({ query: {} })
   if (hasChanges) {
     showToast('已保存并退出项目', 'global')
   }
+  return saved
 }
 
 const handleEditProject = async () => {
@@ -1591,6 +1724,27 @@ const loadProjectScene = async (projectId: string) => {
   }
 }
 
+/**
+ * 跨 Tab 重新登录处理：
+ * - 有项目：重新拉取项目场景（用户/项目可能已经变化）
+ * - 临时编辑器：本地草稿继续保留，提示用户已切换
+ */
+const handleCrossTabLogin = (event: CrossTabLoginEvent) => {
+  // store.user 已被 reinitializeFromStorageToken 同步更新
+  // 这里只需让视图重新走一遍自己的初始化逻辑
+  if (currentProjectId.value) {
+    // B10：同账号重登（changed=false）时项目数据未变（服务端 token 刷新了，但项目 owner 没变），
+    //       跳过重新加载；切换账号（changed=true）才必须重新走 loadProjectScene
+    //       （新 owner 可能没有这个项目的访问权限）。
+    if (event.changed) {
+      void loadProjectScene(currentProjectId.value)
+    }
+  } else if (appSettings.value.draftProtection && !isSceneEmpty(scene)) {
+    // 临时编辑器 + 草稿开启：提示用户已经切换账号，草稿仍保留
+    showToast('其他标签页已重新登录，当前草稿继续保留', 'global')
+  }
+}
+
 const handleSaveScene = async () => {
   if (!currentProjectId.value) {
     showToast('当前未关联项目，无需保存', 'global')
@@ -1633,6 +1787,19 @@ const handleSaveScene = async () => {
         <div class="collab-wait-dialog">
           <div class="collab-spinner"></div>
           <div class="collab-wait-text">{{ collabJoinDialog.message }}</div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 会话失效占位：在 best-effort 保存与清理完成前，给出友好提示 -->
+    <!-- 临时编辑器（无项目）不需要此占位，用户已自动清完本地态，留在原页即可 -->
+    <Transition name="fade-overlay">
+      <div v-if="isInvalidated && currentProjectId" class="session-invalidated-overlay">
+        <div class="session-invalidated-dialog">
+          <div class="session-invalidated-title">会话已失效</div>
+          <div class="session-invalidated-desc">
+            {{ sessionInvalidationReasonText }}。正在保存并退出当前项目…
+          </div>
         </div>
       </div>
     </Transition>
@@ -2256,6 +2423,41 @@ select.axis-control option {
 .fade-overlay-enter-from,
 .fade-overlay-leave-to {
   opacity: 0;
+}
+
+/* 会话失效占位遮罩（复用 fade-overlay 过渡） */
+.session-invalidated-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: rgba(15, 18, 24, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+}
+
+.session-invalidated-dialog {
+  min-width: 320px;
+  max-width: 480px;
+  padding: 24px 28px;
+  background: var(--gm3d-color-surface-elevated, #1c2230);
+  color: var(--gm3d-color-text-primary, #f3f4f6);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+
+.session-invalidated-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.session-invalidated-desc {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--gm3d-color-text-secondary, #c5c8d0);
 }
 
 /* 草稿恢复对话框 */

@@ -32,9 +32,15 @@ const getStorage = () => {
 class ApiClient {
   private baseUrl: string
   private refreshPromise: Promise<boolean> | null = null
+  // 当 refresh token 失效时由调用方注册的回调，用于触发前端会话失效广播
+  private sessionExpiredHandler: (() => void) | null = null
 
   constructor(baseUrl: string = getApiConfig().baseUrl) {
     this.baseUrl = baseUrl
+  }
+
+  setSessionExpiredHandler(handler: (() => void) | null): void {
+    this.sessionExpiredHandler = handler
   }
 
   async get<T>(path: string): Promise<T> {
@@ -182,7 +188,14 @@ class ApiClient {
   }
 
   private isAuthPath(path: string): boolean {
-    return path.startsWith('/auth/login') || path.startsWith('/auth/register') || path.startsWith('/auth/refresh')
+    // 把 /auth/logout 也视为鉴权无关路径：它走 gateway 白名单，token 失效时也要能调通。
+    // 关键：让预刷新和 401 重试都跳过 logout，避免：
+    //   1) 用户主动登出时 apiClient 触发 tryRefreshToken；
+    //   2) refresh 失败导致 reason 错误地变成 'refresh_failed'，登录页显示"会话已过期"而非"你已退出登录"。
+    return path.startsWith('/auth/login')
+        || path.startsWith('/auth/register')
+        || path.startsWith('/auth/refresh')
+        || path.startsWith('/auth/logout')
   }
 
   private async tryRefreshToken(): Promise<boolean> {
@@ -190,7 +203,10 @@ class ApiClient {
 
     this.refreshPromise = (async () => {
       const refreshToken = this.getRefreshToken()
-      if (!refreshToken) return false
+      if (!refreshToken) {
+        this.notifySessionExpired()
+        return false
+      }
 
       try {
         const response = await fetch(`${this.baseUrl}/auth/refresh`, {
@@ -204,6 +220,7 @@ class ApiClient {
 
         if (!response.ok) {
           this.clearTokens()
+          this.notifySessionExpired()
           return false
         }
 
@@ -213,6 +230,7 @@ class ApiClient {
 
         if (!data?.accessToken) {
           this.clearTokens()
+          this.notifySessionExpired()
           return false
         }
 
@@ -224,6 +242,7 @@ class ApiClient {
         return true
       } catch {
         this.clearTokens()
+        this.notifySessionExpired()
         return false
       } finally {
         this.refreshPromise = null
@@ -231,6 +250,17 @@ class ApiClient {
     })()
 
     return this.refreshPromise
+  }
+
+  private notifySessionExpired(): void {
+    const handler = this.sessionExpiredHandler
+    if (handler) {
+      try {
+        handler()
+      } catch {
+        // 回调自身异常不影响主流程
+      }
+    }
   }
 
   private async request<T>(

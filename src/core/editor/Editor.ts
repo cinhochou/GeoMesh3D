@@ -6478,6 +6478,16 @@ export class Editor {
     this.historyIndex++
   }
 
+  /**
+   * 清空 undo/redo 栈。
+   * 用于会话失效后重置编辑器状态，避免重登后还能"撤销"出旧内容。
+   * 不会触发渲染副作用，调用方需要在合适的时机通知渲染层刷新。
+   */
+  clearHistory(): void {
+    this.history = []
+    this.historyIndex = -1
+  }
+
   toggleSnapping() {
     this.isSnappingEnabled = !this.isSnappingEnabled
   }

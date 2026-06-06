@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { CollabManager } from '@/core/collab/CollabManager'
 import type { CollabStatus } from '@/core/collab/CollabManager'
 
 interface CollabJoinDialogState {
@@ -23,6 +24,9 @@ export const useCollabStore = defineStore('collab', () => {
     visible: false,
     message: DEFAULT_COLLAB_JOIN_MESSAGE,
   })
+  // 持有当前活跃的 CollabManager 引用（由 EditorView 注册）；
+  // 提供 leave() 让 useSessionGuard / 上层组件在会话失效时直接断网（不做权限校验）。
+  const activeManager = ref<CollabManager | null>(null)
 
   const isConnected = computed(() => status.value.connected)
   const isConnecting = computed(() => status.value.connecting)
@@ -77,6 +81,35 @@ export const useCollabStore = defineStore('collab', () => {
     closeJoinDialog()
   }
 
+  /**
+   * 注册当前 EditorView 创建的 CollabManager 引用，使 store 拥有控制协作连接的能力。
+   * EditorView 在 onMounted 期间调用一次；onUnmounted 时调 setManager(null) 解绑。
+   *
+   * 用结构化类型接收，避免跨包导入 CollabManager 类后类型识别不一致的问题。
+   */
+  type LeaveableCollab = { leaveRoom: () => void }
+  const setManager = (manager: LeaveableCollab | null) => {
+    activeManager.value = manager as CollabManager | null
+  }
+
+  /**
+   * 离开当前协作房间并断开 WebSocket。
+   * 纯粹的网络层清理：不会重新做权限校验（Yjs 房间是独立的）；
+   * 适用于会话失效时立即把本 Tab 退出协作，避免继续往房间发脏数据。
+   */
+  const leave = () => {
+    const manager = activeManager.value
+    if (!manager) return
+    try {
+      manager.leaveRoom()
+    } catch (err) {
+      // 断网失败不应阻塞后续善后流程
+       
+      console.warn('[collabStore] leaveRoom failed:', err)
+    }
+    activeManager.value = null
+  }
+
   return {
     roomName,
     peerCount,
@@ -94,5 +127,7 @@ export const useCollabStore = defineStore('collab', () => {
     closeJoinDialog,
     setJoinDialogMessage,
     resetCollabState,
+    setManager,
+    leave,
   }
 })

@@ -1052,6 +1052,7 @@ watch(
 watch(
   totalContentCount,
   (count) => {
+    // 大场景自动折叠所有分类
     if (count > 10) {
       if (!hasAutoCollapsedContentGroups.value && !isAllGroupsCollapsed.value) {
         setContentGroupsCollapsed(true)
@@ -1061,10 +1062,15 @@ watch(
       hasAutoCollapsedContentGroups.value = true
       return
     }
+    // 小场景下保留用户在 uiStore 里持久化的分组状态：
+    //   - 之前被显式"全折叠"的（isAllGroupsCollapsed=true）→ 保持折叠
+    //   - 其他情况（用户手动展开/折叠的混合状态）→ 不主动改写，让 contentGroupsCollapsed
+    //     保持用户上次操作的结果
+    // 之前的 else 分支会无条件 setContentGroupsCollapsed(false)，把持久化的"已折叠"
+    // 状态清空，跨 Tab 重登后场景重新加载时所有分类被错误地"自动展开"。修复后仅在
+    // 显式触发（如"全折叠/全展开"按钮）时改变 contentGroupsCollapsed。
     if (isAllGroupsCollapsed.value) {
       setContentGroupsCollapsed(true)
-    } else {
-      setContentGroupsCollapsed(false)
     }
   },
   { immediate: true },
