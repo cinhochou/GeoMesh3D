@@ -39,6 +39,7 @@ import { useAuthStore } from '@/store/authStore'
 import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
 import { DraftStorageService } from '@/core/editor/DraftStorageService'
+import { useOrientationLock } from '@/composables/useOrientationLock'
 
 const viewportRef = ref<HTMLDivElement | null>(null)
 const editorBodyRef = ref<HTMLDivElement | null>(null)
@@ -55,6 +56,7 @@ const {
   isGridVisible,
   isCoordinateSystemVisible,
   isGlobalPointValueMode,
+  isSnappingEnabled,
   isARMode,
   lastModeBeforeAR,
   lastModeBeforeCoordinateOff,
@@ -76,6 +78,8 @@ const {
   joinDialog: collabJoinDialog,
 } = storeToRefs(collabStore)
 const { user } = storeToRefs(authStore)
+
+const { needsRotateToTarget: isPortraitOnPhone } = useOrientationLock('landscape')
 
 const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = getEditorSession()
 
@@ -401,6 +405,16 @@ const handleDraftRecoveryConfirm = () => {
   showToast('已恢复上一次的场景', 'global')
 }
 
+/** 外部请求：有变化时保存当前项目并关闭（如退出登录场景） */
+const handleExternalSaveAndClose = async (event: Event) => {
+  try {
+    await saveProjectIfChangedAndClose()
+  } finally {
+    const detail = (event as CustomEvent<{ done?: () => void }>).detail
+    detail?.done?.()
+  }
+}
+
 /** 用户点击取消恢复，清空草稿 */
 const handleDraftRecoveryCancel = () => {
   DraftStorageService.clearDraft()
@@ -425,10 +439,15 @@ onMounted(() => {
   }
 
   // 草稿恢复：无项目且 draftProtection 开启时检查是否需要弹出恢复提示
+  // 从切换用户取消流程返回时跳过（场景已在 editorSession 中保留）
   if (!route.query.projectId && appSettings.value.draftProtection) {
-    const { needsRecovery } = DraftStorageService.initOnLoad()
-    if (needsRecovery) {
-      draftRecoveryVisible.value = true
+    if (authStore.skipNextDraftRecovery) {
+      authStore.skipNextDraftRecovery = false
+    } else {
+      const { needsRecovery } = DraftStorageService.initOnLoad()
+      if (needsRecovery) {
+        draftRecoveryVisible.value = true
+      }
     }
   }
 
@@ -664,12 +683,21 @@ onMounted(() => {
   window.addEventListener('preview-settings', handlePreviewSettings as EventListener)
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('unload', handleUnload)
+  window.addEventListener('editor:save-and-close', handleExternalSaveAndClose)
 })
 
 watch(
   isGlobalPointValueMode,
   (enabled) => {
     interaction?.setGlobalPointValueMode(enabled)
+  },
+  { immediate: true },
+)
+
+watch(
+  isSnappingEnabled,
+  (enabled) => {
+    editor.isSnappingEnabled = enabled
   },
   { immediate: true },
 )
@@ -901,6 +929,7 @@ onUnmounted(() => {
   window.removeEventListener('preview-settings', handlePreviewSettings as EventListener)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('unload', handleUnload)
+  window.removeEventListener('editor:save-and-close', handleExternalSaveAndClose)
   document.body.classList.remove('sidebar-width-resizing')
 })
 
@@ -1225,11 +1254,6 @@ const handleToggleCoordinateSystem = (enabled: boolean) => {
   }
 }
 
-const handleToggleGlobalPointValue = (enabled: boolean) => {
-  uiStore.setGlobalPointValueMode(enabled)
-  interaction?.setGlobalPointValueMode(enabled)
-}
-
 const handleToggleAR = async (enabled: boolean) => {
   interaction.clearPreview()
   if (enabled) {
@@ -1430,25 +1454,34 @@ const handleNewProjectFromMenu = () => {
 }
 
 const handleExitProject = async () => {
+  await saveProjectIfChangedAndClose()
+}
+
+/** 有变化时保存当前项目并退出（用于退出登录等场景） */
+const saveProjectIfChangedAndClose = async () => {
   if (!currentProjectId.value) return
   const projectId = currentProjectId.value
-  try {
-    const sceneData = exportScene(scene)
-    const thumbnailBlob = await captureThumbnailAsync()
-    let thumbnailUrl: string | undefined
-    if (thumbnailBlob) {
-      try {
-        thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
-      } catch {
-        thumbnailUrl = undefined
+  const sceneData = exportScene(scene)
+  const compareJson = sceneToJsonForCompare(sceneData)
+  const hasChanges = lastSavedSceneJson.value === null || compareJson !== lastSavedSceneJson.value
+  if (hasChanges) {
+    try {
+      const thumbnailBlob = await captureThumbnailAsync()
+      let thumbnailUrl: string | undefined
+      if (thumbnailBlob) {
+        try {
+          thumbnailUrl = await projectApi.uploadThumbnail(thumbnailBlob)
+        } catch {
+          thumbnailUrl = undefined
+        }
       }
+      await projectApi.saveScene(projectId, {
+        sceneData: JSON.stringify(sceneData),
+        thumbnailUrl,
+      })
+    } catch (err) {
+      console.error('退出前保存失败:', err)
     }
-    await projectApi.saveScene(projectId, {
-      sceneData: JSON.stringify(sceneData),
-      thumbnailUrl,
-    })
-  } catch (err) {
-    console.error('退出前保存失败:', err)
   }
   const emptyScene = createEmptySerializedScene()
   importScene(scene, emptyScene)
@@ -1461,7 +1494,9 @@ const handleExitProject = async () => {
   lastSavedSceneJson.value = null
   DraftStorageService.clearDraft()
   router.replace({ query: {} })
-  showToast('已保存并退出项目', 'global')
+  if (hasChanges) {
+    showToast('已保存并退出项目', 'global')
+  }
 }
 
 const handleEditProject = async () => {
@@ -1745,9 +1780,6 @@ const handleSaveScene = async () => {
       @clear-all="handleClearAll"
       @undo="handleUndo"
       @redo="handleRedo"
-      @toggle-snapping="editor.toggleSnapping()"
-      @toggle-coordinate-system="handleToggleCoordinateSystem"
-      @toggle-global-point-value="handleToggleGlobalPointValue"
       @toggle-ar="handleToggleAR"
       @toggle-collab="handleToggleCollab"
       @export-scene="handleExportScene"
@@ -1793,6 +1825,13 @@ const handleSaveScene = async () => {
           </div>
         </div>
         <div v-if="!isARMode" class="viewport-controls">
+          <button
+            type="button"
+            class="axis-control grid-toggle-control"
+            @click="handleToggleCoordinateSystem(!isCoordinateSystemVisible)"
+          >
+            {{ isCoordinateSystemVisible ? '坐标系关' : '坐标系开' }}
+          </button>
           <button
             type="button"
             class="axis-control grid-toggle-control"
@@ -1862,6 +1901,19 @@ const handleSaveScene = async () => {
         </div>
       </div>
     </Transition>
+
+    <div v-if="isPortraitOnPhone" class="portrait-guard" role="alert">
+      <div class="portrait-guard-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="48" height="48">
+          <path
+            fill="currentColor"
+            d="M21.5 7.5h-9A2 2 0 0 0 10.5 9.5v15a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-15a2 2 0 0 0-2-2zm-4.5 18a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm3.5-4h-7V10h7v11.5z"
+          />
+        </svg>
+        <span class="rotate-hint">⟳</span>
+      </div>
+      <p class="portrait-guard-text">请将手机旋转至横屏方向以获取更好的编辑体验</p>
+    </div>
   </div>
 </template>
 
@@ -2307,6 +2359,50 @@ select.axis-control option {
     flex-direction: column;
     align-items: flex-end;
     gap: 0;
+  }
+}
+
+.portrait-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  background: #0f172a;
+  color: #f8fafc;
+  text-align: center;
+}
+
+.portrait-guard-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #f8fafc;
+}
+
+.portrait-guard-icon .rotate-hint {
+  position: absolute;
+  bottom: -10px;
+  right: -14px;
+  font-size: 28px;
+  color: #38bdf8;
+  animation: portrait-guard-spin 2s linear infinite;
+}
+
+.portrait-guard-text {
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  opacity: 0.92;
+}
+
+@keyframes portrait-guard-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

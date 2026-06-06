@@ -43,6 +43,10 @@ export const useAuthStore = defineStore('auth', () => {
   const hasSwitchSnapshot = ref(
     typeof window !== 'undefined' && Boolean(window.sessionStorage.getItem(SWITCH_USER_SNAPSHOT_KEY)),
   )
+  // 标记下一次进入编辑器时是否跳过草稿恢复提示
+  // 由 cancelSwitchUser 在 SPA 内取消切换时置位，编辑器消费后清零
+  // 使用 ref 而非 sessionStorage 可在页面刷新（JS context 重置）时自动失效
+  const skipNextDraftRecovery = ref(false)
 
   const clearError = () => {
     error.value = null
@@ -181,7 +185,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       await authApi.logout()
-    } catch (err) {
+    } catch {
       error.value = null
     } finally {
       clearSwitchSnapshot()
@@ -231,6 +235,9 @@ export const useAuthStore = defineStore('auth', () => {
       await refreshCurrentUser()
     }
     clearSwitchSnapshot()
+    // 标记从切换用户取消流程返回编辑器：跳过草稿恢复提示
+    // （scene/editor 已在 editorSession 模块级变量中保留）
+    skipNextDraftRecovery.value = true
     return true
   }
 
@@ -317,6 +324,7 @@ export const useAuthStore = defineStore('auth', () => {
     cancelSwitchUser,
     hasSwitchSnapshot,
     clearSwitchSnapshot,
+    skipNextDraftRecovery,
     refreshCurrentUser,
     refreshSession,
     updateProfile,

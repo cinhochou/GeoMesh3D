@@ -19,6 +19,8 @@ export interface AppSettings {
   confirmBeforeDelete: boolean
   autoSaveProject: boolean
   draftProtection: boolean
+  enableSnapping: boolean
+  globalPointValue: boolean
 }
 
 const APP_SETTINGS_KEY = 'geomesh3d-settings'
@@ -33,6 +35,8 @@ const defaultAppSettings: AppSettings = {
   confirmBeforeDelete: false,
   autoSaveProject: true,
   draftProtection: true,
+  enableSnapping: false,
+  globalPointValue: false,
 }
 
 function loadAppSettings(): AppSettings {
@@ -54,6 +58,8 @@ function loadAppSettings(): AppSettings {
       confirmBeforeDelete: typeof parsed.confirmBeforeDelete === 'boolean' ? parsed.confirmBeforeDelete : defaultAppSettings.confirmBeforeDelete,
       autoSaveProject: typeof parsed.autoSaveProject === 'boolean' ? parsed.autoSaveProject : defaultAppSettings.autoSaveProject,
       draftProtection: typeof parsed.draftProtection === 'boolean' ? parsed.draftProtection : defaultAppSettings.draftProtection,
+      enableSnapping: typeof parsed.enableSnapping === 'boolean' ? parsed.enableSnapping : defaultAppSettings.enableSnapping,
+      globalPointValue: typeof parsed.globalPointValue === 'boolean' ? parsed.globalPointValue : defaultAppSettings.globalPointValue,
     }
   } catch {
     return { ...defaultAppSettings }
@@ -163,10 +169,12 @@ export const useUiStore = defineStore('ui', () => {
   const axisGridSize = ref(10)
   const isGridVisible = ref(true)
   const isCoordinateSystemVisible = ref(true)
-  const isGlobalPointValueMode = ref(false)
   const isARMode = ref(false)
   const lastModeBeforeAR = ref<EditorMode | null>(null)
   const lastModeBeforeCoordinateOff = ref<EditorMode | null>(null)
+
+  const isGlobalPointValueMode = computed(() => appSettings.value.globalPointValue)
+  const isSnappingEnabled = computed(() => appSettings.value.enableSnapping)
 
   const toastMessage = ref('')
   const toastVisible = ref(false)
@@ -287,11 +295,19 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   const setGlobalPointValueMode = (value: boolean) => {
-    isGlobalPointValueMode.value = value
+    appSettings.value.globalPointValue = value
   }
 
   const toggleGlobalPointValueMode = () => {
-    isGlobalPointValueMode.value = !isGlobalPointValueMode.value
+    appSettings.value.globalPointValue = !appSettings.value.globalPointValue
+  }
+
+  const setSnappingEnabled = (value: boolean) => {
+    appSettings.value.enableSnapping = value
+  }
+
+  const toggleSnappingEnabled = () => {
+    appSettings.value.enableSnapping = !appSettings.value.enableSnapping
   }
 
   const setARMode = (value: boolean) => {
@@ -481,7 +497,8 @@ export const useUiStore = defineStore('ui', () => {
     axisGridSize.value = 10
     isGridVisible.value = true
     isCoordinateSystemVisible.value = true
-    isGlobalPointValueMode.value = false
+    appSettings.value.globalPointValue = false
+    appSettings.value.enableSnapping = false
     isARMode.value = false
     lastModeBeforeAR.value = null
     lastModeBeforeCoordinateOff.value = null
@@ -524,6 +541,7 @@ export const useUiStore = defineStore('ui', () => {
     isGridVisible,
     isCoordinateSystemVisible,
     isGlobalPointValueMode,
+    isSnappingEnabled,
     isARMode,
     lastModeBeforeAR,
     lastModeBeforeCoordinateOff,
@@ -554,6 +572,8 @@ export const useUiStore = defineStore('ui', () => {
     setCoordinateSystemVisible,
     setGlobalPointValueMode,
     toggleGlobalPointValueMode,
+    setSnappingEnabled,
+    toggleSnappingEnabled,
     setARMode,
     setLastModeBeforeAR,
     setLastModeBeforeCoordinateOff,

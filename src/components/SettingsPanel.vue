@@ -4,7 +4,7 @@
  * 提供交互、画质、性能、显示、高级五类应用参数的配置界面
  * 支持实时预览、确认保存、恢复默认、二次确认等功能
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useUiStore, type SettingsCategory, type AppSettings } from '@/store/uiStore'
 
@@ -21,7 +21,7 @@ const categories: { key: SettingsCategory; label: string }[] = [
   { key: 'interaction', label: '交互' },
   { key: 'graphics', label: '画质' },
   { key: 'performance', label: '性能' },
-  { key: 'display', label: '显示' },
+  { key: 'display', label: '渲染' },
   { key: 'advanced', label: '高级' },
 ]
 
@@ -75,7 +75,9 @@ const hasChanges = computed(() => {
     localSettings.value.hiddenEdge !== appSettings.value.hiddenEdge ||
     localSettings.value.confirmBeforeDelete !== appSettings.value.confirmBeforeDelete ||
     localSettings.value.autoSaveProject !== appSettings.value.autoSaveProject ||
-    localSettings.value.draftProtection !== appSettings.value.draftProtection
+    localSettings.value.draftProtection !== appSettings.value.draftProtection ||
+    localSettings.value.enableSnapping !== appSettings.value.enableSnapping ||
+    localSettings.value.globalPointValue !== appSettings.value.globalPointValue
   )
 })
 
@@ -109,7 +111,9 @@ const isDefaultSettings = computed(() => {
     localSettings.value.hiddenEdge === true &&
     localSettings.value.confirmBeforeDelete === false &&
     localSettings.value.autoSaveProject === true &&
-    localSettings.value.draftProtection === true
+    localSettings.value.draftProtection === true &&
+    localSettings.value.enableSnapping === false &&
+    localSettings.value.globalPointValue === false
   )
 })
 
@@ -136,6 +140,8 @@ const handleReset = () => {
       confirmBeforeDelete: false,
       autoSaveProject: true,
       draftProtection: true,
+      enableSnapping: false,
+      globalPointValue: false,
     }
     showConfirmDialog.value = false
   }
@@ -153,12 +159,24 @@ const handleConfirmDialogConfirm = () => {
   confirmDialogAction.value?.()
 }
 
-// 点击遮罩层关闭面板
-const handleOverlayClick = (e: MouseEvent) => {
-  if (e.target === e.currentTarget) {
-    handleClose()
+// 按 Esc 键关闭面板
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.key !== 'Escape') return
+  // 如果二次确认弹窗打开，优先关闭弹窗
+  if (showConfirmDialog.value) {
+    handleConfirmDialogCancel()
+    return
   }
+  handleClose()
 }
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 
 // 实时预览：将本地设置通过自定义事件发送给 EditorView（不保存到 store/localStorage）
 const previewSettings = computed(() => ({ ...localSettings.value }))
@@ -175,7 +193,7 @@ watch(
 <template>
   <Teleport to="body">
     <Transition name="settings-fade">
-      <div v-if="isSettingsPanelOpen" class="settings-overlay" @click="handleOverlayClick">
+      <div v-if="isSettingsPanelOpen" class="settings-overlay">
         <div class="settings-panel">
           <div class="settings-header">
             <h3 class="settings-title">设置</h3>
@@ -267,9 +285,7 @@ watch(
                     <span class="toggle-thumb"></span>
                   </button>
                 </div>
-                <p class="setting-desc">
-                  开启后，被几何体遮挡的点和标签会变暗，减少视觉干扰。
-                </p>
+                <p class="setting-desc">开启后，被几何体遮挡的点和标签会变暗，减少视觉干扰。</p>
               </div>
 
               <div class="setting-item">
@@ -320,6 +336,38 @@ watch(
             </div>
 
             <div v-if="activeCategory === 'interaction'" class="settings-section">
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">点吸附</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.enableSnapping }"
+                    @click="localSettings.enableSnapping = !localSettings.enableSnapping"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，点的移动将按照0.5个单位吸附。关闭该开关，则可以让点的移动更丝滑。
+                </p>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">全局数值</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.globalPointValue }"
+                    @click="localSettings.globalPointValue = !localSettings.globalPointValue"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，移动点时将显示该点的坐标数值标签，以帮助用户更好地确认点的位置。
+                </p>
+              </div>
+
               <div class="setting-item">
                 <div class="setting-header">
                   <label class="setting-label">删除前确认</label>
@@ -387,7 +435,7 @@ watch(
 
         <!-- 二次确认弹窗 -->
         <Transition name="confirm-fade">
-          <div v-if="showConfirmDialog" class="confirm-overlay" @click="handleConfirmDialogCancel">
+          <div v-if="showConfirmDialog" class="confirm-overlay">
             <div class="confirm-dialog" @click.stop>
               <div class="confirm-header">
                 <h4 class="confirm-title">{{ confirmDialogTitle }}</h4>
@@ -396,10 +444,16 @@ watch(
                 <p class="confirm-message">{{ confirmDialogMessage }}</p>
               </div>
               <div class="confirm-footer">
-                <button class="settings-btn settings-btn-secondary" @click="handleConfirmDialogCancel">
+                <button
+                  class="settings-btn settings-btn-secondary"
+                  @click="handleConfirmDialogCancel"
+                >
                   取消
                 </button>
-                <button class="settings-btn settings-btn-danger" @click="handleConfirmDialogConfirm">
+                <button
+                  class="settings-btn settings-btn-danger"
+                  @click="handleConfirmDialogConfirm"
+                >
                   确认
                 </button>
               </div>
@@ -799,7 +853,9 @@ watch(
 
 .settings-fade-enter-active .settings-panel,
 .settings-fade-leave-active .settings-panel {
-  transition: transform 0.2s ease, opacity 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .settings-fade-enter-from .settings-panel,
@@ -820,7 +876,9 @@ watch(
 
 .confirm-fade-enter-active .confirm-dialog,
 .confirm-fade-leave-active .confirm-dialog {
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .confirm-fade-enter-from .confirm-dialog,
