@@ -12,30 +12,31 @@ const routes = [
     path: '/',
     name: 'editor',
     component: EditorView,
+    meta: { title: '编辑器' },
   },
   {
     path: '/login',
     name: 'login',
     component: LoginView,
-    meta: { guestOnly: true },
+    meta: { guestOnly: true, title: '登录' },
   },
   {
     path: '/register',
     name: 'register',
     component: RegisterView,
-    meta: { guestOnly: true },
+    meta: { guestOnly: true, title: '注册' },
   },
   {
     path: '/profile',
     name: 'profile',
     component: ProfileView,
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, title: '个人主页' },
   },
   {
     path: '/projects',
     name: 'projects',
     component: ProjectListView,
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, title: '项目列表' },
   },
   {
     path: '/logout',
@@ -87,6 +88,13 @@ router.beforeEach(async (to, from, next) => {
   } else {
     next()
   }
+})
+
+router.afterEach((to) => {
+  // 编辑器页面的标题由 EditorView 内部 watch(currentProjectName) 动态管理
+  if (to.name === 'editor') return
+  const title = to.meta.title as string | undefined
+  document.title = title ? `${title} - GeoMesh3D` : 'GeoMesh3D'
 })
 
 export default router

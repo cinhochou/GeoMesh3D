@@ -14,31 +14,15 @@ const router = useRouter()
 const authStore = useAuthStore()
 const { user, isLoading } = storeToRefs(authStore)
 
-// 会话失效感知：
-// - S1（用户主动退出，reason='manual'）：停留在本页，给出"重新登录"按钮占位卡，用户可点按钮去登录页
-// - S2（其他 Tab 退出，reason='other_tab'）/ S4（refresh 失败，reason='refresh_failed'）：
-//   直接跳转到登录页，不再展示占位卡；登录页会显示"登录状态已过期，请重新登录"banner
-const { isInvalidated, reason: invalidationReason } = useSessionGuard({
-  onInvalidated: (reason) => {
-    if (reason === 'other_tab' || reason === 'refresh_failed') {
-      router.replace({
-        path: '/login',
-        query: { reason: 'expired', redirect: route.fullPath },
-      })
-    }
-    // 'manual' 走占位卡 + 重新登录按钮的默认路径
+// 会话失效感知：统一跳转登录页
+useSessionGuard({
+  onInvalidated: () => {
+    router.replace({
+      path: '/login',
+      query: { reason: 'expired', redirect: route.fullPath },
+    })
   },
 })
-
-// B3：透传实际失效原因到登录页 banner 文案
-//   - 'manual' → "你已退出登录，请重新登录"
-//   - 'other_tab' / 'refresh_failed' → "登录状态已过期，请重新登录"
-// 避免 S1 主动退出后被告知"登录状态已过期"的语义不一致
-const goToLogin = () => {
-  const redirect = route.fullPath
-  const reason = invalidationReason.value ?? 'expired'
-  router.replace({ path: '/login', query: { reason, redirect } })
-}
 
 const avatarInput = ref<HTMLInputElement | null>(null)
 
@@ -338,22 +322,7 @@ const cancelEditPassword = () => {
 </script>
 
 <template>
-  <div v-if="isInvalidated" class="session-invalidated-page">
-    <div class="session-invalidated-card">
-      <div class="session-invalidated-title">会话已失效</div>
-      <div class="session-invalidated-desc">
-        {{
-          invalidationReason === 'other_tab'
-            ? '账号在另一标签页退出，已自动失效。'
-            : invalidationReason === 'refresh_failed'
-              ? '登录状态已过期，请重新登录。'
-              : '你已退出登录，请重新登录。'
-        }}重新登录后会自动返回个人中心。
-      </div>
-      <button class="session-invalidated-btn" @click="goToLogin">重新登录</button>
-    </div>
-  </div>
-  <div v-else class="profile-page">
+  <div class="profile-page">
     <header class="profile-header">
       <div class="profile-header-inner">
         <img src="@/assets/GeoMesh3D_logo_white_1240x300.png" alt="GeoMesh3D" class="header-logo" @click="goToEditor" />
@@ -518,58 +487,6 @@ const cancelEditPassword = () => {
 </template>
 
 <style scoped>
-/* 会话失效占位页 */
-.session-invalidated-page {
-  min-height: 100vh;
-  background: #0e1014;
-  color: #e5e7eb;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.session-invalidated-card {
-  max-width: 420px;
-  width: 100%;
-  background: #1c2230;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 28px 24px;
-  text-align: center;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
-}
-
-.session-invalidated-title {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-
-.session-invalidated-desc {
-  font-size: 14px;
-  line-height: 1.6;
-  color: #c5c8d0;
-  margin-bottom: 20px;
-}
-
-.session-invalidated-btn {
-  display: inline-block;
-  padding: 10px 20px;
-  font-size: 14px;
-  font-weight: 500;
-  background: #43f260;
-  color: #0e1014;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: filter 0.15s ease;
-}
-
-.session-invalidated-btn:hover {
-  filter: brightness(1.05);
-}
-
 .profile-page {
   position: relative;
   min-height: 100vh;

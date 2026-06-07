@@ -53,28 +53,12 @@ const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
 const authStore = useAuthStore()
 
-// 会话失效状态与善后：useSessionGuard 提供 isInvalidated / reason 的响应式状态；
-// 重登成功后 store.clearSessionInvalidation() 会让 isInvalidated 自动变 false。
-// useSessionGuard 内部用 handled 标记保证 onInvalidated 同周期内只触发一次。
-const {
-  isInvalidated,
-  reason: invalidationReason,
-} = useSessionGuard({
+// 会话失效善后：useSessionGuard 在 onInvalidated 回调中处理保存、断连、跳转等清理。
+// 重登成功后 store.clearSessionInvalidation() 会自动复位。
+useSessionGuard({
   onInvalidated: (reason) => {
     void handleSessionInvalidated(reason)
   },
-})
-const sessionInvalidationReasonText = computed(() => {
-  switch (invalidationReason.value) {
-    case 'manual':
-      return '你已退出登录'
-    case 'other_tab':
-      return '账号在另一标签页退出，已自动失效'
-    case 'refresh_failed':
-      return '会话已过期'
-    default:
-      return '会话已失效'
-  }
 })
 
 // 会话失效后的善后流程：best-effort 保存（S2/S4）→ 断开 Yjs 协作 → 重置场景 → 跳登录
@@ -98,11 +82,11 @@ const handleSessionInvalidated = async (reason: string) => {
   //   - 项目场景走 3s 去抖动的 auto-save（见 triggerAutoSave），最后一次操作和会话失效之间的
   //     < 3s 窗口由这里的 saveScene 兜住
   //   - S1（'manual'）时 Toolbar 已经走完 saveProjectIfChangedAndClose，跳过避免重复保存
-  if (reason !== 'manual') {
+  //   - S2（'other_tab'）时 token 已被其他 Tab 清除，saveScene 必然 401，跳过避免控制台报错
+  if (reason === 'refresh_failed') {
     try {
       const sceneData = exportScene(scene)
       const sceneJson = JSON.stringify(sceneData)
-      // 不重生成缩略图，避免 401 路径上的额外请求
       await projectApi.saveScene(currentProjectId.value, {
         sceneData: sceneJson,
       })
@@ -133,14 +117,10 @@ const handleSessionInvalidated = async (reason: string) => {
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
   // 5) 最后清 currentProjectId / 跳登录页
-  // 顺序：先 router.replace 启动跳转，再清 currentProjectId，
-  // 让占位遮罩（v-if="isInvalidated && currentProjectId"）在跳转前一直可见，避免
-  // "遮罩消失但还在原页面"的闪烁中间态。
   const redirect = route.fullPath
-  const reasonParam = reason === 'manual' ? 'manual' : 'expired'
   router.replace({
     path: '/login',
-    query: { reason: reasonParam, redirect },
+    query: { reason: 'expired', redirect },
   })
   currentProjectId.value = null
   currentProjectName.value = ''
@@ -511,9 +491,11 @@ const handleExternalSaveAndClose = async (event: Event) => {
   try {
     saved = await saveProjectIfChangedAndClose()
   } finally {
-    const detail = (event as CustomEvent<{
-      done?: (result: { saved: boolean }) => void
-    }>).detail
+    const detail = (
+      event as CustomEvent<{
+        done?: (result: { saved: boolean }) => void
+      }>
+    ).detail
     detail?.done?.({ saved })
   }
 }
@@ -796,6 +778,14 @@ onMounted(() => {
   //     但若切换账号会导致"草稿归属新 user"的语义问题，因此弹出 toast 提示。
   crossTabLoginEvents.on(handleCrossTabLogin)
 })
+
+watch(
+  currentProjectName,
+  (name) => {
+    document.title = name ? `项目：${name} - GeoMesh3D` : '编辑器 - GeoMesh3D'
+  },
+  { immediate: true },
+)
 
 watch(
   isGlobalPointValueMode,
@@ -1791,19 +1781,6 @@ const handleSaveScene = async () => {
       </div>
     </Transition>
 
-    <!-- 会话失效占位：在 best-effort 保存与清理完成前，给出友好提示 -->
-    <!-- 临时编辑器（无项目）不需要此占位，用户已自动清完本地态，留在原页即可 -->
-    <Transition name="fade-overlay">
-      <div v-if="isInvalidated && currentProjectId" class="session-invalidated-overlay">
-        <div class="session-invalidated-dialog">
-          <div class="session-invalidated-title">会话已失效</div>
-          <div class="session-invalidated-desc">
-            {{ sessionInvalidationReasonText }}。正在保存并退出当前项目…
-          </div>
-        </div>
-      </div>
-    </Transition>
-
     <InputDialog
       :visible="mergePointDialog.visible"
       title="合并点"
@@ -2423,41 +2400,6 @@ select.axis-control option {
 .fade-overlay-enter-from,
 .fade-overlay-leave-to {
   opacity: 0;
-}
-
-/* 会话失效占位遮罩（复用 fade-overlay 过渡） */
-.session-invalidated-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 11000;
-  background: rgba(15, 18, 24, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: all;
-}
-
-.session-invalidated-dialog {
-  min-width: 320px;
-  max-width: 480px;
-  padding: 24px 28px;
-  background: var(--gm3d-color-surface-elevated, #1c2230);
-  color: var(--gm3d-color-text-primary, #f3f4f6);
-  border-radius: 12px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
-  text-align: center;
-}
-
-.session-invalidated-title {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.session-invalidated-desc {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--gm3d-color-text-secondary, #c5c8d0);
 }
 
 /* 草稿恢复对话框 */

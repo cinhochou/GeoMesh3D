@@ -339,7 +339,7 @@ export const useAuthStore = defineStore('auth', () => {
           if (state === SESSION_STATE_INACTIVE) {
             // 持久化标志只表示"已被标为失效"，无法还原 reason；
             // 'manual' 仅在当前 Tab 主动 logout 时出现（其他 Tab 写入是 'other_tab' / 'refresh_failed'），
-            // 刷新后统一按 'other_tab' 处理，UI 走"账号在另一标签页退出"提示。
+            // 刷新后统一按 'other_tab' 处理，UI 走"登录状态已过期"提示。
             markInvalidatedInternal('other_tab')
           }
         } catch {

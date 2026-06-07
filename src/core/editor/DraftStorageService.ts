@@ -15,16 +15,17 @@ const SESSION_ALIVE_KEY = 'geomesh3d_session_alive'
 /**
  * 临时场景（草稿）本地存储服务
  *
- * 关闭 vs 刷新 vs 意外关闭的区分机制：
+ * 主动操作 vs 异常关闭的区分机制：
  *
  * - sessionStorage 在刷新后保留，关闭标签页后清除
- * - beforeunload 时：保存草稿 + 设置 sessionStorage 标记
- * - unload 时：设置 localStorage graceful_exit 标记（用户确认离开）
+ * - beforeunload 时：保存草稿 + 设置 sessionStorage 标记 + 弹确认框
+ * - unload 时：设置 localStorage graceful_exit 标记（用户确认离开/重新加载）
  *
  * 页面加载时判断：
- * - sessionStorage 存在 → 刷新 → 弹出恢复提示
- * - sessionStorage 不存在 + graceful_exit 存在 → 用户主动关闭 → 清空草稿，不弹恢复
- * - sessionStorage 不存在 + graceful_exit 不存在 → 意外关闭 → 弹出恢复提示
+ * - sessionStorage 存在 + graceful_exit 存在 → 主动刷新（用户点了重新加载）→ 清空草稿，不弹恢复
+ * - sessionStorage 存在 + graceful_exit 不存在 → 异常刷新（服务器重启等被动刷新）→ 弹出恢复提示
+ * - sessionStorage 不存在 + graceful_exit 存在 → 主动关闭Tab（用户点了离开）→ 清空草稿，不弹恢复
+ * - sessionStorage 不存在 + graceful_exit 不存在 → 异常关闭（崩溃/断电/杀进程等）→ 弹出恢复提示
  */
 export const DraftStorageService = {
   /** 保存草稿到 localStorage（空场景不保存） */
@@ -88,19 +89,23 @@ export const DraftStorageService = {
     const isRefresh = sessionStorage.getItem(SESSION_ALIVE_KEY) === 'true'
     const hasGracefulExit = localStorage.getItem(GRACEFUL_EXIT_KEY) !== null
 
-    if (isRefresh) {
-      // 刷新：弹出恢复提示
-      return { needsRecovery: this.hasDraft() }
-    }
+    // 清理标记（graceful_exit 只需读取一次，sessionStorage 在关闭 Tab 后自动清除）
+    localStorage.removeItem(GRACEFUL_EXIT_KEY)
 
     if (hasGracefulExit) {
-      // 用户主动关闭了页面（经过了 beforeunload 确认）→ 清空草稿和标记
+      // 主动操作：用户点了"重新加载"或"离开" → 清空草稿，不弹恢复
       this.clearDraft()
-      localStorage.removeItem(GRACEFUL_EXIT_KEY)
       return { needsRecovery: false }
     }
 
-    // 意外关闭（崩溃/断电/杀进程等）：弹出恢复提示
+    if (isRefresh) {
+      // 异常刷新：sessionStorage 存在说明是刷新，但 graceful_exit 不存在说明用户没有主动确认
+      // （如服务器重启导致页面被动刷新）→ 弹出恢复提示
+      return { needsRecovery: this.hasDraft() }
+    }
+
+    // 异常关闭：sessionStorage 和 graceful_exit 都不存在
+    // （如崩溃/断电/杀进程等）→ 弹出恢复提示
     return { needsRecovery: this.hasDraft() }
   },
 }

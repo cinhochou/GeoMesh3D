@@ -460,12 +460,12 @@ const handleLogout = async () => {
     window.setTimeout(resolve, 1000)
   })
   await authStore.logout()
-  window.dispatchEvent(
-    new CustomEvent('toast', {
-      detail: { msg: '已退出登录', scope: 'global' },
-    }),
-  )
-  await router.push({ name: 'editor' })
+  uiStore.openToast('已退出登录', 'global')
+  setTimeout(() => uiStore.closeToast(), 1500)
+  // 路由跳转由各视图的 useSessionGuard onInvalidated 回调统一处理：
+  // - 编辑器（有项目）→ 跳 /login
+  // - 编辑器（临时）→ 留在当前页
+  // - ProfileView / ProjectListView → 跳 /login
 }
 
 const handleSwitchUser = async () => {
@@ -647,6 +647,7 @@ onUnmounted(() => {
     </div>
 
     <div class="toolbar-scrollable">
+      <div class="toolbar-scrollable-inner">
       <button
         :class="{ 'is-active': currentMode === EditorMode.Select }"
         @click="setMode(EditorMode.Select)"
@@ -798,6 +799,7 @@ onUnmounted(() => {
       <button class="history-button" @click="emit('redo')" :disabled="isEditingLocked || !canRedo">
         重做
       </button>
+      </div>
     </div>
 
     <div
@@ -1540,18 +1542,29 @@ onUnmounted(() => {
 
 .toolbar-scrollable {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 0;
   flex: 1 1 auto;
   min-width: 0;
+  /* overlay 让滚动条覆盖内容而不占据空间，避免滚动条出现时中心点偏移；
+     不支持 overlay 的浏览器回退到 auto */
   overflow-x: auto;
+  overflow-x: overlay;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
-  /* 撑满 toolbar 高度，再用负 margin 下边缘溢出当前 padding 到 toolbar 底 padding；
-     配合 .toolbar 的 overflow:hidden，滚动条被"挤"到 toolbar 最底端（紧贴 border-bottom）。
-     溢出量用 calc(--toolbar-padding-y * -1) 跟随媒体查询同步，避免小窗口下被切掉 */
+  /* stretch + 负 margin 让滚动条贴底 */
   align-self: stretch;
   margin-bottom: calc(var(--toolbar-padding-y) * -1);
+}
+
+.toolbar-scrollable-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min-content;
+  /* stretch + 负 margin 使 scrollable 高度比可见区域多 P，
+     align-items: center 的中心点因此偏下 P/2，
+     用 translateY(-P/2) 精确补偿，使按钮相对 toolbar 整体垂直居中 */
+  transform: translateY(calc(var(--toolbar-padding-y) / -2));
 }
 
 .toolbar-logo {
@@ -1569,6 +1582,7 @@ onUnmounted(() => {
   height: 20px;
   background: #444;
   margin: 0 4px;
+  align-self: center;
 }
 
 button {
@@ -1610,6 +1624,8 @@ button.is-active {
 
 .menu-wrap {
   position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .menu-trigger {
@@ -1677,6 +1693,7 @@ button.is-active {
   align-items: center;
   flex-shrink: 0;
   gap: 4px;
+  align-self: center;
 }
 
 .room-input {
@@ -2025,7 +2042,7 @@ button.is-active {
   }
 
   .toolbar-fixed-left,
-  .toolbar-scrollable {
+  .toolbar-scrollable-inner {
     gap: 6px;
   }
 
@@ -2060,7 +2077,7 @@ button.is-active {
   }
 
   .toolbar-fixed-left,
-  .toolbar-scrollable {
+  .toolbar-scrollable-inner {
     gap: 4px;
   }
 

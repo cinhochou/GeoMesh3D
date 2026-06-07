@@ -47,8 +47,6 @@ const redirect = computed(() => {
 const sessionInvalidationReason = computed(() => {
   const value = route.query.reason
   if (typeof value !== 'string') return null
-  if (value === 'manual') return '你已退出登录，请重新登录'
-  if (value === 'other_tab') return '账号在另一标签页退出，已自动失效'
   if (value === 'expired' || value === 'refresh_failed') return '登录状态已过期，请重新登录'
   return null
 })
@@ -77,7 +75,8 @@ const successMsg = computed(() => {
   if (path.includes('/projects')) {
     return '登录成功！正在进入项目列表...'
   }
-  if (path.startsWith('/editor') || path === '/') {
+  // 编辑器路由是 /，redirect 可能是 / 或 /?projectId=xxx
+  if (path.startsWith('/editor') || path === '/' || path.startsWith('/?')) {
     const name = redirectProjectName.value
     if (name) {
       return `登录成功！正在进入"${name}"项目...`
