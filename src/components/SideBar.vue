@@ -114,7 +114,7 @@ const dismissHintPopovers = (e: MouseEvent | TouchEvent) => {
   }
 }
 
-const isAllGroupsCollapsed = ref(false)
+const isAllGroupsCollapsed = ref(true)
 const toggleAllContentGroups = () => {
   if (isAllGroupsCollapsed.value) {
     setContentGroupsCollapsed(false)
@@ -1658,6 +1658,15 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
   const point = props.scene.points.get(id)
   if (!point) return
   if (isPointCoordinateLocked(point)) return
+  // 将当前实际坐标用 toFixed2 格式化后与输入值比较，
+  // 避免因 toFixed2 截断精度导致每次编辑属性都产生无意义的 TransformCommand
+  // （如实际坐标 1.23456 被 toFixed2 截为 "1.23"，若用户未修改坐标输入，
+  //  不应将点移到 1.23）
+  if (
+    toFixed2(point.position.x) === xStr &&
+    toFixed2(point.position.y) === yStr &&
+    toFixed2(point.position.z) === zStr
+  ) return
   props.editor.setPointPosition(id, new Vec3(x, y, z))
   props.scene.solveDirtyConstraints()
   props.scene.markAllRenderDirty()
@@ -1667,6 +1676,7 @@ const applyEditPoint = () => {
   if (!editing.value || editing.value.type !== 'point') return
   const point = props.scene.points.get(editing.value.id)
   if (point) {
+    props.editor.beginCollabTransaction('UpdatePointCommand')
     props.editor.updatePoint(editing.value.id, {
       name: editPoint.name,
       nameVisible: editPoint.nameVisible,
@@ -1675,8 +1685,11 @@ const applyEditPoint = () => {
     if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
       props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
     }
+    applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
+    props.editor.commitCollabTransaction()
+  } else {
+    applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
   }
-  applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
 }
 
 const applyEditLine = () => {
@@ -1687,6 +1700,7 @@ const applyEditLine = () => {
   const previousLengthLocked = line.lengthLocked
   const previousLockedLength = line.lockedLength
   const parsedLockedLength = Number(editLine.lockedLength)
+  props.editor.beginCollabTransaction('UpdateLineCommand')
   props.editor.updateLine(editing.value.id, {
     name: editLine.name,
     nameVisible: editLine.nameVisible,
@@ -1700,15 +1714,15 @@ const applyEditLine = () => {
   }
 
   const updatedLine = props.scene.lines.get(editing.value.id)
-  if (!updatedLine) return
-  if (props.editor.isLineLocked(updatedLine)) return
+  if (!updatedLine) { props.editor.commitCollabTransaction(); return }
+  if (props.editor.isLineLocked(updatedLine)) { props.editor.commitCollabTransaction(); return }
 
   const constraintChanged =
     editLine.lengthLocked !== previousLengthLocked ||
     (editLine.lengthLocked &&
       Number.isFinite(parsedLockedLength) &&
       Math.abs(parsedLockedLength - previousLockedLength) > 1e-6)
-  if (constraintChanged) return
+  if (constraintChanged) { props.editor.commitCollabTransaction(); return }
 
   const p1x = Number(editLine.p1.x)
   const p1y = Number(editLine.p1.y)
@@ -1724,12 +1738,14 @@ const applyEditLine = () => {
     !Number.isFinite(p2y) ||
     !Number.isFinite(p2z)
   ) {
+    props.editor.commitCollabTransaction()
     return
   }
 
   if (!updatedLine.lengthLocked) {
     applyPointPosition(updatedLine.p1.id, editLine.p1.x, editLine.p1.y, editLine.p1.z)
     applyPointPosition(updatedLine.p2.id, editLine.p2.x, editLine.p2.y, editLine.p2.z)
+    props.editor.commitCollabTransaction()
     return
   }
 
@@ -1757,6 +1773,7 @@ const applyEditLine = () => {
   } else if (hasDeltaP2) {
     props.editor.setPointPosition(updatedLine.p2.id, new Vec3(p2x, p2y, p2z))
   }
+  props.editor.commitCollabTransaction()
 }
 const applyEditRay = () => {
   if (!editing.value || editing.value.type !== 'ray') return
@@ -1764,6 +1781,7 @@ const applyEditRay = () => {
   if (!ray) return
   const previousUserLocked = props.editor.isRayLocked(ray)
   const displayLength = Number(editRay.displayLength)
+  props.editor.beginCollabTransaction('UpdateRayCommand')
   props.editor.updateRay(editing.value.id, {
     name: editRay.name,
     nameVisible: editRay.nameVisible,
@@ -1775,15 +1793,17 @@ const applyEditRay = () => {
     props.editor.setRayLockState(editing.value.id, editRay.userLocked)
   }
   const updatedRay = props.scene.rays.get(editing.value.id)
-  if (!updatedRay || props.editor.isRayLocked(updatedRay)) return
+  if (!updatedRay || props.editor.isRayLocked(updatedRay)) { props.editor.commitCollabTransaction(); return }
   applyPointPosition(ray.p1.id, editRay.p1.x, editRay.p1.y, editRay.p1.z)
   applyPointPosition(ray.p2.id, editRay.p2.x, editRay.p2.y, editRay.p2.z)
+  props.editor.commitCollabTransaction()
 }
 const applyEditVector = () => {
   if (!editing.value || editing.value.type !== 'vector') return
   const vector = props.scene.vectors.get(editing.value.id)
   if (!vector) return
   const previousUserLocked = props.editor.isVectorLocked(vector)
+  props.editor.beginCollabTransaction('UpdateVectorCommand')
   props.editor.updateVector(editing.value.id, {
     name: editVector.name,
     nameVisible: editVector.nameVisible,
@@ -1795,7 +1815,7 @@ const applyEditVector = () => {
   }
 
   const updatedVector = props.scene.vectors.get(editing.value.id)
-  if (!updatedVector || props.editor.isVectorLocked(updatedVector)) return
+  if (!updatedVector || props.editor.isVectorLocked(updatedVector)) { props.editor.commitCollabTransaction(); return }
 
   const isLengthFocused = !!focusedCoord['vector.length']
   const previousLength = updatedVector.getLength()
@@ -1835,6 +1855,7 @@ const applyEditVector = () => {
         ),
       )
     }
+    props.editor.commitCollabTransaction()
     return
   }
 
@@ -1866,6 +1887,7 @@ const applyEditVector = () => {
   if (p2Changed) {
     applyPointPosition(updatedVector.p2.id, editVector.p2.x, editVector.p2.y, editVector.p2.z)
   }
+  props.editor.commitCollabTransaction()
 }
 const applyEditStraightLine = () => {
   if (!editing.value || editing.value.type !== 'straightLine') return
@@ -1873,6 +1895,7 @@ const applyEditStraightLine = () => {
   if (!line) return
   const previousUserLocked = props.editor.isStraightLineLocked(line)
   const displayLength = Number(editStraightLine.displayLength)
+  props.editor.beginCollabTransaction('UpdateStraightLineCommand')
   props.editor.updateStraightLine(editing.value.id, {
     name: editStraightLine.name,
     nameVisible: editStraightLine.nameVisible,
@@ -1884,7 +1907,7 @@ const applyEditStraightLine = () => {
     props.editor.setStraightLineLockState(editing.value.id, editStraightLine.userLocked)
   }
   const updatedLine = props.scene.straightLines.get(editing.value.id)
-  if (!updatedLine || props.editor.isStraightLineLocked(updatedLine)) return
+  if (!updatedLine || props.editor.isStraightLineLocked(updatedLine)) { props.editor.commitCollabTransaction(); return }
   applyPointPosition(
     line.p1.id,
     editStraightLine.p1.x,
@@ -1897,12 +1920,14 @@ const applyEditStraightLine = () => {
     editStraightLine.p2.y,
     editStraightLine.p2.z,
   )
+  props.editor.commitCollabTransaction()
 }
 const applyEditPerpendicularLine = () => {
   if (!editing.value || editing.value.type !== 'perpendicularLine') return
   const line = props.scene.perpendicularLines.get(editing.value.id)
   if (!line) return
   const displayLength = Number(editPerpendicularLine.displayLength)
+  props.editor.beginCollabTransaction('UpdatePerpendicularLineCommand')
   props.editor.updatePerpendicularLine(editing.value.id, {
     name: editPerpendicularLine.name,
     nameVisible: editPerpendicularLine.nameVisible,
@@ -1914,19 +1939,21 @@ const applyEditPerpendicularLine = () => {
     props.editor.setPerpendicularLineLockState(editing.value.id, editPerpendicularLine.userLocked)
   }
   const updatedLine = props.scene.perpendicularLines.get(editing.value.id)
-  if (!updatedLine || updatedLine.userLocked) return
+  if (!updatedLine || updatedLine.userLocked) { props.editor.commitCollabTransaction(); return }
   applyPointPosition(
     line.p1.id,
     editPerpendicularLine.p1.x,
     editPerpendicularLine.p1.y,
     editPerpendicularLine.p1.z,
   )
+  props.editor.commitCollabTransaction()
 }
 const applyEditParallelLine = () => {
   if (!editing.value || editing.value.type !== 'parallelLine') return
   const line = props.scene.parallelLines.get(editing.value.id)
   if (!line) return
   const displayLength = Number(editParallelLine.displayLength)
+  props.editor.beginCollabTransaction('UpdateParallelLineCommand')
   props.editor.updateParallelLine(editing.value.id, {
     name: editParallelLine.name,
     nameVisible: editParallelLine.nameVisible,
@@ -1938,18 +1965,20 @@ const applyEditParallelLine = () => {
     props.editor.setParallelLineLockState(editing.value.id, editParallelLine.userLocked)
   }
   const updatedLine = props.scene.parallelLines.get(editing.value.id)
-  if (!updatedLine || updatedLine.userLocked) return
+  if (!updatedLine || updatedLine.userLocked) { props.editor.commitCollabTransaction(); return }
   applyPointPosition(
     line.p1.id,
     editParallelLine.p1.x,
     editParallelLine.p1.y,
     editParallelLine.p1.z,
   )
+  props.editor.commitCollabTransaction()
 }
 const applyEditFace = () => {
   if (!editing.value || editing.value.type !== 'face') return
   const face = props.scene.faces.get(editing.value.id)
   if (!face) return
+  props.editor.beginCollabTransaction('UpdateFaceCommand')
   props.editor.updateFace(editing.value.id, {
     name: editFace.name,
     nameVisible: editFace.nameVisible,
@@ -1962,11 +1991,13 @@ const applyEditFace = () => {
   if (editFace.areaLocked !== face.areaLocked) {
     props.editor.setFaceAreaLockState(editing.value.id, editFace.areaLocked)
   }
+  props.editor.commitCollabTransaction()
 }
 const applyEditCircle = () => {
   if (!editing.value || editing.value.type !== 'circle') return
   const circle = props.scene.circles.get(editing.value.id)
   if (!circle) return
+  props.editor.beginCollabTransaction('UpdateCircleCommand')
   const patch: Parameters<typeof props.editor.updateCircle>[1] = {
     name: editCircle.name,
     nameVisible: editCircle.nameVisible,
@@ -1984,6 +2015,7 @@ const applyEditCircle = () => {
   if (editCircle.userLocked !== props.editor.isCircleLocked(circle)) {
     props.editor.setCircleLockState(editing.value.id, editCircle.userLocked)
   }
+  props.editor.commitCollabTransaction()
 }
 const getEditingHexahedronState = () => {
   if (!editing.value || editing.value.type !== 'hexahedron') return null
@@ -2108,12 +2140,14 @@ const handleCirclePointCoordBlur = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y
 const applyHexahedronMeta = () => {
   const state = getEditingHexahedronState()
   if (!state) return
+  props.editor.beginCollabTransaction('UpdateHexahedronCommand')
   props.editor.updateCube(state.cubeId, {
     name: `${state.constraint.solidType === 'tetrahedron' ? '正四面体' : '正六面体'}${editHexahedron.nameSuffix.trim()}`,
     valueVisible: editHexahedron.valueVisible,
     edgeLengthLocked: editHexahedron.edgeLengthLocked,
   })
   props.editor.setCubeLockState(state.cubeId, editHexahedron.userLocked)
+  props.editor.commitCollabTransaction()
 }
 const applyHexahedronEdgeLength = () => {
   const state = getEditingHexahedronState()
@@ -2291,12 +2325,14 @@ const applyEditSphereMeta = () => {
   const state = getEditingSphereState()
   if (!state) return
   const prefix = state.sphere.name.startsWith('半径球') ? '半径球' : '两点球'
+  props.editor.beginCollabTransaction('UpdateSphereCommand')
   props.editor.updateSphere(state.sphereId, {
     name: `${prefix}${editSphere.nameSuffix.trim()}`,
     nameVisible: editSphere.nameVisible,
     valueVisible: editSphere.valueVisible,
   })
   props.editor.setSphereLockState(state.sphereId, editSphere.userLocked)
+  props.editor.commitCollabTransaction()
 }
 
 const applyEditSphereRadius = () => {
@@ -2411,12 +2447,14 @@ const applyEditConeMeta = () => {
   const state = getEditingConeState()
   if (!state) return
   const prefix = state.cone.coneType === 'normalCircle' ? '法向圆锥' : '圆锥'
+  props.editor.beginCollabTransaction('UpdateConeCommand')
   props.editor.updateCone(state.coneId, {
     name: `${prefix}${editCone.nameSuffix.trim()}`,
     nameVisible: editCone.nameVisible,
     valueVisible: editCone.valueVisible,
   })
   props.editor.setConeLockState(state.coneId, editCone.userLocked)
+  props.editor.commitCollabTransaction()
 }
 
 const applyEditConeRadius = () => {
@@ -2564,12 +2602,14 @@ const applyEditCylinderMeta = () => {
   const state = currentEditCylinder.value
   if (!state) return
   const prefix = '圆柱'
+  props.editor.beginCollabTransaction('UpdateCylinderCommand')
   props.editor.updateCylinder(state.cylinderId, {
     name: prefix + editCylinder.nameSuffix.trim(),
     nameVisible: editCylinder.nameVisible,
     valueVisible: editCylinder.valueVisible,
   })
   props.editor.setCylinderLockState(state.cylinderId, editCylinder.userLocked)
+  props.editor.commitCollabTransaction()
 }
 
 const applyEditCylinderRadius = () => {

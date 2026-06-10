@@ -1,47 +1,27 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
-import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
-import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 
-export class DeletePerpendicularLineCommand implements Command {
-  constructor(
-    private scene: Scene,
-    private line: PerpendicularLine3,
-    private relatedPerpendicularLines: PerpendicularLine3[] = [],
-    private relatedParallelLines: ParallelLine3[] = [],
-  ) {}
+export function createDeletePerpendicularLineCommand(
+  scene: Scene,
+  line: PerpendicularLine3,
+  relatedPerpendicularLines: PerpendicularLine3[] = [],
+  relatedParallelLines: ParallelLine3[] = [],
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('DeletePerpendicularLineCommand', scene, () => {
+    relatedPerpendicularLines.forEach((l) => {
+      scene.removePerpendicularLine(l.id)
+      scene.selection.perpendicularLines.delete(l.id)
+    })
+    relatedParallelLines.forEach((l) => {
+      scene.removeParallelLine(l.id)
+      scene.selection.parallelLines.delete(l.id)
+    })
+    scene.removePerpendicularLine(line.id)
+    scene.selection.perpendicularLines.delete(line.id)
+  })
 
-  execute() {
-    this.relatedPerpendicularLines.forEach((l) => {
-      this.scene.removePerpendicularLine(l.id)
-      this.scene.selection.perpendicularLines.delete(l.id)
-    })
-    this.relatedParallelLines.forEach((l) => {
-      this.scene.removeParallelLine(l.id)
-      this.scene.selection.parallelLines.delete(l.id)
-    })
-    this.scene.removePerpendicularLine(this.line.id)
-    this.scene.selection.perpendicularLines.delete(this.line.id)
-  }
-
-  undo() {
-    this.scene.addPerpendicularLine(this.line)
-    this.scene.addPerpendicularLineConstraint(
-      new PerpendicularLineConstraint(this.scene, this.line.id, this.line.target),
-    )
-    this.relatedPerpendicularLines.forEach((l) => {
-      this.scene.addPerpendicularLine(l)
-      this.scene.addPerpendicularLineConstraint(
-        new PerpendicularLineConstraint(this.scene, l.id, l.target),
-      )
-    })
-    this.relatedParallelLines.forEach((l) => {
-      this.scene.addParallelLine(l)
-      this.scene.addParallelLineConstraint(
-        new ParallelLineConstraint(this.scene, l.id, l.target),
-      )
-    })
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

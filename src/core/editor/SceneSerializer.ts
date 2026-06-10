@@ -1457,6 +1457,9 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
 }
 
 export function importScene(scene: Scene, data: SerializedScene): void {
+  // 抑制约束脏标记，避免 importScene 期间中间状态触发无效求解
+  scene.beginSnapshotRestore()
+
   scene.selection.clear()
   scene.clearAllConstraints()
 
@@ -1911,6 +1914,10 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   }
 
   scene.markAllRenderDirty()
+
+  // 结束快照恢复，重新启用约束脏标记，并标记所有约束为脏
+  // 确保 restoreDraft 后的 solveDirtyConstraints 能正确求解
+  scene.endSnapshotRestore()
 }
 
 type SceneElementCounts = {

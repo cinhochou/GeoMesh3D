@@ -1,5 +1,5 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
-import { Point3 } from '../../../geometry/Point3'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { Scene } from '../../../scene/Scene'
 
 type PointState = {
   name: string
@@ -10,21 +10,39 @@ type PointState = {
   userLocked: boolean
 }
 
-export class UpdatePointCommand extends AbstractUpdateCommand<PointState> {
+export class UpdatePointCommand extends ConstraintAwareCommand {
+  readonly label = '更新点属性'
+
+  private before: PointState
+  private after: PointState
+
   constructor(
-    private point: Point3,
+    private pointId: string,
     before: PointState,
     after: PointState,
+    scene: Scene,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
   }
 
-  protected apply(state: PointState) {
-    this.point.name = state.name
-    this.point.nameVisible = state.nameVisible
-    this.point.valueVisible = state.valueVisible
-    this.point.labelOffsetX = state.labelOffsetX
-    this.point.labelOffsetY = state.labelOffsetY
-    this.point.userLocked = state.userLocked
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: PointState) {
+    const point = this.scene.points.get(this.pointId)
+    if (!point) return
+    point.name = state.name
+    point.nameVisible = state.nameVisible
+    point.valueVisible = state.valueVisible
+    point.labelOffsetX = state.labelOffsetX
+    point.labelOffsetY = state.labelOffsetY
+    point.userLocked = state.userLocked
   }
 }

@@ -1,23 +1,18 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Point3 } from '../../../geometry/Point3'
 import { Scene } from '../../../scene/Scene'
 import { ObjectConstrainedPointConstraint } from '../../../constraints/ObjectConstrainedPointConstraint'
 
-export class AddConstrainedPointCommand implements Command {
-  constructor(
-    private scene: Scene,
-    private point: Point3,
-    private constraint: ObjectConstrainedPointConstraint,
-  ) {}
+export function createAddConstrainedPointCommand(
+  scene: Scene,
+  point: Point3,
+  constraint: ObjectConstrainedPointConstraint,
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('AddConstrainedPointCommand', scene, () => {
+    scene.addPoint(point)
+    scene.addObjectConstrainedPointConstraint(constraint)
+  })
 
-  execute() {
-    this.scene.addPoint(this.point)
-    this.scene.addObjectConstrainedPointConstraint(this.constraint)
-  }
-
-  undo() {
-    this.scene.removeObjectConstrainedPointConstraint(this.point.id)
-    this.scene.points.delete(this.point.id)
-    this.scene.selection.points.delete(this.point.id)
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

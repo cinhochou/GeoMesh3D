@@ -1,1082 +1,475 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { Point3 } from '../../../geometry/Point3'
 import { Vec3 } from '../../../geometry/Vec3'
-import { Line3 } from '../../../geometry/Line3'
-import { Ray3 } from '../../../geometry/Ray3'
-import { GeoVector3 } from '../../../geometry/GeoVector3'
-import { StraightLine3 } from '../../../geometry/StraightLine3'
-import { Circle3, type CircleType, type DirectionType } from '../../../geometry/Circle3'
-import { Sphere3 } from '../../../geometry/Sphere3'
-import { Cone3 } from '../../../geometry/Cone3'
-import { Cylinder3 } from '../../../geometry/Cylinder3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
-import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
-import { ObjectConstrainedPointConstraint } from '../../../constraints/ObjectConstrainedPointConstraint'
-import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
-import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
-import { ParallelLine3 } from '../../../geometry/ParallelLine3'
-import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
-import type { ConstrainedToRef } from '../../../geometry/Point3'
 
-type LinearSnapshot<T extends Line3 | Ray3 | StraightLine3 | GeoVector3> = {
-  item: T
-  p1: Point3
-  p2: Point3
-}
+/**
+ * 合并点的核心逻辑（不含快照捕获）。
+ * 供 createMergePointsCommand 和 createMergeCubePointsCommand 共用。
+ */
+function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3): void {
+  const removeId = removePoint.id
+  const keepId = keepPoint.id
 
-type FaceSnapshot = {
-  face: PlanarPolygon
-  boundaryPointIds: string[]
-  memberPointIds: string[]
-  boundaryLineIds: string[]
-  supportPointIds: string[]
-  cubeOwnerPointIds: string[]
-  cubeDependentPointIds: string[]
-  regularPolygonOwnerPointIds: string[]
-  regularPolygonDependentPointIds: string[]
-}
-
-type CubeSnapshot = {
-  constraint: CubeConstraint
-  ownerPointIds: [string, string]
-  dependentLayouts: Array<{ pointId: string; x: number; y: number; z: number }>
-}
-
-type PointCubeSnapshot = {
-  point: Point3
-  cubeId: string | null
-  cubeRole: 'owner' | 'dependent' | null
-}
-
-type RegularPolygonSnapshot = {
-  constraint: RegularPolygonConstraint
-  ownerPointIds: [string, string]
-  dependentLayouts: Array<{ pointId: string; angleIndex: number }>
-}
-
-type PointRegularPolygonSnapshot = {
-  point: Point3
-  regularPolygonId: string | null
-  regularPolygonRole: 'owner' | 'dependent' | null
-}
-
-type CircleSnapshot = {
-  circle: Circle3
-  p1: Point3
-  p2: Point3
-  p3: Point3
-  centerPoint: Point3 | null
-  centerPosition: Vec3 | null
-  centerCircleId: string | null
-  centerCircleRole: string | null
-  movedPoints: Array<{ point: Point3; originalPosition: Vec3 }>
-  circleType: CircleType
-  directionType: DirectionType | null
-  directionId: string | null
-  lockedRadius: number | null
-  keepPointCircleId: string | null
-  keepPointCircleRole: 'center' | null
-}
-
-type SphereSnapshot = {
-  sphere: Sphere3
-  centerPoint: Point3
-  radiusPoint: Point3 | null
-  centerSphereId: string | null
-  centerSphereRole: 'center' | 'radius' | null
-  radiusSphereId: string | null
-  radiusSphereRole: 'center' | 'radius' | null
-}
-
-type ConeSnapshot = {
-  cone: Cone3
-  baseCenterPoint: Point3
-  apexPoint: Point3
-  baseCenterConeId: string | null
-  baseCenterConeRole: 'baseCenter' | 'apex' | null
-  apexConeId: string | null
-  apexConeRole: 'baseCenter' | 'apex' | null
-}
-
-type CylinderSnapshot = {
-  cylinder: Cylinder3
-  bottomCenterPoint: Point3
-  topCenterPoint: Point3
-  bottomCenterCylinderId: string | null
-  bottomCenterCylinderRole: 'bottomCenter' | 'topCenter' | null
-  topCenterCylinderId: string | null
-  topCenterCylinderRole: 'bottomCenter' | 'topCenter' | null
-  bottomCircleId: string | null
-  topCircleId: string | null
-  bottomCircleDirectionId: string | null
-  topCircleDirectionId: string | null
-}
-
-type ObjectConstrainedPointSnapshot = {
-  constraint: ObjectConstrainedPointConstraint
-  pointId: string
-  target: ConstrainedToRef
-  parametricData: string
-}
-
-type PerpendicularLineSnapshot = {
-  line: PerpendicularLine3
-  p1: Point3
-  p2: Point3
-  targetType: string
-  targetId: string
-}
-
-type ParallelLineSnapshot = {
-  line: ParallelLine3
-  p1: Point3
-  p2: Point3
-  targetType: string
-  targetId: string
-}
-
-export class MergePointsCommand implements Command {
-  private lineSnapshots: Array<LinearSnapshot<Line3>>
-  private straightLineSnapshots: Array<LinearSnapshot<StraightLine3>>
-  private raySnapshots: Array<LinearSnapshot<Ray3>>
-  private vectorSnapshots: Array<LinearSnapshot<GeoVector3>>
-  private perpendicularLineSnapshots: PerpendicularLineSnapshot[]
-  private parallelLineSnapshots: ParallelLineSnapshot[]
-  private faceSnapshots: FaceSnapshot[]
-  private cubeSnapshots: CubeSnapshot[]
-  private pointCubeSnapshots: PointCubeSnapshot[]
-  private regularPolygonSnapshots: RegularPolygonSnapshot[]
-  private pointRegularPolygonSnapshots: PointRegularPolygonSnapshot[]
-  private circleSnapshots: CircleSnapshot[]
-  private sphereSnapshots: SphereSnapshot[]
-  private coneSnapshots: ConeSnapshot[]
-  private cylinderSnapshots: CylinderSnapshot[]
-  private objectConstrainedPointSnapshots: ObjectConstrainedPointSnapshot[]
-  private keepPointCircleId: string | null
-  private keepPointCircleRole: 'center' | null
-  private keepPointLocked: boolean
-  private keepPointUserLocked: boolean
-  private removedLines = new Set<string>()
-  private removedStraightLines = new Set<string>()
-  private removedRays = new Set<string>()
-  private removedVectors = new Set<string>()
-  private removedFaces = new Set<string>()
-  private removedCircles = new Set<string>()
-  private removedSpheres = new Set<string>()
-  private removedCones = new Set<string>()
-  private removedCylinders = new Set<string>()
-  private removedPerpendicularLines = new Set<string>()
-  private removedParallelLines = new Set<string>()
-  private cascadePerpendicularLineSnapshots: PerpendicularLineSnapshot[] = []
-  private cascadeParallelLineSnapshots: ParallelLineSnapshot[] = []
-
-  constructor(
-    private scene: Scene,
-    private keepPoint: Point3,
-    private removePoint: Point3,
-  ) {
-    this.keepPointCircleId = keepPoint.circleId
-    this.keepPointCircleRole = keepPoint.circleRole
-    this.keepPointLocked = keepPoint.locked
-    this.keepPointUserLocked = keepPoint.userLocked
-    this.lineSnapshots = [...scene.lines.values()]
-      .filter((line) => line.p1.id === keepPoint.id || line.p2.id === keepPoint.id || line.p1.id === removePoint.id || line.p2.id === removePoint.id)
-      .map((line) => ({ item: line, p1: line.p1, p2: line.p2 }))
-    this.straightLineSnapshots = [...scene.straightLines.values()]
-      .filter((line) => line.p1.id === keepPoint.id || line.p2.id === keepPoint.id || line.p1.id === removePoint.id || line.p2.id === removePoint.id)
-      .map((line) => ({ item: line, p1: line.p1, p2: line.p2 }))
-    this.raySnapshots = [...scene.rays.values()]
-      .filter((ray) => ray.p1.id === keepPoint.id || ray.p2.id === keepPoint.id || ray.p1.id === removePoint.id || ray.p2.id === removePoint.id)
-      .map((ray) => ({ item: ray, p1: ray.p1, p2: ray.p2 }))
-    this.vectorSnapshots = [...scene.vectors.values()]
-      .filter((vector) => vector.p1.id === keepPoint.id || vector.p2.id === keepPoint.id || vector.p1.id === removePoint.id || vector.p2.id === removePoint.id)
-      .map((vector) => ({ item: vector, p1: vector.p1, p2: vector.p2 }))
-    this.faceSnapshots = [...scene.faces.values()]
-      .filter((face) => face.includesPoint(keepPoint.id) || face.includesPoint(removePoint.id))
-      .map((face) => ({
-        face,
-        boundaryPointIds: [...face.boundaryPointIds],
-        memberPointIds: [...face.memberPointIds],
-        boundaryLineIds: [...face.boundaryLineIds],
-        supportPointIds: [...face.supportPointIds],
-        cubeOwnerPointIds: [...face.cubeOwnerPointIds],
-        cubeDependentPointIds: [...face.cubeDependentPointIds],
-        regularPolygonOwnerPointIds: [...face.regularPolygonOwnerPointIds],
-        regularPolygonDependentPointIds: [...face.regularPolygonDependentPointIds],
-      }))
-    this.cubeSnapshots = [...scene.cubeConstraints.values()]
-      .filter((constraint): constraint is CubeConstraint => constraint instanceof CubeConstraint)
-      .filter((constraint) =>
-        [constraint.ownerPointIds[0], constraint.ownerPointIds[1], ...constraint.dependentLayouts.map((item) => item.pointId)].some(
-          (pointId) => pointId === keepPoint.id || pointId === removePoint.id,
-        ),
-      )
-      .map((constraint) => ({
-        constraint,
-        ownerPointIds: [...constraint.ownerPointIds] as [string, string],
-        dependentLayouts: constraint.dependentLayouts.map((item) => ({ ...item })),
-      }))
-    const pointsToSnapshot = new Map<string, Point3>([
-      [keepPoint.id, keepPoint],
-      [removePoint.id, removePoint],
-    ])
-    this.cubeSnapshots.forEach(({ constraint }) => {
-      const ownerA = scene.points.get(constraint.ownerPointIds[0])
-      const ownerB = scene.points.get(constraint.ownerPointIds[1])
-      if (ownerA) pointsToSnapshot.set(ownerA.id, ownerA)
-      if (ownerB) pointsToSnapshot.set(ownerB.id, ownerB)
-      constraint.dependentLayouts.forEach(({ pointId }) => {
-        const point = scene.points.get(pointId)
-        if (point) pointsToSnapshot.set(point.id, point)
-      })
-    })
-    this.pointCubeSnapshots = [...pointsToSnapshot.values()].map((point) => ({
-      point,
-      cubeId: point.cubeId,
-      cubeRole: point.cubeRole,
-    }))
-
-    this.regularPolygonSnapshots = [...scene.regularPolygonConstraints.values()]
-      .filter((constraint): constraint is RegularPolygonConstraint => constraint instanceof RegularPolygonConstraint)
-      .filter((constraint) =>
-        [constraint.ownerPointIds[0], constraint.ownerPointIds[1], ...constraint.dependentLayouts.map((item) => item.pointId)].some(
-          (pointId) => pointId === keepPoint.id || pointId === removePoint.id,
-        ),
-      )
-      .map((constraint) => ({
-        constraint,
-        ownerPointIds: [...constraint.ownerPointIds] as [string, string],
-        dependentLayouts: constraint.dependentLayouts.map((item) => ({ ...item })),
-      }))
-    const rpPointsToSnapshot = new Map<string, Point3>([
-      [keepPoint.id, keepPoint],
-      [removePoint.id, removePoint],
-    ])
-    this.regularPolygonSnapshots.forEach(({ constraint }) => {
-      const ownerA = scene.points.get(constraint.ownerPointIds[0])
-      const ownerB = scene.points.get(constraint.ownerPointIds[1])
-      if (ownerA) rpPointsToSnapshot.set(ownerA.id, ownerA)
-      if (ownerB) rpPointsToSnapshot.set(ownerB.id, ownerB)
-      constraint.dependentLayouts.forEach(({ pointId }) => {
-        const point = scene.points.get(pointId)
-        if (point) rpPointsToSnapshot.set(point.id, point)
-      })
-    })
-    this.pointRegularPolygonSnapshots = [...rpPointsToSnapshot.values()].map((point) => ({
-      point,
-      regularPolygonId: point.regularPolygonId,
-      regularPolygonRole: point.regularPolygonRole,
-    }))
-
-    this.circleSnapshots = [...scene.circles.values()]
-      .filter((circle) =>
-        circle.p1.id === keepPoint.id || circle.p2.id === keepPoint.id || circle.p3.id === keepPoint.id ||
-        circle.p1.id === removePoint.id || circle.p2.id === removePoint.id || circle.p3.id === removePoint.id ||
-        [...scene.points.values()].some(
-          (p) => p.circleId === circle.id && p.circleRole === 'center' &&
-            (p.id === keepPoint.id || p.id === removePoint.id),
-        ),
-      )
-      .map((circle) => {
-        const centerPoint = [...scene.points.values()].find(
-          (p) => p.circleId === circle.id && p.circleRole === 'center',
-        ) ?? null
-        return {
-          circle,
-          p1: circle.p1,
-          p2: circle.p2,
-          p3: circle.p3,
-          centerPoint,
-          centerPosition: centerPoint ? centerPoint.position.clone() : null,
-          centerCircleId: centerPoint ? centerPoint.circleId : null,
-          centerCircleRole: centerPoint ? centerPoint.circleRole : null,
-          movedPoints: [],
-          circleType: circle.circleType,
-          directionType: circle.directionType,
-          directionId: circle.directionId,
-          lockedRadius: circle.lockedRadius,
-          keepPointCircleId: this.keepPoint.circleId,
-          keepPointCircleRole: this.keepPoint.circleRole,
-        }
-      })
-
-    this.sphereSnapshots = [...scene.spheres.values()]
-      .filter((sphere) =>
-        sphere.centerPoint.id === keepPoint.id || (sphere.radiusPoint && sphere.radiusPoint.id === keepPoint.id) ||
-        sphere.centerPoint.id === removePoint.id || (sphere.radiusPoint && sphere.radiusPoint.id === removePoint.id),
-      )
-      .map((sphere) => ({
-        sphere,
-        centerPoint: sphere.centerPoint,
-        radiusPoint: sphere.radiusPoint,
-        centerSphereId: sphere.centerPoint.sphereId,
-        centerSphereRole: sphere.centerPoint.sphereRole,
-        radiusSphereId: sphere.radiusPoint?.sphereId ?? null,
-        radiusSphereRole: sphere.radiusPoint?.sphereRole ?? null,
-      }))
-
-    this.coneSnapshots = [...scene.cones.values()]
-      .filter((cone) =>
-        cone.baseCenterPoint.id === keepPoint.id || cone.apexPoint.id === keepPoint.id ||
-        cone.baseCenterPoint.id === removePoint.id || cone.apexPoint.id === removePoint.id,
-      )
-      .map((cone) => ({
-        cone,
-        baseCenterPoint: cone.baseCenterPoint,
-        apexPoint: cone.apexPoint,
-        baseCenterConeId: cone.baseCenterPoint.coneId,
-        baseCenterConeRole: cone.baseCenterPoint.coneRole,
-        apexConeId: cone.apexPoint.coneId,
-        apexConeRole: cone.apexPoint.coneRole,
-      }))
-
-    this.cylinderSnapshots = [...scene.cylinders.values()]
-      .filter((cylinder) =>
-        cylinder.bottomCenterPoint.id === keepPoint.id || cylinder.topCenterPoint.id === keepPoint.id ||
-        cylinder.bottomCenterPoint.id === removePoint.id || cylinder.topCenterPoint.id === removePoint.id,
-      )
-      .map((cylinder) => {
-        const bottomCircle = cylinder.normalCircleId ? scene.circles.get(cylinder.normalCircleId) : null
-        const topCircle = cylinder.topNormalCircleId ? scene.circles.get(cylinder.topNormalCircleId) : null
-        return {
-          cylinder,
-          bottomCenterPoint: cylinder.bottomCenterPoint,
-          topCenterPoint: cylinder.topCenterPoint,
-          bottomCenterCylinderId: cylinder.bottomCenterPoint.cylinderId,
-          bottomCenterCylinderRole: cylinder.bottomCenterPoint.cylinderRole,
-          topCenterCylinderId: cylinder.topCenterPoint.cylinderId,
-          topCenterCylinderRole: cylinder.topCenterPoint.cylinderRole,
-          bottomCircleId: cylinder.normalCircleId,
-          topCircleId: cylinder.topNormalCircleId,
-          bottomCircleDirectionId: bottomCircle?.directionId ?? null,
-          topCircleDirectionId: topCircle?.directionId ?? null,
-        }
-      })
-
-    this.objectConstrainedPointSnapshots = [...scene.objectConstrainedPointConstraints.values()]
-      .filter((constraint) =>
-        constraint.pointId === keepPoint.id || constraint.pointId === removePoint.id,
-      )
-      .map((constraint) => ({
-        constraint,
-        pointId: constraint.pointId,
-        target: { ...constraint.target },
-        parametricData: constraint.parametricData ? JSON.stringify(constraint.parametricData) : '',
-      }))
-
-    this.perpendicularLineSnapshots = [...scene.perpendicularLines.values()]
-      .filter((line) =>
-        line.p1.id === keepPoint.id || line.p1.id === removePoint.id ||
-        line.p2.id === keepPoint.id || line.p2.id === removePoint.id,
-      )
-      .map((line) => ({
-        line,
-        p1: line.p1,
-        p2: line.p2,
-        targetType: line.target.type,
-        targetId: line.target.id,
-      }))
-
-    this.parallelLineSnapshots = [...scene.parallelLines.values()]
-      .filter((line) =>
-        line.p1.id === keepPoint.id || line.p1.id === removePoint.id ||
-        line.p2.id === keepPoint.id || line.p2.id === removePoint.id,
-      )
-      .map((line) => ({
-        line,
-        p1: line.p1,
-        p2: line.p2,
-        targetType: line.target.type,
-        targetId: line.target.id,
-      }))
+  // ─── 线段 ──────────────────────────────────────────
+  for (const line of [...scene.lines.values()]) {
+    if (line.p1.id === removeId) line.p1 = keepPoint
+    if (line.p2.id === removeId) line.p2 = keepPoint
+    if (line.p1.id === line.p2.id) {
+      scene.lines.delete(line.id)
+      scene.selection.lines.delete(line.id)
+    }
   }
 
-  private replacePointId(ids: string[]) {
-    return [...new Set(ids.map((id) => (id === this.removePoint.id ? this.keepPoint.id : id)))]
+  // ─── 直线 ──────────────────────────────────────────
+  for (const line of [...scene.straightLines.values()]) {
+    if (line.p1.id === removeId) line.p1 = keepPoint
+    if (line.p2.id === removeId) line.p2 = keepPoint
+    if (line.p1.id === line.p2.id) {
+      scene.straightLines.delete(line.id)
+      scene.selection.straightLines.delete(line.id)
+    }
   }
 
-  execute() {
-    this.lineSnapshots.forEach(({ item }) => {
-      if (item.p1.id === this.removePoint.id) item.p1 = this.keepPoint
-      if (item.p2.id === this.removePoint.id) item.p2 = this.keepPoint
-      if (item.p1.id === item.p2.id) {
-        this.scene.lines.delete(item.id)
-        this.scene.selection.lines.delete(item.id)
-        this.removedLines.add(item.id)
-      }
-    })
+  // ─── 射线 ──────────────────────────────────────────
+  for (const ray of [...scene.rays.values()]) {
+    if (ray.p1.id === removeId) ray.p1 = keepPoint
+    if (ray.p2.id === removeId) ray.p2 = keepPoint
+    if (ray.p1.id === ray.p2.id) {
+      scene.rays.delete(ray.id)
+      scene.selection.rays.delete(ray.id)
+    }
+  }
 
-    this.straightLineSnapshots.forEach(({ item }) => {
-      if (item.p1.id === this.removePoint.id) item.p1 = this.keepPoint
-      if (item.p2.id === this.removePoint.id) item.p2 = this.keepPoint
-      if (item.p1.id === item.p2.id) {
-        this.scene.straightLines.delete(item.id)
-        this.scene.selection.straightLines.delete(item.id)
-        this.removedStraightLines.add(item.id)
-      }
-    })
+  // ─── 向量 ──────────────────────────────────────────
+  for (const vector of [...scene.vectors.values()]) {
+    if (vector.p1.id === removeId) vector.p1 = keepPoint
+    if (vector.p2.id === removeId) vector.p2 = keepPoint
+    if (vector.p1.id === vector.p2.id) {
+      scene.vectors.delete(vector.id)
+      scene.selection.vectors.delete(vector.id)
+    }
+  }
 
-    this.raySnapshots.forEach(({ item }) => {
-      if (item.p1.id === this.removePoint.id) item.p1 = this.keepPoint
-      if (item.p2.id === this.removePoint.id) item.p2 = this.keepPoint
-      if (item.p1.id === item.p2.id) {
-        this.scene.rays.delete(item.id)
-        this.scene.selection.rays.delete(item.id)
-        this.removedRays.add(item.id)
-      }
-    })
+  // ─── 面 ────────────────────────────────────────────
+  const replacePointId = (ids: string[]) =>
+    [...new Set(ids.map((id) => (id === removeId ? keepId : id)))]
 
-    this.vectorSnapshots.forEach(({ item }) => {
-      if (item.p1.id === this.removePoint.id) item.p1 = this.keepPoint
-      if (item.p2.id === this.removePoint.id) item.p2 = this.keepPoint
-      if (item.p1.id === item.p2.id) {
-        this.scene.vectors.delete(item.id)
-        this.scene.selection.vectors.delete(item.id)
-        this.removedVectors.add(item.id)
-      }
-    })
+  for (const face of [...scene.faces.values()]) {
+    if (!face.includesPoint(keepId) && !face.includesPoint(removeId)) continue
 
-    this.faceSnapshots.forEach(({ face }) => {
-      face.boundaryPointIds = this.replacePointId(face.boundaryPointIds)
-      face.memberPointIds = this.replacePointId(face.memberPointIds)
-      face.supportPointIds = this.replacePointId(face.supportPointIds)
-      face.cubeOwnerPointIds = this.replacePointId(face.cubeOwnerPointIds)
-      face.cubeDependentPointIds = this.replacePointId(face.cubeDependentPointIds)
-      face.regularPolygonOwnerPointIds = this.replacePointId(face.regularPolygonOwnerPointIds)
-      face.regularPolygonDependentPointIds = this.replacePointId(face.regularPolygonDependentPointIds)
-      face.boundaryLineIds = face.boundaryLineIds.filter((lineId) => this.scene.lines.has(lineId))
+    face.boundaryPointIds = replacePointId(face.boundaryPointIds)
+    face.memberPointIds = replacePointId(face.memberPointIds)
+    face.supportPointIds = replacePointId(face.supportPointIds)
+    face.cubeOwnerPointIds = replacePointId(face.cubeOwnerPointIds)
+    face.cubeDependentPointIds = replacePointId(face.cubeDependentPointIds)
+    face.regularPolygonOwnerPointIds = replacePointId(face.regularPolygonOwnerPointIds)
+    face.regularPolygonDependentPointIds = replacePointId(face.regularPolygonDependentPointIds)
+    face.boundaryLineIds = face.boundaryLineIds.filter((lineId) => scene.lines.has(lineId))
 
-      if (face.boundaryPointIds.length < 3 || face.memberPointIds.length < 3) {
-        this.scene.removeFace(face.id)
-        this.removedFaces.add(face.id)
-        return
-      }
-
-      this.rebuildBoundaryLineIds(face)
-
-      face.normalize(this.scene.points)
-      if (face.supportPointIds.length < 3) {
-        this.scene.removeFace(face.id)
-        this.removedFaces.add(face.id)
-      }
-    })
-
-    this.cubeSnapshots.forEach(({ constraint }) => {
-      if (constraint.ownerPointIds[0] === this.removePoint.id) constraint.ownerPointIds[0] = this.keepPoint.id
-      if (constraint.ownerPointIds[1] === this.removePoint.id) constraint.ownerPointIds[1] = this.keepPoint.id
-      constraint.dependentLayouts.forEach((layout) => {
-        if (layout.pointId === this.removePoint.id) layout.pointId = this.keepPoint.id
-      })
-    })
-
-    const inheritedCubeSnapshot =
-      !this.keepPoint.cubeId &&
-      this.pointCubeSnapshots.find(({ point }) => point.id === this.removePoint.id && point.cubeId)
-    if (inheritedCubeSnapshot) {
-      this.keepPoint.cubeId = inheritedCubeSnapshot.cubeId
-      this.keepPoint.cubeRole = inheritedCubeSnapshot.cubeRole
+    if (face.boundaryPointIds.length < 3 || face.memberPointIds.length < 3) {
+      scene.removeFace(face.id)
+      continue
     }
 
-    this.regularPolygonSnapshots.forEach(({ constraint }) => {
-      if (constraint.ownerPointIds[0] === this.removePoint.id) constraint.ownerPointIds[0] = this.keepPoint.id
-      if (constraint.ownerPointIds[1] === this.removePoint.id) constraint.ownerPointIds[1] = this.keepPoint.id
-      constraint.dependentLayouts.forEach((layout) => {
-        if (layout.pointId === this.removePoint.id) layout.pointId = this.keepPoint.id
-      })
-    })
+    rebuildBoundaryLineIds(scene, face)
 
-    const inheritedRpSnapshot =
-      !this.keepPoint.regularPolygonId &&
-      this.pointRegularPolygonSnapshots.find(({ point }) => point.id === this.removePoint.id && point.regularPolygonId)
-    if (inheritedRpSnapshot) {
-      this.keepPoint.regularPolygonId = inheritedRpSnapshot.regularPolygonId
-      this.keepPoint.regularPolygonRole = inheritedRpSnapshot.regularPolygonRole
+    face.normalize(scene.points)
+    if (face.supportPointIds.length < 3) {
+      scene.removeFace(face.id)
     }
-
-    this.circleSnapshots.forEach((snapshot) => {
-      const { circle } = snapshot
-      const isRemoveCenter = snapshot.centerPoint?.id === this.removePoint.id
-      const isKeepCenter = snapshot.centerPoint?.id === this.keepPoint.id
-
-      if (circle.isNormalCircle()) {
-        if (circle.p1.id === this.removePoint.id) {
-          circle.p1 = this.keepPoint
-          this.keepPoint.circleId = circle.id
-          this.keepPoint.circleRole = 'center'
-        }
-        if (circle.directionType === 'point' && circle.directionId === this.removePoint.id) {
-          circle.directionId = this.keepPoint.id
-        }
-        return
-      }
-
-      if (isRemoveCenter) {
-        const frame = circle.getFrame()
-        if (frame) {
-          const delta = new Vec3(
-            this.keepPoint.position.x - frame.center.x,
-            this.keepPoint.position.y - frame.center.y,
-            this.keepPoint.position.z - frame.center.z,
-          )
-          const movedPoints: Array<{ point: Point3; originalPosition: Vec3 }> = []
-          const pointIds = new Set([circle.p1.id, circle.p2.id, circle.p3.id])
-          pointIds.forEach((pid) => {
-            const pt = this.scene.points.get(pid)
-            if (pt && pt.id !== this.keepPoint.id) {
-              movedPoints.push({ point: pt, originalPosition: pt.position.clone() })
-              pt.position = new Vec3(
-                pt.position.x + delta.x,
-                pt.position.y + delta.y,
-                pt.position.z + delta.z,
-              )
-            }
-          })
-          snapshot.movedPoints = movedPoints
-        }
-        this.keepPoint.circleId = circle.id
-        this.keepPoint.circleRole = 'center'
-        this.keepPoint.locked = true
-        this.keepPoint.userLocked = false
-      }
-
-      if (circle.p1.id === this.removePoint.id) circle.p1 = this.keepPoint
-      if (circle.p2.id === this.removePoint.id) circle.p2 = this.keepPoint
-      if (circle.p3.id === this.removePoint.id) circle.p3 = this.keepPoint
-
-      const pointIds = [circle.p1.id, circle.p2.id, circle.p3.id]
-      const uniqueIds = new Set(pointIds)
-      if (uniqueIds.size < 3) {
-        this.scene.circles.delete(circle.id)
-        this.scene.selection.circles.delete(circle.id)
-        this.removedCircles.add(circle.id)
-        if (snapshot.centerPoint) {
-          this.scene.points.delete(snapshot.centerPoint.id)
-          this.scene.selection.points.delete(snapshot.centerPoint.id)
-        }
-        if (isRemoveCenter) {
-          this.keepPoint.circleId = null
-          this.keepPoint.circleRole = null
-          this.keepPoint.locked = false
-        }
-        if (isKeepCenter && snapshot.centerPoint) {
-          snapshot.centerPoint.circleId = null
-          snapshot.centerPoint.circleRole = null
-          snapshot.centerPoint.locked = false
-        }
-        return
-      }
-
-      if (!circle.isValid()) {
-        this.scene.circles.delete(circle.id)
-        this.scene.selection.circles.delete(circle.id)
-        this.removedCircles.add(circle.id)
-        if (snapshot.centerPoint) {
-          this.scene.points.delete(snapshot.centerPoint.id)
-          this.scene.selection.points.delete(snapshot.centerPoint.id)
-        }
-        if (isRemoveCenter) {
-          this.keepPoint.circleId = null
-          this.keepPoint.circleRole = null
-          this.keepPoint.locked = false
-        }
-        if (isKeepCenter && snapshot.centerPoint) {
-          snapshot.centerPoint.circleId = null
-          snapshot.centerPoint.circleRole = null
-          snapshot.centerPoint.locked = false
-        }
-        return
-      }
-
-      if (isKeepCenter && snapshot.centerPoint) {
-        const newFrame = circle.getFrame()
-        if (newFrame) {
-          snapshot.centerPoint.position = newFrame.center
-        }
-      }
-    })
-
-    this.sphereSnapshots.forEach((snapshot) => {
-      const { sphere } = snapshot
-      if (sphere.centerPoint.id === this.removePoint.id) {
-        sphere.centerPoint = this.keepPoint
-        this.keepPoint.sphereId = sphere.id
-        this.keepPoint.sphereRole = 'center'
-      }
-      if (sphere.radiusPoint && sphere.radiusPoint.id === this.removePoint.id) {
-        sphere.radiusPoint = this.keepPoint
-        this.keepPoint.sphereId = sphere.id
-        this.keepPoint.sphereRole = 'radius'
-      }
-      if (sphere.radiusPoint && sphere.centerPoint.id === sphere.radiusPoint.id) {
-        this.scene.removeSphere(sphere.id)
-        this.removedSpheres.add(sphere.id)
-        this.keepPoint.sphereId = null
-        this.keepPoint.sphereRole = null
-      }
-    })
-
-    this.coneSnapshots.forEach((snapshot) => {
-      const { cone } = snapshot
-      if (cone.baseCenterPoint.id === this.removePoint.id) {
-        cone.baseCenterPoint = this.keepPoint
-        this.keepPoint.coneId = cone.id
-        this.keepPoint.coneRole = 'baseCenter'
-      }
-      if (cone.apexPoint.id === this.removePoint.id) {
-        cone.apexPoint = this.keepPoint
-        this.keepPoint.coneId = cone.id
-        this.keepPoint.coneRole = 'apex'
-      }
-      if (cone.baseCenterPoint.id === cone.apexPoint.id) {
-        this.scene.removeCone(cone.id)
-        this.removedCones.add(cone.id)
-        this.keepPoint.coneId = null
-        this.keepPoint.coneRole = null
-      }
-    })
-
-    this.cylinderSnapshots.forEach((snapshot) => {
-      const { cylinder } = snapshot
-      if (cylinder.bottomCenterPoint.id === this.removePoint.id) {
-        cylinder.bottomCenterPoint = this.keepPoint
-        this.keepPoint.cylinderId = cylinder.id
-        this.keepPoint.cylinderRole = 'bottomCenter'
-        if (snapshot.bottomCircleId) {
-          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
-          if (bottomCircle) {
-            if (bottomCircle.p1.id === this.removePoint.id) bottomCircle.p1 = this.keepPoint
-            if (bottomCircle.p2.id === this.removePoint.id) bottomCircle.p2 = this.keepPoint
-            if (bottomCircle.p3.id === this.removePoint.id) bottomCircle.p3 = this.keepPoint
-          }
-        }
-        if (snapshot.topCircleId) {
-          const topCircle = this.scene.circles.get(snapshot.topCircleId)
-          if (topCircle && topCircle.directionId === this.removePoint.id) {
-            topCircle.directionId = this.keepPoint.id
-          }
-        }
-      }
-      if (cylinder.topCenterPoint.id === this.removePoint.id) {
-        cylinder.topCenterPoint = this.keepPoint
-        this.keepPoint.cylinderId = cylinder.id
-        this.keepPoint.cylinderRole = 'topCenter'
-        if (snapshot.topCircleId) {
-          const topCircle = this.scene.circles.get(snapshot.topCircleId)
-          if (topCircle) {
-            if (topCircle.p1.id === this.removePoint.id) topCircle.p1 = this.keepPoint
-            if (topCircle.p2.id === this.removePoint.id) topCircle.p2 = this.keepPoint
-            if (topCircle.p3.id === this.removePoint.id) topCircle.p3 = this.keepPoint
-          }
-        }
-        if (snapshot.bottomCircleId) {
-          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
-          if (bottomCircle && bottomCircle.directionId === this.removePoint.id) {
-            bottomCircle.directionId = this.keepPoint.id
-          }
-        }
-      }
-      if (cylinder.bottomCenterPoint.id === cylinder.topCenterPoint.id) {
-        if (snapshot.bottomCircleId) {
-          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
-          if (bottomCircle) {
-            this.scene.circles.delete(bottomCircle.id)
-            this.scene.selection.circles.delete(bottomCircle.id)
-            bottomCircle.p1.circleId = null
-            bottomCircle.p1.circleRole = null
-          }
-        }
-        if (snapshot.topCircleId) {
-          const topCircle = this.scene.circles.get(snapshot.topCircleId)
-          if (topCircle) {
-            this.scene.circles.delete(topCircle.id)
-            this.scene.selection.circles.delete(topCircle.id)
-            topCircle.p1.circleId = null
-            topCircle.p1.circleRole = null
-          }
-        }
-        this.scene.removeCylinder(cylinder.id)
-        this.removedCylinders.add(cylinder.id)
-        this.keepPoint.cylinderId = null
-        this.keepPoint.cylinderRole = null
-      }
-    })
-
-    this.objectConstrainedPointSnapshots.forEach((snapshot) => {
-      if (snapshot.pointId === this.removePoint.id) {
-        this.scene.removeObjectConstrainedPointConstraint(this.removePoint.id)
-      }
-      if (snapshot.pointId === this.keepPoint.id) {
-        this.keepPoint.constrainedTo = snapshot.target
-      }
-    })
-
-    const deletedTargetIds = new Set<string>()
-    this.removedLines.forEach((id) => deletedTargetIds.add(`line:${id}`))
-    this.removedStraightLines.forEach((id) => deletedTargetIds.add(`straightLine:${id}`))
-    this.removedRays.forEach((id) => deletedTargetIds.add(`ray:${id}`))
-    this.removedVectors.forEach((id) => deletedTargetIds.add(`vector:${id}`))
-    this.removedFaces.forEach((id) => deletedTargetIds.add(`face:${id}`))
-    this.removedCones.forEach((id) => deletedTargetIds.add(`coneBase:${id}`))
-    this.removedCylinders.forEach((id) => {
-      deletedTargetIds.add(`cylinderBottom:${id}`)
-      deletedTargetIds.add(`cylinderTop:${id}`)
-    })
-    this.removedPerpendicularLines.forEach((id) => deletedTargetIds.add(`perpendicularLine:${id}`))
-    this.removedParallelLines.forEach((id) => deletedTargetIds.add(`parallelLine:${id}`))
-
-    const cascadeDeletePerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
-      (pl) => deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`),
-    )
-    const cascadeDeleteParallelLines = [...this.scene.parallelLines.values()].filter(
-      (pl) => deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`),
-    )
-    const _cdPlIds = new Set(cascadeDeletePerpendicularLines.map((l) => l.id))
-    const _cdPllIds = new Set(cascadeDeleteParallelLines.map((l) => l.id))
-    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
-      if (_cdPlIds.has(pl.id)) return
-      if (pl.target.type === 'perpendicularLine' && _cdPlIds.has(pl.target.id)) { cascadeDeletePerpendicularLines.push(pl); _cdPlIds.add(pl.id) }
-      if (pl.target.type === 'parallelLine' && _cdPllIds.has(pl.target.id)) { cascadeDeletePerpendicularLines.push(pl); _cdPlIds.add(pl.id) }
-    })
-    ;[...this.scene.parallelLines.values()].forEach((pl) => {
-      if (_cdPllIds.has(pl.id)) return
-      if (pl.target.type === 'perpendicularLine' && _cdPlIds.has(pl.target.id)) { cascadeDeleteParallelLines.push(pl); _cdPllIds.add(pl.id) }
-      if (pl.target.type === 'parallelLine' && _cdPllIds.has(pl.target.id)) { cascadeDeleteParallelLines.push(pl); _cdPllIds.add(pl.id) }
-    })
-    this.cascadePerpendicularLineSnapshots = cascadeDeletePerpendicularLines.map((pl) => ({
-      line: pl,
-      p1: pl.p1,
-      p2: pl.p2,
-      targetType: pl.target.type,
-      targetId: pl.target.id,
-    }))
-    this.cascadeParallelLineSnapshots = cascadeDeleteParallelLines.map((pl) => ({
-      line: pl,
-      p1: pl.p1,
-      p2: pl.p2,
-      targetType: pl.target.type,
-      targetId: pl.target.id,
-    }))
-    cascadeDeletePerpendicularLines.forEach((pl) => {
-      this.scene.perpendicularLines.delete(pl.id)
-      this.scene.selection.perpendicularLines.delete(pl.id)
-      this.removedPerpendicularLines.add(pl.id)
-    })
-    cascadeDeleteParallelLines.forEach((pl) => {
-      this.scene.parallelLines.delete(pl.id)
-      this.scene.selection.parallelLines.delete(pl.id)
-      this.removedParallelLines.add(pl.id)
-    })
-
-    this.perpendicularLineSnapshots.forEach(({ line }) => {
-      if (line.p1.id === this.removePoint.id) line.p1 = this.keepPoint
-      if (line.p2.id === this.removePoint.id) line.p2 = this.keepPoint
-      if (line.p1.id === line.p2.id) {
-        this.scene.perpendicularLines.delete(line.id)
-        this.scene.selection.perpendicularLines.delete(line.id)
-        this.removedPerpendicularLines.add(line.id)
-      }
-    })
-
-    this.parallelLineSnapshots.forEach(({ line }) => {
-      if (line.p1.id === this.removePoint.id) line.p1 = this.keepPoint
-      if (line.p2.id === this.removePoint.id) line.p2 = this.keepPoint
-      if (line.p1.id === line.p2.id) {
-        this.scene.parallelLines.delete(line.id)
-        this.scene.selection.parallelLines.delete(line.id)
-        this.removedParallelLines.add(line.id)
-      }
-    })
-
-    this.scene.points.delete(this.removePoint.id)
-    this.scene.selection.points.delete(this.removePoint.id)
-    this.scene.markPointDirty(this.keepPoint.id)
-    this.scene.solveDirtyConstraints()
-    this.scene.markAllRenderDirty()
-    this.scene.selection.selectPoint(this.keepPoint.id, true)
   }
 
-  undo() {
-    this.scene.addPoint(this.removePoint)
+  // ─── 立方体约束 ────────────────────────────────────
+  for (const constraint of [...scene.cubeConstraints.values()]) {
+    const cubeConstraint = constraint as unknown as CubeConstraint
+    const allPointIds = [
+      cubeConstraint.ownerPointIds[0],
+      cubeConstraint.ownerPointIds[1],
+      ...cubeConstraint.dependentLayouts.map((item) => item.pointId)
+    ]
+    if (!allPointIds.some((pid) => pid === keepId || pid === removeId)) continue
 
-    this.circleSnapshots.forEach((snapshot) => {
-      const { circle } = snapshot
-      circle.p1 = snapshot.p1
-      circle.p2 = snapshot.p2
-      circle.p3 = snapshot.p3
-
-      if (circle.isNormalCircle()) {
-        circle.circleType = snapshot.circleType
-        circle.directionType = snapshot.directionType
-        circle.directionId = snapshot.directionId
-        circle.lockedRadius = snapshot.lockedRadius
-      }
-
-      snapshot.movedPoints.forEach(({ point, originalPosition }) => {
-        point.position = originalPosition
-      })
-
-      if (snapshot.centerPoint) {
-        if (!this.scene.points.has(snapshot.centerPoint.id)) {
-          this.scene.addPoint(snapshot.centerPoint)
-        }
-        snapshot.centerPoint.position = snapshot.centerPosition!
-        snapshot.centerPoint.circleId = snapshot.centerCircleId
-        snapshot.centerPoint.circleRole = snapshot.centerCircleRole as 'center' | null
-      }
-
-      const isRemoveCenter = snapshot.centerPoint?.id === this.removePoint.id
-      if (isRemoveCenter) {
-        this.keepPoint.circleId = this.keepPointCircleId
-        this.keepPoint.circleRole = this.keepPointCircleRole
-        this.keepPoint.locked = this.keepPointLocked
-        this.keepPoint.userLocked = this.keepPointUserLocked
-      }
-
-      if (circle.isNormalCircle() && circle.p1.id === this.keepPoint.id) {
-        this.keepPoint.circleId = snapshot.keepPointCircleId
-        this.keepPoint.circleRole = snapshot.keepPointCircleRole as 'center' | null
-      }
-
-      if (this.removedCircles.has(circle.id)) {
-        this.scene.addCircle(circle)
-      }
+    if (cubeConstraint.ownerPointIds[0] === removeId) cubeConstraint.ownerPointIds[0] = keepId
+    if (cubeConstraint.ownerPointIds[1] === removeId) cubeConstraint.ownerPointIds[1] = keepId
+    cubeConstraint.dependentLayouts.forEach((layout) => {
+      if (layout.pointId === removeId) layout.pointId = keepId
     })
+  }
 
-    this.lineSnapshots.forEach(({ item, p1, p2 }) => {
-      item.p1 = p1
-      item.p2 = p2
-      if (this.removedLines.has(item.id)) this.scene.addLine(item)
-    })
-    this.straightLineSnapshots.forEach(({ item, p1, p2 }) => {
-      item.p1 = p1
-      item.p2 = p2
-      if (this.removedStraightLines.has(item.id)) this.scene.addStraightLine(item)
-    })
-    this.raySnapshots.forEach(({ item, p1, p2 }) => {
-      item.p1 = p1
-      item.p2 = p2
-      if (this.removedRays.has(item.id)) this.scene.addRay(item)
-    })
-    this.vectorSnapshots.forEach(({ item, p1, p2 }) => {
-      item.p1 = p1
-      item.p2 = p2
-      if (this.removedVectors.has(item.id)) this.scene.addVector(item)
-    })
-    this.faceSnapshots.forEach(({ face, boundaryPointIds, memberPointIds, boundaryLineIds, supportPointIds }) => {
-      face.boundaryPointIds = [...boundaryPointIds]
-      face.memberPointIds = [...memberPointIds]
-      face.boundaryLineIds = [...boundaryLineIds]
-      face.supportPointIds = [...supportPointIds]
-      const snapshot = this.faceSnapshots.find((item) => item.face.id === face.id)
-      if (snapshot) {
-        face.cubeOwnerPointIds = [...snapshot.cubeOwnerPointIds]
-        face.cubeDependentPointIds = [...snapshot.cubeDependentPointIds]
-        face.regularPolygonOwnerPointIds = [...snapshot.regularPolygonOwnerPointIds]
-        face.regularPolygonDependentPointIds = [...snapshot.regularPolygonDependentPointIds]
-      }
-      if (this.removedFaces.has(face.id)) this.scene.addFace(face)
-      else face.normalize(this.scene.points)
-    })
+  // 继承 removePoint 的 cubeId/cubeRole
+  if (!keepPoint.cubeId && removePoint.cubeId) {
+    keepPoint.cubeId = removePoint.cubeId
+    keepPoint.cubeRole = removePoint.cubeRole
+  }
 
-    this.cubeSnapshots.forEach(({ constraint, ownerPointIds, dependentLayouts }) => {
-      constraint.ownerPointIds[0] = ownerPointIds[0]
-      constraint.ownerPointIds[1] = ownerPointIds[1]
-      constraint.dependentLayouts.splice(
-        0,
-        constraint.dependentLayouts.length,
-        ...dependentLayouts.map((item) => ({ ...item })),
+  // ─── 正多边形约束 ──────────────────────────────────
+  for (const constraint of [...scene.regularPolygonConstraints.values()]) {
+    const polygonConstraint = constraint as unknown as RegularPolygonConstraint
+    const allPointIds = [
+      polygonConstraint.ownerPointIds[0],
+      polygonConstraint.ownerPointIds[1],
+      ...polygonConstraint.dependentLayouts.map((item) => item.pointId)
+    ]
+    if (!allPointIds.some((pid) => pid === keepId || pid === removeId)) continue
+
+    if (polygonConstraint.ownerPointIds[0] === removeId) polygonConstraint.ownerPointIds[0] = keepId
+    if (polygonConstraint.ownerPointIds[1] === removeId) polygonConstraint.ownerPointIds[1] = keepId
+    polygonConstraint.dependentLayouts.forEach((layout) => {
+      if (layout.pointId === removeId) layout.pointId = keepId
+    })
+  }
+
+  // 继承 removePoint 的 regularPolygonId/regularPolygonRole
+  if (!keepPoint.regularPolygonId && removePoint.regularPolygonId) {
+    keepPoint.regularPolygonId = removePoint.regularPolygonId
+    keepPoint.regularPolygonRole = removePoint.regularPolygonRole
+  }
+
+  // ─── 圆 ────────────────────────────────────────────
+  for (const circle of [...scene.circles.values()]) {
+    const involvesRemove =
+      circle.p1.id === removeId || circle.p2.id === removeId || circle.p3.id === removeId ||
+      [...scene.points.values()].some(
+        (p) => p.circleId === circle.id && p.circleRole === 'center' && p.id === removeId,
       )
-    })
-    this.pointCubeSnapshots.forEach(({ point, cubeId, cubeRole }) => {
-      point.cubeId = cubeId
-      point.cubeRole = cubeRole
-    })
-    this.regularPolygonSnapshots.forEach(({ constraint, ownerPointIds, dependentLayouts }) => {
-      constraint.ownerPointIds[0] = ownerPointIds[0]
-      constraint.ownerPointIds[1] = ownerPointIds[1]
-      constraint.dependentLayouts.splice(
-        0,
-        constraint.dependentLayouts.length,
-        ...dependentLayouts.map((item) => ({ ...item })),
+    const involvesKeep =
+      circle.p1.id === keepId || circle.p2.id === keepId || circle.p3.id === keepId ||
+      [...scene.points.values()].some(
+        (p) => p.circleId === circle.id && p.circleRole === 'center' && p.id === keepId,
       )
-    })
-    this.pointRegularPolygonSnapshots.forEach(({ point, regularPolygonId, regularPolygonRole }) => {
-      point.regularPolygonId = regularPolygonId
-      point.regularPolygonRole = regularPolygonRole
-    })
+    if (!involvesRemove && !involvesKeep) continue
 
-    this.sphereSnapshots.forEach((snapshot) => {
-      const { sphere } = snapshot
-      sphere.centerPoint = snapshot.centerPoint
-      sphere.radiusPoint = snapshot.radiusPoint
-      snapshot.centerPoint.sphereId = snapshot.centerSphereId
-      snapshot.centerPoint.sphereRole = snapshot.centerSphereRole
-      if (snapshot.radiusPoint) {
-        snapshot.radiusPoint.sphereId = snapshot.radiusSphereId
-        snapshot.radiusPoint.sphereRole = snapshot.radiusSphereRole
-      }
-      if (this.removedSpheres.has(sphere.id)) {
-        this.scene.addSphere(sphere)
-      }
-    })
+    const centerPoint = [...scene.points.values()].find(
+      (p) => p.circleId === circle.id && p.circleRole === 'center',
+    ) ?? null
+    const isRemoveCenter = centerPoint?.id === removeId
+    const isKeepCenter = centerPoint?.id === keepId
 
-    this.coneSnapshots.forEach((snapshot) => {
-      const { cone } = snapshot
-      cone.baseCenterPoint = snapshot.baseCenterPoint
-      cone.apexPoint = snapshot.apexPoint
-      snapshot.baseCenterPoint.coneId = snapshot.baseCenterConeId
-      snapshot.baseCenterPoint.coneRole = snapshot.baseCenterConeRole
-      snapshot.apexPoint.coneId = snapshot.apexConeId
-      snapshot.apexPoint.coneRole = snapshot.apexConeRole
-      if (this.removedCones.has(cone.id)) {
-        this.scene.addCone(cone)
+    // 法向圆
+    if (circle.isNormalCircle()) {
+      if (circle.p1.id === removeId) {
+        circle.p1 = keepPoint
+        keepPoint.circleId = circle.id
+        keepPoint.circleRole = 'center'
       }
-    })
+      if (circle.directionType === 'point' && circle.directionId === removeId) {
+        circle.directionId = keepId
+      }
+      continue
+    }
 
-    this.cylinderSnapshots.forEach((snapshot) => {
-      const { cylinder } = snapshot
-      cylinder.bottomCenterPoint = snapshot.bottomCenterPoint
-      cylinder.topCenterPoint = snapshot.topCenterPoint
-      snapshot.bottomCenterPoint.cylinderId = snapshot.bottomCenterCylinderId
-      snapshot.bottomCenterPoint.cylinderRole = snapshot.bottomCenterCylinderRole
-      snapshot.topCenterPoint.cylinderId = snapshot.topCenterCylinderId
-      snapshot.topCenterPoint.cylinderRole = snapshot.topCenterCylinderRole
-      if (snapshot.bottomCircleId) {
-        const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
-        if (bottomCircle) {
-          if (bottomCircle.p1.id === this.keepPoint.id) bottomCircle.p1 = snapshot.bottomCenterPoint
-          if (bottomCircle.p2.id === this.keepPoint.id) bottomCircle.p2 = snapshot.bottomCenterPoint
-          if (bottomCircle.p3.id === this.keepPoint.id) bottomCircle.p3 = snapshot.bottomCenterPoint
-          bottomCircle.directionId = snapshot.bottomCircleDirectionId
-        }
-      }
-      if (snapshot.topCircleId) {
-        const topCircle = this.scene.circles.get(snapshot.topCircleId)
-        if (topCircle) {
-          if (topCircle.p1.id === this.keepPoint.id) topCircle.p1 = snapshot.topCenterPoint
-          if (topCircle.p2.id === this.keepPoint.id) topCircle.p2 = snapshot.topCenterPoint
-          if (topCircle.p3.id === this.keepPoint.id) topCircle.p3 = snapshot.topCenterPoint
-          topCircle.directionId = snapshot.topCircleDirectionId
-        }
-      }
-      if (this.removedCylinders.has(cylinder.id)) {
-        this.scene.addCylinder(cylinder)
-        if (snapshot.bottomCircleId) {
-          const bottomCircle = this.scene.circles.get(snapshot.bottomCircleId)
-          if (bottomCircle) {
-            this.scene.addCircle(bottomCircle)
-            bottomCircle.p1.circleId = bottomCircle.id
-            bottomCircle.p1.circleRole = 'center'
-          }
-        }
-        if (snapshot.topCircleId) {
-          const topCircle = this.scene.circles.get(snapshot.topCircleId)
-          if (topCircle) {
-            this.scene.addCircle(topCircle)
-            topCircle.p1.circleId = topCircle.id
-            topCircle.p1.circleRole = 'center'
-          }
-        }
-        const constraint = new CylinderConstraint(
-          this.scene,
-          cylinder.id,
-          snapshot.bottomCircleId!,
-          snapshot.topCircleId!,
-          cylinder.name,
-          cylinder.valueVisible,
+    // 三点圆 — 中心点被移除
+    if (isRemoveCenter) {
+      const frame = circle.getFrame()
+      if (frame) {
+        const delta = new Vec3(
+          keepPoint.position.x - frame.center.x,
+          keepPoint.position.y - frame.center.y,
+          keepPoint.position.z - frame.center.z,
         )
-        this.scene.addCylinderConstraint(constraint)
+        const pointIds = new Set([circle.p1.id, circle.p2.id, circle.p3.id])
+        pointIds.forEach((pid) => {
+          const pt = scene.points.get(pid)
+          if (pt && pt.id !== keepId) {
+            pt.position = new Vec3(
+              pt.position.x + delta.x,
+              pt.position.y + delta.y,
+              pt.position.z + delta.z,
+            )
+          }
+        })
       }
-    })
+      keepPoint.circleId = circle.id
+      keepPoint.circleRole = 'center'
+      keepPoint.locked = true
+      keepPoint.userLocked = false
+    }
 
-    this.objectConstrainedPointSnapshots.forEach((snapshot) => {
-      const point = this.scene.points.get(snapshot.pointId)
-      if (!point) return
-      point.constrainedTo = snapshot.target
-      const existing = this.scene.getObjectConstrainedPointConstraint(snapshot.pointId)
-      if (existing) {
-        existing.target = snapshot.target
-        if (snapshot.parametricData) {
-          existing.parametricData = JSON.parse(snapshot.parametricData)
-        } else {
-          existing.parametricData = null
-        }
-      } else {
-        const constraint = new ObjectConstrainedPointConstraint(this.scene, snapshot.pointId, snapshot.target)
-        if (snapshot.parametricData) {
-          constraint.parametricData = JSON.parse(snapshot.parametricData)
-        }
-        this.scene.addObjectConstrainedPointConstraint(constraint)
+    if (circle.p1.id === removeId) circle.p1 = keepPoint
+    if (circle.p2.id === removeId) circle.p2 = keepPoint
+    if (circle.p3.id === removeId) circle.p3 = keepPoint
+
+    // 退化检测
+    const uniqueIds = new Set([circle.p1.id, circle.p2.id, circle.p3.id])
+    if (uniqueIds.size < 3) {
+      scene.circles.delete(circle.id)
+      scene.selection.circles.delete(circle.id)
+      if (centerPoint) {
+        scene.points.delete(centerPoint.id)
+        scene.selection.points.delete(centerPoint.id)
       }
-    })
-
-    this.perpendicularLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
-      line.p1 = p1
-      line.p2 = p2
-      line.target = { type: targetType as PerpendicularLine3['target']['type'], id: targetId }
-      if (this.removedPerpendicularLines.has(line.id)) {
-        this.scene.addPerpendicularLine(line)
-        const constraint = new PerpendicularLineConstraint(this.scene, line.id, line.target)
-        this.scene.addPerpendicularLineConstraint(constraint)
+      if (isRemoveCenter) {
+        keepPoint.circleId = null
+        keepPoint.circleRole = null
+        keepPoint.locked = false
       }
-    })
-
-    this.parallelLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
-      line.p1 = p1
-      line.p2 = p2
-      line.target = { type: targetType as ParallelLine3['target']['type'], id: targetId }
-      if (this.removedParallelLines.has(line.id)) {
-        this.scene.addParallelLine(line)
-        const constraint = new ParallelLineConstraint(this.scene, line.id, line.target)
-        this.scene.addParallelLineConstraint(constraint)
+      if (isKeepCenter && centerPoint) {
+        centerPoint.circleId = null
+        centerPoint.circleRole = null
+        centerPoint.locked = false
       }
-    })
+      continue
+    }
 
-    this.cascadePerpendicularLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
-      line.p1 = p1
-      line.p2 = p2
-      line.target = { type: targetType as PerpendicularLine3['target']['type'], id: targetId }
-      if (this.removedPerpendicularLines.has(line.id) && !this.scene.perpendicularLines.has(line.id)) {
-        this.scene.addPerpendicularLine(line)
-        const constraint = new PerpendicularLineConstraint(this.scene, line.id, line.target)
-        this.scene.addPerpendicularLineConstraint(constraint)
+    // 无效检测
+    if (!circle.isValid()) {
+      scene.circles.delete(circle.id)
+      scene.selection.circles.delete(circle.id)
+      if (centerPoint) {
+        scene.points.delete(centerPoint.id)
+        scene.selection.points.delete(centerPoint.id)
       }
-    })
-
-    this.cascadeParallelLineSnapshots.forEach(({ line, p1, p2, targetType, targetId }) => {
-      line.p1 = p1
-      line.p2 = p2
-      line.target = { type: targetType as ParallelLine3['target']['type'], id: targetId }
-      if (this.removedParallelLines.has(line.id) && !this.scene.parallelLines.has(line.id)) {
-        this.scene.addParallelLine(line)
-        const constraint = new ParallelLineConstraint(this.scene, line.id, line.target)
-        this.scene.addParallelLineConstraint(constraint)
+      if (isRemoveCenter) {
+        keepPoint.circleId = null
+        keepPoint.circleRole = null
+        keepPoint.locked = false
       }
-    })
+      if (isKeepCenter && centerPoint) {
+        centerPoint.circleId = null
+        centerPoint.circleRole = null
+        centerPoint.locked = false
+      }
+      continue
+    }
 
-    this.scene.markPointDirty(this.keepPoint.id)
-    this.scene.markPointDirty(this.removePoint.id)
-    this.scene.solveDirtyConstraints()
-    this.scene.markAllRenderDirty()
-
-    this.scene.selection.clear()
-    this.scene.selection.selectPoint(this.keepPoint.id, true)
-    this.scene.selection.selectPoint(this.removePoint.id, true)
-  }
-
-  private rebuildBoundaryLineIds(face: PlanarPolygon) {
-    const boundaryLineIds: string[] = []
-    for (let i = 0; i < face.boundaryPointIds.length; i++) {
-      const p1Id = face.boundaryPointIds[i]!
-      const p2Id = face.boundaryPointIds[(i + 1) % face.boundaryPointIds.length]!
-      const foundLine = PlanarPolygon.findExistingLine(this.scene.lines, p1Id, p2Id)
-      if (foundLine) {
-        boundaryLineIds.push(foundLine.id)
+    // 保留中心点更新位置
+    if (isKeepCenter && centerPoint) {
+      const newFrame = circle.getFrame()
+      if (newFrame) {
+        centerPoint.position = newFrame.center
       }
     }
-    face.boundaryLineIds = boundaryLineIds
   }
+
+  // ─── 球 ────────────────────────────────────────────
+  for (const sphere of [...scene.spheres.values()]) {
+    if (
+      sphere.centerPoint.id !== removeId && sphere.centerPoint.id !== keepId &&
+      sphere.radiusPoint?.id !== removeId && sphere.radiusPoint?.id !== keepId
+    ) continue
+
+    if (sphere.centerPoint.id === removeId) {
+      sphere.centerPoint = keepPoint
+      keepPoint.sphereId = sphere.id
+      keepPoint.sphereRole = 'center'
+    }
+    if (sphere.radiusPoint && sphere.radiusPoint.id === removeId) {
+      sphere.radiusPoint = keepPoint
+      keepPoint.sphereId = sphere.id
+      keepPoint.sphereRole = 'radius'
+    }
+    if (sphere.radiusPoint && sphere.centerPoint.id === sphere.radiusPoint.id) {
+      scene.removeSphere(sphere.id)
+      keepPoint.sphereId = null
+      keepPoint.sphereRole = null
+    }
+  }
+
+  // ─── 圆锥 ──────────────────────────────────────────
+  for (const cone of [...scene.cones.values()]) {
+    if (
+      cone.baseCenterPoint.id !== removeId && cone.baseCenterPoint.id !== keepId &&
+      cone.apexPoint.id !== removeId && cone.apexPoint.id !== keepId
+    ) continue
+
+    if (cone.baseCenterPoint.id === removeId) {
+      cone.baseCenterPoint = keepPoint
+      keepPoint.coneId = cone.id
+      keepPoint.coneRole = 'baseCenter'
+    }
+    if (cone.apexPoint.id === removeId) {
+      cone.apexPoint = keepPoint
+      keepPoint.coneId = cone.id
+      keepPoint.coneRole = 'apex'
+    }
+    if (cone.baseCenterPoint.id === cone.apexPoint.id) {
+      scene.removeCone(cone.id)
+      keepPoint.coneId = null
+      keepPoint.coneRole = null
+    }
+  }
+
+  // ─── 圆柱 ──────────────────────────────────────────
+  for (const cylinder of [...scene.cylinders.values()]) {
+    if (
+      cylinder.bottomCenterPoint.id !== removeId && cylinder.bottomCenterPoint.id !== keepId &&
+      cylinder.topCenterPoint.id !== removeId && cylinder.topCenterPoint.id !== keepId
+    ) continue
+
+    const bottomCircleId = cylinder.normalCircleId
+    const topCircleId = cylinder.topNormalCircleId
+
+    if (cylinder.bottomCenterPoint.id === removeId) {
+      cylinder.bottomCenterPoint = keepPoint
+      keepPoint.cylinderId = cylinder.id
+      keepPoint.cylinderRole = 'bottomCenter'
+      if (bottomCircleId) {
+        const bottomCircle = scene.circles.get(bottomCircleId)
+        if (bottomCircle) {
+          if (bottomCircle.p1.id === removeId) bottomCircle.p1 = keepPoint
+          if (bottomCircle.p2.id === removeId) bottomCircle.p2 = keepPoint
+          if (bottomCircle.p3.id === removeId) bottomCircle.p3 = keepPoint
+        }
+      }
+      if (topCircleId) {
+        const topCircle = scene.circles.get(topCircleId)
+        if (topCircle && topCircle.directionId === removeId) {
+          topCircle.directionId = keepId
+        }
+      }
+    }
+    if (cylinder.topCenterPoint.id === removeId) {
+      cylinder.topCenterPoint = keepPoint
+      keepPoint.cylinderId = cylinder.id
+      keepPoint.cylinderRole = 'topCenter'
+      if (topCircleId) {
+        const topCircle = scene.circles.get(topCircleId)
+        if (topCircle) {
+          if (topCircle.p1.id === removeId) topCircle.p1 = keepPoint
+          if (topCircle.p2.id === removeId) topCircle.p2 = keepPoint
+          if (topCircle.p3.id === removeId) topCircle.p3 = keepPoint
+        }
+      }
+      if (bottomCircleId) {
+        const bottomCircle = scene.circles.get(bottomCircleId)
+        if (bottomCircle && bottomCircle.directionId === removeId) {
+          bottomCircle.directionId = keepId
+        }
+      }
+    }
+    if (cylinder.bottomCenterPoint.id === cylinder.topCenterPoint.id) {
+      if (bottomCircleId) {
+        const bottomCircle = scene.circles.get(bottomCircleId)
+        if (bottomCircle) {
+          scene.circles.delete(bottomCircle.id)
+          scene.selection.circles.delete(bottomCircle.id)
+          bottomCircle.p1.circleId = null
+          bottomCircle.p1.circleRole = null
+        }
+      }
+      if (topCircleId) {
+        const topCircle = scene.circles.get(topCircleId)
+        if (topCircle) {
+          scene.circles.delete(topCircle.id)
+          scene.selection.circles.delete(topCircle.id)
+          topCircle.p1.circleId = null
+          topCircle.p1.circleRole = null
+        }
+      }
+      scene.removeCylinder(cylinder.id)
+      keepPoint.cylinderId = null
+      keepPoint.cylinderRole = null
+    }
+  }
+
+  // ─── 对象约束点 ────────────────────────────────────
+  for (const constraint of [...scene.objectConstrainedPointConstraints.values()]) {
+    if (constraint.pointId === removeId) {
+      scene.removeObjectConstrainedPointConstraint(removeId)
+    }
+    if (constraint.pointId === keepId) {
+      keepPoint.constrainedTo = { ...constraint.target }
+    }
+  }
+
+  // ─── 垂线与平行线（含级联删除）─────────────────────
+  const deletedTargetIds = new Set<string>()
+
+  // 先处理直接引用 removePoint 的垂线/平行线
+  for (const line of [...scene.perpendicularLines.values()]) {
+    if (line.p1.id === removeId) line.p1 = keepPoint
+    if (line.p2.id === removeId) line.p2 = keepPoint
+    if (line.p1.id === line.p2.id) {
+      scene.perpendicularLines.delete(line.id)
+      scene.selection.perpendicularLines.delete(line.id)
+      deletedTargetIds.add(`perpendicularLine:${line.id}`)
+    }
+  }
+
+  for (const line of [...scene.parallelLines.values()]) {
+    if (line.p1.id === removeId) line.p1 = keepPoint
+    if (line.p2.id === removeId) line.p2 = keepPoint
+    if (line.p1.id === line.p2.id) {
+      scene.parallelLines.delete(line.id)
+      scene.selection.parallelLines.delete(line.id)
+      deletedTargetIds.add(`parallelLine:${line.id}`)
+    }
+  }
+
+  // 级联删除：目标已被删除的垂线/平行线
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const pl of [...scene.perpendicularLines.values()]) {
+      if (deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`)) {
+        scene.perpendicularLines.delete(pl.id)
+        scene.selection.perpendicularLines.delete(pl.id)
+        deletedTargetIds.add(`perpendicularLine:${pl.id}`)
+        changed = true
+      }
+    }
+    for (const pl of [...scene.parallelLines.values()]) {
+      if (deletedTargetIds.has(`${pl.target.type}:${pl.target.id}`)) {
+        scene.parallelLines.delete(pl.id)
+        scene.selection.parallelLines.delete(pl.id)
+        deletedTargetIds.add(`parallelLine:${pl.id}`)
+        changed = true
+      }
+    }
+  }
+
+  // ─── 删除被移除的点 ────────────────────────────────
+  scene.points.delete(removeId)
+  scene.selection.points.delete(removeId)
+
+  // ─── 标记脏点并求解 ────────────────────────────────
+  scene.markPointDirty(keepId)
+  scene.solveDirtyConstraints()
+  scene.markAllRenderDirty()
+  scene.selection.selectPoint(keepId, true)
 }
+
+function rebuildBoundaryLineIds(scene: Scene, face: PlanarPolygon) {
+  const boundaryLineIds: string[] = []
+  for (let i = 0; i < face.boundaryPointIds.length; i++) {
+    const p1Id = face.boundaryPointIds[i]!
+    const p2Id = face.boundaryPointIds[(i + 1) % face.boundaryPointIds.length]!
+    const foundLine = PlanarPolygon.findExistingLine(scene.lines, p1Id, p2Id)
+    if (foundLine) {
+      boundaryLineIds.push(foundLine.id)
+    }
+  }
+  face.boundaryLineIds = boundaryLineIds
+}
+
+/**
+ * 创建合并点命令（基于快照模式）。
+ *
+ * 将 removePoint 合并到 keepPoint，自动替换所有引用，
+ * 删除退化元素，处理级联删除。
+ *
+ * undo/redo 由 SnapshotCommand 的全量快照自动处理，
+ * 无需手动管理数百行快照恢复逻辑。
+ */
+export function createMergePointsCommand(
+  scene: Scene,
+  keepPoint: Point3,
+  removePoint: Point3,
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('MergePointsCommand', scene, () => {
+    executeMergePoints(scene, keepPoint, removePoint)
+  })
+
+  cmd.executeAndCapture()
+  return cmd
+}
+
+/**
+ * 合并点核心逻辑（供 createMergeCubePointsCommand 复用）。
+ * 不自行捕获快照，由外层 SnapshotCommand 统一管理。
+ */
+export { executeMergePoints }

@@ -1,4 +1,5 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { Scene } from '../../../scene/Scene'
 import { StraightLine3 } from '../../../geometry/StraightLine3'
 
 type StraightLineState = {
@@ -12,23 +13,45 @@ type StraightLineState = {
   userLocked: boolean
 }
 
-export class UpdateStraightLineCommand extends AbstractUpdateCommand<StraightLineState> {
+export class UpdateStraightLineCommand extends ConstraintAwareCommand {
+  readonly label = '更新直线属性'
+
+  private before: StraightLineState
+  private after: StraightLineState
+
   constructor(
-    private line: StraightLine3,
+    private lineId: string,
     before: StraightLineState,
     after: StraightLineState,
+    scene: Scene,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const line = scene.straightLines.get(lineId)
+    if (line) {
+      this.markAffected(line.p1.id, line.p2.id)
+    }
   }
 
-  protected apply(state: StraightLineState) {
-    this.line.name = state.name
-    this.line.nameVisible = state.nameVisible
-    this.line.valueVisible = state.valueVisible
-    this.line.labelOffsetX = state.labelOffsetX
-    this.line.labelOffsetY = state.labelOffsetY
-    this.line.visible = state.visible
-    this.line.displayLength = StraightLine3.normalizeDisplayLength(state.displayLength)
-    this.line.userLocked = state.userLocked
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: StraightLineState) {
+    const line = this.scene.straightLines.get(this.lineId)
+    if (!line) return
+    line.name = state.name
+    line.nameVisible = state.nameVisible
+    line.valueVisible = state.valueVisible
+    line.labelOffsetX = state.labelOffsetX
+    line.labelOffsetY = state.labelOffsetY
+    line.visible = state.visible
+    line.displayLength = StraightLine3.normalizeDisplayLength(state.displayLength)
+    line.userLocked = state.userLocked
   }
 }

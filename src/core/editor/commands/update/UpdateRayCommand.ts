@@ -1,4 +1,5 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { Scene } from '../../../scene/Scene'
 import { Ray3 } from '../../../geometry/Ray3'
 
 type RayState = {
@@ -12,23 +13,45 @@ type RayState = {
   userLocked: boolean
 }
 
-export class UpdateRayCommand extends AbstractUpdateCommand<RayState> {
+export class UpdateRayCommand extends ConstraintAwareCommand {
+  readonly label = '更新射线属性'
+
+  private before: RayState
+  private after: RayState
+
   constructor(
-    private ray: Ray3,
+    private rayId: string,
     before: RayState,
     after: RayState,
+    scene: Scene,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const ray = scene.rays.get(rayId)
+    if (ray) {
+      this.markAffected(ray.p1.id, ray.p2.id)
+    }
   }
 
-  protected apply(state: RayState) {
-    this.ray.name = state.name
-    this.ray.nameVisible = state.nameVisible
-    this.ray.valueVisible = state.valueVisible
-    this.ray.labelOffsetX = state.labelOffsetX
-    this.ray.labelOffsetY = state.labelOffsetY
-    this.ray.visible = state.visible
-    this.ray.displayLength = Ray3.normalizeDisplayLength(state.displayLength)
-    this.ray.userLocked = state.userLocked
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: RayState) {
+    const ray = this.scene.rays.get(this.rayId)
+    if (!ray) return
+    ray.name = state.name
+    ray.nameVisible = state.nameVisible
+    ray.valueVisible = state.valueVisible
+    ray.labelOffsetX = state.labelOffsetX
+    ray.labelOffsetY = state.labelOffsetY
+    ray.visible = state.visible
+    ray.displayLength = Ray3.normalizeDisplayLength(state.displayLength)
+    ray.userLocked = state.userLocked
   }
 }

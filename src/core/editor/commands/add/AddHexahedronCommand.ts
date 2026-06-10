@@ -1,46 +1,29 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { Point3 } from '../../../geometry/Point3'
 import { Line3 } from '../../../geometry/Line3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
-import { IntersectionPointConstraint } from '../../../constraints/IntersectionPointConstraint'
 
-export class AddHexahedronCommand implements Command {
-  constructor(
-    private scene: Scene,
-    private points: Point3[],
-    private faces: PlanarPolygon[],
-    private constraint: CubeConstraint,
-    private boundaryLines: Line3[] = [],
-    private dependentIntersectionPoints: Array<{
-      point: Point3
-      constraint: IntersectionPointConstraint
-    }> = [],
-  ) {}
+export function createAddHexahedronCommand(
+  scene: Scene,
+  points: Point3[],
+  faces: PlanarPolygon[],
+  constraint: CubeConstraint,
+  boundaryLines: Line3[] = [],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: import('../../../constraints/IntersectionPointConstraint').IntersectionPointConstraint
+  }> = [],
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('AddHexahedronCommand', scene, () => {
+    points.forEach((point) => scene.addPoint(point))
+    boundaryLines.forEach((line) => scene.addLine(line))
+    faces.forEach((face) => scene.addFace(face))
+    scene.addCubeConstraint(constraint)
+  })
 
-  execute() {
-    this.points.forEach((point) => this.scene.addPoint(point))
-    this.boundaryLines.forEach((line) => this.scene.addLine(line))
-    this.faces.forEach((face) => this.scene.addFace(face))
-    this.scene.addCubeConstraint(this.constraint)
-  }
-
-  undo() {
-    this.scene.removeCubeConstraint(this.constraint.cubeId)
-    this.faces.forEach((face) => this.scene.removeFace(face.id))
-    this.boundaryLines.forEach((line) => {
-      this.scene.lines.delete(line.id)
-      this.scene.selection.lines.delete(line.id)
-    })
-    this.dependentIntersectionPoints.forEach(({ point, constraint }) => {
-      this.scene.removeIntersectionConstraint(constraint.pointId)
-      this.scene.points.delete(point.id)
-      this.scene.selection.points.delete(point.id)
-    })
-    this.points.forEach((point) => {
-      this.scene.points.delete(point.id)
-      this.scene.selection.points.delete(point.id)
-    })
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

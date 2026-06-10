@@ -1,4 +1,5 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { Scene } from '../../../scene/Scene'
 import { Line3 } from '../../../geometry/Line3'
 import { Vec3 } from '../../../geometry/Vec3'
 
@@ -16,26 +17,48 @@ type LineState = {
   p2Position?: Vec3
 }
 
-export class UpdateLineCommand extends AbstractUpdateCommand<LineState> {
+export class UpdateLineCommand extends ConstraintAwareCommand {
+  readonly label = '更新线段属性'
+
+  private before: LineState
+  private after: LineState
+
   constructor(
-    private line: Line3,
+    private lineId: string,
     before: LineState,
     after: LineState,
+    scene: Scene,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const line = scene.lines.get(lineId)
+    if (line) {
+      this.markAffected(line.p1.id, line.p2.id)
+    }
   }
 
-  protected apply(state: LineState) {
-    this.line.name = state.name
-    this.line.nameVisible = state.nameVisible
-    this.line.valueVisible = state.valueVisible
-    this.line.labelOffsetX = state.labelOffsetX
-    this.line.labelOffsetY = state.labelOffsetY
-    this.line.visible = state.visible
-    this.line.userLocked = state.userLocked
-    this.line.lengthLocked = state.lengthLocked
-    this.line.lockedLength = Line3.normalizeLockedLength(state.lockedLength)
-    if (state.p1Position) this.line.p1.setPosition(state.p1Position.clone())
-    if (state.p2Position) this.line.p2.setPosition(state.p2Position.clone())
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: LineState) {
+    const line = this.scene.lines.get(this.lineId)
+    if (!line) return
+    line.name = state.name
+    line.nameVisible = state.nameVisible
+    line.valueVisible = state.valueVisible
+    line.labelOffsetX = state.labelOffsetX
+    line.labelOffsetY = state.labelOffsetY
+    line.visible = state.visible
+    line.userLocked = state.userLocked
+    line.lengthLocked = state.lengthLocked
+    line.lockedLength = Line3.normalizeLockedLength(state.lockedLength)
+    if (state.p1Position) line.p1.setPosition(state.p1Position.clone())
+    if (state.p2Position) line.p2.setPosition(state.p2Position.clone())
   }
 }

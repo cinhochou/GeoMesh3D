@@ -104,4 +104,19 @@ export class Point3 {
     this.position = v
     this.onPositionChanged?.(this, previous, v)
   }
+
+  /**
+   * 强制设置位置，绕过 locked 检查，但仍触发 onPositionChanged 回调。
+   * 用于快照恢复等需要强制更新位置的场景。
+   */
+  forceSetPosition(v: Vec3) {
+    const previous = this.position
+    const unchanged =
+      Math.abs(previous.x - v.x) <= Point3.POSITION_EPSILON &&
+      Math.abs(previous.y - v.y) <= Point3.POSITION_EPSILON &&
+      Math.abs(previous.z - v.z) <= Point3.POSITION_EPSILON
+    if (unchanged) return
+    this.position = v
+    this.onPositionChanged?.(this, previous, v)
+  }
 }

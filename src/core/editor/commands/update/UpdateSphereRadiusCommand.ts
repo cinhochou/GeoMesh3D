@@ -1,23 +1,45 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
 import { Scene } from '../../../scene/Scene'
-import { Sphere3 } from '../../../geometry/Sphere3'
 
 type SphereRadiusState = {
   radiusValue: number
 }
 
-export class UpdateSphereRadiusCommand extends AbstractUpdateCommand<SphereRadiusState> {
+export class UpdateSphereRadiusCommand extends ConstraintAwareCommand {
+  readonly label = '更新球体半径'
+
+  private before: SphereRadiusState
+  private after: SphereRadiusState
+
   constructor(
-    private scene: Scene,
-    private sphere: Sphere3,
+    scene: Scene,
+    private sphereId: string,
     before: SphereRadiusState,
     after: SphereRadiusState,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const sphere = scene.spheres.get(sphereId)
+    if (sphere) {
+      this.markAffected(sphere.centerPoint.id)
+      if (sphere.radiusPoint) {
+        this.markAffected(sphere.radiusPoint.id)
+      }
+    }
   }
 
-  protected apply(state: SphereRadiusState) {
-    this.sphere.radiusValue = state.radiusValue
-    this.scene.markAllRenderDirty()
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: SphereRadiusState) {
+    const sphere = this.scene.spheres.get(this.sphereId)
+    if (!sphere) return
+    sphere.radiusValue = state.radiusValue
   }
 }

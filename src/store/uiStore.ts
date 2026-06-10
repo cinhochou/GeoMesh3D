@@ -145,20 +145,20 @@ interface ContentGroupCollapseState {
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
-  point: false,
-  line: false,
-  straightLine: false,
-  perpendicularLine: false,
-  parallelLine: false,
-  ray: false,
-  vector: false,
-  circle: false,
-  face: false,
-  hexahedron: false,
-  tetrahedron: false,
-  sphere: false,
-  cone: false,
-  cylinder: false,
+  point: true,
+  line: true,
+  straightLine: true,
+  perpendicularLine: true,
+  parallelLine: true,
+  ray: true,
+  vector: true,
+  circle: true,
+  face: true,
+  hexahedron: true,
+  tetrahedron: true,
+  sphere: true,
+  cone: true,
+  cylinder: true,
 })
 
 export const useUiStore = defineStore('ui', () => {

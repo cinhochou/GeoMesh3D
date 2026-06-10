@@ -4347,34 +4347,17 @@ export class CollabManager {
     this.emitSharedHistoryState()
   }
 
-  sharedUndo(): void {
-    if (!this.provider || this.roomName === null) return
-    const currentIndex = this.yHistoryIndex.get('value') ?? -1
-    if (currentIndex < 0) return
-
-    const entry = this.readSharedHistoryEntryAt(currentIndex)
-    if (!entry) return
-
-    this.isApplyingSharedHistory = true
-    try {
-      importScene(this.scene, entry.before)
-      this.scene.solveDirtyConstraints()
-      this.scene.markAllRenderDirty()
-    } finally {
-      this.isApplyingSharedHistory = false
-    }
-
-    this.yHistoryIndex.set('value', currentIndex - 1)
-    this.syncFullScene()
-    this.emitSharedHistoryState()
-  }
-
+  /**
+   * 将本地快照历史上传到共享历史。
+   * 仅在共享历史为空时调用（第一个加入房间的成员）。
+   */
   uploadLocalSnapshotHistory(
     entries: Array<{
       before: SerializedScene
       after: SerializedScene
       label: string
     }>,
+    historyIndex: number,
     actorClientId: number,
     actorName: string | null,
   ): void {
@@ -4404,9 +4387,31 @@ export class CollabManager {
         this.yHistory.push([this.serializeHistoryEntry(fullEntry)])
       }
 
-      this.yHistoryIndex.set('value', this.yHistory.length - 1)
+      this.yHistoryIndex.set('value', historyIndex)
     })
 
+    this.emitSharedHistoryState()
+  }
+
+  sharedUndo(): void {
+    if (!this.provider || this.roomName === null) return
+    const currentIndex = this.yHistoryIndex.get('value') ?? -1
+    if (currentIndex < 0) return
+
+    const entry = this.readSharedHistoryEntryAt(currentIndex)
+    if (!entry) return
+
+    this.isApplyingSharedHistory = true
+    try {
+      importScene(this.scene, entry.before)
+      this.scene.solveDirtyConstraints()
+      this.scene.markAllRenderDirty()
+    } finally {
+      this.isApplyingSharedHistory = false
+    }
+
+    this.yHistoryIndex.set('value', currentIndex - 1)
+    this.syncFullScene()
     this.emitSharedHistoryState()
   }
 

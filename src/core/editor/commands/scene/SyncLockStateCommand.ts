@@ -1,4 +1,5 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
+import { Scene } from '../../../scene/Scene'
 import { Point3 } from '../../../geometry/Point3'
 import { Line3 } from '../../../geometry/Line3'
 import { Ray3 } from '../../../geometry/Ray3'
@@ -84,97 +85,60 @@ type ParallelLineLockTransform = {
   after: boolean
 }
 
-export class SyncLockStateCommand implements Command {
-  constructor(
-    private pointTransforms: PointLockTransform[],
-    private lineTransforms: LineLockTransform[],
-    private straightLineTransforms: StraightLineLockTransform[],
-    private rayTransforms: RayLockTransform[],
-    private vectorTransforms: VectorLockTransform[] = [],
-    private faceTransforms: FaceLockTransform[] = [],
-    private circleTransforms: CircleLockTransform[] = [],
-    private sphereTransforms: SphereLockTransform[] = [],
-    private coneTransforms: ConeLockTransform[] = [],
-    private cylinderTransforms: CylinderLockTransform[] = [],
-    private perpendicularLineTransforms: PerpendicularLineLockTransform[] = [],
-    private parallelLineTransforms: ParallelLineLockTransform[] = [],
-  ) {}
-
-  execute() {
-    this.pointTransforms.forEach(({ point, after }) => {
+export function createSyncLockStateCommand(
+  scene: Scene,
+  pointTransforms: PointLockTransform[],
+  lineTransforms: LineLockTransform[],
+  straightLineTransforms: StraightLineLockTransform[],
+  rayTransforms: RayLockTransform[],
+  vectorTransforms: VectorLockTransform[] = [],
+  faceTransforms: FaceLockTransform[] = [],
+  circleTransforms: CircleLockTransform[] = [],
+  sphereTransforms: SphereLockTransform[] = [],
+  coneTransforms: ConeLockTransform[] = [],
+  cylinderTransforms: CylinderLockTransform[] = [],
+  perpendicularLineTransforms: PerpendicularLineLockTransform[] = [],
+  parallelLineTransforms: ParallelLineLockTransform[] = [],
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('SyncLockStateCommand', scene, () => {
+    pointTransforms.forEach(({ point, after }) => {
       point.userLocked = after
     })
-    this.lineTransforms.forEach(({ line, after }) => {
+    lineTransforms.forEach(({ line, after }) => {
       line.userLocked = after
     })
-    this.straightLineTransforms.forEach(({ line, after }) => {
+    straightLineTransforms.forEach(({ line, after }) => {
       line.userLocked = after
     })
-    this.rayTransforms.forEach(({ ray, after }) => {
+    rayTransforms.forEach(({ ray, after }) => {
       ray.userLocked = after
     })
-    this.vectorTransforms.forEach(({ vector, after }) => {
+    vectorTransforms.forEach(({ vector, after }) => {
       vector.userLocked = after
     })
-    this.faceTransforms.forEach(({ face, after }) => {
+    faceTransforms.forEach(({ face, after }) => {
       face.userLocked = after
     })
-    this.circleTransforms.forEach(({ circle, after }) => {
+    circleTransforms.forEach(({ circle, after }) => {
       circle.userLocked = after
     })
-    this.sphereTransforms.forEach(({ sphere, after }) => {
+    sphereTransforms.forEach(({ sphere, after }) => {
       sphere.userLocked = after
     })
-    this.coneTransforms.forEach(({ cone, after }) => {
+    coneTransforms.forEach(({ cone, after }) => {
       cone.userLocked = after
     })
-    this.cylinderTransforms.forEach(({ cylinder, after }) => {
+    cylinderTransforms.forEach(({ cylinder, after }) => {
       cylinder.userLocked = after
     })
-    this.perpendicularLineTransforms.forEach(({ line, after }) => {
+    perpendicularLineTransforms.forEach(({ line, after }) => {
       line.userLocked = after
     })
-    this.parallelLineTransforms.forEach(({ line, after }) => {
+    parallelLineTransforms.forEach(({ line, after }) => {
       line.userLocked = after
     })
-  }
+  })
 
-  undo() {
-    this.pointTransforms.forEach(({ point, before }) => {
-      point.userLocked = before
-    })
-    this.lineTransforms.forEach(({ line, before }) => {
-      line.userLocked = before
-    })
-    this.straightLineTransforms.forEach(({ line, before }) => {
-      line.userLocked = before
-    })
-    this.rayTransforms.forEach(({ ray, before }) => {
-      ray.userLocked = before
-    })
-    this.vectorTransforms.forEach(({ vector, before }) => {
-      vector.userLocked = before
-    })
-    this.faceTransforms.forEach(({ face, before }) => {
-      face.userLocked = before
-    })
-    this.circleTransforms.forEach(({ circle, before }) => {
-      circle.userLocked = before
-    })
-    this.sphereTransforms.forEach(({ sphere, before }) => {
-      sphere.userLocked = before
-    })
-    this.coneTransforms.forEach(({ cone, before }) => {
-      cone.userLocked = before
-    })
-    this.cylinderTransforms.forEach(({ cylinder, before }) => {
-      cylinder.userLocked = before
-    })
-    this.perpendicularLineTransforms.forEach(({ line, before }) => {
-      line.userLocked = before
-    })
-    this.parallelLineTransforms.forEach(({ line, before }) => {
-      line.userLocked = before
-    })
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

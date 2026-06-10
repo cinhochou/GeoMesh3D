@@ -1,8 +1,10 @@
 // src/core/editor/Editor.ts
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
+import { HistoryManager, type HistoryEntry } from './HistoryManager'
 import { TransformCommand } from './commands/scene/TransformCommand'
-import { AddElementCommand } from './commands/add/AddElementCommand'
+import { createAddElementCommand } from './commands/add/AddElementCommand'
+import { SnapshotCommand } from './commands/SnapshotCommand'
 import { Point3, type ConstrainedToRef } from '../geometry/Point3'
 import { Line3, type FaceConstraintType } from '../geometry/Line3'
 import { Ray3 } from '../geometry/Ray3'
@@ -33,45 +35,45 @@ import { UpdateStraightLineCommand } from './commands/update/UpdateStraightLineC
 import { UpdatePerpendicularLineCommand } from './commands/update/UpdatePerpendicularLineCommand'
 import { UpdateParallelLineCommand } from './commands/update/UpdateParallelLineCommand'
 import { UpdateFaceCommand } from './commands/update/UpdateFaceCommand'
-import { DeletePointCommand } from './commands/delete/DeletePointCommand'
-import { DeleteLineCommand } from './commands/delete/DeleteLineCommand'
-import { DeleteRayCommand } from './commands/delete/DeleteRayCommand'
-import { DeleteVectorCommand } from './commands/delete/DeleteVectorCommand'
-import { DeleteStraightLineCommand } from './commands/delete/DeleteStraightLineCommand'
-import { DeleteFaceCommand } from './commands/delete/DeleteFaceCommand'
-import { DeleteRegularPolygonCommand } from './commands/delete/DeleteRegularPolygonCommand'
-import { DeleteCircleCommand } from './commands/delete/DeleteCircleCommand'
-import { DeleteSphereCommand } from './commands/delete/DeleteSphereCommand'
+import { createDeletePointCommand } from './commands/delete/DeletePointCommand'
+import { createDeleteLineCommand } from './commands/delete/DeleteLineCommand'
+import { createDeleteRayCommand } from './commands/delete/DeleteRayCommand'
+import { createDeleteVectorCommand } from './commands/delete/DeleteVectorCommand'
+import { createDeleteStraightLineCommand } from './commands/delete/DeleteStraightLineCommand'
+import { createDeleteFaceCommand } from './commands/delete/DeleteFaceCommand'
+import { createDeleteRegularPolygonCommand } from './commands/delete/DeleteRegularPolygonCommand'
+import { createDeleteCircleCommand } from './commands/delete/DeleteCircleCommand'
+import { createDeleteSphereCommand } from './commands/delete/DeleteSphereCommand'
 import { UpdateSphereCommand } from './commands/update/UpdateSphereCommand'
 import { UpdateCubeCommand } from './commands/update/UpdateCubeCommand'
 import { UpdateRegularPolygonCommand } from './commands/update/UpdateRegularPolygonCommand'
-import { DeleteHexahedronCommand } from './commands/delete/DeleteHexahedronCommand'
-import { ClearSceneCommand } from './commands/scene/ClearSceneCommand'
-import { SyncLockStateCommand } from './commands/scene/SyncLockStateCommand'
-import { MergePointsCommand } from './commands/scene/MergePointsCommand'
-import { MergeCubePointsCommand } from './commands/scene/MergeCubePointsCommand'
-import { AddIntersectionPointCommand } from './commands/add/AddIntersectionPointCommand'
-import { AddConstrainedPointCommand } from './commands/add/AddConstrainedPointCommand'
+import { createDeleteHexahedronCommand } from './commands/delete/DeleteHexahedronCommand'
+import { createClearSceneCommand } from './commands/scene/ClearSceneCommand'
+import { createSyncLockStateCommand } from './commands/scene/SyncLockStateCommand'
+import { createMergePointsCommand } from './commands/scene/MergePointsCommand'
+import { createMergeCubePointsCommand } from './commands/scene/MergeCubePointsCommand'
+import { createAddIntersectionPointCommand } from './commands/add/AddIntersectionPointCommand'
+import { createAddConstrainedPointCommand } from './commands/add/AddConstrainedPointCommand'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
-import { AddHexahedronCommand } from './commands/add/AddHexahedronCommand'
-import { AddSphereCommand } from './commands/add/AddSphereCommand'
-import { AddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
-import { AddConeCommand } from './commands/add/AddConeCommand'
-import { DeleteRadiusSphereCommand } from './commands/delete/DeleteRadiusSphereCommand'
+import { createAddHexahedronCommand } from './commands/add/AddHexahedronCommand'
+import { createAddSphereCommand } from './commands/add/AddSphereCommand'
+import { createAddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
+import { createAddConeCommand } from './commands/add/AddConeCommand'
+import { createDeleteRadiusSphereCommand } from './commands/delete/DeleteRadiusSphereCommand'
 import { UpdateSphereRadiusCommand } from './commands/update/UpdateSphereRadiusCommand'
-import { DeleteConeCommand } from './commands/delete/DeleteConeCommand'
+import { createDeleteConeCommand } from './commands/delete/DeleteConeCommand'
 import { UpdateConeCommand } from './commands/update/UpdateConeCommand'
 import { UpdateConeRadiusCommand } from './commands/update/UpdateConeRadiusCommand'
 import { UpdateConeHeightCommand } from './commands/update/UpdateConeHeightCommand'
-import { AddCylinderCommand } from './commands/add/AddCylinderCommand'
-import { DeleteCylinderCommand } from './commands/delete/DeleteCylinderCommand'
-import { DeletePerpendicularLineCommand } from './commands/delete/DeletePerpendicularLineCommand'
-import { DeleteParallelLineCommand } from './commands/delete/DeleteParallelLineCommand'
+import { createAddCylinderCommand } from './commands/add/AddCylinderCommand'
+import { createDeleteCylinderCommand } from './commands/delete/DeleteCylinderCommand'
+import { createDeletePerpendicularLineCommand } from './commands/delete/DeletePerpendicularLineCommand'
+import { createDeleteParallelLineCommand } from './commands/delete/DeleteParallelLineCommand'
 import { UpdateCylinderCommand } from './commands/update/UpdateCylinderCommand'
 import { UpdateCylinderRadiusCommand } from './commands/update/UpdateCylinderRadiusCommand'
 import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHeightCommand'
 import { Cylinder3 } from '../geometry/Cylinder3'
-import { AddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
+import { createAddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
@@ -369,12 +371,19 @@ export class Editor {
   scene: Scene
   mode: EditorMode = EditorMode.Select
   selectedPoints: Point3[] = []
+  /** @deprecated 使用 historyManager 代替 */
   history: Command[] = []
+  /** @deprecated 使用 historyManager 代替 */
   historyIndex = -1
+  /** 新的历史管理器，统一管理撤销/重做 */
+  historyManager: HistoryManager
+  /** 每次历史操作后递增，供 Vue watcher 检测变化（historyManager 被 markRaw 无法追踪） */
+  historyVersion = 0
   isSnappingEnabled: boolean = true
 
   constructor(scene: Scene) {
     this.scene = scene
+    this.historyManager = new HistoryManager(scene)
   }
 
   isPointConstrainedByLockedLinear(pointId: string) {
@@ -672,7 +681,7 @@ export class Editor {
       edgeLengthLocked: nextEdgeLengthLocked,
       lockedEdgeLength: nextLockedEdgeLength,
     }
-    this.executeCommand(new UpdateCubeCommand(constraint, before, after))
+    this.executeCommand(new UpdateCubeCommand(constraint.cubeId, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 
@@ -833,8 +842,9 @@ export class Editor {
 
     if (sphere.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -879,7 +889,7 @@ export class Editor {
       visible: patch.visible ?? sphere.visible,
       userLocked: patch.userLocked ?? sphere.userLocked,
     }
-    this.executeCommand(new UpdateSphereCommand(sphere, before, after))
+    this.executeCommand(new UpdateSphereCommand(sphere.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 
@@ -903,7 +913,7 @@ export class Editor {
       const normalizedRadius = Math.max(0.1, nextRadius)
       const before = { radiusValue: sphere.radiusValue }
       const after = { radiusValue: normalizedRadius }
-      this.executeCommand(new UpdateSphereRadiusCommand(this.scene, sphere, before, after))
+      this.executeCommand(new UpdateSphereRadiusCommand(this.scene, sphere.id, before, after))
       this.scene.markAllRenderDirty()
       return
     }
@@ -928,9 +938,9 @@ export class Editor {
     if (!sphere) return
     this.removeConstrainedPointsReferencing('sphere', sphereId)
     if (sphere.name.startsWith('半径球')) {
-      this.executeCommand(new DeleteRadiusSphereCommand(this.scene, sphere))
+      this.executeHistoryEntry(createDeleteRadiusSphereCommand(this.scene, sphere))
     } else {
-      this.executeCommand(new DeleteSphereCommand(this.scene, sphere))
+      this.executeHistoryEntry(createDeleteSphereCommand(this.scene, sphere))
     }
   }
 
@@ -955,7 +965,7 @@ export class Editor {
       (index) => `两点球${index + 1}`,
     )
     const sphere = new Sphere3(genId('sph'), sphereName, firstPoint, secondPoint)
-    this.executeCommand(new AddSphereCommand(this.scene, sphere))
+    this.executeHistoryEntry(createAddSphereCommand(this.scene, sphere))
     this.scene.selection.clear()
     this.scene.selection.selectSphere(sphere.id)
   }
@@ -983,7 +993,7 @@ export class Editor {
       false,
       radius,
     )
-    this.executeCommand(new AddRadiusSphereCommand(this.scene, sphere))
+    this.executeHistoryEntry(createAddRadiusSphereCommand(this.scene, sphere))
     this.scene.selection.clear()
     this.scene.selection.selectSphere(sphere.id)
   }
@@ -1044,8 +1054,9 @@ export class Editor {
 
     if (cone.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -1091,7 +1102,7 @@ export class Editor {
       visible: patch.visible ?? cone.visible,
       userLocked: patch.userLocked ?? cone.userLocked,
     }
-    this.executeCommand(new UpdateConeCommand(cone, before, after))
+    this.executeCommand(new UpdateConeCommand(cone.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 
@@ -1115,7 +1126,7 @@ export class Editor {
     const normalizedRadius = Math.max(0.1, nextRadius)
     const before = { radiusValue: cone.radiusValue }
     const after = { radiusValue: normalizedRadius }
-    this.executeCommand(new UpdateConeRadiusCommand(this.scene, cone, before, after))
+    this.executeCommand(new UpdateConeRadiusCommand(this.scene, cone.id, before, after))
     this.scene.markAllRenderDirty()
   }
 
@@ -1123,7 +1134,7 @@ export class Editor {
     const cone = this.getCone(coneId)
     if (!cone) return
     const normalizedHeight = Math.max(0.1, nextHeight)
-    this.executeCommand(new UpdateConeHeightCommand(cone, cone.apexPoint, normalizedHeight))
+    this.executeCommand(new UpdateConeHeightCommand(this.scene, cone.id, cone.apexPoint.id, normalizedHeight))
     this.scene.markAllRenderDirty()
   }
 
@@ -1144,7 +1155,7 @@ export class Editor {
     ;[...this.scene.parallelLines.values()].forEach((pl) => {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
     })
-    this.executeCommand(new DeleteConeCommand(this.scene, cone, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteConeCommand(this.scene, cone, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateConeTwoPoint(baseCenterPoint: Point3, apexPoint: Point3, radius: number) {
@@ -1175,7 +1186,7 @@ export class Editor {
       false,
       radius,
     )
-    this.executeCommand(new AddConeCommand(this.scene, cone))
+    this.executeHistoryEntry(createAddConeCommand(this.scene, cone))
     this.scene.selection.clear()
     this.scene.selection.selectCone(cone.id)
   }
@@ -1211,7 +1222,7 @@ export class Editor {
       frame.radius,
       normalCircle.id,
     )
-    this.executeCommand(new AddConeCommand(this.scene, cone))
+    this.executeHistoryEntry(createAddConeCommand(this.scene, cone))
     this.scene.selection.clear()
     this.scene.selection.selectCone(cone.id)
   }
@@ -1295,8 +1306,9 @@ export class Editor {
     )
       return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -1343,7 +1355,7 @@ export class Editor {
       visible: patch.visible ?? cylinder.visible,
       userLocked: patch.userLocked ?? cylinder.userLocked,
     }
-    this.executeCommand(new UpdateCylinderCommand(cylinder, before, after))
+    this.executeCommand(new UpdateCylinderCommand(cylinder.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 
@@ -1367,7 +1379,7 @@ export class Editor {
     const normalizedRadius = Math.max(0.1, nextRadius)
     const before = { radiusValue: cylinder.radiusValue }
     const after = { radiusValue: normalizedRadius }
-    this.executeCommand(new UpdateCylinderRadiusCommand(this.scene, cylinder, before, after))
+    this.executeCommand(new UpdateCylinderRadiusCommand(this.scene, cylinder.id, before, after))
     this.scene.markAllRenderDirty()
   }
 
@@ -1376,7 +1388,7 @@ export class Editor {
     if (!cylinder) return
     const normalizedHeight = Math.max(0.1, nextHeight)
     this.executeCommand(
-      new UpdateCylinderHeightCommand(cylinder, cylinder.topCenterPoint, normalizedHeight),
+      new UpdateCylinderHeightCommand(this.scene, cylinder.id, cylinder.topCenterPoint.id, normalizedHeight),
     )
     this.scene.markAllRenderDirty()
   }
@@ -1399,7 +1411,7 @@ export class Editor {
     ;[...this.scene.parallelLines.values()].forEach((pl) => {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
     })
-    this.executeCommand(new DeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateCylinderTwoPoint(bottomCenterPoint: Point3, topCenterPoint: Point3, radius: number) {
@@ -1476,7 +1488,7 @@ export class Editor {
       bottomCircle.id,
       topCircle.id,
     )
-    this.executeCommand(new AddCylinderCommand(this.scene, cylinder, bottomCircle, topCircle))
+    this.executeHistoryEntry(createAddCylinderCommand(this.scene, cylinder, bottomCircle, topCircle))
     this.scene.selection.clear()
     this.scene.selection.selectCylinder(cylinder.id)
   }
@@ -1535,7 +1547,7 @@ export class Editor {
       edgeLengthLocked: nextEdgeLengthLocked,
       lockedEdgeLength: nextLockedEdgeLength,
     }
-    this.executeCommand(new UpdateRegularPolygonCommand(constraint, before, after))
+    this.executeCommand(new UpdateRegularPolygonCommand(constraint.constraintId, before, after, this.scene))
     const face = this.scene.faces.get(constraint.faceId)
     if (face) {
       face.nameVisible = after.nameVisible
@@ -1695,10 +1707,10 @@ export class Editor {
             ? keepPoint.position.clone()
             : new Vec3(before.x + delta.x, before.y + delta.y, before.z + delta.z)
         if (samePosition(before, after)) return null
-        return { point, before, after }
+        return { pointId: point.id, before, after }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
@@ -1717,7 +1729,7 @@ export class Editor {
       return null
     }
 
-    return new MergeCubePointsCommand(this.scene, keepPoint, removePoint, transforms)
+    return createMergeCubePointsCommand(this.scene, keepPoint, removePoint, transforms)
   }
 
   private snapSolidOwnerPosition(constraint: CubeConstraint, position: Vec3, comparePoint: Point3) {
@@ -1799,20 +1811,21 @@ export class Editor {
           return null
         }
         return {
-          point,
+          pointId: point.id,
           before: point.position.clone(),
           after,
         }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
     if (transforms.length === 0) return
     const axisHintChanges = [
       {
-        setAxisHint: constraint.setAxisHint.bind(constraint),
+        constraintType: 'cube' as const,
+        constraintId: constraint.cubeId,
         before: axisHintBefore,
         after: vAxis,
       },
@@ -1820,7 +1833,7 @@ export class Editor {
     if (transforms.length === 1) {
       const transform = transforms[0]!
       this.executeCommand(
-        new TransformCommand(transform.point, transform.before, transform.after, axisHintChanges, this.scene),
+        new TransformCommand(transform.pointId, transform.before, transform.after, axisHintChanges, this.scene),
       )
       return
     }
@@ -1893,20 +1906,21 @@ export class Editor {
           return null
         }
         return {
-          point,
+          pointId: point.id,
           before: point.position.clone(),
           after,
         }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
     if (transforms.length === 0) return
     const axisHintChanges = [
       {
-        setAxisHint: constraint.setAxisHint.bind(constraint),
+        constraintType: 'regularPolygon' as const,
+        constraintId: constraint.constraintId,
         before: axisHintBefore,
         after: projectedDir,
       },
@@ -1914,7 +1928,7 @@ export class Editor {
     if (transforms.length === 1) {
       this.executeCommand(
         new TransformCommand(
-          transforms[0]!.point,
+          transforms[0]!.pointId,
           transforms[0]!.before,
           transforms[0]!.after,
           axisHintChanges,
@@ -2427,8 +2441,9 @@ export class Editor {
         return
       }
 
-      this.executeCommand(
-        new SyncLockStateCommand(
+      this.executeHistoryEntry(
+        createSyncLockStateCommand(
+          this.scene,
           faceCascade.pointTransforms,
           faceCascade.lineTransforms,
           [],
@@ -2542,8 +2557,9 @@ export class Editor {
       return
     }
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         pointTransforms,
         lineTransforms,
         straightLineTransforms,
@@ -2573,8 +2589,9 @@ export class Editor {
         return
       }
 
-      this.executeCommand(
-        new SyncLockStateCommand(
+      this.executeHistoryEntry(
+        createSyncLockStateCommand(
+          this.scene,
           faceCascade.pointTransforms,
           faceCascade.lineTransforms,
           [],
@@ -2599,8 +2616,9 @@ export class Editor {
 
     if (line.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [{ line, before: line.userLocked, after: locked }],
         [],
@@ -2626,8 +2644,9 @@ export class Editor {
 
     if (line.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [{ line, before: line.userLocked, after: locked }],
@@ -2660,8 +2679,9 @@ export class Editor {
 
     if (line.userLocked === locked && p1Transforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         p1Transforms,
         [],
         [],
@@ -2693,8 +2713,9 @@ export class Editor {
 
     if (ray.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -2754,8 +2775,9 @@ export class Editor {
     )
       return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -2808,8 +2830,8 @@ export class Editor {
     if (pointTransforms.length === 0 && lineTransforms.length === 0 && faceTransforms.length === 0)
       return
 
-    this.executeCommand(
-      new SyncLockStateCommand(pointTransforms, lineTransforms, [], [], [], faceTransforms),
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(this.scene, pointTransforms, lineTransforms, [], [], [], faceTransforms),
     )
   }
 
@@ -2826,7 +2848,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateFaceCommand(
-        face,
+        face.id,
         {
           name: face.name,
           nameVisible: face.nameVisible,
@@ -2851,16 +2873,17 @@ export class Editor {
           lockedArea: nextLockedArea,
           edgeLengthLocks: [...face.edgeLengthLocks],
         },
+        this.scene,
       ),
     )
   }
 
   get canUndo() {
-    return this.historyIndex >= 0
+    return this.historyManager.canUndo
   }
 
   get canRedo() {
-    return this.historyIndex < this.history.length - 1
+    return this.historyManager.canRedo
   }
 
   setMode(mode: EditorMode) {
@@ -2984,8 +3007,8 @@ export class Editor {
       }
     })
 
-    this.executeCommand(
-      new DeletePointCommand(
+    this.historyManager.push(
+      createDeletePointCommand(
         this.scene,
         point,
         relatedLines,
@@ -3003,6 +3026,7 @@ export class Editor {
         relatedParallelLines,
       ),
     )
+    this.historyVersion++
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
 
@@ -3077,8 +3101,8 @@ export class Editor {
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
 
-    this.executeCommand(
-      new DeleteLineCommand(
+    this.executeHistoryEntry(
+      createDeleteLineCommand(
         this.scene,
         line,
         dependentIntersectionPoints,
@@ -3116,14 +3140,14 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
-    this.executeCommand(new DeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   deleteCircle(circleId: string) {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
     this.removeConstrainedPointsReferencing('circle', circleId)
-    this.executeCommand(new DeleteCircleCommand(this.scene, circle))
+    this.executeHistoryEntry(createDeleteCircleCommand(this.scene, circle))
   }
 
   deleteStraightLine(lineId: string) {
@@ -3151,8 +3175,8 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
-    this.executeCommand(
-      new DeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines),
+    this.executeHistoryEntry(
+      createDeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines),
     )
   }
 
@@ -3192,8 +3216,8 @@ export class Editor {
         if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
         if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       })
-      this.executeCommand(
-        new DeleteHexahedronCommand(
+      this.executeHistoryEntry(
+        createDeleteHexahedronCommand(
           this.scene,
           faces,
           dependentPoints,
@@ -3233,8 +3257,8 @@ export class Editor {
         if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
         if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       })
-      this.executeCommand(
-        new DeleteRegularPolygonCommand(
+      this.executeHistoryEntry(
+        createDeleteRegularPolygonCommand(
           this.scene,
           face,
           regularPolygonConstraint,
@@ -3270,78 +3294,29 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
-    this.executeCommand(new DeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   clearAll() {
-    const points = [...this.scene.points.values()].filter(
-      (point) =>
-        !point.locked ||
-        point.circleRole === 'center' ||
-        point.sphereRole === 'center' ||
-        point.sphereRole === 'radius' ||
-        point.coneRole === 'baseCenter' ||
-        point.coneRole === 'apex' ||
-        point.cylinderRole === 'bottomCenter' ||
-        point.cylinderRole === 'topCenter',
-    )
-    const lines = [...this.scene.lines.values()]
-    const straightLines = [...this.scene.straightLines.values()]
-    const rays = [...this.scene.rays.values()]
-    const vectors = [...this.scene.vectors.values()]
-    const circles = [...this.scene.circles.values()]
-    const spheres = [...this.scene.spheres.values()]
-    const faces = [...this.scene.faces.values()]
-    const cones = [...this.scene.cones.values()]
-    const cylinders = [...this.scene.cylinders.values()]
-    const constraints = this.scene.constraints.filter((constraint) => !('faceId' in constraint))
-    const cylinderConstraints = [...this.scene.cylinderConstraints.values()]
-    const perpendicularLines = [...this.scene.perpendicularLines.values()]
-    const parallelLines = [...this.scene.parallelLines.values()]
-    const perpendicularLineConstraints = [...this.scene.perpendicularLineConstraints.values()].filter(
-      (constraint): constraint is PerpendicularLineConstraint => constraint instanceof PerpendicularLineConstraint,
-    )
-    const parallelLineConstraints = [...this.scene.parallelLineConstraints.values()].filter(
-      (constraint): constraint is ParallelLineConstraint => constraint instanceof ParallelLineConstraint,
-    )
-
     if (
-      points.length === 0 &&
-      lines.length === 0 &&
-      straightLines.length === 0 &&
-      rays.length === 0 &&
-      vectors.length === 0 &&
-      circles.length === 0 &&
-      spheres.length === 0 &&
-      faces.length === 0 &&
-      cones.length === 0 &&
-      cylinders.length === 0 &&
-      constraints.length === 0 &&
-      perpendicularLines.length === 0 &&
-      parallelLines.length === 0
+      this.scene.points.size <= 1 &&
+      this.scene.lines.size === 0 &&
+      this.scene.straightLines.size === 0 &&
+      this.scene.rays.size === 0 &&
+      this.scene.vectors.size === 0 &&
+      this.scene.circles.size === 0 &&
+      this.scene.spheres.size === 0 &&
+      this.scene.faces.size === 0 &&
+      this.scene.cones.size === 0 &&
+      this.scene.cylinders.size === 0 &&
+      this.scene.constraints.length === 0 &&
+      this.scene.perpendicularLines.size === 0 &&
+      this.scene.parallelLines.size === 0
     )
       return
 
-    this.executeCommand(
-      new ClearSceneCommand(
-        this.scene,
-        points,
-        lines,
-        straightLines,
-        rays,
-        vectors,
-        circles,
-        spheres,
-        faces,
-        constraints,
-        cones,
-        cylinders,
-        cylinderConstraints,
-        perpendicularLines,
-        parallelLines,
-        perpendicularLineConstraints,
-        parallelLineConstraints,
-      ),
+    this.executeHistoryEntry(
+      createClearSceneCommand(this.scene),
     )
     this.selectedPoints = []
   }
@@ -3357,8 +3332,8 @@ export class Editor {
       false,
       true,
     )
-    const cmd = new AddElementCommand(this.scene, p, 'point')
-    this.executeCommand(cmd)
+    const cmd = createAddElementCommand(this.scene, p, 'point')
+    this.executeHistoryEntry(cmd)
     return p
   }
 
@@ -3378,8 +3353,8 @@ export class Editor {
     p.constrainedTo = { type: targetType, id: targetId }
     const constraint = new ObjectConstrainedPointConstraint(this.scene, p.id, p.constrainedTo)
     constraint.computeParametricDataFromPosition(finalPosition)
-    const cmd = new AddConstrainedPointCommand(this.scene, p, constraint)
-    this.executeCommand(cmd)
+    const cmd = createAddConstrainedPointCommand(this.scene, p, constraint)
+    this.executeHistoryEntry(cmd)
     return p
   }
 
@@ -3542,17 +3517,17 @@ export class Editor {
         const before = point.position.clone()
         if (before.x === position.x && before.y === position.y && before.z === position.z)
           return null
-        return { point, before, after: position.clone() }
+        return { pointId: point.id, before, after: position.clone() }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
+      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
       return
     }
 
@@ -3561,7 +3536,7 @@ export class Editor {
 
   applyPointTransformHistory(
     transforms: Array<{ id: string; before: Vec3; after: Vec3 }>,
-    axisHintChanges: Array<{ setAxisHint: (v: Vec3) => void; before: Vec3; after: Vec3 }> = [],
+    axisHintChanges: Array<{ constraintType: 'cube' | 'regularPolygon'; constraintId: string; before: Vec3; after: Vec3 }> = [],
   ) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       transforms.map(({ id, after }) => ({ id, position: after.clone() })),
@@ -3580,20 +3555,20 @@ export class Editor {
         }
 
         return {
-          point,
+          pointId: id,
           before: original.before.clone(),
           after: position.clone(),
         }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
     if (commandTransforms.length === 0 && axisHintChanges.length === 0) return
     if (commandTransforms.length === 1 && axisHintChanges.length === 0) {
       const transform = commandTransforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
+      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
       return
     }
 
@@ -3633,7 +3608,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdatePointCommand(
-        point,
+        point.id,
         {
           name: point.name,
           nameVisible: point.nameVisible,
@@ -3650,6 +3625,7 @@ export class Editor {
           labelOffsetY: nextLabelOffsetY,
           userLocked: nextUserLocked,
         },
+        this.scene,
       ),
     )
   }
@@ -3743,7 +3719,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateLineCommand(
-        line,
+        line.id,
         {
           name: line.name,
           nameVisible: line.nameVisible,
@@ -3770,6 +3746,7 @@ export class Editor {
           p1Position: nextP1Position,
           p2Position: nextP2Position,
         },
+        this.scene,
       ),
     )
   }
@@ -3812,7 +3789,7 @@ export class Editor {
       centerVisible: patch.centerVisible ?? circle.centerVisible,
       lockedRadius: patch.lockedRadius ?? circle.lockedRadius,
     }
-    this.executeCommand(new UpdateCircleCommand(circle, before, after, this.scene))
+    this.executeCommand(new UpdateCircleCommand(circle.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
 
@@ -3855,7 +3832,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateRayCommand(
-        ray,
+        ray.id,
         {
           name: ray.name,
           nameVisible: ray.nameVisible,
@@ -3876,6 +3853,7 @@ export class Editor {
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
         },
+        this.scene,
       ),
     )
   }
@@ -3921,7 +3899,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateStraightLineCommand(
-        line,
+        line.id,
         {
           name: line.name,
           nameVisible: line.nameVisible,
@@ -3942,6 +3920,7 @@ export class Editor {
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
         },
+        this.scene,
       ),
     )
   }
@@ -3987,7 +3966,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdatePerpendicularLineCommand(
-        line,
+        line.id,
         {
           name: line.name,
           nameVisible: line.nameVisible,
@@ -4008,6 +3987,7 @@ export class Editor {
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
         },
+        this.scene,
       ),
     )
   }
@@ -4057,7 +4037,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateFaceCommand(
-        face,
+        face.id,
         {
           name: face.name,
           nameVisible: face.nameVisible,
@@ -4082,6 +4062,7 @@ export class Editor {
           lockedArea: nextLockedArea,
           edgeLengthLocks: [...nextEdgeLengthLocks],
         },
+        this.scene,
       ),
     )
   }
@@ -4281,11 +4262,16 @@ export class Editor {
       false,
       true,
     )
-    const constraint = new PerpendicularLineConstraint(this.scene, perpendicularLine.id, { type: target.type, id: target.id })
 
-    this.executeCommand(new AddElementCommand(this.scene, perpendicularLine, 'perpendicularLine'))
-    this.scene.addPerpendicularLineConstraint(constraint)
-    constraint.solve()
+    // 使用 SnapshotCommand 统一管理垂线+约束的创建，确保撤销/重做完整
+    const cmd = new SnapshotCommand('CreatePerpendicularLine', this.scene, () => {
+      this.scene.addPerpendicularLine(perpendicularLine)
+      const constraint = new PerpendicularLineConstraint(this.scene, perpendicularLine.id, { type: target.type, id: target.id })
+      this.scene.addPerpendicularLineConstraint(constraint)
+      constraint.solve()
+    })
+    cmd.executeAndCapture()
+    this.executeHistoryEntry(cmd)
 
     this.clearPerpendicularLineSelection()
     this.scene.selection.clear()
@@ -4301,7 +4287,7 @@ export class Editor {
     const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
       (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
     )
-    this.executeCommand(new DeletePerpendicularLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeletePerpendicularLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
   }
 
   private parallelLinePendingTarget: ParallelLineTargetRef | null = null
@@ -4452,11 +4438,16 @@ export class Editor {
       false,
       true,
     )
-    const constraint = new ParallelLineConstraint(this.scene, parallelLine.id, { type: target.type, id: target.id })
 
-    this.executeCommand(new AddElementCommand(this.scene, parallelLine, 'parallelLine'))
-    this.scene.addParallelLineConstraint(constraint)
-    constraint.solve()
+    // 使用 SnapshotCommand 统一管理平行线+约束的创建，确保撤销/重做完整
+    const cmd = new SnapshotCommand('CreateParallelLine', this.scene, () => {
+      this.scene.addParallelLine(parallelLine)
+      const constraint = new ParallelLineConstraint(this.scene, parallelLine.id, { type: target.type, id: target.id })
+      this.scene.addParallelLineConstraint(constraint)
+      constraint.solve()
+    })
+    cmd.executeAndCapture()
+    this.executeHistoryEntry(cmd)
 
     this.clearParallelLineSelection()
     this.scene.selection.clear()
@@ -4472,7 +4463,7 @@ export class Editor {
     const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
       (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
     )
-    this.executeCommand(new DeleteParallelLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteParallelLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
   }
 
   updateParallelLine(
@@ -4516,7 +4507,7 @@ export class Editor {
 
     this.executeCommand(
       new UpdateParallelLineCommand(
-        line,
+        line.id,
         {
           name: line.name,
           nameVisible: line.nameVisible,
@@ -4537,6 +4528,7 @@ export class Editor {
           displayLength: nextDisplayLength,
           userLocked: nextUserLocked,
         },
+        this.scene,
       ),
     )
   }
@@ -4564,8 +4556,9 @@ export class Editor {
 
     if (line.userLocked === locked && p1Transforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         p1Transforms,
         [],
         [],
@@ -4646,7 +4639,7 @@ export class Editor {
       false,
     )
     const constraint = new IntersectionPointConstraint(this.scene, point.id, a, b)
-    this.executeCommand(new AddIntersectionPointCommand(this.scene, point, constraint))
+    this.executeHistoryEntry(createAddIntersectionPointCommand(this.scene, point, constraint))
     this.clearIntersectionSelection()
     this.scene.selection.selectPoint(point.id)
   }
@@ -4766,9 +4759,9 @@ export class Editor {
         removeConstraint,
       )
       if (!mergeCommand) return
-      this.executeCommand(mergeCommand)
+      this.executeHistoryEntry(mergeCommand)
     } else {
-      this.executeCommand(new MergePointsCommand(this.scene, keepPoint, removePoint))
+      this.executeHistoryEntry(createMergePointsCommand(this.scene, keepPoint, removePoint))
     }
 
     this.selectedPoints = []
@@ -4818,7 +4811,7 @@ export class Editor {
           false,
           true,
         )
-        this.executeCommand(new AddElementCommand(this.scene, vector, 'vector'))
+        this.executeHistoryEntry(createAddElementCommand(this.scene, vector, 'vector'))
       } else {
         emitToast('向量已存在，创建向量失败')
       }
@@ -4850,7 +4843,7 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
-    this.executeCommand(new DeleteVectorCommand(this.scene, vector, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteVectorCommand(this.scene, vector, relatedPerpendicularLines, relatedParallelLines))
   }
 
   isVectorLocked(vector: GeoVector3 | null | undefined) {
@@ -4886,8 +4879,9 @@ export class Editor {
 
     if (vector.userLocked === locked && endpointTransforms.length === 0) return
 
-    this.executeCommand(
-      new SyncLockStateCommand(
+    this.executeHistoryEntry(
+      createSyncLockStateCommand(
+        this.scene,
         endpointTransforms,
         [],
         [],
@@ -4934,7 +4928,7 @@ export class Editor {
     this.executeCommand(
       new UpdateVectorCommand(
         this.scene,
-        vector,
+        vector.id,
         {
           name: vector.name,
           nameVisible: vector.nameVisible,
@@ -5014,8 +5008,10 @@ export class Editor {
     centerPoint.circleId = circle.id
     centerPoint.circleRole = 'center'
 
-    this.executeCommand(new AddElementCommand(this.scene, circle, 'circle'))
-    this.executeCommand(new AddElementCommand(this.scene, centerPoint, 'point'))
+    this.beginTransaction('CreateThreePointCircle')
+    this.executeHistoryEntry(createAddElementCommand(this.scene, circle, 'circle'))
+    this.executeHistoryEntry(createAddElementCommand(this.scene, centerPoint, 'point'))
+    this.commitTransaction()
     this.selectedPoints = []
     this.scene.selection.clear()
     this.scene.selection.selectCircle(circle.id)
@@ -5105,7 +5101,7 @@ export class Editor {
       emitToast('无法创建法向圆，请检查法向量和半径')
       return
     }
-    this.executeCommand(new AddElementCommand(this.scene, circle, 'circle'))
+    this.executeHistoryEntry(createAddElementCommand(this.scene, circle, 'circle'))
     this.selectedPoints = []
     this.scene.selection.clear()
     this.scene.selection.selectCircle(circle.id)
@@ -5274,8 +5270,8 @@ export class Editor {
       rpName,
     )
 
-    this.executeCommand(
-      new AddRegularPolygonCommand(this.scene, newPoints, face, constraint, newLines),
+    this.executeHistoryEntry(
+      createAddRegularPolygonCommand(this.scene, newPoints, face, constraint, newLines),
     )
 
     this.selectedPoints = []
@@ -5323,7 +5319,7 @@ export class Editor {
     )
 
     face.normalize(this.scene.points)
-    this.executeCommand(new AddElementCommand(this.scene, face, 'face', newLines))
+    this.executeHistoryEntry(createAddElementCommand(this.scene, face, 'face', newLines))
     this.scene.selection.clear()
     this.scene.selection.selectFace(face.id)
   }
@@ -5432,8 +5428,8 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(
-      new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
+    this.executeHistoryEntry(
+      createAddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
     )
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
@@ -5535,8 +5531,8 @@ export class Editor {
       cubeName,
     )
 
-    this.executeCommand(
-      new AddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
+    this.executeHistoryEntry(
+      createAddHexahedronCommand(this.scene, dependentPoints, faces, constraint, allBoundaryLines),
     )
     this.scene.selection.clear()
     this.selectCubeByFaceId(faces[0]!.id)
@@ -5609,7 +5605,7 @@ export class Editor {
             p2!,
             false,
           )
-          this.executeCommand(new AddElementCommand(this.scene, line, 'line'))
+          this.executeHistoryEntry(createAddElementCommand(this.scene, line, 'line'))
         } else if (type === 'straightLine') {
           const line = new StraightLine3(
             genId('sl'),
@@ -5623,7 +5619,7 @@ export class Editor {
             false,
             true,
           )
-          this.executeCommand(new AddElementCommand(this.scene, line, 'straightLine'))
+          this.executeHistoryEntry(createAddElementCommand(this.scene, line, 'straightLine'))
         } else {
           const ray = new Ray3(
             genId('r'),
@@ -5637,7 +5633,7 @@ export class Editor {
             false,
             true,
           )
-          this.executeCommand(new AddElementCommand(this.scene, ray, 'ray'))
+          this.executeHistoryEntry(createAddElementCommand(this.scene, ray, 'ray'))
         }
       } else {
         window.dispatchEvent(
@@ -5971,17 +5967,17 @@ export class Editor {
         const before = point.position.clone()
         if (before.x === position.x && before.y === position.y && before.z === position.z)
           return null
-        return { point, before, after: position.clone() }
+        return { pointId: point.id, before, after: position.clone() }
       })
       .filter(
-        (transform): transform is { point: Point3; before: Vec3; after: Vec3 } =>
+        (transform): transform is { pointId: string; before: Vec3; after: Vec3 } =>
           transform !== null,
       )
 
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.point, transform.before, transform.after, [], this.scene))
+      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
       return
     }
 
@@ -6471,11 +6467,44 @@ export class Editor {
     this.setPointsPositions(updates)
   }
 
-  executeCommand(cmd: Command) {
-    cmd.execute()
-    this.history = this.history.slice(0, this.historyIndex + 1)
-    this.history.push(cmd)
-    this.historyIndex++
+  executeCommand(cmd: Command | HistoryEntry) {
+    // 如果已经是 HistoryEntry（SnapshotCommand / ConstraintAwareCommand）
+    if ('redo' in cmd && typeof (cmd as HistoryEntry).redo === 'function') {
+      const entry = cmd as HistoryEntry
+      // SnapshotCommand 在 executeAndCapture() 中已经执行过，不需要再调用 redo()
+      // ConstraintAwareCommand 尚未执行，需要先调用 redo()
+      const isSnapshot = 'beforeSnapshot' in cmd
+      if (!isSnapshot) {
+        entry.redo()
+        // ConstraintAwareCommand.redo() 只标记脏点，需要手动触发约束求解和渲染同步
+        this.scene.solveDirtyConstraints()
+        this.scene.markAllRenderDirty()
+      }
+      this.historyManager.push(entry)
+      this.historyVersion++
+      return
+    }
+    // 将旧 Command 接口适配为 HistoryEntry
+    // 注意：命令在传入前已经执行过，所以 redo 应该重新执行，undo 应该撤销
+    const legacyCmd = cmd as Command
+    const entry: HistoryEntry = {
+      id: `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      label: legacyCmd.constructor.name,
+      timestamp: Date.now(),
+      redo: () => legacyCmd.execute(),
+      undo: () => legacyCmd.undo(),
+    }
+    this.historyManager.push(entry)
+    this.historyVersion++
+  }
+
+  /**
+   * 执行一个 HistoryEntry 并记录到历史栈。
+   * 用于新的约束感知命令。
+   */
+  executeHistoryEntry(entry: HistoryEntry): void {
+    this.historyManager.push(entry)
+    this.historyVersion++
   }
 
   /**
@@ -6484,6 +6513,9 @@ export class Editor {
    * 不会触发渲染副作用，调用方需要在合适的时机通知渲染层刷新。
    */
   clearHistory(): void {
+    this.historyManager.clear()
+    this.historyVersion++
+    // 同步清理旧字段
     this.history = []
     this.historyIndex = -1
   }
@@ -6493,16 +6525,52 @@ export class Editor {
   }
 
   undo() {
-    if (this.historyIndex >= 0) {
-      this.history[this.historyIndex]!.undo()
-      this.historyIndex--
-    }
+    this.historyManager.undo()
+    this.historyVersion++
   }
 
   redo() {
-    if (this.historyIndex < this.history.length - 1) {
-      this.historyIndex++
-      this.history[this.historyIndex]!.execute()
-    }
+    this.historyManager.redo()
+    this.historyVersion++
+  }
+
+  /**
+   * 开始一个事务，将后续的多个操作合并为一个可撤销单元。
+   */
+  beginTransaction(label: string): void {
+    this.historyManager.beginTransaction(label)
+  }
+
+  /**
+   * 提交当前事务。
+   */
+  commitTransaction(): void {
+    this.historyManager.commitTransaction()
+    this.historyVersion++
+  }
+
+  /**
+   * 回滚当前事务，撤销事务期间已执行的所有操作。
+   */
+  rollbackTransaction(): void {
+    this.historyManager.rollbackTransaction()
+    this.historyVersion++
+  }
+
+  /**
+   * 开始协作事务。在协作模式下将多个 executeCommand 合并为一条共享历史记录；
+   * 在非协作模式下退化为 beginTransaction。
+   * 此方法会被 EditorView 覆盖以注入协作逻辑。
+   */
+  beginCollabTransaction(label: string): void {
+    this.beginTransaction(label)
+  }
+
+  /**
+   * 提交协作事务。
+   * 此方法会被 EditorView 覆盖以注入协作逻辑。
+   */
+  commitCollabTransaction(): void {
+    this.commitTransaction()
   }
 }

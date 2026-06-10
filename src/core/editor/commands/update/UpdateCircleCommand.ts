@@ -1,5 +1,4 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
-import { Circle3 } from '../../../geometry/Circle3'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
 import { Scene } from '../../../scene/Scene'
 
 type CircleState = {
@@ -14,33 +13,53 @@ type CircleState = {
   lockedRadius: number | null
 }
 
-export class UpdateCircleCommand extends AbstractUpdateCommand<CircleState> {
+export class UpdateCircleCommand extends ConstraintAwareCommand {
+  readonly label = '更新圆属性'
+
+  private before: CircleState
+  private after: CircleState
+
   constructor(
-    private circle: Circle3,
+    private circleId: string,
     before: CircleState,
     after: CircleState,
-    private scene?: Scene,
+    scene?: Scene,
   ) {
-    super(before, after)
+    super(scene!)
+    this.before = before
+    this.after = after
+    const circle = scene?.circles.get(circleId)
+    if (circle) {
+      this.markAffected(circle.p1.id, circle.p2.id, circle.p3.id)
+    }
   }
 
-  protected apply(state: CircleState) {
-    this.circle.name = state.name
-    this.circle.nameVisible = state.nameVisible
-    this.circle.valueVisible = state.valueVisible
-    this.circle.labelOffsetX = state.labelOffsetX
-    this.circle.labelOffsetY = state.labelOffsetY
-    this.circle.visible = state.visible
-    this.circle.userLocked = state.userLocked
-    this.circle.centerVisible = state.centerVisible
-    this.circle.lockedRadius = state.lockedRadius
-    if (this.circle.isNormalCircle() && state.lockedRadius != null && this.scene) {
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: CircleState) {
+    const circle = this.scene.circles.get(this.circleId)
+    if (!circle) return
+    circle.name = state.name
+    circle.nameVisible = state.nameVisible
+    circle.valueVisible = state.valueVisible
+    circle.labelOffsetX = state.labelOffsetX
+    circle.labelOffsetY = state.labelOffsetY
+    circle.visible = state.visible
+    circle.userLocked = state.userLocked
+    circle.centerVisible = state.centerVisible
+    circle.lockedRadius = state.lockedRadius
+    if (circle.isNormalCircle() && state.lockedRadius != null && this.scene) {
       this.scene.cones.forEach((cone) => {
-        if (cone.normalCircleId === this.circle.id) {
+        if (cone.normalCircleId === circle.id) {
           cone.radiusValue = state.lockedRadius!
         }
       })
-      this.scene.markAllRenderDirty()
     }
   }
 }

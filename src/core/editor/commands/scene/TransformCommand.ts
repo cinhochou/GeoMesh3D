@@ -1,37 +1,42 @@
-import type { Command } from '../../Command'
-import { Point3 } from '../../../geometry/Point3'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
 import { Vec3 } from '../../../geometry/Vec3'
 import type { ParametricData } from '../../../constraints/ObjectConstrainedPointConstraint'
 import type { Scene } from '../../../scene/Scene'
 
 type AxisHintChange = {
-  setAxisHint: (v: Vec3) => void
+  constraintType: 'cube' | 'regularPolygon'
+  constraintId: string
   before: Vec3
   after: Vec3
 }
 
-export class TransformCommand implements Command {
-  private point: Point3
+/**
+ * 移动单个点的命令。
+ * 使用 pointId 而非直接 Point3 引用，确保在 SnapshotCommand 重建对象后仍能正确操作。
+ */
+export class TransformCommand extends ConstraintAwareCommand {
+  readonly label = 'TransformCommand'
+
+  private pointId: string
   private before: Vec3
   private after: Vec3
   private axisHintChanges: AxisHintChange[]
-  private scene: Scene
   private beforeParametricData: ParametricData | null
   private afterParametricData: ParametricData | null
 
   constructor(
-    point: Point3,
+    pointId: string,
     before: Vec3,
     after: Vec3,
     axisHintChanges: AxisHintChange[] = [],
     scene: Scene,
   ) {
-    this.point = point
+    super(scene)
+    this.pointId = pointId
     this.before = before
     this.after = after
     this.axisHintChanges = axisHintChanges
-    this.scene = scene
-    const constraint = scene.getObjectConstrainedPointConstraint(point.id)
+    const constraint = scene.getObjectConstrainedPointConstraint(pointId)
     if (constraint) {
       const saved = constraint.parametricData
       constraint.computeParametricDataFromPosition(before)
@@ -47,25 +52,50 @@ export class TransformCommand implements Command {
       this.beforeParametricData = null
       this.afterParametricData = null
     }
+    this.markAffected(pointId)
   }
 
-  execute() {
-    this.axisHintChanges.forEach(({ setAxisHint, after }) => setAxisHint(after))
-    this.point.setPosition(this.after)
-    const constraint = this.scene.getObjectConstrainedPointConstraint(this.point.id)
+  protected doExecute(): void {
+    this.applyAxisHints('after')
+    const point = this.scene.points.get(this.pointId)
+    if (point) point.setPosition(this.after)
+    const constraint = this.scene.getObjectConstrainedPointConstraint(this.pointId)
     if (constraint && this.afterParametricData) {
       constraint.parametricData = JSON.parse(JSON.stringify(this.afterParametricData))
     }
   }
 
-  undo() {
-    this.axisHintChanges.forEach(({ setAxisHint, before }) => setAxisHint(before))
-    this.point.setPosition(this.before)
-    const constraint = this.scene.getObjectConstrainedPointConstraint(this.point.id)
+  protected doUndo(): void {
+    this.applyAxisHints('before')
+    const point = this.scene.points.get(this.pointId)
+    if (point) point.setPosition(this.before)
+    const constraint = this.scene.getObjectConstrainedPointConstraint(this.pointId)
     if (constraint) {
       constraint.parametricData = this.beforeParametricData
         ? JSON.parse(JSON.stringify(this.beforeParametricData))
         : null
     }
+  }
+
+  private applyAxisHints(field: 'before' | 'after'): void {
+    for (const change of this.axisHintChanges) {
+      const constraint = this.findConstraint(change.constraintType, change.constraintId)
+      if (constraint) constraint.setAxisHint(change[field])
+    }
+  }
+
+  private findConstraint(
+    type: 'cube' | 'regularPolygon',
+    id: string,
+  ): { setAxisHint(v: Vec3): void } | null {
+    if (type === 'cube') {
+      const c = this.scene.cubeConstraints.get(id)
+      return c && 'setAxisHint' in c ? (c as { setAxisHint(v: Vec3): void }) : null
+    }
+    if (type === 'regularPolygon') {
+      const c = this.scene.regularPolygonConstraints.get(id)
+      return c && 'setAxisHint' in c ? (c as { setAxisHint(v: Vec3): void }) : null
+    }
+    return null
   }
 }

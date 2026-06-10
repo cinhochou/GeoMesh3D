@@ -1,15 +1,21 @@
-import { reactive } from 'vue'
+import { reactive, markRaw } from 'vue'
 import { Scene } from '../scene/Scene'
 import { Editor } from './Editor'
 import type { Command } from './Command'
+import type { HistoryEntry } from './HistoryManager'
 import { createEmptySerializedScene, importScene } from './SceneSerializer'
 
 type EditorSession = {
   scene: Scene
   editor: Editor
   originalExecuteCommand: (cmd: Command) => void
+  originalExecuteHistoryEntry: (entry: HistoryEntry) => void
   originalUndo: () => void
   originalRedo: () => void
+  originalBeginTransaction: (label: string) => void
+  originalCommitTransaction: () => void
+  originalBeginCollabTransaction: (label: string) => void
+  originalCommitCollabTransaction: () => void
 }
 
 let session: EditorSession | null = null
@@ -18,14 +24,22 @@ export const getEditorSession = (): EditorSession => {
   if (session) return session
 
   const scene = reactive(new Scene()) as Scene
-  const editor = reactive(new Editor(scene)) as Editor
+  const rawEditor = new Editor(scene)
+  // 将 HistoryManager 标记为 raw，防止 Vue 深度代理导致私有字段访问异常
+  rawEditor.historyManager = markRaw(rawEditor.historyManager)
+  const editor = reactive(rawEditor) as Editor
 
   session = {
     scene,
     editor,
     originalExecuteCommand: editor.executeCommand.bind(editor),
+    originalExecuteHistoryEntry: editor.executeHistoryEntry.bind(editor),
     originalUndo: editor.undo.bind(editor),
     originalRedo: editor.redo.bind(editor),
+    originalBeginTransaction: editor.beginTransaction.bind(editor),
+    originalCommitTransaction: editor.commitTransaction.bind(editor),
+    originalBeginCollabTransaction: editor.beginCollabTransaction.bind(editor),
+    originalCommitCollabTransaction: editor.commitCollabTransaction.bind(editor),
   }
 
   return session

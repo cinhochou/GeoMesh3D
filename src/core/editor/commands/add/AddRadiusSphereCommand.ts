@@ -1,22 +1,17 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { Sphere3 } from '../../../geometry/Sphere3'
 
-export class AddRadiusSphereCommand implements Command {
-  constructor(
-    private scene: Scene,
-    private sphere: Sphere3,
-  ) {}
+export function createAddRadiusSphereCommand(
+  scene: Scene,
+  sphere: Sphere3,
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('AddRadiusSphereCommand', scene, () => {
+    scene.addSphere(sphere)
+    sphere.centerPoint.sphereId = sphere.id
+    sphere.centerPoint.sphereRole = 'center'
+  })
 
-  execute() {
-    this.scene.addSphere(this.sphere)
-    this.sphere.centerPoint.sphereId = this.sphere.id
-    this.sphere.centerPoint.sphereRole = 'center'
-  }
-
-  undo() {
-    this.scene.removeSphere(this.sphere.id)
-    this.sphere.centerPoint.sphereId = null
-    this.sphere.centerPoint.sphereRole = null
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

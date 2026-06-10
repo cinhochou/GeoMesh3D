@@ -1,90 +1,49 @@
-import type { Command } from '../../Command'
+import { SnapshotCommand } from '../SnapshotCommand'
 import { Cylinder3 } from '../../../geometry/Cylinder3'
 import { Scene } from '../../../scene/Scene'
-import { Circle3 } from '../../../geometry/Circle3'
-import { CylinderConstraint } from '../../../constraints/CylinderConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
-import { PerpendicularLineConstraint } from '../../../constraints/PerpendicularLineConstraint'
-import { ParallelLineConstraint } from '../../../constraints/ParallelLineConstraint'
 
-export class DeleteCylinderCommand implements Command {
-  private bottomCircle: Circle3 | null = null
-  private topCircle: Circle3 | null = null
-  private constraint: CylinderConstraint | null = null
-
-  constructor(
-    private scene: Scene,
-    private cylinder: Cylinder3,
-    private relatedPerpendicularLines: PerpendicularLine3[] = [],
-    private relatedParallelLines: ParallelLine3[] = [],
-  ) {}
-
-  execute() {
-    this.relatedPerpendicularLines.forEach((line) => {
-      this.scene.removePerpendicularLine(line.id)
-      this.scene.selection.perpendicularLines.delete(line.id)
+export function createDeleteCylinderCommand(
+  scene: Scene,
+  cylinder: Cylinder3,
+  relatedPerpendicularLines: PerpendicularLine3[] = [],
+  relatedParallelLines: ParallelLine3[] = [],
+): SnapshotCommand {
+  const cmd = new SnapshotCommand('DeleteCylinderCommand', scene, () => {
+    relatedPerpendicularLines.forEach((line) => {
+      scene.removePerpendicularLine(line.id)
+      scene.selection.perpendicularLines.delete(line.id)
     })
-    this.relatedParallelLines.forEach((line) => {
-      this.scene.removeParallelLine(line.id)
-      this.scene.selection.parallelLines.delete(line.id)
+    relatedParallelLines.forEach((line) => {
+      scene.removeParallelLine(line.id)
+      scene.selection.parallelLines.delete(line.id)
     })
-    if (this.cylinder.normalCircleId) {
-      this.bottomCircle = this.scene.circles.get(this.cylinder.normalCircleId) ?? null
-      if (this.bottomCircle) {
-        this.scene.circles.delete(this.bottomCircle.id)
-        this.scene.selection.circles.delete(this.bottomCircle.id)
-        this.bottomCircle.p1.circleId = null
-        this.bottomCircle.p1.circleRole = null
+    if (cylinder.normalCircleId) {
+      const bottomCircle = scene.circles.get(cylinder.normalCircleId) ?? null
+      if (bottomCircle) {
+        scene.circles.delete(bottomCircle.id)
+        scene.selection.circles.delete(bottomCircle.id)
+        bottomCircle.p1.circleId = null
+        bottomCircle.p1.circleRole = null
       }
     }
-    if (this.cylinder.topNormalCircleId) {
-      this.topCircle = this.scene.circles.get(this.cylinder.topNormalCircleId) ?? null
-      if (this.topCircle) {
-        this.scene.circles.delete(this.topCircle.id)
-        this.scene.selection.circles.delete(this.topCircle.id)
-        this.topCircle.p1.circleId = null
-        this.topCircle.p1.circleRole = null
+    if (cylinder.topNormalCircleId) {
+      const topCircle = scene.circles.get(cylinder.topNormalCircleId) ?? null
+      if (topCircle) {
+        scene.circles.delete(topCircle.id)
+        scene.selection.circles.delete(topCircle.id)
+        topCircle.p1.circleId = null
+        topCircle.p1.circleRole = null
       }
     }
-    this.constraint = this.scene.cylinderConstraints.get(this.cylinder.id) ?? null
-    this.scene.removeCylinder(this.cylinder.id)
-    this.cylinder.bottomCenterPoint.cylinderId = null
-    this.cylinder.bottomCenterPoint.cylinderRole = null
-    this.cylinder.topCenterPoint.cylinderId = null
-    this.cylinder.topCenterPoint.cylinderRole = null
-  }
+    scene.removeCylinder(cylinder.id)
+    cylinder.bottomCenterPoint.cylinderId = null
+    cylinder.bottomCenterPoint.cylinderRole = null
+    cylinder.topCenterPoint.cylinderId = null
+    cylinder.topCenterPoint.cylinderRole = null
+  })
 
-  undo() {
-    this.scene.addCylinder(this.cylinder)
-    this.cylinder.bottomCenterPoint.cylinderId = this.cylinder.id
-    this.cylinder.bottomCenterPoint.cylinderRole = 'bottomCenter'
-    this.cylinder.topCenterPoint.cylinderId = this.cylinder.id
-    this.cylinder.topCenterPoint.cylinderRole = 'topCenter'
-    if (this.bottomCircle) {
-      this.scene.addCircle(this.bottomCircle)
-      this.bottomCircle.p1.circleId = this.bottomCircle.id
-      this.bottomCircle.p1.circleRole = 'center'
-    }
-    if (this.topCircle) {
-      this.scene.addCircle(this.topCircle)
-      this.topCircle.p1.circleId = this.topCircle.id
-      this.topCircle.p1.circleRole = 'center'
-    }
-    if (this.constraint) {
-      this.scene.addCylinderConstraint(this.constraint)
-    }
-    this.relatedPerpendicularLines.forEach((line) => {
-      this.scene.addPerpendicularLine(line)
-      this.scene.addPerpendicularLineConstraint(
-        new PerpendicularLineConstraint(this.scene, line.id, line.target),
-      )
-    })
-    this.relatedParallelLines.forEach((line) => {
-      this.scene.addParallelLine(line)
-      this.scene.addParallelLineConstraint(
-        new ParallelLineConstraint(this.scene, line.id, line.target),
-      )
-    })
-  }
+  cmd.executeAndCapture()
+  return cmd
 }

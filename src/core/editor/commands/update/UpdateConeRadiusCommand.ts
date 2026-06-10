@@ -1,29 +1,48 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
 import { Scene } from '../../../scene/Scene'
-import { Cone3 } from '../../../geometry/Cone3'
 
 type RadiusState = {
   radiusValue: number
 }
 
-export class UpdateConeRadiusCommand extends AbstractUpdateCommand<RadiusState> {
+export class UpdateConeRadiusCommand extends ConstraintAwareCommand {
+  readonly label = '更新圆锥半径'
+
+  private before: RadiusState
+  private after: RadiusState
+
   constructor(
-    private scene: Scene,
-    private cone: Cone3,
+    scene: Scene,
+    private coneId: string,
     before: RadiusState,
     after: RadiusState,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const cone = scene.cones.get(coneId)
+    if (cone) {
+      this.markAffected(cone.baseCenterPoint.id, cone.apexPoint.id)
+    }
   }
 
-  protected apply(state: RadiusState) {
-    this.cone.radiusValue = state.radiusValue
-    if (this.cone.normalCircleId) {
-      const normalCircle = this.scene.circles.get(this.cone.normalCircleId)
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(state: RadiusState) {
+    const cone = this.scene.cones.get(this.coneId)
+    if (!cone) return
+    cone.radiusValue = state.radiusValue
+    if (cone.normalCircleId) {
+      const normalCircle = this.scene.circles.get(cone.normalCircleId)
       if (normalCircle) {
         normalCircle.lockedRadius = state.radiusValue
       }
     }
-    this.scene.markAllRenderDirty()
   }
 }

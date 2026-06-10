@@ -1,6 +1,5 @@
-import { AbstractUpdateCommand } from '../AbstractUpdateCommand'
+import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
 import { Scene } from '../../../scene/Scene'
-import { GeoVector3 } from '../../../geometry/GeoVector3'
 
 export type VectorPatch = {
   name: string
@@ -12,24 +11,44 @@ export type VectorPatch = {
   userLocked: boolean
 }
 
-export class UpdateVectorCommand extends AbstractUpdateCommand<VectorPatch> {
+export class UpdateVectorCommand extends ConstraintAwareCommand {
+  readonly label = '更新向量属性'
+
+  private before: VectorPatch
+  private after: VectorPatch
+
   constructor(
-    private scene: Scene,
-    private vector: GeoVector3,
+    scene: Scene,
+    private vectorId: string,
     before: VectorPatch,
     after: VectorPatch,
   ) {
-    super(before, after)
+    super(scene)
+    this.before = before
+    this.after = after
+    const vector = scene.vectors.get(vectorId)
+    if (vector) {
+      this.markAffected(vector.p1.id, vector.p2.id)
+    }
   }
 
-  protected apply(patch: VectorPatch) {
-    this.vector.name = patch.name
-    this.vector.nameVisible = patch.nameVisible
-    this.vector.valueVisible = patch.valueVisible
-    this.vector.labelOffsetX = patch.labelOffsetX
-    this.vector.labelOffsetY = patch.labelOffsetY
-    this.vector.visible = patch.visible
-    this.vector.userLocked = patch.userLocked
-    this.scene.markAllRenderDirty()
+  protected doExecute(): void {
+    this.apply(this.after)
+  }
+
+  protected doUndo(): void {
+    this.apply(this.before)
+  }
+
+  private apply(patch: VectorPatch) {
+    const vector = this.scene.vectors.get(this.vectorId)
+    if (!vector) return
+    vector.name = patch.name
+    vector.nameVisible = patch.nameVisible
+    vector.valueVisible = patch.valueVisible
+    vector.labelOffsetX = patch.labelOffsetX
+    vector.labelOffsetY = patch.labelOffsetY
+    vector.visible = patch.visible
+    vector.userLocked = patch.userLocked
   }
 }

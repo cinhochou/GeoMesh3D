@@ -15,6 +15,7 @@ import EditProjectDialog from '../components/EditProjectDialog.vue'
 
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
+import type { HistoryEntry } from '../core/editor/HistoryManager'
 import type { Point3 } from '../core/geometry/Point3'
 import { getEditorSession, resetEditorSession } from '../core/editor/editorSession'
 import {
@@ -109,10 +110,11 @@ const handleSessionInvalidated = async (reason: string) => {
 
   // 4) 重置场景与 undo/redo
   resetEditorSession()
-  // resetEditorSession 只清了 editor.history；EditorView 内部的 localSnapshotHistory 是
-  // 非协作模式下的本地 undo/redo 栈，会话失效时必须一并清空，否则重登后还能"撤销"出旧内容。
-  localSnapshotHistory.length = 0
-  localSnapshotHistoryIndex = -1
+  // resetEditorSession 已通过 HistoryManager.clear() 清空历史栈
+  // 如果在协作模式中被失效，需要恢复 HistoryManager 的暂停状态
+  if (editor.historyManager.isPaused) {
+    editor.historyManager.resume()
+  }
   updateLocalHistoryUI()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
@@ -156,7 +158,7 @@ const { user } = storeToRefs(authStore)
 
 const { needsRotateToTarget: isPortraitOnPhone } = useOrientationLock('landscape')
 
-const { scene, editor, originalExecuteCommand, originalUndo, originalRedo } = getEditorSession()
+const { scene, editor, originalExecuteCommand, originalExecuteHistoryEntry, originalUndo, originalRedo, originalBeginTransaction, originalCommitTransaction, originalBeginCollabTransaction, originalCommitCollabTransaction } = getEditorSession()
 
 let renderer: ThreeRenderer
 let interaction: Interaction
@@ -168,12 +170,12 @@ let solverFlushRequested = false
 let solverFlushReady = false
 
 const collabManager = ref<CollabManager | null>(null)
-const localSnapshotHistory: Array<{
-  before: SerializedScene
-  after: SerializedScene
-  label: string
-}> = []
-let localSnapshotHistoryIndex = -1
+
+/** 协作事务：将多个 executeCommand 调用合并为一条共享历史记录 */
+let collabTransactionDepth = 0
+let collabTransactionBefore: SerializedScene | null = null
+let collabTransactionLabel = ''
+
 let lastFpsTime = performance.now()
 let frameCount = 0
 const sidebarWidth = ref<number | null>(null)
@@ -197,7 +199,9 @@ const lastSavedSceneJson = ref<string | null>(null)
 // 草稿自动保存与意外关闭恢复
 const draftRecoveryVisible = ref(false)
 let autoSaveTimer: number | null = null
+let periodicSaveTimer: number | null = null
 const AUTO_SAVE_DEBOUNCE = 3_000
+const PERIODIC_SAVE_INTERVAL = 30_000
 
 const sceneToJsonForCompare = (data: SerializedScene): string => {
   const copy = { ...data }
@@ -443,9 +447,25 @@ const stopAutoSave = () => {
   }
 }
 
+/** 启动定期强制保存（安全网，防止 watcher 遗漏） */
+const startPeriodicSave = () => {
+  stopPeriodicSave()
+  periodicSaveTimer = window.setInterval(() => {
+    autoSave()
+  }, PERIODIC_SAVE_INTERVAL)
+}
+
+/** 停止定期强制保存 */
+const stopPeriodicSave = () => {
+  if (periodicSaveTimer !== null) {
+    clearInterval(periodicSaveTimer)
+    periodicSaveTimer = null
+  }
+}
+
 /**
  * beforeunload 处理：
- * - draftProtection 开启时：保存草稿 + 标记 sessionStorage + 弹确认框
+ * - draftProtection 开启时：同步保存草稿 + 弹确认框
  * - draftProtection 关闭时：不保存、不弹框
  */
 const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -458,13 +478,27 @@ const handleBeforeUnload = (e: BeforeUnloadEvent) => {
 }
 
 /**
- * unload 处理：
- * 用户确认离开后标记 graceful_exit
- * 下次打开时据此清空草稿（不弹恢复提示）
+ * pagehide 处理（替代 unload，更可靠）：
+ * 标记 graceful exit，下次加载时据此清空草稿不弹恢复。
+ * 同时保存草稿作为最后保障。
  */
-const handleUnload = () => {
+const handlePageHide = () => {
   if (!currentProjectId.value && appSettings.value.draftProtection && !isSceneEmpty(scene)) {
-    DraftStorageService.onUnload()
+    DraftStorageService.saveDraft(scene)
+    DraftStorageService.onPageHide()
+  }
+}
+
+/**
+ * visibilitychange 处理：
+ * 页面变为 hidden 时保存草稿（安全网，覆盖移动端场景）。
+ * 不标记 graceful exit（用户可能回来）。
+ */
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'hidden') {
+    if (!currentProjectId.value && appSettings.value.draftProtection) {
+      DraftStorageService.onVisibilityHidden(scene)
+    }
   }
 }
 
@@ -475,6 +509,10 @@ const handleDraftRecoveryConfirm = () => {
     DraftStorageService.restoreDraft(scene, data)
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
+    // 恢复后重置内容区为默认收起状态，并同步折叠/展开按钮状态
+    uiStore.setContentGroupsCollapsed(true)
+    // 恢复后清空历史栈（恢复的场景是"新起点"，不应能撤销到空场景）
+    editor.clearHistory()
   }
   draftRecoveryVisible.value = false
   showToast('已恢复上一次的场景', 'global')
@@ -535,6 +573,9 @@ onMounted(() => {
       }
     }
   }
+
+  // 启动定期强制保存（安全网，防止 watcher 遗漏导致草稿过期）
+  startPeriodicSave()
 
   renderer = new ThreeRenderer(viewportRef.value!, appSettings.value)
   uiStore.setAxisGridSize(renderer.getAxisGridSize())
@@ -628,33 +669,85 @@ onMounted(() => {
     const cm = collabManager.value
     const inRoom = cm && cm.getStatus().room !== null
     if (inRoom && !cm!.getIsApplyingSharedHistory()) {
-      const before = exportScene(scene)
-      originalExecuteCommand(cmd)
-      const after = exportScene(scene)
-      cm!.syncAction()
-      const clientId = cm!.getProviderClientId()
-      cm!.appendHistoryEntry({
-        id: crypto.randomUUID(),
-        actorClientId: clientId,
-        actorName: cm!.getLocalUserLabel(),
-        createdAt: Date.now(),
-        label: cmd.constructor.name,
-        before,
-        after,
-      })
-    } else if (!inRoom) {
-      const before = exportScene(scene)
-      originalExecuteCommand(cmd)
-      const after = exportScene(scene)
-      const truncateAt = localSnapshotHistoryIndex + 1
-      if (truncateAt < localSnapshotHistory.length) {
-        localSnapshotHistory.splice(truncateAt)
+      if (collabTransactionDepth > 0) {
+        // 协作事务中：只执行命令，不创建共享历史记录（由 commitTransaction 统一创建）
+        originalExecuteCommand(cmd)
+        cm!.syncAction()
+      } else {
+        // 统一方案：先执行命令，再通过 undo→export→redo 获取 before 快照
+        // 这对所有命令类型都正确：
+        // - SnapshotCommand：executeAndCapture() 时已执行，originalExecuteCommand 不会再次 redo
+        // - ConstraintAwareCommand：originalExecuteCommand 会调用 redo() 执行操作
+        // - 拖拽场景：点位置在拖拽中已被修改，undo 可以恢复到操作前
+        originalExecuteCommand(cmd)
+        const after = exportScene(scene)
+        // 通过 undo→export→redo 获取操作前的场景快照
+        const entry = cmd as unknown as HistoryEntry
+        entry.undo()
+        const before = exportScene(scene)
+        entry.redo()
+        // 约束求解和渲染同步
+        scene.solveDirtyConstraints()
+        scene.markAllRenderDirty()
+
+        cm!.syncAction()
+        const clientId = cm!.getProviderClientId()
+        const label = cmd.constructor.name
+        cm!.appendHistoryEntry({
+          id: crypto.randomUUID(),
+          actorClientId: clientId,
+          actorName: cm!.getLocalUserLabel(),
+          createdAt: Date.now(),
+          label,
+          before,
+          after,
+        })
       }
-      localSnapshotHistory.push({ before, after, label: cmd.constructor.name })
-      localSnapshotHistoryIndex = localSnapshotHistory.length - 1
+    } else if (!inRoom) {
+      originalExecuteCommand(cmd)
       updateLocalHistoryUI()
     } else {
       originalExecuteCommand(cmd)
+      cm!.syncAction()
+    }
+  }
+
+  editor.executeHistoryEntry = (entry: HistoryEntry) => {
+    const cm = collabManager.value
+    const inRoom = cm && cm.getStatus().room !== null
+    if (inRoom && !cm!.getIsApplyingSharedHistory()) {
+      if (collabTransactionDepth > 0) {
+        // 协作事务中：只执行命令，不创建共享历史记录
+        originalExecuteHistoryEntry(entry)
+        cm!.syncAction()
+      } else {
+        // 统一方案：先执行命令，再通过 undo→export→redo 获取 before 快照
+        // 对所有命令类型（SnapshotCommand / ConstraintAwareCommand）都正确
+        originalExecuteHistoryEntry(entry)
+        const after = exportScene(scene)
+        entry.undo()
+        const before = exportScene(scene)
+        entry.redo()
+        scene.solveDirtyConstraints()
+        scene.markAllRenderDirty()
+
+        cm!.syncAction()
+        const clientId = cm!.getProviderClientId()
+        cm!.appendHistoryEntry({
+          id: crypto.randomUUID(),
+          actorClientId: clientId,
+          actorName: cm!.getLocalUserLabel(),
+          createdAt: Date.now(),
+          label: entry.label,
+          before,
+          after,
+        })
+      }
+    } else if (!inRoom) {
+      originalExecuteHistoryEntry(entry)
+      updateLocalHistoryUI()
+    } else {
+      originalExecuteHistoryEntry(entry)
       cm!.syncAction()
     }
   }
@@ -663,12 +756,8 @@ onMounted(() => {
     const cm = collabManager.value
     if (cm && cm.getStatus().room !== null) {
       cm.sharedUndo()
-    } else if (localSnapshotHistoryIndex >= 0) {
-      const entry = localSnapshotHistory[localSnapshotHistoryIndex]!
-      importScene(scene, entry.before)
-      localSnapshotHistoryIndex--
-      scene.solveDirtyConstraints()
-      scene.markAllRenderDirty()
+    } else {
+      editor.historyManager.undo()
       updateLocalHistoryUI()
     }
   }
@@ -677,14 +766,63 @@ onMounted(() => {
     const cm = collabManager.value
     if (cm && cm.getStatus().room !== null) {
       cm.sharedRedo()
-    } else if (localSnapshotHistoryIndex < localSnapshotHistory.length - 1) {
-      const entry = localSnapshotHistory[localSnapshotHistoryIndex + 1]!
-      importScene(scene, entry.after)
-      localSnapshotHistoryIndex++
-      scene.solveDirtyConstraints()
-      scene.markAllRenderDirty()
+    } else {
+      editor.historyManager.redo()
       updateLocalHistoryUI()
     }
+  }
+
+  // 覆盖 beginTransaction：协作模式下使用协作事务机制，非协作模式下走原始逻辑
+  // 这样 Interaction handler 等使用 beginTransaction 的代码也能正确处理协作模式
+  editor.beginTransaction = (label: string) => {
+    const cm = collabManager.value
+    const inRoom = cm && cm.getStatus().room !== null
+    if (inRoom) {
+      collabTransactionDepth++
+      if (collabTransactionDepth === 1) {
+        collabTransactionBefore = exportScene(scene)
+        collabTransactionLabel = label
+      }
+    } else {
+      originalBeginTransaction(label)
+    }
+  }
+
+  editor.commitTransaction = () => {
+    const cm = collabManager.value
+    const inRoom = cm && cm.getStatus().room !== null
+    if (inRoom) {
+      if (collabTransactionDepth <= 0) return
+      collabTransactionDepth--
+      if (collabTransactionDepth === 0 && collabTransactionBefore) {
+        const after = exportScene(scene)
+        cm!.syncAction()
+        cm!.appendHistoryEntry({
+          id: crypto.randomUUID(),
+          actorClientId: cm!.getProviderClientId(),
+          actorName: cm!.getLocalUserLabel(),
+          createdAt: Date.now(),
+          label: collabTransactionLabel,
+          before: collabTransactionBefore,
+          after,
+        })
+        collabTransactionBefore = null
+      }
+    } else {
+      originalCommitTransaction()
+      editor.historyVersion++
+      updateLocalHistoryUI()
+    }
+  }
+
+  // beginCollabTransaction/commitCollabTransaction 直接委托给 beginTransaction/commitTransaction
+  // 这样无论是 SideBar 还是 Interaction handler，都走同一套事务机制
+  editor.beginCollabTransaction = (label: string) => {
+    editor.beginTransaction(label)
+  }
+
+  editor.commitCollabTransaction = () => {
+    editor.commitTransaction()
   }
 
   const loop = () => {
@@ -769,7 +907,8 @@ onMounted(() => {
   window.addEventListener('pointercancel', stopSidebarWidthDrag)
   window.addEventListener('preview-settings', handlePreviewSettings as EventListener)
   window.addEventListener('beforeunload', handleBeforeUnload)
-  window.addEventListener('unload', handleUnload)
+  window.addEventListener('pagehide', handlePageHide)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('editor:save-and-close', handleExternalSaveAndClose)
 
   // 跨 Tab 重新登录：当其他 Tab 登录/重新登录并切换到当前 Tab 的 user 后：
@@ -840,16 +979,20 @@ watch(
 
 watch(
   [
-    () => editor.historyIndex,
-    () => editor.history.length,
+    () => editor.historyVersion,
     () => editor.isSnappingEnabled,
     () => scene.points.size,
     () => scene.lines.size,
     () => scene.straightLines.size,
+    () => scene.perpendicularLines.size,
+    () => scene.parallelLines.size,
     () => scene.rays.size,
+    () => scene.vectors.size,
     () => scene.circles.size,
     () => scene.faces.size,
     () => scene.spheres.size,
+    () => scene.cones.size,
+    () => scene.cylinders.size,
   ],
   () => {
     scene.markAllRenderDirty()
@@ -867,8 +1010,8 @@ const sharedHistoryState = ref<import('../core/collab/CollabManager').SharedHist
 
 const updateLocalHistoryUI = () => {
   sceneStore.setHistoryState({
-    canUndo: localSnapshotHistoryIndex >= 0,
-    canRedo: localSnapshotHistoryIndex < localSnapshotHistory.length - 1,
+    canUndo: editor.historyManager.canUndo,
+    canRedo: editor.historyManager.canRedo,
   })
 }
 
@@ -992,6 +1135,7 @@ watch(
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
   stopAutoSave()
+  stopPeriodicSave()
   // 离开协作房间：优先通过 collabStore 走统一通道（它内部已持有 manager 引用）
   collabStore.leave()
   collabStore.resetCollabState()
@@ -1000,8 +1144,14 @@ onUnmounted(() => {
     animationFrameId = null
   }
   editor.executeCommand = originalExecuteCommand
+  editor.executeHistoryEntry = originalExecuteHistoryEntry
   editor.undo = originalUndo
   editor.redo = originalRedo
+  editor.beginTransaction = originalBeginTransaction
+  editor.commitTransaction = originalCommitTransaction
+  editor.beginCollabTransaction = originalBeginCollabTransaction
+  editor.commitCollabTransaction = originalCommitCollabTransaction
+  editor.historyManager.clear()
   detachSolverListener()
   solverWorker?.terminate()
   solverWorker = null
@@ -1030,7 +1180,8 @@ onUnmounted(() => {
   window.removeEventListener('pointercancel', stopSidebarWidthDrag)
   window.removeEventListener('preview-settings', handlePreviewSettings as EventListener)
   window.removeEventListener('beforeunload', handleBeforeUnload)
-  window.removeEventListener('unload', handleUnload)
+  window.removeEventListener('pagehide', handlePageHide)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('editor:save-and-close', handleExternalSaveAndClose)
   crossTabLoginEvents.off(handleCrossTabLogin)
   document.body.classList.remove('sidebar-width-resizing')
@@ -1038,11 +1189,8 @@ onUnmounted(() => {
 
 // P3：onBeforeUnmount 时清空非协作模式下的本地 undo/redo 栈，
 // 释放其中每个 snapshot 持有的 scene 引用，缩短大场景下的内存驻留时间。
-// 注意：localSnapshotHistory / localSnapshotHistoryIndex 本身已经在 setup 闭包里（每次挂载
-// 重新初始化为 [] / -1），但数组里的对象引用如果不清，GC 仍要等整个闭包被释放才会回收。
 onBeforeUnmount(() => {
-  localSnapshotHistory.length = 0
-  localSnapshotHistoryIndex = -1
+  editor.historyManager.clear()
 })
 
 function onModeChange(mode: EditorMode) {
@@ -1276,8 +1424,7 @@ const handleImportScene = async () => {
       if (!confirmed) return
     }
 
-    editor.history = []
-    editor.historyIndex = -1
+    editor.clearHistory()
     editor.selectedPoints = []
     scene.selection.clear()
 
@@ -1301,14 +1448,9 @@ const handleImportScene = async () => {
         before,
         after,
       })
-    } else if (!inRoom && before) {
-      const after = exportScene(scene)
-      localSnapshotHistory.length = 0
-      localSnapshotHistory.push({ before, after, label: 'ImportScene' })
-      localSnapshotHistoryIndex = 0
-      updateLocalHistoryUI()
     } else {
       collabManager.value?.syncAction()
+      updateLocalHistoryUI()
     }
 
     showToast('导入成功', 'global')
@@ -1419,27 +1561,52 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
   if (open) {
     collabStore.openJoinDialog('正在加入房间中...')
     try {
-      const snapshotsToUpload = [...localSnapshotHistory]
+      // 在加入房间前，先获取本地快照历史（用于第一个成员上传）
+      const localSnapshotHistory = editor.historyManager.getSnapshotHistory()
+
       await collabManager.value?.joinRoom(room)
       scene.selection.clear()
       editor.selectedPoints = []
+      // 协作模式下暂停本地 HistoryManager，使用共享历史代替
+      editor.historyManager.pause()
+      editor.historyVersion++
       collabManager.value?.setupHistoryObservers()
       collabManager.value?.syncLocalHistorySeqFromYjs()
+
       if (collabManager.value) {
         const sharedState = collabManager.value.getSharedHistoryState()
-        if (sharedState.entries.length === 0 && snapshotsToUpload.length > 0) {
-          collabManager.value.uploadLocalSnapshotHistory(
-            snapshotsToUpload,
-            collabManager.value.getProviderClientId(),
-            collabManager.value.getLocalUserLabel(),
-          )
+        if (sharedState.entries.length === 0) {
+          // 第一个加入房间的成员：将本地完整历史上传为共享历史主线
+          if (localSnapshotHistory.entries.length > 0) {
+            collabManager.value.uploadLocalSnapshotHistory(
+              localSnapshotHistory.entries,
+              localSnapshotHistory.historyIndex,
+              collabManager.value.getProviderClientId(),
+              collabManager.value.getLocalUserLabel(),
+            )
+          } else if (!isSceneEmpty(scene)) {
+            // 本地无历史但场景非空（如导入的场景），创建一条初始快照记录
+            const after = exportScene(scene)
+            const before = createEmptySerializedScene()
+            collabManager.value.appendHistoryEntry({
+              id: crypto.randomUUID(),
+              actorClientId: collabManager.value.getProviderClientId(),
+              actorName: collabManager.value.getLocalUserLabel(),
+              createdAt: Date.now(),
+              label: 'InitialScene',
+              before,
+              after,
+            })
+          }
         }
+        // 后加入的成员：共享历史已有内容，自动同步即可（场景已被 joinRoom 同步）
       }
-      localSnapshotHistory.length = 0
-      localSnapshotHistoryIndex = -1
+
       collabStore.closeJoinDialog()
       showToast(`成功加入房间: ${room}`, 'global')
     } catch (err) {
+      // 加入失败时恢复 HistoryManager
+      editor.historyManager.resume()
       collabStore.closeJoinDialog()
       showToast('⚠️ 协作连接失败（请检查 websocket 服务）', 'global')
       console.error(err)
@@ -1448,17 +1615,20 @@ const handleToggleCollab = async ({ open, room }: { open: boolean; room: string 
   }
 
   const cm = collabManager.value
+  // 退出协作模式：将共享历史保留到本地 HistoryManager
   if (cm) {
     const sharedState = cm.getSharedHistoryState()
-    localSnapshotHistory.length = 0
-    for (const entry of sharedState.entries) {
-      localSnapshotHistory.push({
-        before: entry.before,
-        after: entry.after,
-        label: entry.label,
-      })
-    }
-    localSnapshotHistoryIndex = sharedState.historyIndex
+
+    const snapshotEntries = sharedState.entries.map((e) => ({
+      before: e.before,
+      after: e.after,
+      label: e.label,
+    }))
+    editor.historyManager.resume()
+    editor.historyManager.loadFromSharedHistory(snapshotEntries, sharedState.historyIndex)
+    editor.historyVersion++
+  } else {
+    editor.historyManager.resume()
   }
   cm?.leaveRoom()
   sharedHistoryState.value = null
@@ -1701,6 +1871,8 @@ const loadProjectScene = async (projectId: string) => {
           scene.markAllRenderDirty()
           sceneStore.syncEditorState(editor)
           sceneStore.syncSceneState(scene)
+          uiStore.setContentGroupsCollapsed(true)
+          editor.clearHistory()
         }
       } catch (e) {
         console.error('加载场景数据失败:', e)

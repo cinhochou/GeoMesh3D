@@ -203,7 +203,8 @@ export class Interaction {
   private dragStartPositions = new Map<string, Vec3>()
   private dragSceneStartPositions: Map<string, Vec3> | null = null
   private dragStartAxisHints: Array<{
-    setAxisHint: (v: Vec3) => void
+    constraintType: 'cube' | 'regularPolygon'
+    constraintId: string
     getVAxisHint: () => Vec3
     before: Vec3
   }> | null = null
@@ -4746,12 +4747,14 @@ export class Interaction {
     if (!this.dragStartAxisHints) {
       this.dragStartAxisHints = [
         ...this.editor.getCubeConstraints().map((c) => ({
-          setAxisHint: c.setAxisHint.bind(c),
+          constraintType: 'cube' as const,
+          constraintId: c.cubeId,
           getVAxisHint: c.getVAxisHint.bind(c),
           before: c.getVAxisHint().clone(),
         })),
         ...this.editor.getRegularPolygonConstraints().map((c) => ({
-          setAxisHint: c.setAxisHint.bind(c),
+          constraintType: 'regularPolygon' as const,
+          constraintId: c.constraintId,
           getVAxisHint: c.getVAxisHint.bind(c),
           before: c.getVAxisHint().clone(),
         })),
@@ -4840,7 +4843,8 @@ export class Interaction {
     const axisHintChanges =
       this.dragStartAxisHints
         ?.map((entry) => ({
-          setAxisHint: entry.setAxisHint,
+          constraintType: entry.constraintType,
+          constraintId: entry.constraintId,
           before: entry.before,
           after: entry.getVAxisHint().clone(),
         }))

@@ -246,6 +246,9 @@ export class Scene {
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
 
+  /** 快照恢复期间抑制约束脏标记，避免中间状态触发无效求解 */
+  private suppressConstraintDirty = false
+
   constructor() {
     const origin = new Point3(Scene.ORIGIN_ID, 'O', new Vec3(0, 0, 0), true, true)
     this.addPoint(origin)
@@ -628,6 +631,10 @@ export class Scene {
     this.dirtyConstraints.clear()
   }
 
+  clearDirtyConstraints() {
+    this.dirtyConstraints.clear()
+  }
+
   rebuildConstraintIndexes() {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
@@ -712,9 +719,8 @@ export class Scene {
     this.perpendicularLines.forEach((perpendicularLine) => {
       if (perpendicularLine.p1.id === pointId) {
         this.dirtyIds.perpendicularLine.add(perpendicularLine.id)
-        this.markConstraintDirty(
-          this.perpendicularLineConstraints.get(perpendicularLine.id)!,
-        )
+        const constraint = this.perpendicularLineConstraints.get(perpendicularLine.id)
+        if (constraint) this.markConstraintDirty(constraint)
       }
     })
     this.perpendicularLineConstraints.forEach((constraint) => {
@@ -755,9 +761,8 @@ export class Scene {
     this.parallelLines.forEach((parallelLine) => {
       if (parallelLine.p1.id === pointId) {
         this.dirtyIds.parallelLine.add(parallelLine.id)
-        this.markConstraintDirty(
-          this.parallelLineConstraints.get(parallelLine.id)!,
-        )
+        const constraint = this.parallelLineConstraints.get(parallelLine.id)
+        if (constraint) this.markConstraintDirty(constraint)
       }
     })
     this.parallelLineConstraints.forEach((constraint) => {
@@ -810,12 +815,20 @@ export class Scene {
     return this.dirtyConstraints.size > 0
   }
 
-  solveDirtyConstraints(maxPasses: number = 6) {
+  solveDirtyConstraints(maxPasses: number = 10) {
     let passes = 0
     while (this.dirtyConstraints.size > 0 && passes < maxPasses) {
       const batch = [...this.dirtyConstraints]
       this.dirtyConstraints.clear()
-      batch.forEach((constraint) => constraint.solve())
+      batch.forEach((constraint) => {
+        if (!constraint) return
+        try {
+          if (constraint.isEffective && !constraint.isEffective()) return
+          constraint.solve()
+        } catch (e) {
+          console.warn('[solveDirtyConstraints] constraint solve failed:', e)
+        }
+      })
       passes += 1
     }
     return passes
@@ -939,10 +952,28 @@ export class Scene {
   }
 
   private markConstraintDirty(constraint: SceneConstraint) {
+    if (this.suppressConstraintDirty) return
     const beforeSize = this.dirtyConstraints.size
     this.dirtyConstraints.add(constraint)
     if (this.dirtyConstraints.size !== beforeSize) {
       this.solverListeners.forEach((listener) => listener())
     }
+  }
+
+  /**
+   * 在快照恢复期间抑制约束脏标记。
+   * 调用 beginSnapshotRestore 后，所有 markConstraintDirty 调用会被跳过，
+   * 直到调用 endSnapshotRestore。
+   */
+  beginSnapshotRestore() {
+    this.suppressConstraintDirty = true
+  }
+
+  /**
+   * 结束快照恢复，重新启用约束脏标记，并标记所有约束为脏。
+   */
+  endSnapshotRestore() {
+    this.suppressConstraintDirty = false
+    this.constraints.forEach((c) => this.dirtyConstraints.add(c))
   }
 }
