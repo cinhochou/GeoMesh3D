@@ -1406,6 +1406,42 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
         return { valid: false, error: `圆柱约束 "${yc.name}" 引用了不存在的顶面圆` }
       }
     }
+    if (c.type === 'objectConstrainedPoint') {
+      const oc = c as SerializedObjectConstrainedPointConstraint
+      if (typeof oc.pointId !== 'string' || oc.pointId === '' || !pointIdSet.has(oc.pointId)) {
+        return { valid: false, error: '对象约束点引用了不存在的点' }
+      }
+      if (typeof oc.targetType !== 'string' || typeof oc.targetId !== 'string' || oc.targetId === '') {
+        return { valid: false, error: `对象约束点 (pointId=${oc.pointId}) 的 target 无效` }
+      }
+      const validObjectConstrainedTargetTypes = new Set([
+        'line', 'straightLine', 'ray', 'vector', 'circle', 'face', 'sphere',
+        'cone', 'coneBase', 'cylinder', 'cylinderBottom', 'cylinderTop',
+        'perpendicularLine', 'parallelLine',
+        'xAxis', 'yAxis', 'zAxis',
+      ])
+      if (!validObjectConstrainedTargetTypes.has(oc.targetType)) {
+        return { valid: false, error: `对象约束点 (pointId=${oc.pointId}) 的 targetType 无效` }
+      }
+      const resolveObjectConstrainedTargetId = (type: string, id: string): boolean => {
+        if (type === 'line') return lineIdSet.has(id)
+        if (type === 'straightLine') return straightLineIdSet.has(id)
+        if (type === 'ray') return rayIdSet.has(id)
+        if (type === 'vector') return vectorIdSet.has(id)
+        if (type === 'circle') return circleIdSet.has(id)
+        if (type === 'face') return faceIdSet.has(id)
+        if (type === 'sphere') return sphereIdSet.has(id)
+        if (type === 'cone' || type === 'coneBase') return coneIdSet.has(id)
+        if (type === 'cylinder' || type === 'cylinderBottom' || type === 'cylinderTop') return cylinderIdSet.has(id)
+        if (type === 'perpendicularLine') return perpendicularLineIdSet.has(id)
+        if (type === 'parallelLine') return parallelLineIdSet.has(id)
+        if (type === 'xAxis' || type === 'yAxis' || type === 'zAxis') return id === type
+        return false
+      }
+      if (!resolveObjectConstrainedTargetId(oc.targetType, oc.targetId)) {
+        return { valid: false, error: `对象约束点 (pointId=${oc.pointId}) 引用了不存在的 target 对象` }
+      }
+    }
     if (c.type === 'perpendicularLine') {
       const plc = c as SerializedPerpendicularLineConstraint
       if (typeof plc.perpendicularLineId !== 'string' || plc.perpendicularLineId === '' || !perpendicularLineIdSet.has(plc.perpendicularLineId)) {

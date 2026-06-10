@@ -1155,6 +1155,9 @@ export class Editor {
     ;[...this.scene.parallelLines.values()].forEach((pl) => {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteConeCommand(this.scene, cone, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -1411,6 +1414,9 @@ export class Editor {
     ;[...this.scene.parallelLines.values()].forEach((pl) => {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -3101,6 +3107,10 @@ export class Editor {
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
 
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
+
     this.executeHistoryEntry(
       createDeleteLineCommand(
         this.scene,
@@ -3140,6 +3150,9 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteRayCommand(this.scene, ray, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -3175,6 +3188,9 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(
       createDeleteStraightLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines),
     )
@@ -3216,6 +3232,9 @@ export class Editor {
         if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
         if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       })
+      // 清理关联垂线/平行线上的约束点
+      relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+      relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
       this.executeHistoryEntry(
         createDeleteHexahedronCommand(
           this.scene,
@@ -3257,6 +3276,9 @@ export class Editor {
         if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
         if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       })
+      // 清理关联垂线/平行线上的约束点
+      relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+      relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
       this.executeHistoryEntry(
         createDeleteRegularPolygonCommand(
           this.scene,
@@ -3294,6 +3316,9 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteFaceCommand(this.scene, face, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -4281,12 +4306,16 @@ export class Editor {
   deletePerpendicularLine(lineId: string) {
     const line = this.scene.perpendicularLines.get(lineId)
     if (!line) return
+    this.removeConstrainedPointsReferencing('perpendicularLine', lineId)
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
     )
     const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
       (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
     )
+    // 清理关联线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeletePerpendicularLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -4457,12 +4486,16 @@ export class Editor {
   deleteParallelLine(lineId: string) {
     const line = this.scene.parallelLines.get(lineId)
     if (!line) return
+    this.removeConstrainedPointsReferencing('parallelLine', lineId)
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
     )
     const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
       (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
     )
+    // 清理关联线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteParallelLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
   }
 
@@ -4843,6 +4876,9 @@ export class Editor {
       if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
       if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
     })
+    // 清理关联垂线/平行线上的约束点
+    relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
     this.executeHistoryEntry(createDeleteVectorCommand(this.scene, vector, relatedPerpendicularLines, relatedParallelLines))
   }
 

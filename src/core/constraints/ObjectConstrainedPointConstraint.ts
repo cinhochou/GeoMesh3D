@@ -14,6 +14,8 @@ export type ParametricData =
   | { type: 'line' | 'vector'; t: number }
   | { type: 'straightLine'; t: number }
   | { type: 'ray'; t: number }
+  | { type: 'perpendicularLine'; distance: number }
+  | { type: 'parallelLine'; distance: number }
   | { type: 'circle'; angle: number }
   | { type: 'face'; localU: number; localV: number }
   | { type: 'sphere'; theta: number; phi: number }
@@ -98,6 +100,12 @@ export class ObjectConstrainedPointConstraint {
     ) {
       const cylinder = this.scene.cylinders.get(target.id)
       if (cylinder) { ids.push(cylinder.bottomCenterPoint.id, cylinder.topCenterPoint.id) }
+    } else if (target.type === 'perpendicularLine') {
+      const pl = this.scene.perpendicularLines.get(target.id)
+      if (pl) { ids.push(pl.p1.id, pl.p2.id) }
+    } else if (target.type === 'parallelLine') {
+      const pll = this.scene.parallelLines.get(target.id)
+      if (pll) { ids.push(pll.p1.id, pll.p2.id) }
     }
     return ids
   }
@@ -164,6 +172,22 @@ export class ObjectConstrainedPointConstraint {
         const ray = this.scene.rays.get(this.target.id)
         if (!ray) return
         this.parametricData = { type: 'ray', t: computeSegmentT(pos, ray.p1.position, ray.p2.position) }
+        break
+      }
+      case 'perpendicularLine': {
+        const pl = this.scene.perpendicularLines.get(this.target.id)
+        if (!pl) return
+        const plDir = pl.getNormalizedDirectionVector(this.scene)
+        const plAp = sub(pos, pl.p1.position)
+        this.parametricData = { type: 'perpendicularLine', distance: dot(plAp, plDir) }
+        break
+      }
+      case 'parallelLine': {
+        const pll = this.scene.parallelLines.get(this.target.id)
+        if (!pll) return
+        const pllDir = pll.getNormalizedDirectionVector(this.scene)
+        const pllAp = sub(pos, pll.p1.position)
+        this.parametricData = { type: 'parallelLine', distance: dot(pllAp, pllDir) }
         break
       }
       case 'circle': {
@@ -289,7 +313,6 @@ export class ObjectConstrainedPointConstraint {
         const axisLen = length(axis)
         if (axisLen <= ObjectConstrainedPointConstraint.EPSILON) return
         const axisDir = scale(axis, 1 / axisLen)
-        const R = cylinder.radiusValue
         const diff = sub(pos, bottomCenter)
         const alongAxis = dot(diff, axisDir)
         const radial = sub(diff, scale(axisDir, alongAxis))
@@ -378,6 +401,18 @@ export class ObjectConstrainedPointConstraint {
         const ray = this.scene.rays.get(this.target.id)
         if (!ray) return null
         return add(ray.p1.position, scale(sub(ray.p2.position, ray.p1.position), pd.t))
+      }
+      case 'perpendicularLine': {
+        const pl = this.scene.perpendicularLines.get(this.target.id)
+        if (!pl) return null
+        const plDir = pl.getNormalizedDirectionVector(this.scene)
+        return add(pl.p1.position, scale(plDir, pd.distance))
+      }
+      case 'parallelLine': {
+        const pll = this.scene.parallelLines.get(this.target.id)
+        if (!pll) return null
+        const pllDir = pll.getNormalizedDirectionVector(this.scene)
+        return add(pll.p1.position, scale(pllDir, pd.distance))
       }
       case 'circle': {
         const circle = this.scene.circles.get(this.target.id)
@@ -624,6 +659,8 @@ export class ObjectConstrainedPointConstraint {
       case 'straightLine': return this.projectToStraightLine(pos)
       case 'ray': return this.projectToRay(pos)
       case 'vector': return this.projectToVector(pos)
+      case 'perpendicularLine': return this.projectToPerpendicularLine(pos)
+      case 'parallelLine': return this.projectToParallelLine(pos)
       case 'circle': return this.projectToCircle(pos)
       case 'face': return this.projectToFace(pos)
       case 'sphere': return this.projectToSphere(pos)
@@ -661,6 +698,18 @@ export class ObjectConstrainedPointConstraint {
     const vec = this.scene.vectors.get(this.target.id)
     if (!vec) return null
     return projectToSegment(pos, vec.p1.position, vec.p2.position)
+  }
+
+  private projectToPerpendicularLine(pos: Vec3): Vec3 | null {
+    const pl = this.scene.perpendicularLines.get(this.target.id)
+    if (!pl) return null
+    return projectToInfiniteLine(pos, pl.p1.position, pl.p2.position)
+  }
+
+  private projectToParallelLine(pos: Vec3): Vec3 | null {
+    const pll = this.scene.parallelLines.get(this.target.id)
+    if (!pll) return null
+    return projectToInfiniteLine(pos, pll.p1.position, pll.p2.position)
   }
 
   private projectToCircle(pos: Vec3): Vec3 | null {

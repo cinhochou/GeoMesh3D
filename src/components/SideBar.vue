@@ -405,6 +405,8 @@ const POINT_CONSTRAINT_BADGE: Record<string, string> = {
   cylinder: '柱面约束',
   cylinderBottom: '柱底约束',
   cylinderTop: '柱顶约束',
+  perpendicularLine: '垂线约束',
+  parallelLine: '平行线约束',
   xAxis: 'X轴约束',
   yAxis: 'Y轴约束',
   zAxis: 'Z轴约束',

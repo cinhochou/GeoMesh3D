@@ -520,7 +520,7 @@ export class Interaction {
       this.renderer.setGuideLinesVisible(true)
       this.renderer.setGuideLabelVisible(true)
     }
-    this.renderer.setGuidePointColor(hasConstrainedTarget ? 0xffff00 : DEFAULT_POINT_COLOR)
+    this.renderer.setGuidePointColor((nearAxis || hasConstrainedTarget) ? 0xffff00 : DEFAULT_POINT_COLOR)
   }
 
   private pickConstrainedTarget(): THREE.Object3D | null {
@@ -538,6 +538,8 @@ export class Interaction {
       'cylinder',
       'cylinderBottom',
       'cylinderTop',
+      'perpendicularLine',
+      'parallelLine',
     ])
     const meshCandidates = [...this.renderer.geometrySyncer.meshMap.values()].filter((obj) => {
       return validTypes.has(obj.userData?.type)
@@ -573,6 +575,8 @@ export class Interaction {
       'cylinder',
       'cylinderBottom',
       'cylinderTop',
+      'perpendicularLine',
+      'parallelLine',
     ])
     if (!validTypes.has(type)) return false
 
@@ -596,7 +600,9 @@ export class Interaction {
         | 'coneBase'
         | 'cylinder'
         | 'cylinderBottom'
-        | 'cylinderTop',
+        | 'cylinderTop'
+        | 'perpendicularLine'
+        | 'parallelLine',
       geoId,
     )
     this.createPointDraft = null

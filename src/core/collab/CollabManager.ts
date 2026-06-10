@@ -1147,6 +1147,24 @@ export class CollabManager {
     this.deletedParallelLineIds.add(id)
   }
 
+  private cleanupConstrainedPointsForDeletedObject(targetType: string, targetId: string) {
+    const pointsToRemove: string[] = []
+    this.scene.objectConstrainedPointConstraints.forEach((constraint) => {
+      if (constraint.target.type === targetType && constraint.target.id === targetId) {
+        pointsToRemove.push(constraint.pointId)
+      }
+    })
+    pointsToRemove.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (point) {
+        this.scene.removeObjectConstrainedPointConstraint(pointId)
+        this.scene.points.delete(pointId)
+        this.scene.selection.points.delete(pointId)
+        this.scene.markPointDirty(pointId)
+      }
+    })
+  }
+
   private markFaceDeleted(id: string) {
     this.dirtyFaceIds.delete(id)
     this.deletedFaceIds.add(id)
@@ -1247,6 +1265,9 @@ export class CollabManager {
     })
     this.scene.perpendicularLines.forEach((line, id) => {
       if (line.p1.id === pointId || line.p2.id === pointId) this.markPerpendicularLineDirty(id)
+    })
+    this.scene.parallelLines.forEach((line, id) => {
+      if (line.p1.id === pointId || line.p2.id === pointId) this.markParallelLineDirty(id)
     })
     this.scene.faces.forEach((face, id) => {
       if (face.includesPoint(pointId)) this.markFaceDirty(id)
@@ -2844,6 +2865,7 @@ export class CollabManager {
     const validTargetTypes = new Set([
       'line', 'straightLine', 'ray', 'vector', 'circle', 'face', 'sphere',
       'cone', 'coneBase', 'cylinder', 'cylinderBottom', 'cylinderTop',
+      'perpendicularLine', 'parallelLine',
       'xAxis', 'yAxis', 'zAxis',
     ])
     if (!validTargetTypes.has(targetType)) return
@@ -3366,6 +3388,7 @@ export class CollabManager {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.perpendicularLineRecordCleanup)
+          this.cleanupConstrainedPointsForDeletedObject('perpendicularLine', id)
           this.scene.removePerpendicularLine(id)
           return
         }
@@ -3386,6 +3409,7 @@ export class CollabManager {
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
+          this.cleanupConstrainedPointsForDeletedObject('parallelLine', id)
           this.scene.removeParallelLine(id)
           return
         }

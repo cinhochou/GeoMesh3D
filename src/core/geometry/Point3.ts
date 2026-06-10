@@ -14,6 +14,8 @@ export type ConstrainedToRef = {
     | 'cylinder'
     | 'cylinderBottom'
     | 'cylinderTop'
+    | 'perpendicularLine'
+    | 'parallelLine'
     | 'xAxis'
     | 'yAxis'
     | 'zAxis'
