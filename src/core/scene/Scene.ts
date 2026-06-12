@@ -97,6 +97,7 @@ export class Scene {
     }
     for (const [id, ray] of this.rays) {
       this._addPointRefEntry(idx, ray.p1.id, 'rays', id)
+      this._addPointRefEntry(idx, ray.p2.id, 'rays', id)
     }
     for (const [id, v] of this.vectors) {
       this._addPointRefEntry(idx, v.p1.id, 'vectors', id)

@@ -1974,6 +1974,7 @@ export class CollabManager {
     const name = this.readString(record, 'name', point?.name ?? '')
     const nameVisible = this.readBoolean(record, 'nameVisible', point?.nameVisible ?? true)
     const valueVisible = this.readBoolean(record, 'valueVisible', point?.valueVisible ?? false)
+    const visible = this.readBoolean(record, 'visible', point?.visible ?? true)
     const labelOffsetX = this.readNumber(
       record,
       'labelOffsetX',
@@ -2012,6 +2013,14 @@ export class CollabManager {
       point.name = name
       point.nameVisible = nameVisible
       point.valueVisible = valueVisible
+      point.visible = visible
+      // 同步圆心点的 visible 到圆的 centerVisible
+      if (point.circleRole === 'center' && point.circleId) {
+        const circle = this.scene.circles.get(point.circleId)
+        if (circle) {
+          circle.centerVisible = visible
+        }
+      }
       point.labelOffsetX = labelOffsetX
       point.labelOffsetY = labelOffsetY
       point.userLocked = userLocked
@@ -2053,6 +2062,7 @@ export class CollabManager {
       labelOffsetX,
       labelOffsetY,
       valueVisible,
+      visible,
     )
     nextPoint.cubeId = cubeId
     nextPoint.cubeRole = cubeRole
@@ -2546,6 +2556,19 @@ export class CollabManager {
       circle.visible = visible
       circle.userLocked = userLocked
       circle.centerVisible = centerVisible
+      // 同步圆心点的 visible 属性
+      if (circleType === 'normal') {
+        if (p1.circleRole === 'center' && p1.circleId === id) {
+          p1.visible = centerVisible
+        }
+      } else {
+        for (const pt of this.scene.points.values()) {
+          if (pt.circleRole === 'center' && pt.circleId === id) {
+            pt.visible = centerVisible
+            break
+          }
+        }
+      }
       circle.circleType = circleType
       circle.directionType = directionType
       circle.directionId = directionId
@@ -2556,6 +2579,19 @@ export class CollabManager {
       if (circleType === 'normal') {
         p1.circleId = id
         p1.circleRole = 'center'
+        // 同步法向圆半径到圆锥/圆柱
+        if (lockedRadius != null) {
+          this.scene.cones.forEach((cone) => {
+            if (cone.normalCircleId === id) {
+              cone.radiusValue = lockedRadius!
+            }
+          })
+          this.scene.cylinders.forEach((cylinder) => {
+            if (cylinder.normalCircleId === id || cylinder.topNormalCircleId === id) {
+              cylinder.radiusValue = lockedRadius!
+            }
+          })
+        }
       }
       this.syncCircleCenterPointPosition(id)
       this.scene.markAllRenderDirty()
@@ -3673,6 +3709,7 @@ export class CollabManager {
     this.setScalarField(record, 'name', point.name)
     this.setScalarField(record, 'nameVisible', point.nameVisible)
     this.setScalarField(record, 'valueVisible', point.valueVisible)
+    this.setScalarField(record, 'visible', point.visible)
     this.setScalarField(record, 'labelOffsetX', point.labelOffsetX)
     this.setScalarField(record, 'labelOffsetY', point.labelOffsetY)
     this.setScalarField(record, 'userLocked', point.userLocked)

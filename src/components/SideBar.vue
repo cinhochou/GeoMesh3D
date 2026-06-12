@@ -579,6 +579,7 @@ const editPoint = reactive({
   name: '',
   nameVisible: true,
   valueVisible: false,
+  visible: true,
   userLocked: false,
   x: '',
   y: '',
@@ -1471,6 +1472,7 @@ const startEditPoint = (p: Point3 | undefined) => {
   editPoint.name = p.name ?? ''
   editPoint.nameVisible = p.nameVisible !== false
   editPoint.valueVisible = p.valueVisible === true
+  editPoint.visible = p.visible !== false
   editPoint.userLocked = isPointCoordinateLocked(p)
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
@@ -1683,6 +1685,7 @@ const applyEditPoint = () => {
       name: editPoint.name,
       nameVisible: editPoint.nameVisible,
       valueVisible: editPoint.valueVisible,
+      visible: editPoint.visible,
     })
     if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
       props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
@@ -2763,6 +2766,12 @@ const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
   } else if (target.type === 'cylinderTop') {
     const obj = props.scene.cylinders.get(target.id)
     targetLabel = obj ? `圆柱顶${obj.name ?? ''}` : '圆柱顶'
+  } else if (target.type === 'perpendicularLine') {
+    const obj = props.scene.perpendicularLines.get(target.id)
+    targetLabel = obj ? `垂线${obj.name ?? ''}` : '垂线'
+  } else if (target.type === 'parallelLine') {
+    const obj = props.scene.parallelLines.get(target.id)
+    targetLabel = obj ? `平行线${obj.name ?? ''}` : '平行线'
   }
   return `点${p1Name}-${targetLabel}`
 }
@@ -2782,6 +2791,12 @@ const getParallelLineSourceLabel = (line: ParallelLine3) => {
   } else if (target.type === 'vector') {
     const obj = props.scene.vectors.get(target.id)
     targetLabel = obj ? `向量${obj.name ?? ''}` : '向量'
+  } else if (target.type === 'perpendicularLine') {
+    const obj = props.scene.perpendicularLines.get(target.id)
+    targetLabel = obj ? `垂线${obj.name ?? ''}` : '垂线'
+  } else if (target.type === 'parallelLine') {
+    const obj = props.scene.parallelLines.get(target.id)
+    targetLabel = obj ? `平行线${obj.name ?? ''}` : '平行线'
   }
   return `点${p1Name}-${targetLabel}`
 }
@@ -2872,6 +2887,7 @@ watch(
           name: p.name ?? '',
           nameVisible: p.nameVisible !== false,
           valueVisible: p.valueVisible === true,
+          visible: p.visible !== false,
           userLocked: isPointCoordinateLocked(p),
           x: p.position.x,
           y: p.position.y,
@@ -2884,6 +2900,7 @@ watch(
     editPoint.name = newPos.name
     editPoint.nameVisible = newPos.nameVisible
     editPoint.valueVisible = newPos.valueVisible
+    editPoint.visible = newPos.visible
     editPoint.userLocked = newPos.userLocked
     if (!focusedCoord['point.x']) editPoint.x = toFixed2(newPos.x)
     if (!focusedCoord['point.y']) editPoint.y = toFixed2(newPos.y)
@@ -3410,8 +3427,12 @@ onUnmounted(() => {
               <label>名称</label>
               <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
               <label class="toggle-label">
+                <input type="checkbox" v-model="editPoint.visible" @change="applyEditPoint" />
+                {{ editPoint.visible ? '对象显示' : '对象隐藏' }}
+              </label>
+              <label class="toggle-label">
                 <input type="checkbox" v-model="editPoint.nameVisible" @change="applyEditPoint" />
-                {{ editPoint.nameVisible ? '隐藏' : '显示' }}
+                {{ editPoint.nameVisible ? '名称显示' : '名称隐藏' }}
               </label>
               <label class="toggle-label">
                 <input type="checkbox" v-model="editPoint.valueVisible" @change="applyEditPoint" />

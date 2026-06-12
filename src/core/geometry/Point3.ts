@@ -37,6 +37,7 @@ export class Point3 {
   name: string
   nameVisible: boolean
   valueVisible: boolean
+  visible: boolean
   labelOffsetX: number
   labelOffsetY: number
   position: Vec3
@@ -71,11 +72,13 @@ export class Point3 {
     labelOffsetX: number = Point3.DEFAULT_LABEL_OFFSET_X,
     labelOffsetY: number = Point3.DEFAULT_LABEL_OFFSET_Y,
     valueVisible: boolean = false,
+    visible: boolean = true,
   ) {
     this.id = id
     this.name = name
     this.nameVisible = nameVisible
     this.valueVisible = valueVisible
+    this.visible = visible
     this.labelOffsetX = labelOffsetX
     this.labelOffsetY = labelOffsetY
     this.position = position

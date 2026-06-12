@@ -5,6 +5,7 @@ type PointState = {
   name: string
   nameVisible: boolean
   valueVisible: boolean
+  visible: boolean
   labelOffsetX: number
   labelOffsetY: number
   userLocked: boolean
@@ -41,8 +42,16 @@ export class UpdatePointCommand extends ConstraintAwareCommand {
     point.name = state.name
     point.nameVisible = state.nameVisible
     point.valueVisible = state.valueVisible
+    point.visible = state.visible
     point.labelOffsetX = state.labelOffsetX
     point.labelOffsetY = state.labelOffsetY
     point.userLocked = state.userLocked
+    // 同步圆心点的 visible 到圆的 centerVisible
+    if (point.circleRole === 'center' && point.circleId) {
+      const circle = this.scene.circles.get(point.circleId)
+      if (circle) {
+        circle.centerVisible = state.visible
+      }
+    }
   }
 }

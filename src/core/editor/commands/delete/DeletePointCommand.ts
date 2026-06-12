@@ -13,6 +13,8 @@ import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { Cone3 } from '../../../geometry/Cone3'
+import { Cylinder3 } from '../../../geometry/Cylinder3'
 
 export function createDeletePointCommand(
   scene: Scene,
@@ -49,6 +51,8 @@ export function createDeletePointCommand(
   }> = [],
   relatedPerpendicularLines: PerpendicularLine3[] = [],
   relatedParallelLines: ParallelLine3[] = [],
+  relatedCones: Cone3[] = [],
+  relatedCylinders: Cylinder3[] = [],
 ): SnapshotCommand {
   const cmd = new SnapshotCommand('DeletePointCommand', scene, () => {
     relatedLines.forEach((line) => {
@@ -148,6 +152,51 @@ export function createDeletePointCommand(
     relatedParallelLines.forEach((line) => {
       scene.removeParallelLine(line.id)
       scene.selection.parallelLines.delete(line.id)
+    })
+    relatedCones.forEach((cone) => {
+      // 删除圆锥关联的法向圆
+      if (cone.normalCircleId) {
+        const circle = scene.circles.get(cone.normalCircleId)
+        if (circle) {
+          scene.circles.delete(circle.id)
+          scene.selection.circles.delete(circle.id)
+          circle.p1.circleId = null
+          circle.p1.circleRole = null
+        }
+      }
+      scene.removeCone(cone.id)
+      cone.baseCenterPoint.coneId = null
+      cone.baseCenterPoint.coneRole = null
+      cone.apexPoint.coneId = null
+      cone.apexPoint.coneRole = null
+      scene.selection.cones.delete(cone.id)
+    })
+    relatedCylinders.forEach((cylinder) => {
+      // 删除圆柱关联的法向圆
+      if (cylinder.normalCircleId) {
+        const circle = scene.circles.get(cylinder.normalCircleId)
+        if (circle) {
+          scene.circles.delete(circle.id)
+          scene.selection.circles.delete(circle.id)
+          circle.p1.circleId = null
+          circle.p1.circleRole = null
+        }
+      }
+      if (cylinder.topNormalCircleId) {
+        const circle = scene.circles.get(cylinder.topNormalCircleId)
+        if (circle) {
+          scene.circles.delete(circle.id)
+          scene.selection.circles.delete(circle.id)
+          circle.p1.circleId = null
+          circle.p1.circleRole = null
+        }
+      }
+      scene.removeCylinder(cylinder.id)
+      cylinder.bottomCenterPoint.cylinderId = null
+      cylinder.bottomCenterPoint.cylinderRole = null
+      cylinder.topCenterPoint.cylinderId = null
+      cylinder.topCenterPoint.cylinderRole = null
+      scene.selection.cylinders.delete(cylinder.id)
     })
     dependentIntersectionPoints.forEach(({ point, constraint }) => {
       scene.removeIntersectionConstraint(constraint.pointId)

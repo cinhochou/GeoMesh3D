@@ -29,6 +29,7 @@ type SerializedPoint = {
   name: string
   nameVisible: boolean
   valueVisible: boolean
+  visible?: boolean
   labelOffsetX: number
   labelOffsetY: number
   position: SerializedVec3
@@ -381,6 +382,7 @@ function serializePoint(p: Point3): SerializedPoint {
   return {
     ...pickBaseFields(p),
     position: serializeVec3(p.position),
+    visible: p.visible,
     locked: p.locked,
     userLocked: p.userLocked,
     cubeId: p.cubeId,
@@ -819,6 +821,9 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     }
     if (typeof p.valueVisible !== 'boolean') {
       p.valueVisible = true
+    }
+    if (typeof p.visible !== 'boolean') {
+      p.visible = true
     }
     if (typeof p.labelOffsetX !== 'number') {
       p.labelOffsetX = 10
@@ -1556,6 +1561,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       sp.labelOffsetX,
       sp.labelOffsetY,
       sp.valueVisible,
+      sp.visible ?? true,
     )
     p.cubeId = sp.cubeId
     p.cubeRole = sp.cubeRole

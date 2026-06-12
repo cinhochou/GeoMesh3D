@@ -540,18 +540,18 @@ export class GeometrySyncer {
       ;(sprite.material as THREE.SpriteMaterial).color.set(finalColor)
       this.pointBaseColor.set(p.id, new THREE.Color(finalColor))
 
-      let pointSpriteVisible = true
+      let pointSpriteVisible = p.visible !== false
       const isCircleCenterPoint = p.circleRole === 'center'
       if (isCircleCenterPoint && p.circleId) {
         const circle = scene.circles.get(p.circleId)
         const circleVisible = circle ? circle.centerVisible && circle.visible : false
         if (circleVisible) {
-          pointSpriteVisible = true
+          pointSpriteVisible = p.visible !== false
         } else {
-          pointSpriteVisible = this.getCachedPointRef(p.id, scene, p.circleId)
+          pointSpriteVisible = (p.visible !== false) && this.getCachedPointRef(p.id, scene, p.circleId)
         }
-        sprite.visible = pointSpriteVisible
       }
+      sprite.visible = pointSpriteVisible
 
       const isLabelActive =
         this.activeLabelTarget?.type === 'point' && this.activeLabelTarget.geoId === p.id

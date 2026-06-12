@@ -19,6 +19,16 @@ export function createDeleteConeCommand(
       scene.removeParallelLine(line.id)
       scene.selection.parallelLines.delete(line.id)
     })
+    // 删除圆锥关联的法向圆
+    if (cone.normalCircleId) {
+      const circle = scene.circles.get(cone.normalCircleId)
+      if (circle) {
+        scene.circles.delete(circle.id)
+        scene.selection.circles.delete(circle.id)
+        circle.p1.circleId = null
+        circle.p1.circleRole = null
+      }
+    }
     scene.removeCone(cone.id)
     cone.baseCenterPoint.coneId = null
     cone.baseCenterPoint.coneRole = null

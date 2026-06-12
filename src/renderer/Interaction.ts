@@ -89,7 +89,10 @@ export class Interaction {
       parallelLine: (e, id) => e.scene.selection.deselectParallelLine(id),
       ray: (e, id) => e.scene.selection.deselectRay(id),
       vector: (e, id) => e.scene.selection.deselectVector(id),
-      circle: (e, id) => e.scene.selection.deselectCircle(id),
+      circle: (e, id) => {
+        e.scene.selection.deselectCircle(id)
+        e.scene.markAllRenderDirty()
+      },
       sphere: (e, id) => e.scene.selection.deselectSphere(id),
       cone: (e, id) => {
         e.scene.selection.deselectCone(id)
@@ -1447,13 +1450,38 @@ export class Interaction {
         const cd = centerScreen.distanceTo(sampleScreen)
         if (cd > maxRadiusScreen) maxRadiusScreen = cd
       }
-      // 动态调整命中半径：小圆（平视）时半径小，避免覆盖中心点；
-      // 大圆保持原 circleHitRadius（细线圆需要 8px 容差）。
-      const dynamicHitRadius = Math.max(
-        2,
-        Math.min(circleHitRadius, maxRadiusScreen * 0.3 + 2),
-      )
-      if (minDist > dynamicHitRadius) continue
+
+      const isNormalCircle = circle.isNormalCircle()
+
+      // 法向圆使用圆盘式命中检测：鼠标落在屏幕空间投影圆盘内部即算命中，
+      // 而不仅仅是靠近圆周线。这解决了：
+      // 1. 点击底面圆盘内部（非圆周线附近）无法选中的问题
+      // 2. 靠近圆心区域无法选中的问题
+      // 3. 某些视角下 raycast 无法命中底面 mesh 的问题
+      let hitDist: number
+      if (isNormalCircle && maxRadiusScreen > 0) {
+        const centerDist = pointer.distanceTo(centerScreen)
+        if (centerDist > maxRadiusScreen + circleHitRadius) {
+          // 鼠标在圆盘投影之外，完全未命中
+          continue
+        }
+        if (centerDist <= maxRadiusScreen) {
+          // 鼠标在圆盘投影内部，screenDist 设为 0 表示精确命中
+          hitDist = 0
+        } else {
+          // 鼠标在圆盘边缘附近，screenDist 为超出圆盘的距离
+          hitDist = centerDist - maxRadiusScreen
+        }
+      } else {
+        // 普通三点圆：仅检测鼠标到圆周线的距离
+        const dynamicHitRadius = Math.max(
+          2,
+          Math.min(circleHitRadius, maxRadiusScreen * 0.3 + 2),
+        )
+        if (minDist > dynamicHitRadius) continue
+        hitDist = minDist
+      }
+
       // 圆不应用端点保护：圆是连续曲线，p1/p2/p3 只是定义圆的 3 个
       // 参考点，圆圈线上的任何位置（不只是这 3 个点）都应该是圆的一部分。
       // 鼠标落在圆圈线上时，应优先选中圆；端点 p1/p2/p3 自身有自己的
@@ -1482,11 +1510,23 @@ export class Interaction {
       }
       candidates.push({
         object: mesh,
-        screenDist: minDist + endpointPenalty,
+        screenDist: hitDist + endpointPenalty,
         depth,
         type: 'circle',
         geoId: id,
       })
+    }
+
+    // 收集屏幕空间命中的法向圆 ID，用于抑制对应的圆锥/圆柱侧面候选，
+    // 避免法向圆与圆锥/圆柱体之间的误触
+    const hitNormalCircleIds = new Set<string>()
+    for (const c of candidates) {
+      if (c.type === 'circle') {
+        const circle = this.editor.scene.circles.get(c.geoId)
+        if (circle?.isNormalCircle()) {
+          hitNormalCircleIds.add(c.geoId)
+        }
+      }
     }
 
     this.raycaster.setFromCamera(this.mouse, camera)
@@ -1560,6 +1600,34 @@ export class Interaction {
             type,
             geoId,
           })
+        } else if (type === 'cone' || type === 'coneBase') {
+          // AR 模式下 raycast 优先：当法向圆已被屏幕空间检测命中时，
+          // 给 raycast 命中加微小深度惩罚，让法向圆在排序中胜出。
+          const cone = this.editor.scene.cones.get(geoId)
+          const arDepthPenalty = cone?.normalCircleId && hitNormalCircleIds.has(cone.normalCircleId) ? 1e-3 : 0
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance + arDepthPenalty,
+            type,
+            geoId,
+          })
+        } else if (type === 'cylinder' || type === 'cylinderBottom' || type === 'cylinderTop') {
+          // AR 模式下 raycast 优先：原理同上。
+          const cylinder = this.editor.scene.cylinders.get(geoId)
+          const arDepthPenalty =
+            cylinder &&
+            ((cylinder.normalCircleId && hitNormalCircleIds.has(cylinder.normalCircleId)) ||
+              (cylinder.topNormalCircleId && hitNormalCircleIds.has(cylinder.topNormalCircleId)))
+              ? 1e-3
+              : 0
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance + arDepthPenalty,
+            type,
+            geoId,
+          })
         } else {
           candidates.push({
             object: resolved,
@@ -1621,20 +1689,40 @@ export class Interaction {
         const geoId = obj.userData?.geoId as string | undefined
         if (!rawType || !geoId) continue
         const cone = this.editor.scene.cones.get(geoId)
-        if (cone && isObjectProtected(geoId, [cone.baseCenterPoint.id, cone.apexPoint.id])) continue
-        if (rawType === 'coneBase' && this.editor.mode === EditorMode.CreatePerpendicularLine) {
-          candidates.push({
-            object: obj,
-            screenDist: 0,
-            depth: hit.distance + cameraPos.length(),
-            type: 'coneBase',
-            geoId,
-          })
+        const isConeProtected = cone && isObjectProtected(geoId, [cone.baseCenterPoint.id, cone.apexPoint.id])
+        // 当法向圆已被屏幕空间检测命中时，给圆锥/圆柱所有 raycast 命中加一个
+        // 微小深度惩罚（+ 1e-3），让法向圆（比锥体更贴近相机视角的法向圆平面）
+        // 在深度排序中胜出。这样：
+        // - 鼠标在锥体侧面 → 法向圆未命中 → 锥体 depth 小 → 锥体赢 ✓
+        // - 鼠标在法向圆圆圈/圆内 → 法向圆已命中 → 锥体深度惩罚后更大 → 法向圆赢 ✓
+        const depthPenalty = cone?.normalCircleId && hitNormalCircleIds.has(cone.normalCircleId) ? 1e-3 : 0
+        if (rawType === 'coneBase' && cone?.normalCircleId) {
+          if (this.editor.mode === EditorMode.CreatePerpendicularLine) {
+            if (!isConeProtected) {
+              candidates.push({
+                object: obj,
+                screenDist: 0,
+                depth: hit.distance + depthPenalty,
+                type: 'coneBase',
+                geoId,
+              })
+            }
+          } else {
+            candidates.push({
+              object: obj,
+              screenDist: 0,
+              depth: hit.distance + depthPenalty,
+              type: 'circle',
+              geoId: cone.normalCircleId,
+            })
+          }
+        } else if (isConeProtected) {
+          continue
         } else {
           candidates.push({
             object: obj,
             screenDist: 0,
-            depth: hit.distance + cameraPos.length(),
+            depth: hit.distance + depthPenalty,
             type: rawType === 'coneBase' ? 'cone' : rawType,
             geoId,
           })
@@ -1652,27 +1740,63 @@ export class Interaction {
         const geoId = obj.userData?.geoId as string | undefined
         if (!rawType || !geoId) continue
         const cylinder = this.editor.scene.cylinders.get(geoId)
-        if (
-          cylinder &&
+        const isCylinderProtected = cylinder &&
           isObjectProtected(geoId, [cylinder.bottomCenterPoint.id, cylinder.topCenterPoint.id])
-        )
+        // 当底面/顶面法向圆已被屏幕空间检测命中时，给圆柱所有 raycast 命中
+        // 加一个微小深度惩罚（+ 1e-3），让法向圆在排序中胜出。原理见圆锥注释。
+        const depthPenalty =
+          cylinder &&
+          ((cylinder.normalCircleId && hitNormalCircleIds.has(cylinder.normalCircleId)) ||
+            (cylinder.topNormalCircleId && hitNormalCircleIds.has(cylinder.topNormalCircleId)))
+            ? 1e-3
+            : 0
+        if (rawType === 'cylinderBottom' && cylinder?.normalCircleId) {
+          if (this.editor.mode === EditorMode.CreatePerpendicularLine) {
+            if (!isCylinderProtected) {
+              candidates.push({
+                object: obj,
+                screenDist: 0,
+                depth: hit.distance + depthPenalty,
+                type: rawType,
+                geoId,
+              })
+            }
+          } else {
+            candidates.push({
+              object: obj,
+              screenDist: 0,
+              depth: hit.distance + depthPenalty,
+              type: 'circle',
+              geoId: cylinder.normalCircleId,
+            })
+          }
+        } else if (rawType === 'cylinderTop' && cylinder?.topNormalCircleId) {
+          if (this.editor.mode === EditorMode.CreatePerpendicularLine) {
+            if (!isCylinderProtected) {
+              candidates.push({
+                object: obj,
+                screenDist: 0,
+                depth: hit.distance + depthPenalty,
+                type: rawType,
+                geoId,
+              })
+            }
+          } else {
+            candidates.push({
+              object: obj,
+              screenDist: 0,
+              depth: hit.distance + depthPenalty,
+              type: 'circle',
+              geoId: cylinder.topNormalCircleId,
+            })
+          }
+        } else if (isCylinderProtected) {
           continue
-        if (
-          (rawType === 'cylinderBottom' || rawType === 'cylinderTop') &&
-          this.editor.mode === EditorMode.CreatePerpendicularLine
-        ) {
-          candidates.push({
-            object: obj,
-            screenDist: 0,
-            depth: hit.distance + cameraPos.length(),
-            type: rawType,
-            geoId,
-          })
         } else {
           candidates.push({
             object: obj,
             screenDist: 0,
-            depth: hit.distance + cameraPos.length(),
+            depth: hit.distance + depthPenalty,
             type: rawType === 'cylinderBottom' || rawType === 'cylinderTop' ? 'cylinder' : rawType,
             geoId,
           })
@@ -1700,7 +1824,16 @@ export class Interaction {
       return a.depth - b.depth
     })
 
-    return candidates[0]!.object
+    // 不能直接返回 candidates[0]!.object，因为 candidate.geoId/type 可能和
+    // object 自身 userData 不一样（例如 coneBase 会被转成法向圆）。
+    // 创建一个轻量包装对象，把正确的 candidate.geoId/candidate.type
+    // 写入 userData，并设置 worldPosition 为原 object 的世界位置，
+    // 供上层选择逻辑（包括 resolvePreferredTarget 中的距离计算）使用。
+    const best = candidates[0]!
+    const wrapper = new THREE.Object3D()
+    wrapper.userData = { geoId: best.geoId, type: best.type }
+    wrapper.position.copy(best.object.getWorldPosition(new THREE.Vector3()))
+    return wrapper
   }
 
   private isLinearNearProtectedPoint(
@@ -3034,6 +3167,7 @@ export class Interaction {
           const alreadySelected = this.editor.scene.selection.circles.has(geoId)
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
           this.editor.scene.selection.selectCircle(geoId, true)
+          this.editor.scene.markAllRenderDirty()
           const circle = this.editor.scene.circles.get(geoId)
           if (circle) {
             if (this.editor.isCircleGeometryLocked(circle)) {

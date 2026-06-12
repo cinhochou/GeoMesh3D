@@ -40,6 +40,7 @@ type PointSnapshot = {
   name: string
   nameVisible: boolean
   valueVisible: boolean
+  visible: boolean
   labelOffsetX: number
   labelOffsetY: number
   position: Vec3Snapshot
@@ -286,6 +287,7 @@ function snapPoint(p: Point3): PointSnapshot {
     name: p.name,
     nameVisible: p.nameVisible,
     valueVisible: p.valueVisible,
+    visible: p.visible,
     labelOffsetX: p.labelOffsetX,
     labelOffsetY: p.labelOffsetY,
     position: snapVec3(p.position),
@@ -512,6 +514,14 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       existing.name = sp.name
       existing.nameVisible = sp.nameVisible
       existing.valueVisible = sp.valueVisible
+      existing.visible = sp.visible ?? true
+      // 同步圆心点的 visible 到圆的 centerVisible
+      if (existing.circleRole === 'center' && existing.circleId) {
+        const circle = scene.circles.get(existing.circleId)
+        if (circle) {
+          circle.centerVisible = sp.visible ?? true
+        }
+      }
       existing.labelOffsetX = sp.labelOffsetX
       existing.labelOffsetY = sp.labelOffsetY
       existing.forceSetPosition(new Vec3(sp.position.x, sp.position.y, sp.position.z))
@@ -532,7 +542,7 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       existing.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
     } else {
       // 场景中不存在，创建新点
-      const p = new Point3(sp.id, sp.name, new Vec3(sp.position.x, sp.position.y, sp.position.z), sp.locked, sp.nameVisible, sp.userLocked, sp.labelOffsetX, sp.labelOffsetY, sp.valueVisible)
+      const p = new Point3(sp.id, sp.name, new Vec3(sp.position.x, sp.position.y, sp.position.z), sp.locked, sp.nameVisible, sp.userLocked, sp.labelOffsetX, sp.labelOffsetY, sp.valueVisible, sp.visible ?? true)
       p.cubeId = sp.cubeId; p.cubeRole = sp.cubeRole
       p.circleId = sp.circleId; p.circleRole = sp.circleRole
       p.regularPolygonId = sp.regularPolygonId; p.regularPolygonRole = sp.regularPolygonRole
@@ -678,6 +688,19 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       existing.visible = sc.visible
       existing.userLocked = sc.userLocked
       existing.centerVisible = sc.centerVisible
+      // 同步圆心点的 visible 属性
+      if (existing.isNormalCircle()) {
+        if (existing.p1.circleRole === 'center' && existing.p1.circleId === existing.id) {
+          existing.p1.visible = sc.centerVisible
+        }
+      } else {
+        for (const pt of scene.points.values()) {
+          if (pt.circleRole === 'center' && pt.circleId === existing.id) {
+            pt.visible = sc.centerVisible
+            break
+          }
+        }
+      }
       existing.circleType = sc.circleType
       existing.directionType = sc.directionType
       existing.directionId = sc.directionId

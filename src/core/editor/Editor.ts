@@ -579,7 +579,7 @@ export class Editor {
 
   collectDependentFacesByLineId(lineId: string): PlanarPolygon[] {
     const line = this.scene.lines.get(lineId)
-    if (!line || !line.faceOwned) return []
+    if (!line) return []
 
     const cubeFaceIds = new Set<string>()
     this.scene.cubeConstraints.forEach((constraint) => {
@@ -2923,6 +2923,14 @@ export class Editor {
         sphere.centerPoint.id === pointId ||
         (sphere.radiusPoint && sphere.radiusPoint.id === pointId),
     )
+    // 删除点时级联删除依赖该点的圆锥
+    const relatedCones = [...this.scene.cones.values()].filter(
+      (cone) => cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId,
+    )
+    // 删除点时级联删除依赖该点的圆柱
+    const relatedCylinders = [...this.scene.cylinders.values()].filter(
+      (cylinder) => cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId,
+    )
     const relatedFaces = [...this.scene.faces.values()].filter(
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
     )
@@ -2971,6 +2979,9 @@ export class Editor {
       if (pl.target.type === 'straightLine' && relatedStraightLines.some((l) => l.id === pl.target.id)) return true
       if (pl.target.type === 'ray' && relatedRays.some((r) => r.id === pl.target.id)) return true
       if (pl.target.type === 'vector' && relatedVectors.some((v) => v.id === pl.target.id)) return true
+      if (pl.target.type === 'coneBase' && relatedCones.some((c) => c.id === pl.target.id)) return true
+      if (pl.target.type === 'cylinderBottom' && relatedCylinders.some((c) => c.id === pl.target.id)) return true
+      if (pl.target.type === 'cylinderTop' && relatedCylinders.some((c) => c.id === pl.target.id)) return true
       if (pl.target.type === 'face') {
         if (filteredRelatedFaces.some((f) => f.id === pl.target.id)) return true
         if (dependentCubes.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
@@ -3030,6 +3041,8 @@ export class Editor {
         dependentRegularPolygons,
         relatedPerpendicularLines,
         relatedParallelLines,
+        relatedCones,
+        relatedCylinders,
       ),
     )
     this.historyVersion++
@@ -3160,7 +3173,44 @@ export class Editor {
     const circle = this.scene.circles.get(circleId)
     if (!circle) return
     this.removeConstrainedPointsReferencing('circle', circleId)
-    this.executeHistoryEntry(createDeleteCircleCommand(this.scene, circle))
+    // 删除法向圆时级联删除依赖该法向圆的圆锥
+    const relatedCones = [...this.scene.cones.values()].filter(
+      (cone) => cone.normalCircleId === circleId,
+    )
+    relatedCones.forEach((cone) => {
+      this.removeConstrainedPointsReferencing('cone', cone.id)
+      this.removeConstrainedPointsReferencing('coneBase', cone.id)
+    })
+    // 删除法向圆时级联删除依赖该法向圆的圆柱
+    const relatedCylinders = [...this.scene.cylinders.values()].filter(
+      (cylinder) => cylinder.normalCircleId === circleId || cylinder.topNormalCircleId === circleId,
+    )
+    relatedCylinders.forEach((cylinder) => {
+      this.removeConstrainedPointsReferencing('cylinder', cylinder.id)
+      this.removeConstrainedPointsReferencing('cylinderBottom', cylinder.id)
+      this.removeConstrainedPointsReferencing('cylinderTop', cylinder.id)
+    })
+    // 收集圆锥和圆柱关联的垂线/平行线
+    const allRelatedIds = new Set<string>()
+    relatedCones.forEach((c) => allRelatedIds.add(c.id))
+    relatedCylinders.forEach((c) => allRelatedIds.add(c.id))
+    const geoPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => (pl.target.type === 'coneBase' && relatedCones.some((c) => c.id === pl.target.id)) ||
+        (pl.target.type === 'cylinderBottom' && relatedCylinders.some((c) => c.id === pl.target.id)) ||
+        (pl.target.type === 'cylinderTop' && relatedCylinders.some((c) => c.id === pl.target.id)),
+    )
+    const _cplIds = new Set(geoPerpendicularLines.map((l) => l.id))
+    ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+      if (_cplIds.has(pl.id)) return
+      if (pl.target.type === 'perpendicularLine' && _cplIds.has(pl.target.id)) { geoPerpendicularLines.push(pl); _cplIds.add(pl.id) }
+    })
+    const geoParallelLines: ParallelLine3[] = []
+    ;[...this.scene.parallelLines.values()].forEach((pl) => {
+      if (pl.target.type === 'perpendicularLine' && _cplIds.has(pl.target.id)) { geoParallelLines.push(pl) }
+    })
+    geoPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+    geoParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
+    this.executeHistoryEntry(createDeleteCircleCommand(this.scene, circle, relatedCones, relatedCylinders, geoPerpendicularLines, geoParallelLines))
   }
 
   deleteStraightLine(lineId: string) {
@@ -3606,6 +3656,7 @@ export class Editor {
       name?: string
       nameVisible?: boolean
       valueVisible?: boolean
+      visible?: boolean
       labelOffsetX?: number
       labelOffsetY?: number
       userLocked?: boolean
@@ -3617,6 +3668,7 @@ export class Editor {
     const nextName = patch.name ?? point.name
     const nextVisible = patch.nameVisible ?? point.nameVisible
     const nextValueVisible = patch.valueVisible ?? point.valueVisible
+    const nextObjVisible = patch.visible ?? point.visible
     const nextLabelOffsetX = patch.labelOffsetX ?? point.labelOffsetX
     const nextLabelOffsetY = patch.labelOffsetY ?? point.labelOffsetY
     const nextUserLocked = patch.userLocked ?? point.userLocked
@@ -3624,6 +3676,7 @@ export class Editor {
       nextName === point.name &&
       nextVisible === point.nameVisible &&
       nextValueVisible === point.valueVisible &&
+      nextObjVisible === point.visible &&
       nextLabelOffsetX === point.labelOffsetX &&
       nextLabelOffsetY === point.labelOffsetY &&
       nextUserLocked === point.userLocked
@@ -3638,6 +3691,7 @@ export class Editor {
           name: point.name,
           nameVisible: point.nameVisible,
           valueVisible: point.valueVisible,
+          visible: point.visible,
           labelOffsetX: point.labelOffsetX,
           labelOffsetY: point.labelOffsetY,
           userLocked: point.userLocked,
@@ -3646,6 +3700,7 @@ export class Editor {
           name: nextName,
           nameVisible: nextVisible,
           valueVisible: nextValueVisible,
+          visible: nextObjVisible,
           labelOffsetX: nextLabelOffsetX,
           labelOffsetY: nextLabelOffsetY,
           userLocked: nextUserLocked,
