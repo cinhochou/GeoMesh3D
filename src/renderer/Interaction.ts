@@ -585,6 +585,29 @@ export class Interaction {
 
     this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
 
+    // For circles, compute the intersection of the ray with the circle's
+    // plane instead of using the raycaster hit on the LineLoop segments.
+    // The LineLoop is an approximation (128 segments) so the hit point can
+    // be offset from the true mathematical circle. Using the ray-plane
+    // intersection gives a point directly under the cursor on the circle's
+    // plane, which projects to the correct position on the mathematical
+    // circle.
+    if (type === 'circle') {
+      const planeHit = this.findCirclePlaneHit(geoId)
+      if (planeHit) {
+        const pos = this.renderer.toMathLocalPosition(planeHit)
+        this.editor.createConstrainedPoint(
+          new Vec3(pos.x, pos.y, pos.z),
+          'circle',
+          geoId,
+        )
+        this.createPointDraft = null
+        this.mobileCreatePreviewPos = null
+        this.renderer.hideAxisGuides()
+        return true
+      }
+    }
+
     const closestHit = this.findClosestHitOnObject(type, geoId)
     if (!closestHit) return false
 
@@ -612,6 +635,85 @@ export class Interaction {
     this.mobileCreatePreviewPos = null
     this.renderer.hideAxisGuides()
     return true
+  }
+
+  /** Compute the intersection of the current ray with the circle's plane */
+  private findCirclePlaneHit(geoId: string): THREE.Vector3 | null {
+    const scene = this.editor.scene
+    const circle = scene.circles.get(geoId)
+    if (!circle) return null
+
+    // Resolve the direction vector the same way the constraint system does
+    let resolvedDir: Vec3 | null = null
+    if (circle.isNormalCircle() && circle.directionType && circle.directionId) {
+      // Use the Editor's resolveDirectionVector for consistency
+      const dirType = circle.directionType
+      const dirId = circle.directionId
+      if (dirType === 'point') {
+        resolvedDir = new Vec3(0, 1, 0)
+      } else if (dirType === 'line') {
+        const l = scene.lines.get(dirId)
+        resolvedDir = l ? l.getNormalizedDirectionVector() : null
+      } else if (dirType === 'straightLine') {
+        const sl = scene.straightLines.get(dirId)
+        resolvedDir = sl ? sl.getNormalizedDirectionVector() : null
+      } else if (dirType === 'ray') {
+        const r = scene.rays.get(dirId)
+        resolvedDir = r ? r.getNormalizedDirectionVector() : null
+      } else if (dirType === 'vector') {
+        const v = scene.vectors.get(dirId)
+        resolvedDir = v ? v.getNormalizedDirectionVector() : null
+      }
+    }
+
+    // Check for cone/cylinder axis override
+    if (circle.isNormalCircle()) {
+      const coneIds = scene.getConesForCircle(circle.id)
+      for (const coneId of coneIds) {
+        const cone = scene.cones.get(coneId)
+        if (cone) {
+          const axis = new Vec3(
+            cone.apexPoint.position.x - cone.baseCenterPoint.position.x,
+            cone.apexPoint.position.y - cone.baseCenterPoint.position.y,
+            cone.apexPoint.position.z - cone.baseCenterPoint.position.z,
+          )
+          if (Math.hypot(axis.x, axis.y, axis.z) > 1e-8) {
+            resolvedDir = axis
+            break
+          }
+        }
+      }
+      if (!coneIds.length) {
+        const cylinderIds = scene.getCylindersForCircle(circle.id)
+        for (const cylId of cylinderIds) {
+          const cyl = scene.cylinders.get(cylId)
+          if (cyl) {
+            const axis = new Vec3(
+              cyl.topCenterPoint.position.x - cyl.bottomCenterPoint.position.x,
+              cyl.topCenterPoint.position.y - cyl.bottomCenterPoint.position.y,
+              cyl.topCenterPoint.position.z - cyl.bottomCenterPoint.position.z,
+            )
+            if (Math.hypot(axis.x, axis.y, axis.z) > 1e-8) {
+              resolvedDir = axis
+              break
+            }
+          }
+        }
+      }
+    }
+
+    const frame = circle.getFrame(resolvedDir)
+    if (!frame) return null
+
+    // Build a Three.js plane from the circle's frame
+    const center = new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z)
+    const normal = new THREE.Vector3(frame.normal.x, frame.normal.y, frame.normal.z)
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, center)
+
+    const hitPoint = new THREE.Vector3()
+    if (!this.raycaster.ray.intersectPlane(plane, hitPoint)) return null
+
+    return hitPoint
   }
 
   private findClosestHitOnObject(_type: string, _geoId: string): THREE.Vector3 | null {

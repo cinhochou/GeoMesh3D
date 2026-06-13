@@ -6237,7 +6237,9 @@ export class Editor {
     return nextPositions
   }
 
-  private applyObjectConstrainedPointPositions(nextPositions: Map<string, Vec3>) {
+  private applyObjectConstrainedPointPositions(
+    nextPositions: Map<string, Vec3>,
+  ) {
     this.scene.objectConstrainedPointConstraints.forEach((constraint) => {
       const point = this.scene.points.get(constraint.pointId)
       if (!point || this.isPointCoordinateLocked(point)) return
@@ -6245,6 +6247,20 @@ export class Editor {
       const depIds = constraint.getDependencyPointIds()
       const hasDepMoved = depIds.some((id) => id !== constraint.pointId && nextPositions.has(id))
       const isBeingDragged = this.scene.activeDraggedPointIds?.has(constraint.pointId) ?? false
+
+      // For circle constraints, use the rotation-based approach to keep the
+      // point at the same relative position on the circle when the normal or
+      // center changes. The constraint's projectPositionWithRotation method
+      // rotates the point's offset by the same rotation as the normal change,
+      // then projects onto the new circle.
+      if (constraint.target.type === 'circle' && hasDepMoved && !isBeingDragged) {
+        const projected = constraint.projectPositionWithRotation(point.position)
+        if (projected) {
+          nextPositions.set(constraint.pointId, projected)
+          constraint.computeParametricDataFromPosition(projected)
+          return
+        }
+      }
 
       if (hasDepMoved && !isBeingDragged && constraint.parametricData) {
         const recomputed = constraint.recomputePosition()

@@ -17,6 +17,7 @@ import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
+import type { ParametricRange } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 
@@ -585,6 +586,93 @@ const editPoint = reactive({
   y: '',
   z: '',
 })
+
+/** 约束点参数化编辑数据 */
+const editConstrainedParams = reactive<Record<string, string>>({})
+/** 约束点参数化范围缓存 */
+const constrainedParamRanges = ref<ParametricRange[]>([])
+
+/** 判断点是否有对象约束（用于决定显示参数化编辑器还是 xyz 编辑器） */
+const isPointObjectConstrained = (point: Point3 | undefined): boolean => {
+  return Boolean(point?.constrainedTo)
+}
+
+/** 获取约束点的参数化范围 */
+const getConstrainedParamRanges = (point: Point3 | undefined): ParametricRange[] => {
+  if (!point?.constrainedTo) return []
+  const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
+  if (!constraint) return []
+  return constraint.getParametricRanges()
+}
+
+/** 同步约束点参数化数据到编辑状态 */
+const syncConstrainedParams = (point: Point3 | undefined) => {
+  // 清空旧数据
+  for (const key of Object.keys(editConstrainedParams)) {
+    delete editConstrainedParams[key]
+  }
+  constrainedParamRanges.value = []
+  if (!point?.constrainedTo) return
+  const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
+  if (!constraint || !constraint.parametricData) return
+  const ranges = constraint.getParametricRanges()
+  constrainedParamRanges.value = ranges
+  for (const range of ranges) {
+    const val = constraint.getParametricValue(range.key)
+    editConstrainedParams[range.key] = val !== undefined ? toFixed2(val) : '0.00'
+  }
+}
+
+/** 应用约束点参数化编辑（仅更新位置，不覆盖输入框值） */
+const applyConstrainedParam = (key: string) => {
+  if (!editing.value || editing.value.type !== 'point') return
+  const point = props.scene.points.get(editing.value.id)
+  if (!point || isPointCoordinateLocked(point)) return
+  const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
+  if (!constraint) return
+  const rawValue = Number(editConstrainedParams[key])
+  if (!Number.isFinite(rawValue)) return
+  props.editor.beginCollabTransaction('UpdateConstrainedPointParam')
+  constraint.setParametricValue(key, rawValue)
+  props.scene.solveDirtyConstraints()
+  props.scene.markAllRenderDirty()
+  props.editor.commitCollabTransaction()
+  // 同步 xyz 显示
+  editPoint.x = toFixed2(point.position.x)
+  editPoint.y = toFixed2(point.position.y)
+  editPoint.z = toFixed2(point.position.z)
+}
+
+/** 约束点参数增减（与普通点坐标增减行为一致，使用 stepCoordInput） */
+const nudgeConstrainedParam = (key: string, direction: 'up' | 'down') => {
+  const inputKey = `constrained.${key}`
+  const nextValue = stepCoordInput(inputKey, direction)
+  if (nextValue === null) return
+  editConstrainedParams[key] = nextValue
+  applyConstrainedParam(key)
+}
+
+/** 约束点参数输入 focus 处理 */
+const handleConstrainedParamFocus = (key: string) => {
+  setCoordFocus(`constrained.${key}`, true)
+}
+
+/** 约束点参数输入 blur 处理：normalize 后 clamp 到范围，同步最终值 */
+const handleConstrainedParamBlur = (key: string) => {
+  editConstrainedParams[key] = normalizeCoord(editConstrainedParams[key])
+  setCoordFocus(`constrained.${key}`, false)
+  applyConstrainedParam(key)
+  // blur 后同步 clamp 后的最终值到输入框
+  if (!editing.value || editing.value.type !== 'point') return
+  const point = props.scene.points.get(editing.value.id)
+  if (point) {
+    const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
+    if (constraint) {
+      const val = constraint.getParametricValue(key)
+      if (val !== undefined) editConstrainedParams[key] = toFixed2(val)
+    }
+  }
+}
 const editLine = reactive({
   name: '',
   nameVisible: true,
@@ -1477,6 +1565,8 @@ const startEditPoint = (p: Point3 | undefined) => {
   editPoint.x = toFixed2(p.position.x)
   editPoint.y = toFixed2(p.position.y)
   editPoint.z = toFixed2(p.position.z)
+  // 初始化约束点参数化数据
+  syncConstrainedParams(p)
 }
 
 const startEditLine = (l: Line3 | undefined) => {
@@ -1690,7 +1780,10 @@ const applyEditPoint = () => {
     if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
       props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
     }
-    applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
+    // 约束点不通过 xyz 编辑位置，由参数化编辑器处理
+    if (!isPointObjectConstrained(point)) {
+      applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
+    }
     props.editor.commitCollabTransaction()
   } else {
     applyPointPosition(editing.value.id, editPoint.x, editPoint.y, editPoint.z)
@@ -2892,6 +2985,7 @@ watch(
           x: p.position.x,
           y: p.position.y,
           z: p.position.z,
+          constrainedTo: p.constrainedTo,
         }
       : null
   },
@@ -2905,6 +2999,24 @@ watch(
     if (!focusedCoord['point.x']) editPoint.x = toFixed2(newPos.x)
     if (!focusedCoord['point.y']) editPoint.y = toFixed2(newPos.y)
     if (!focusedCoord['point.z']) editPoint.z = toFixed2(newPos.z)
+    // 约束点：同步参数化数据（父对象更新时传导更新范围）
+    // 正在编辑的参数不覆盖，避免打断用户输入
+    if (newPos.constrainedTo) {
+      const point = props.scene.points.get(editing.value!.id)
+      if (point) {
+        const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
+        if (constraint && constraint.parametricData) {
+          const ranges = constraint.getParametricRanges()
+          constrainedParamRanges.value = ranges
+          for (const range of ranges) {
+            if (!focusedCoord[`constrained.${range.key}`]) {
+              const val = constraint.getParametricValue(range.key)
+              editConstrainedParams[range.key] = val !== undefined ? toFixed2(val) : '0.00'
+            }
+          }
+        }
+      }
+    }
   },
   { immediate: true },
 )
@@ -3448,7 +3560,48 @@ onUnmounted(() => {
                 锁定
               </label>
             </div>
-            <div class="coord-row">
+            <!-- 约束点：参数化编辑器 -->
+            <div v-if="isPointObjectConstrained(p!)" class="coord-row constrained-param-row">
+              <div
+                v-for="range in constrainedParamRanges"
+                :key="range.key"
+                class="axis-field"
+              >
+                <label>{{ range.label }}</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeConstrainedParam(range.key, 'down')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef(`constrained.${range.key}`, el)"
+                    v-model="editConstrainedParams[range.key]"
+                    @input="applyConstrainedParam(range.key)"
+                    @focus="handleConstrainedParamFocus(range.key)"
+                    @blur="handleConstrainedParamBlur(range.key)"
+                    step="0.1"
+                    :min="range.min"
+                    :max="range.max"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgeConstrainedParam(range.key, 'up')"
+                    :disabled="isPointCoordinateLocked(p!)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+            <!-- 非约束点：xyz 编辑器 -->
+            <div v-else class="coord-row">
               <div class="axis-field">
                 <label>x</label>
                 <div class="coord-input">
@@ -9105,6 +9258,11 @@ hr {
   grid-template-columns: 1fr;
   gap: 4px;
   grid-column: 1 / -1;
+}
+.constrained-param-row {
+  background: rgba(100, 200, 255, 0.06);
+  border-radius: 4px;
+  padding: 4px;
 }
 .coord-row-title {
   font-size: 12px;

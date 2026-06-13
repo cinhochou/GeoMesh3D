@@ -348,6 +348,13 @@ export class Scene {
     this.cones.set(cone.id, cone)
     this.dirtyIds.cone.add(cone.id)
     this.invalidateRenderSyncCache()
+    if (cone.normalCircleId) {
+      this.objectConstrainedPointConstraints.forEach((constraint) => {
+        if (constraint.target.type === 'circle' && constraint.target.id === cone.normalCircleId) {
+          this.markConstraintDirty(constraint)
+        }
+      })
+    }
   }
 
   removeCone(coneId: string) {
@@ -361,6 +368,13 @@ export class Scene {
     this.cylinders.set(cylinder.id, cylinder)
     this.dirtyIds.cylinder.add(cylinder.id)
     this.invalidateRenderSyncCache()
+    if (cylinder.normalCircleId) {
+      this.objectConstrainedPointConstraints.forEach((constraint) => {
+        if (constraint.target.type === 'circle' && constraint.target.id === cylinder.normalCircleId) {
+          this.markConstraintDirty(constraint)
+        }
+      })
+    }
   }
 
   removeCylinder(cylinderId: string) {
@@ -824,7 +838,10 @@ export class Scene {
       batch.forEach((constraint) => {
         if (!constraint) return
         try {
-          if (constraint.isEffective && !constraint.isEffective()) return
+          if (constraint.isEffective && !constraint.isEffective()) {
+            this.dirtyConstraints.add(constraint)
+            return
+          }
           constraint.solve()
         } catch (e) {
           console.warn('[solveDirtyConstraints] constraint solve failed:', e)

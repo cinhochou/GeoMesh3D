@@ -1,5 +1,6 @@
 import { computePlaneBasis, projectPointToPlane, projectPoint2D } from '../geometry/PlanarUtils'
 import { Vec3 } from '../geometry/Vec3'
+import { Circle3 } from '../geometry/Circle3'
 import { Scene } from '../scene/Scene'
 import type { ConstrainedToRef } from '../geometry/Point3'
 
@@ -9,6 +10,52 @@ const scale = (v: Vec3, s: number) => new Vec3(v.x * s, v.y * s, v.z * s)
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 const lengthSq = (v: Vec3) => v.x * v.x + v.y * v.y + v.z * v.z
 const length = (v: Vec3) => Math.hypot(v.x, v.y, v.z)
+const cross = (a: Vec3, b: Vec3) => new Vec3(
+  a.y * b.z - a.z * b.y,
+  a.z * b.x - a.x * b.z,
+  a.x * b.y - a.y * b.x,
+)
+const normalize = (v: Vec3): Vec3 | null => {
+  const len = length(v)
+  return len > 1e-10 ? scale(v, 1 / len) : null
+}
+
+/** Compute the quaternion-like rotation (axis + cosHalfAngle) that rotates `from` to `to`. */
+function rotationFromTo(from: Vec3, to: Vec3): { axis: Vec3; cosHalf: number; sinHalf: number } | null {
+  const f = normalize(from)
+  const t = normalize(to)
+  if (!f || !t) return null
+  const d = dot(f, t)
+  // Vectors are nearly parallel — no rotation needed
+  if (d > 1 - 1e-10) return { axis: new Vec3(1, 0, 0), cosHalf: 1, sinHalf: 0 }
+  // Vectors are nearly opposite — pick any perpendicular axis
+  if (d < -1 + 1e-10) {
+    const perp = Math.abs(f.x) < 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0)
+    const axis = normalize(cross(f, perp))
+    if (!axis) return null
+    return { axis, cosHalf: 0, sinHalf: 1 }
+  }
+  const axis = normalize(cross(f, t))
+  if (!axis) return null
+  const cosHalf = Math.sqrt((1 + d) / 2)
+  const sinHalf = Math.sqrt((1 - d) / 2)
+  return { axis, cosHalf, sinHalf }
+}
+
+/** Apply a rotation (computed by rotationFromTo) to a vector. */
+function applyRotation(v: Vec3, rotation: { axis: Vec3; cosHalf: number; sinHalf: number }): Vec3 {
+  const { axis, cosHalf, sinHalf } = rotation
+  // Rodrigues' rotation formula using quaternion:
+  // q = cosHalf + (axis.x*i + axis.y*j + axis.z*k)*sinHalf
+  // v' = q * v * q^-1
+  // Equivalent to: v' = v*cos(2*half) + (axis×v)*sin(2*half) + axis*(axis·v)*(1-cos(2*half))
+  // where cos(2*half) = cosHalf^2 - sinHalf^2, sin(2*half) = 2*cosHalf*sinHalf
+  const cosAngle = cosHalf * cosHalf - sinHalf * sinHalf
+  const sinAngle = 2 * cosHalf * sinHalf
+  const crossAV = cross(axis, v)
+  const dotAV = dot(axis, v)
+  return add(add(scale(v, cosAngle), scale(crossAV, sinAngle)), scale(axis, dotAV * (1 - cosAngle)))
+}
 
 export type ParametricData =
   | { type: 'line' | 'vector'; t: number }
@@ -16,7 +63,7 @@ export type ParametricData =
   | { type: 'ray'; t: number }
   | { type: 'perpendicularLine'; distance: number }
   | { type: 'parallelLine'; distance: number }
-  | { type: 'circle'; angle: number }
+  | { type: 'circle'; angle: number; normal: [number, number, number]; center: [number, number, number] }
   | { type: 'face'; localU: number; localV: number }
   | { type: 'sphere'; theta: number; phi: number }
   | {
@@ -55,6 +102,15 @@ export type ParametricData =
     }
   | { type: 'xAxis' | 'yAxis' | 'zAxis'; t: number }
 
+/** 单个参数化维度的范围约束 */
+export type ParametricRange = {
+  key: string
+  label: string
+  min: number
+  max: number
+  step: number
+}
+
 export class ObjectConstrainedPointConstraint {
   private static readonly EPSILON = 1e-5
 
@@ -83,7 +139,21 @@ export class ObjectConstrainedPointConstraint {
       if (vec) { ids.push(vec.p1.id, vec.p2.id) }
     } else if (target.type === 'circle') {
       const circle = this.scene.circles.get(target.id)
-      if (circle) { ids.push(circle.p1.id, circle.p2.id, circle.p3.id) }
+      if (circle) {
+        ids.push(circle.p1.id, circle.p2.id, circle.p3.id)
+        if (circle.isNormalCircle()) {
+          const coneIds = this.scene.getConesForCircle(circle.id)
+          for (const coneId of coneIds) {
+            const cone = this.scene.cones.get(coneId)
+            if (cone) { ids.push(cone.baseCenterPoint.id, cone.apexPoint.id) }
+          }
+          const cylinderIds = this.scene.getCylindersForCircle(circle.id)
+          for (const cylId of cylinderIds) {
+            const cyl = this.scene.cylinders.get(cylId)
+            if (cyl) { ids.push(cyl.bottomCenterPoint.id, cyl.topCenterPoint.id) }
+          }
+        }
+      }
     } else if (target.type === 'face') {
       const face = this.scene.faces.get(target.id)
       if (face) { ids.push(...face.memberPointIds) }
@@ -118,6 +188,57 @@ export class ObjectConstrainedPointConstraint {
     const point = this.scene.points.get(this.pointId)
     if (!point || point.locked) return
     if (point.userLocked) return
+    // For circle constraints, when the normal vector changes we rotate the
+    // point's offset from the center by the same rotation that was applied
+    // to the normal. This keeps the point at the same relative position on
+    // the circle (e.g. if it was at the "right side", it stays at the
+    // "right side" after the circle tilts). A simple projectToConstraint
+    // would keep the absolute position, causing the angle to drift when the
+    // normal changes. Using recomputePosition directly is also wrong because
+    // getNormalFrame's uAxis is unstable (flips when normal crosses Y).
+    if (this.target.type === 'circle') {
+      const circle = this.scene.circles.get(this.target.id)
+      if (!circle) return
+      const newDirection = this.resolveDirectionForCircle(circle)
+      const newFrame = circle.getFrame(newDirection)
+      if (!newFrame) return
+
+      if (this.parametricData && this.parametricData.type === 'circle') {
+        const oldNormal = new Vec3(...this.parametricData.normal)
+        const oldCenter = new Vec3(...this.parametricData.center)
+        const newNormal = newFrame.normal
+        const newCenter = newFrame.center
+
+        // Compute the rotation from old normal to new normal
+        const rotation = rotationFromTo(oldNormal, newNormal)
+        if (rotation) {
+          // Rotate the point's offset from the old center, then translate
+          // to the new center
+          const oldOffset = sub(point.position, oldCenter)
+          const rotatedOffset = applyRotation(oldOffset, rotation)
+          const rotatedPos = add(newCenter, rotatedOffset)
+          // Project onto the new circle to ensure it's exactly on the circle
+          const projected = this.projectToCircleWithFrame(rotatedPos, newFrame)
+          if (projected) {
+            const dist = length(sub(point.position, projected))
+            if (dist > ObjectConstrainedPointConstraint.EPSILON) {
+              point.setPosition(projected)
+            }
+            this.computeParametricDataFromPosition(projected)
+            return
+          }
+        }
+      }
+
+      // No parametricData or rotation failed: project current position
+      const projected = this.projectToCircleWithFrame(point.position, newFrame)
+      if (!projected) return
+      const dist = length(sub(point.position, projected))
+      if (dist <= ObjectConstrainedPointConstraint.EPSILON) return
+      point.setPosition(projected)
+      this.computeParametricDataFromPosition(projected)
+      return
+    }
     const isBeingDragged = this.scene.activeDraggedPointIds?.has(this.pointId) ?? false
     if (!isBeingDragged && this.parametricData) {
       const recomputed = this.recomputePosition()
@@ -140,6 +261,118 @@ export class ObjectConstrainedPointConstraint {
 
   projectPosition(pos: Vec3): Vec3 | null {
     return this.projectToConstraint(pos)
+  }
+
+  /** For circle constraints, rotate the point's offset by the normal change
+   *  before projecting. This keeps the point at the same relative position
+   *  on the circle when the normal changes. */
+  projectPositionWithRotation(pos: Vec3): Vec3 | null {
+    if (this.target.type !== 'circle') return this.projectToConstraint(pos)
+    const circle = this.scene.circles.get(this.target.id)
+    if (!circle) return null
+    const newDirection = this.resolveDirectionForCircle(circle)
+    const newFrame = circle.getFrame(newDirection)
+    if (!newFrame) return null
+
+    if (this.parametricData && this.parametricData.type === 'circle') {
+      const oldNormal = new Vec3(...this.parametricData.normal)
+      const oldCenter = new Vec3(...this.parametricData.center)
+      const newNormal = newFrame.normal
+      const newCenter = newFrame.center
+
+      const rotation = rotationFromTo(oldNormal, newNormal)
+      if (rotation) {
+        const oldOffset = sub(pos, oldCenter)
+        const rotatedOffset = applyRotation(oldOffset, rotation)
+        const rotatedPos = add(newCenter, rotatedOffset)
+        return this.projectToCircleWithFrame(rotatedPos, newFrame)
+      }
+    }
+
+    return this.projectToCircleWithFrame(pos, newFrame)
+  }
+
+  /** 返回当前约束类型下各参数化维度的可编辑范围 */
+  getParametricRanges(): ParametricRange[] {
+    const pd = this.parametricData
+    if (!pd) return []
+    switch (pd.type) {
+      case 'line':
+      case 'vector':
+        return [{ key: 't', label: 't', min: 0, max: 1, step: 0.1 }]
+      case 'straightLine':
+        return [{ key: 't', label: 't', min: -100, max: 100, step: 0.1 }]
+      case 'ray':
+        return [{ key: 't', label: 't', min: 0, max: 100, step: 0.1 }]
+      case 'perpendicularLine':
+        return [{ key: 'distance', label: '距离', min: -100, max: 100, step: 0.1 }]
+      case 'parallelLine':
+        return [{ key: 'distance', label: '距离', min: -100, max: 100, step: 0.1 }]
+      case 'circle':
+        return [{ key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 }]
+      case 'face':
+        return [
+          { key: 'localU', label: 'U', min: -100, max: 100, step: 0.1 },
+          { key: 'localV', label: 'V', min: -100, max: 100, step: 0.1 },
+        ]
+      case 'sphere':
+        return [
+          { key: 'theta', label: 'θ', min: 0, max: Math.PI, step: 0.1 },
+          { key: 'phi', label: 'φ', min: 0, max: 2 * Math.PI, step: 0.1 },
+        ]
+      case 'cone':
+        return [
+          { key: 't', label: 't', min: 0, max: 1, step: 0.1 },
+          { key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 },
+        ]
+      case 'coneBase':
+        return [
+          { key: 'radialRatio', label: '径向比', min: 0, max: 1, step: 0.1 },
+          { key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 },
+        ]
+      case 'cylinder':
+        return [
+          { key: 't', label: 't', min: 0, max: 1, step: 0.1 },
+          { key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 },
+        ]
+      case 'cylinderBottom':
+      case 'cylinderTop':
+        return [
+          { key: 'radialRatio', label: '径向比', min: 0, max: 1, step: 0.1 },
+          { key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 },
+        ]
+      case 'xAxis':
+      case 'yAxis':
+      case 'zAxis':
+        return [{ key: 't', label: 't', min: -100, max: 100, step: 0.1 }]
+      default:
+        return []
+    }
+  }
+
+  /** 获取当前参数化数据的某个参数值 */
+  getParametricValue(key: string): number | undefined {
+    const pd = this.parametricData
+    if (!pd) return undefined
+    return (pd as Record<string, unknown>)[key] as number | undefined
+  }
+
+  /** 设置当前参数化数据的某个参数值，并重新计算点位置 */
+  setParametricValue(key: string, value: number): boolean {
+    const pd = this.parametricData
+    if (!pd) return false
+    const ranges = this.getParametricRanges()
+    const range = ranges.find((r) => r.key === key)
+    if (!range) return false
+    const clamped = Math.max(range.min, Math.min(value, range.max))
+    ;(pd as Record<string, unknown>)[key] = clamped
+    const newPos = this.recomputePosition()
+    if (!newPos) return false
+    const point = this.scene.points.get(this.pointId)
+    if (!point || point.locked) return false
+    point.setPosition(newPos)
+    this.computeParametricDataFromPosition(newPos)
+    return true
   }
 
   computeParametricData() {
@@ -193,13 +426,16 @@ export class ObjectConstrainedPointConstraint {
       case 'circle': {
         const circle = this.scene.circles.get(this.target.id)
         if (!circle) return
-        const frame = circle.getFrame(
-          this.resolveDirectionVector(circle.directionType ?? 'point', circle.directionId ?? ''),
-        )
+        const frame = circle.getFrame(this.resolveDirectionForCircle(circle))
         if (!frame) return
         const diff = sub(pos, frame.center)
         const angle = Math.atan2(dot(diff, frame.vAxis), dot(diff, frame.uAxis))
-        this.parametricData = { type: 'circle', angle }
+        this.parametricData = {
+          type: 'circle',
+          angle,
+          normal: [frame.normal.x, frame.normal.y, frame.normal.z],
+          center: [frame.center.x, frame.center.y, frame.center.z],
+        }
         break
       }
       case 'face': {
@@ -417,9 +653,7 @@ export class ObjectConstrainedPointConstraint {
       case 'circle': {
         const circle = this.scene.circles.get(this.target.id)
         if (!circle) return null
-        const frame = circle.getFrame(
-          this.resolveDirectionVector(circle.directionType ?? 'point', circle.directionId ?? ''),
-        )
+        const frame = circle.getFrame(this.resolveDirectionForCircle(circle))
         if (!frame) return null
         return add(
           frame.center,
@@ -712,15 +946,50 @@ export class ObjectConstrainedPointConstraint {
     return projectToInfiniteLine(pos, pll.p1.position, pll.p2.position)
   }
 
+  private resolveDirectionForCircle(circle: Circle3): Vec3 | null {
+    let resolvedDirection: Vec3 | null = circle.isNormalCircle() && circle.directionType && circle.directionId
+      ? this.resolveDirectionVector(circle.directionType, circle.directionId)
+      : null
+
+    if (circle.isNormalCircle()) {
+      const coneIds = this.scene.getConesForCircle(circle.id)
+      for (const coneId of coneIds) {
+        const cone = this.scene.cones.get(coneId)
+        if (cone) {
+          const axis = sub(cone.apexPoint.position, cone.baseCenterPoint.position)
+          if (length(axis) > 1e-8) {
+            resolvedDirection = axis
+            break
+          }
+        }
+      }
+      if (!coneIds.length) {
+        const cylinderIds = this.scene.getCylindersForCircle(circle.id)
+        for (const cylId of cylinderIds) {
+          const cyl = this.scene.cylinders.get(cylId)
+          if (cyl) {
+            const axis = sub(cyl.topCenterPoint.position, cyl.bottomCenterPoint.position)
+            if (length(axis) > 1e-8) {
+              resolvedDirection = axis
+              break
+            }
+          }
+        }
+      }
+    }
+
+    return resolvedDirection
+  }
+
   private projectToCircle(pos: Vec3): Vec3 | null {
     const circle = this.scene.circles.get(this.target.id)
     if (!circle) return null
-    const frame = circle.getFrame(
-      this.scene.points.size > 0
-        ? this.resolveDirectionVector(circle.directionType ?? 'point', circle.directionId ?? '')
-        : null,
-    )
+    const frame = circle.getFrame(this.resolveDirectionForCircle(circle))
     if (!frame) return null
+    return this.projectToCircleWithFrame(pos, frame)
+  }
+
+  private projectToCircleWithFrame(pos: Vec3, frame: { center: Vec3; radius: number; uAxis: Vec3; vAxis: Vec3 }): Vec3 | null {
     const diff = sub(pos, frame.center)
     const inPlaneU = dot(diff, frame.uAxis)
     const inPlaneV = dot(diff, frame.vAxis)
@@ -962,8 +1231,7 @@ export class ObjectConstrainedPointConstraint {
 
   private resolveDirectionVector(directionType: string, directionId: string): Vec3 | null {
     if (directionType === 'point') {
-      const p = this.scene.points.get(directionId)
-      return p ? p.position : null
+      return new Vec3(0, 1, 0)
     }
     if (directionType === 'line') {
       const l = this.scene.lines.get(directionId)
