@@ -597,14 +597,6 @@ const isPointObjectConstrained = (point: Point3 | undefined): boolean => {
   return Boolean(point?.constrainedTo)
 }
 
-/** 获取约束点的参数化范围 */
-const getConstrainedParamRanges = (point: Point3 | undefined): ParametricRange[] => {
-  if (!point?.constrainedTo) return []
-  const constraint = props.scene.getObjectConstrainedPointConstraint(point.id)
-  if (!constraint) return []
-  return constraint.getParametricRanges()
-}
-
 /** 同步约束点参数化数据到编辑状态 */
 const syncConstrainedParams = (point: Point3 | undefined) => {
   // 清空旧数据
@@ -659,7 +651,7 @@ const handleConstrainedParamFocus = (key: string) => {
 
 /** 约束点参数输入 blur 处理：normalize 后 clamp 到范围，同步最终值 */
 const handleConstrainedParamBlur = (key: string) => {
-  editConstrainedParams[key] = normalizeCoord(editConstrainedParams[key])
+  editConstrainedParams[key] = normalizeCoord(editConstrainedParams[key] ?? '')
   setCoordFocus(`constrained.${key}`, false)
   applyConstrainedParam(key)
   // blur 后同步 clamp 后的最终值到输入框
@@ -3720,6 +3712,9 @@ onUnmounted(() => {
               <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
                 getPointConstraintBadge(p!)
               }}</span>
+              <span v-if="p!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 v-if="p!.id !== Scene.ORIGIN_ID"
                 class="card-delete-btn"
@@ -4030,6 +4025,9 @@ onUnmounted(() => {
               <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{
                 getLineConstraintBadge(l!)
               }}</span>
+              <span v-if="l!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -4343,6 +4341,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               直线{{ sl!.name ?? '' }}
               <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+              <span v-if="sl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -4577,6 +4576,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               垂线{{ pl!.name ?? '' }}
               <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -4805,6 +4805,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               平行线{{ pl!.name ?? '' }}
               <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+              <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -5090,6 +5091,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               射线{{ r!.name ?? '' }}
               <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+              <span v-if="r!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -5384,6 +5386,9 @@ onUnmounted(() => {
             <div class="card-summary-header">
               向量{{ v!.name ?? '' }}
               <span v-if="props.editor.isVectorLocked(v!)" class="lock-badge">🔒</span>
+              <span v-if="v!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -5990,6 +5995,7 @@ onUnmounted(() => {
               {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
               <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
               <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
+              <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -6368,6 +6374,9 @@ onUnmounted(() => {
                 class="lock-badge"
                 >🔒</span
               >
+              <span v-if="cube.faceIds.some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -6778,6 +6787,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               {{ rp.name }}
               <span v-if="props.scene.faces.get(rp.faceId)?.userLocked" class="lock-badge">🔒</span>
+              <span v-if="props.scene.faces.get(rp.faceId)?.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -7117,6 +7127,9 @@ onUnmounted(() => {
             <div class="card-summary-header">
               {{ s!.name ?? '' }}
               <span v-if="props.editor.isSphereGeometryLocked(s!)" class="lock-badge">🔒</span>
+              <span v-if="s!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -7491,6 +7504,7 @@ onUnmounted(() => {
             <div class="card-summary-header">
               {{ c!.name ?? '' }}
               <span v-if="props.editor.isConeGeometryLocked(c!)" class="lock-badge">🔒</span>
+              <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -7918,6 +7932,9 @@ onUnmounted(() => {
             <div class="card-summary-header">
               {{ c!.name ?? '' }}
               <span v-if="props.editor.isCylinderGeometryLocked(c!)" class="lock-badge">🔒</span>
+              <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -8082,6 +8099,7 @@ onUnmounted(() => {
               <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                 getSolidConstraintBadge(face!.cubeId)
               }}</span>
+              <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
                 title="删除"
@@ -8250,6 +8268,7 @@ onUnmounted(() => {
                 <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
                   getPointConstraintBadge(p!)
                 }}</span>
+                <span v-if="p!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
             </div>
           </div>
@@ -8300,9 +8319,10 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedLineIds.includes(l!.id) }"
               @click="selectLineFromContent(l!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 线段{{ l!.name ?? '' }}
                 <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
+                <span v-if="l!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
                 <div>
@@ -8338,9 +8358,10 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedStraightLineIds.includes(sl!.id) }"
               @click="selectStraightLineFromContent(sl!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 直线{{ sl!.name ?? '' }}
                 <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
+                <span v-if="sl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
                 点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
@@ -8374,9 +8395,10 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedPerpendicularLineIds.includes(pl!.id) }"
               @click="selectPerpendicularLineFromContent(pl!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 垂线{{ pl!.name ?? '' }}
                 <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+                <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
               <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
@@ -8407,6 +8429,9 @@ onUnmounted(() => {
               <div>
                 平行线{{ pl!.name ?? '' }}
                 <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
+                <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </span>
               </div>
               <div>来源：{{ getParallelLineSourceLabel(pl!) }}</div>
             </div>
@@ -8433,9 +8458,10 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedRayIds.includes(r!.id) }"
               @click="selectRayFromContent(r!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 射线{{ r!.name ?? '' }}
                 <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
+                <span v-if="r!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
                 起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
@@ -8469,9 +8495,10 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedVectorIds.includes(vec!.id) }"
               @click="selectVectorFromContent(vec!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 向量{{ vec!.name ?? '' }}
                 <span v-if="props.editor.isVectorLocked(vec!)" class="lock-badge">🔒</span>
+                <span v-if="vec!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
                 起点{{ vec!.p1.name ?? '' }}（{{ vec!.p1.position.x.toFixed(2) }},
@@ -8510,6 +8537,7 @@ onUnmounted(() => {
                 <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
                 <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
                 <span v-if="getCylinderForNormalCircle(c!)" class="constraint-badge">圆柱约束</span>
+                <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <template v-if="c!.isNormalCircle()">
                 <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
@@ -8555,13 +8583,14 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedHexahedronIds.includes(cube.cubeId) }"
               @click="selectHexahedronFromContent(cube.cubeId)"
             >
-              <div>
+              <div class="card-summary-header">
                 {{ cube.name }}
                 <span
                   v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                   class="lock-badge"
                   >🔒</span
                 >
+                <span v-if="cube.faceIds.some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
               <div>
@@ -8595,11 +8624,12 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedSphereIds.includes(sphere.id) }"
               @click="selectSphereFromContent(sphere.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 {{ sphere.name ?? '' }}
                 <span v-if="props.editor.isSphereGeometryLocked(sphere)" class="lock-badge"
                   >🔒</span
                 >
+                <span v-if="sphere.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
               <div>
@@ -8635,6 +8665,7 @@ onUnmounted(() => {
               <div>
                 {{ cone.name ?? '' }}
                 <span v-if="props.editor.isConeGeometryLocked(cone)" class="lock-badge">🔒</span>
+                <span v-if="cone.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div class="face-metric-row">
                 <span class="metric-item"
@@ -8678,11 +8709,12 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedCylinderIds.includes(cylinder.id) }"
               @click="selectCylinderFromContent(cylinder.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 {{ cylinder.name ?? '' }}
                 <span v-if="props.editor.isCylinderGeometryLocked(cylinder)" class="lock-badge"
                   >🔒</span
                 >
+                <span v-if="cylinder.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div class="face-metric-row">
                 <span class="metric-item"
@@ -8722,7 +8754,7 @@ onUnmounted(() => {
               :class="{ 'is-selected': selectedFaceIds.includes(face!.id) }"
               @click="selectFaceFromContent(face!.id)"
             >
-              <div>
+              <div class="card-summary-header">
                 {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
                 <span v-if="face!.isRegularPolygon" class="constraint-badge"
                   >正{{ face!.regularPolygonVertexCount }}边形</span
@@ -8731,6 +8763,9 @@ onUnmounted(() => {
                 <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                   getSolidConstraintBadge(face!.cubeId)
                 }}</span>
+                <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </span>
               </div>
               <div>
                 边界点：{{
@@ -9343,30 +9378,46 @@ hr {
   width: 100%;
 }
 .lock-badge {
-  font-size: 11px;
-  padding: 1px 4px;
+  font-size: 10px;
+  padding: 0 2px;
   border-radius: 3px;
-  margin-left: 6px;
+  margin-left: 2px;
+  flex-shrink: 0;
 }
 .constraint-badge {
   display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
+  margin-left: 2px;
+  padding: 0 4px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.4;
   white-space: nowrap;
   color: #ffe2b7;
   background: rgba(255, 179, 71, 0.18);
   border: 1px solid rgba(255, 179, 71, 0.42);
   vertical-align: middle;
+  flex-shrink: 0;
+}
+.hidden-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  color: #999;
+  opacity: 0.7;
+  vertical-align: middle;
+  flex-shrink: 0;
 }
 .point-summary-line {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 .point-summary-text {
   min-width: 0;
@@ -10000,8 +10051,10 @@ hr {
 .card-summary-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .card-delete-btn {
