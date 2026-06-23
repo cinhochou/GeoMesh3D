@@ -38,6 +38,8 @@ export default defineConfig({
       workbox: {
         // 预缓存构建产物：JS/CSS/HTML/字体/本地图片等
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
+        // ar.js 等库超过默认 2MB 限制，需要放宽
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         // 运行时缓存策略（只缓存图片，不缓存 API，避免不同用户/不同 token 之间读到旧数据）
         runtimeCaching: [
           {
