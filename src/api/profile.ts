@@ -1,9 +1,12 @@
 import { apiClient } from './client'
+import { getApiConfig } from '@/config/api'
 
 export interface UserStats {
   projectCount: number
   roomCount: number
 }
+
+const isNgrokUrl = (url: string): boolean => /\.ngrok(?:-free)?\.[^/]+/i.test(url)
 
 export const profileApi = {
   async getUserStats(userId: string): Promise<UserStats> {
@@ -14,13 +17,17 @@ export const profileApi = {
     const formData = new FormData()
     formData.append('file', file)
     const accessToken = apiClient.getAccessToken()
-    const config = await import('@/config/api')
-    const baseUrl = config.getApiConfig().baseUrl
+    const baseUrl = getApiConfig().baseUrl
+    const headers: Record<string, string> = {}
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`
+    }
+    if (isNgrokUrl(baseUrl)) {
+      headers['ngrok-skip-browser-warning'] = 'true'
+    }
     const response = await fetch(`${baseUrl}/user/${userId}/avatar`, {
       method: 'POST',
-      headers: {
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
+      headers,
       body: formData,
     })
     if (!response.ok) {

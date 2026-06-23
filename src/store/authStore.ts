@@ -366,7 +366,11 @@ export const useAuthStore = defineStore('auth', () => {
         initialized.value = true
         return currentUser
       } catch (err) {
-        apiClient.clearTokens()
+        // 只有服务端明确返回 401 时才清 token；网络错误、CORS 异常、ngrok 警告页等不清除，
+        // 避免因为代理/穿透问题导致刷新后误登出。
+        if (err instanceof ApiError && err.status === 401) {
+          apiClient.clearTokens()
+        }
         error.value = extractErrorMessage(err)
         setAuthenticated(null)
         initialized.value = true

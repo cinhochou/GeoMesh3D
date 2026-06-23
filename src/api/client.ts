@@ -24,6 +24,8 @@ const ACCESS_TOKEN_KEY = 'access_token'
 const REFRESH_TOKEN_KEY = 'refresh_token'
 const TOKEN_EXPIRES_AT_KEY = 'token_expires_at'
 
+const isNgrokUrl = (url: string): boolean => /\.ngrok(?:-free)?\.[^/]+/i.test(url)
+
 const getStorage = () => {
   if (typeof window === 'undefined') return null
   return window.localStorage
@@ -59,6 +61,31 @@ class ApiClient {
     return this.request<T>(path, { method: 'DELETE' })
   }
 
+  private getDefaultHeaders(needsJson = false): Record<string, string> {
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    }
+    if (needsJson) {
+      headers['Content-Type'] = 'application/json'
+    }
+    if (isNgrokUrl(this.baseUrl)) {
+      headers['ngrok-skip-browser-warning'] = 'true'
+    }
+    return headers
+  }
+
+  private async parseResponse<T>(response: Response): Promise<ApiResponse<T> | T | null> {
+    const rawText = await response.text()
+    if (!rawText) return null
+    try {
+      return JSON.parse(rawText) as ApiResponse<T> | T
+    } catch {
+      throw new ApiError('服务端返回非 JSON 数据，可能是 ngrok 警告页或代理中间页', {
+        status: response.status,
+      })
+    }
+  }
+
   async upload<T>(path: string, formData: FormData): Promise<T> {
     if (!this.isAuthPath(path) && this.isTokenExpiringSoon()) {
       await this.tryRefreshToken()
@@ -68,7 +95,7 @@ class ApiClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
-        Accept: 'application/json',
+        ...this.getDefaultHeaders(),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: formData,
@@ -81,14 +108,13 @@ class ApiClient {
         const retryResponse = await fetch(`${this.baseUrl}${path}`, {
           method: 'POST',
           headers: {
-            Accept: 'application/json',
+            ...this.getDefaultHeaders(),
             ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
           },
           body: formData,
         })
 
-        const retryRawText = await retryResponse.text()
-        const retryPayload = retryRawText ? (JSON.parse(retryRawText) as ApiResponse<T> | T) : null
+        const retryPayload = await this.parseResponse<T>(retryResponse)
 
         if (!retryResponse.ok) {
           const apiMessage =
@@ -116,8 +142,7 @@ class ApiClient {
       }
     }
 
-    const rawText = await response.text()
-    const payload = rawText ? (JSON.parse(rawText) as ApiResponse<T> | T) : null
+    const payload = await this.parseResponse<T>(response)
 
     if (!response.ok) {
       const apiMessage =
@@ -212,8 +237,7 @@ class ApiClient {
         const response = await fetch(`${this.baseUrl}/auth/refresh`, {
           method: 'POST',
           headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
+            ...this.getDefaultHeaders(true),
           },
           body: JSON.stringify({ refreshToken }),
         })
@@ -224,9 +248,12 @@ class ApiClient {
           return false
         }
 
-        const rawText = await response.text()
-        const payload = rawText ? JSON.parse(rawText) : null
-        const data = payload?.data ?? payload
+        const payload = await this.parseResponse(response)
+        const data = (payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload) as {
+          accessToken?: string
+          refreshToken?: string | null
+          expiresIn?: number
+        } | null
 
         if (!data?.accessToken) {
           this.clearTokens()
@@ -278,8 +305,7 @@ class ApiClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: options.method,
       headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
+        ...this.getDefaultHeaders(true),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: options.data === undefined ? undefined : JSON.stringify(options.data),
@@ -292,15 +318,13 @@ class ApiClient {
         const retryResponse = await fetch(`${this.baseUrl}${path}`, {
           method: options.method,
           headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
+            ...this.getDefaultHeaders(true),
             ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
           },
           body: options.data === undefined ? undefined : JSON.stringify(options.data),
         })
 
-        const retryRawText = await retryResponse.text()
-        const retryPayload = retryRawText ? (JSON.parse(retryRawText) as ApiResponse<T> | T) : null
+        const retryPayload = await this.parseResponse<T>(retryResponse)
 
         if (!retryResponse.ok) {
           const apiMessage =
@@ -332,8 +356,7 @@ class ApiClient {
       }
     }
 
-    const rawText = await response.text()
-    const payload = rawText ? (JSON.parse(rawText) as ApiResponse<T> | T) : null
+    const payload = await this.parseResponse<T>(response)
 
     if (!response.ok) {
       const apiMessage =

@@ -4,9 +4,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { projectApi } from '@/api/project'
 import { userApi } from '@/api/user'
 import { ApiError } from '@/api/client'
-import { getApiConfig } from '@/config/api'
 import type { Project } from '@/types/project'
 import { useSessionGuard } from '@/composables/useSessionGuard'
+import ProxiedImage from '@/components/ProxiedImage.vue'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 
 const route = useRoute()
@@ -22,12 +22,6 @@ useSessionGuard({
     })
   },
 })
-
-const resolveThumbnailUrl = (url: string | null | undefined): string => {
-  if (!url) return ''
-  if (url.startsWith('http') || url.startsWith('data:')) return url
-  return getApiConfig().baseUrl + url
-}
 
 const allProjects = ref<Project[]>([])
 const isLoading = ref(false)
@@ -554,9 +548,9 @@ const handleRecycleBin = () => {
                   />
                 </svg>
               </div>
-              <img
+              <ProxiedImage
                 v-else
-                :src="resolveThumbnailUrl(project.thumbnailUrl)"
+                :src="project.thumbnailUrl || ''"
                 alt="thumbnail"
                 class="pl-thumb-image"
               />

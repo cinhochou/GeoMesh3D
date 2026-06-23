@@ -5,8 +5,8 @@ import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/store/authStore'
 import { profileApi } from '@/api/profile'
 import type { UserStats } from '@/api/profile'
-import { getApiConfig } from '@/config/api'
 import { useSessionGuard } from '@/composables/useSessionGuard'
+import ProxiedImage from '@/components/ProxiedImage.vue'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 
 const route = useRoute()
@@ -108,12 +108,6 @@ const showToast = (msg: string) => {
 }
 
 const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
-const avatarUrl = computed(() => {
-  const url = user.value?.avatarUrl || ''
-  if (!url) return ''
-  if (url.startsWith('http')) return url
-  return getApiConfig().baseUrl + url
-})
 const defaultAvatarText = computed(() => {
   const source = displayName.value.trim()
   return source ? source.slice(0, 1).toUpperCase() : 'U'
@@ -171,7 +165,7 @@ const syncFormFromUser = () => {
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
 const openAvatarPreview = () => {
-  if (avatarUrl.value || avatarPreview.value) {
+  if (user.value?.avatarUrl || avatarPreview.value) {
     avatarPreviewVisible.value = true
   }
 }
@@ -334,7 +328,18 @@ const cancelEditPassword = () => {
       <div class="profile-card">
         <div class="info-section">
           <div class="avatar-ring" @click="openAvatarPreview">
-            <img v-if="avatarPreview || avatarUrl" :src="avatarPreview || avatarUrl" alt="avatar" class="avatar-image" />
+            <img
+              v-if="avatarPreview"
+              :src="avatarPreview"
+              alt="avatar"
+              class="avatar-image"
+            />
+            <ProxiedImage
+              v-else-if="user?.avatarUrl"
+              :src="user.avatarUrl"
+              alt="avatar"
+              class="avatar-image"
+            />
             <div v-else class="avatar-fallback">{{ defaultAvatarText }}</div>
             <button class="avatar-edit-btn" @click.stop="triggerAvatarUpload" title="修改头像">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -476,7 +481,18 @@ const cancelEditPassword = () => {
     <Transition name="preview-fade">
       <div v-if="avatarPreviewVisible" class="avatar-preview-backdrop" @click="closeAvatarPreview">
         <div class="avatar-preview-wrapper" @click.stop>
-          <img :src="avatarPreview || avatarUrl" alt="avatar" class="avatar-preview-image" />
+          <img
+            v-if="avatarPreview"
+            :src="avatarPreview"
+            alt="avatar"
+            class="avatar-preview-image"
+          />
+          <ProxiedImage
+            v-else
+            :src="user?.avatarUrl || ''"
+            alt="avatar"
+            class="avatar-preview-image"
+          />
           <button class="avatar-preview-close" @click="closeAvatarPreview">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>

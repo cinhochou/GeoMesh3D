@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
 import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
-import { getApiConfig } from '@/config/api'
+import ProxiedImage from '@/components/ProxiedImage.vue'
 
 defineOptions({
   name: 'EditorToolbar',
@@ -119,12 +119,6 @@ const profileMenuStyle = ref({
 const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
 const displayEmail = computed(() => user.value?.username || '请先登录后查看账号信息')
 const userRoleText = computed(() => user.value?.role || 'GUEST')
-const avatarUrl = computed(() => {
-  const url = user.value?.avatarUrl || ''
-  if (!url) return ''
-  if (url.startsWith('http')) return url
-  return getApiConfig().baseUrl + url
-})
 const defaultAvatarText = computed(() => {
   const source = displayName.value.trim()
   return source ? source.slice(0, 1).toUpperCase() : 'U'
@@ -809,7 +803,12 @@ onUnmounted(() => {
       @click="toggleProfileMenu"
     >
       <div class="avatar-ring">
-        <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="avatar-image" />
+        <ProxiedImage
+          v-if="user?.avatarUrl"
+          :src="user.avatarUrl"
+          alt="avatar"
+          class="avatar-image"
+        />
         <div v-else class="avatar-fallback">{{ defaultAvatarText }}</div>
       </div>
       <span class="profile-name">{{ displayName }}</span>
@@ -1471,7 +1470,7 @@ onUnmounted(() => {
 
   <Teleport to="body">
     <div
-      v-if="profileMenuOpen"
+      v-show="profileMenuOpen"
       ref="profilePanelRef"
       class="profile-panel"
       :style="profileMenuStyle"
@@ -1484,7 +1483,12 @@ onUnmounted(() => {
       <template v-else>
         <div class="profile-summary">
           <div class="avatar-ring profile-panel-avatar">
-            <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="avatar-image" />
+            <ProxiedImage
+              v-if="user?.avatarUrl"
+              :src="user.avatarUrl"
+              alt="avatar"
+              class="avatar-image"
+            />
             <div v-else class="avatar-fallback">{{ defaultAvatarText }}</div>
           </div>
           <div class="profile-summary-text">
