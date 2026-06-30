@@ -1,4 +1,3 @@
-import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { Point3 } from '../../../geometry/Point3'
 import { Line3 } from '../../../geometry/Line3'
@@ -9,18 +8,74 @@ import { Circle3 } from '../../../geometry/Circle3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
+import { createAddFeatureCommand } from '../../../features'
+import type { FeatureType } from '../../../features'
 
 export type ElementType = 'point' | 'line' | 'straightLine' | 'ray' | 'vector' | 'circle' | 'face' | 'perpendicularLine' | 'parallelLine'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const executeMap: Record<string, (scene: Scene, element: any) => void> = {
-  point: (scene, el) => scene.addPoint(el),
-  line: (scene, el) => scene.addLine(el),
-  straightLine: (scene, el) => scene.addStraightLine(el),
-  vector: (scene, el) => scene.addVector(el),
-  ray: (scene, el) => scene.addRay(el),
-  perpendicularLine: (scene, el) => scene.addPerpendicularLine(el),
-  parallelLine: (scene, el) => scene.addParallelLine(el),
+function buildFeatureParams(
+  element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarPolygon | PerpendicularLine3 | ParallelLine3,
+  type: ElementType,
+  boundaryLines: Line3[] = [],
+): Record<string, unknown> {
+  if (type === 'point') {
+    const p = element as Point3
+    return {
+      position: { x: p.position.x, y: p.position.y, z: p.position.z },
+      name: p.name,
+      visible: p.visible,
+      nameVisible: p.nameVisible,
+      valueVisible: p.valueVisible,
+      labelOffsetX: p.labelOffsetX,
+      labelOffsetY: p.labelOffsetY,
+      locked: p.locked,
+      userLocked: p.userLocked,
+      circleId: p.circleId,
+      circleRole: p.circleRole,
+      sphereId: p.sphereId,
+      sphereRole: p.sphereRole,
+      coneId: p.coneId,
+      coneRole: p.coneRole,
+      cylinderId: p.cylinderId,
+      cylinderRole: p.cylinderRole,
+    }
+  }
+
+  if (type === 'circle') {
+    return { circle: element as Circle3 }
+  }
+
+  if (type === 'face') {
+    return { face: element as PlanarPolygon, boundaryLines }
+  }
+
+  if (type === 'perpendicularLine') {
+    return { line: element as PerpendicularLine3 }
+  }
+
+  if (type === 'parallelLine') {
+    return { line: element as ParallelLine3 }
+  }
+
+  const twoPoint = element as Line3 | StraightLine3 | Ray3 | GeoVector3
+  const params: Record<string, unknown> = {
+    p1Id: twoPoint.p1.id,
+    p2Id: twoPoint.p2.id,
+    name: twoPoint.name,
+    visible: twoPoint.visible,
+    nameVisible: twoPoint.nameVisible,
+    valueVisible: twoPoint.valueVisible,
+    labelOffsetX: twoPoint.labelOffsetX,
+    labelOffsetY: twoPoint.labelOffsetY,
+    userLocked: twoPoint.userLocked,
+  }
+  if (type === 'straightLine') {
+    params.displayLength = (twoPoint as StraightLine3).displayLength
+  }
+  if (type === 'ray') {
+    params.displayLength = (twoPoint as Ray3).displayLength
+  }
+  return params
 }
 
 export function createAddElementCommand(
@@ -28,27 +83,9 @@ export function createAddElementCommand(
   element: Point3 | Line3 | StraightLine3 | Ray3 | GeoVector3 | Circle3 | PlanarPolygon | PerpendicularLine3 | ParallelLine3,
   type: ElementType,
   boundaryLines: Line3[] = [],
-): SnapshotCommand {
-  const cmd = new SnapshotCommand(
-    `add-${type}`,
-    scene,
-    () => {
-      if (type === 'face') {
-        boundaryLines.forEach((line) => scene.addLine(line))
-        scene.addFace(element as PlanarPolygon)
-      } else if (type === 'circle') {
-        scene.addCircle(element as Circle3)
-        if ((element as Circle3).isNormalCircle()) {
-          const centerPoint = (element as Circle3).p1
-          centerPoint.circleId = element.id
-          centerPoint.circleRole = 'center'
-        }
-      } else {
-        executeMap[type]!(scene, element)
-      }
-    },
-  )
+): ReturnType<typeof createAddFeatureCommand> {
+  const featureType = type as FeatureType
+  const params = buildFeatureParams(element, type, boundaryLines)
 
-  cmd.executeAndCapture()
-  return cmd
+  return createAddFeatureCommand(scene, element.id, featureType, params)
 }

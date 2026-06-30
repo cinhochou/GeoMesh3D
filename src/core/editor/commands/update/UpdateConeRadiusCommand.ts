@@ -1,48 +1,31 @@
-import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { UpdateFeatureCommand } from '../../../features/FeatureUpdateCommand'
 import { Scene } from '../../../scene/Scene'
 
 type RadiusState = {
   radiusValue: number
 }
 
-export class UpdateConeRadiusCommand extends ConstraintAwareCommand {
-  readonly label = '更新圆锥半径'
-
-  private before: RadiusState
-  private after: RadiusState
-
+export class UpdateConeRadiusCommand extends UpdateFeatureCommand {
   constructor(
     scene: Scene,
     private coneId: string,
     before: RadiusState,
     after: RadiusState,
   ) {
-    super(scene)
-    this.before = before
-    this.after = after
     const cone = scene.cones.get(coneId)
+    const affectedPointIds: string[] = []
     if (cone) {
-      this.markAffected(cone.baseCenterPoint.id, cone.apexPoint.id)
+      affectedPointIds.push(cone.baseCenterPoint.id, cone.apexPoint.id)
     }
-  }
 
-  protected doExecute(): void {
-    this.apply(this.after)
-  }
-
-  protected doUndo(): void {
-    this.apply(this.before)
-  }
-
-  private apply(state: RadiusState) {
-    const cone = this.scene.cones.get(this.coneId)
-    if (!cone) return
-    cone.radiusValue = state.radiusValue
-    if (cone.normalCircleId) {
-      const normalCircle = this.scene.circles.get(cone.normalCircleId)
-      if (normalCircle) {
-        normalCircle.lockedRadius = state.radiusValue
-      }
-    }
+    super(
+      scene,
+      '更新圆锥半径',
+      { id: coneId, type: 'cone', params: {}, dependencies: [] },
+      { elementIds: { cones: [coneId] } },
+      before as unknown as Record<string, unknown>,
+      after as unknown as Record<string, unknown>,
+      affectedPointIds,
+    )
   }
 }

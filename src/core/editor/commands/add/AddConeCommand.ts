@@ -1,19 +1,22 @@
-import { SnapshotCommand } from '../SnapshotCommand'
 import { Scene } from '../../../scene/Scene'
 import { Cone3 } from '../../../geometry/Cone3'
+import { createAddFeatureCommand } from '../../../features'
 
 export function createAddConeCommand(
   scene: Scene,
   cone: Cone3,
-): SnapshotCommand {
-  const cmd = new SnapshotCommand('AddConeCommand', scene, () => {
-    scene.addCone(cone)
-    cone.baseCenterPoint.coneId = cone.id
-    cone.baseCenterPoint.coneRole = 'baseCenter'
-    cone.apexPoint.coneId = cone.id
-    cone.apexPoint.coneRole = 'apex'
+): ReturnType<typeof createAddFeatureCommand> {
+  return createAddFeatureCommand(scene, cone.id, 'cone', {
+    baseCenterPointId: cone.baseCenterPoint.id,
+    apexPointId: cone.apexPoint.id,
+    coneType: cone.coneType,
+    name: cone.name,
+    visible: cone.visible,
+    nameVisible: cone.nameVisible,
+    valueVisible: cone.valueVisible,
+    labelOffsetX: cone.labelOffsetX,
+    labelOffsetY: cone.labelOffsetY,
+    radiusValue: cone.radiusValue,
+    normalCircleId: cone.normalCircleId,
   })
-
-  cmd.executeAndCapture()
-  return cmd
 }

@@ -59,7 +59,7 @@ import { createAddHexahedronCommand } from './commands/add/AddHexahedronCommand'
 import { createAddSphereCommand } from './commands/add/AddSphereCommand'
 import { createAddRadiusSphereCommand } from './commands/add/AddRadiusSphereCommand'
 import { createAddConeCommand } from './commands/add/AddConeCommand'
-import { createDeleteRadiusSphereCommand } from './commands/delete/DeleteRadiusSphereCommand'
+
 import { UpdateSphereRadiusCommand } from './commands/update/UpdateSphereRadiusCommand'
 import { createDeleteConeCommand } from './commands/delete/DeleteConeCommand'
 import { UpdateConeCommand } from './commands/update/UpdateConeCommand'
@@ -77,6 +77,7 @@ import { createAddRegularPolygonCommand } from './commands/add/AddRegularPolygon
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
+import { FeatureDocument, type FeatureOperation } from '../features'
 import {
   canCreateIntersectionFromTargets,
   computeIntersectionPoint,
@@ -380,10 +381,13 @@ export class Editor {
   /** 每次历史操作后递增，供 Vue watcher 检测变化（historyManager 被 markRaw 无法追踪） */
   historyVersion = 0
   isSnappingEnabled: boolean = true
+  /** 基于 Feature 的文档 API，供外部程序和脚本调用作图能力 */
+  featureDocument: FeatureDocument
 
   constructor(scene: Scene) {
     this.scene = scene
     this.historyManager = new HistoryManager(scene)
+    this.featureDocument = new FeatureDocument(scene, (entry) => this.historyManager.push(entry))
   }
 
   isPointConstrainedByLockedLinear(pointId: string) {
@@ -937,11 +941,7 @@ export class Editor {
     const sphere = this.getSphere(sphereId)
     if (!sphere) return
     this.removeConstrainedPointsReferencing('sphere', sphereId)
-    if (sphere.name.startsWith('半径球')) {
-      this.executeHistoryEntry(createDeleteRadiusSphereCommand(this.scene, sphere))
-    } else {
-      this.executeHistoryEntry(createDeleteSphereCommand(this.scene, sphere))
-    }
+    this.executeHistoryEntry(createDeleteSphereCommand(this.scene, sphere))
   }
 
   tryCreateSphereTwoPoints(firstPoint: Point3, secondPoint: Point3) {
@@ -6572,6 +6572,16 @@ export class Editor {
     })
 
     this.setPointsPositions(updates)
+  }
+
+  /**
+   * 通过 Feature 操作描述执行作图命令。
+   * 这是外部程序、脚本、插件调用作图能力的统一入口。
+   */
+  applyFeatureOperation(operation: FeatureOperation): HistoryEntry {
+    const entry = this.featureDocument.applyOperation(operation)
+    this.historyVersion++
+    return entry
   }
 
   executeCommand(cmd: Command | HistoryEntry) {

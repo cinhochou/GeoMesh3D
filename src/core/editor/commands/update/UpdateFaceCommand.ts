@@ -1,4 +1,4 @@
-import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { UpdateFeatureCommand } from '../../../features/FeatureUpdateCommand'
 import { Scene } from '../../../scene/Scene'
 
 type FaceState = {
@@ -14,47 +14,24 @@ type FaceState = {
   edgeLengthLocks: Array<number | null>
 }
 
-export class UpdateFaceCommand extends ConstraintAwareCommand {
-  readonly label = '更新面属性'
-
-  private before: FaceState
-  private after: FaceState
-
+export class UpdateFaceCommand extends UpdateFeatureCommand {
   constructor(
     private faceId: string,
     before: FaceState,
     after: FaceState,
     scene: Scene,
   ) {
-    super(scene)
-    this.before = before
-    this.after = after
     const face = scene.faces.get(faceId)
-    if (face) {
-      this.markAffectedPoints(face.boundaryPointIds)
-    }
-  }
+    const affectedPointIds: string[] = face ? [...face.boundaryPointIds] : []
 
-  protected doExecute(): void {
-    this.apply(this.after)
-  }
-
-  protected doUndo(): void {
-    this.apply(this.before)
-  }
-
-  private apply(state: FaceState) {
-    const face = this.scene.faces.get(this.faceId)
-    if (!face) return
-    face.name = state.name
-    face.nameVisible = state.nameVisible
-    face.valueVisible = state.valueVisible
-    face.labelOffsetX = state.labelOffsetX
-    face.labelOffsetY = state.labelOffsetY
-    face.visible = state.visible
-    face.userLocked = state.userLocked
-    face.areaLocked = state.areaLocked
-    face.lockedArea = state.lockedArea
-    face.edgeLengthLocks = [...state.edgeLengthLocks]
+    super(
+      scene,
+      '更新面属性',
+      { id: faceId, type: 'face', params: {}, dependencies: [] },
+      { elementIds: { faces: [faceId] } },
+      before as unknown as Record<string, unknown>,
+      after as unknown as Record<string, unknown>,
+      affectedPointIds,
+    )
   }
 }

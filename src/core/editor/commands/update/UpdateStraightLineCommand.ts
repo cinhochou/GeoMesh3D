@@ -1,6 +1,5 @@
-import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { UpdateFeatureCommand } from '../../../features/FeatureUpdateCommand'
 import { Scene } from '../../../scene/Scene'
-import { StraightLine3 } from '../../../geometry/StraightLine3'
 
 type StraightLineState = {
   name: string
@@ -13,45 +12,27 @@ type StraightLineState = {
   userLocked: boolean
 }
 
-export class UpdateStraightLineCommand extends ConstraintAwareCommand {
-  readonly label = '更新直线属性'
-
-  private before: StraightLineState
-  private after: StraightLineState
-
+export class UpdateStraightLineCommand extends UpdateFeatureCommand {
   constructor(
     private lineId: string,
     before: StraightLineState,
     after: StraightLineState,
     scene: Scene,
   ) {
-    super(scene)
-    this.before = before
-    this.after = after
     const line = scene.straightLines.get(lineId)
+    const affectedPointIds: string[] = []
     if (line) {
-      this.markAffected(line.p1.id, line.p2.id)
+      affectedPointIds.push(line.p1.id, line.p2.id)
     }
-  }
 
-  protected doExecute(): void {
-    this.apply(this.after)
-  }
-
-  protected doUndo(): void {
-    this.apply(this.before)
-  }
-
-  private apply(state: StraightLineState) {
-    const line = this.scene.straightLines.get(this.lineId)
-    if (!line) return
-    line.name = state.name
-    line.nameVisible = state.nameVisible
-    line.valueVisible = state.valueVisible
-    line.labelOffsetX = state.labelOffsetX
-    line.labelOffsetY = state.labelOffsetY
-    line.visible = state.visible
-    line.displayLength = StraightLine3.normalizeDisplayLength(state.displayLength)
-    line.userLocked = state.userLocked
+    super(
+      scene,
+      '更新直线属性',
+      { id: lineId, type: 'straightLine', params: {}, dependencies: [] },
+      { elementIds: { straightLines: [lineId] } },
+      before as unknown as Record<string, unknown>,
+      after as unknown as Record<string, unknown>,
+      affectedPointIds,
+    )
   }
 }

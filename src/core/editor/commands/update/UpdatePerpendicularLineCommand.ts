@@ -1,6 +1,5 @@
-import { ConstraintAwareCommand } from '../ConstraintAwareCommand'
+import { UpdateFeatureCommand } from '../../../features/FeatureUpdateCommand'
 import { Scene } from '../../../scene/Scene'
-import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 
 type PerpendicularLineState = {
   name: string
@@ -13,45 +12,27 @@ type PerpendicularLineState = {
   userLocked: boolean
 }
 
-export class UpdatePerpendicularLineCommand extends ConstraintAwareCommand {
-  readonly label = '更新垂线属性'
-
-  private before: PerpendicularLineState
-  private after: PerpendicularLineState
-
+export class UpdatePerpendicularLineCommand extends UpdateFeatureCommand {
   constructor(
     private lineId: string,
     before: PerpendicularLineState,
     after: PerpendicularLineState,
     scene: Scene,
   ) {
-    super(scene)
-    this.before = before
-    this.after = after
     const line = scene.perpendicularLines.get(lineId)
+    const affectedPointIds: string[] = []
     if (line) {
-      this.markAffected(line.p1.id, line.p2.id)
+      affectedPointIds.push(line.p1.id, line.p2.id)
     }
-  }
 
-  protected doExecute(): void {
-    this.apply(this.after)
-  }
-
-  protected doUndo(): void {
-    this.apply(this.before)
-  }
-
-  private apply(state: PerpendicularLineState) {
-    const line = this.scene.perpendicularLines.get(this.lineId)
-    if (!line) return
-    line.name = state.name
-    line.nameVisible = state.nameVisible
-    line.valueVisible = state.valueVisible
-    line.labelOffsetX = state.labelOffsetX
-    line.labelOffsetY = state.labelOffsetY
-    line.visible = state.visible
-    line.displayLength = PerpendicularLine3.normalizeDisplayLength(state.displayLength)
-    line.userLocked = state.userLocked
+    super(
+      scene,
+      '更新垂线属性',
+      { id: lineId, type: 'perpendicularLine', params: {}, dependencies: [] },
+      { elementIds: { perpendicularLines: [lineId] } },
+      before as unknown as Record<string, unknown>,
+      after as unknown as Record<string, unknown>,
+      affectedPointIds,
+    )
   }
 }
