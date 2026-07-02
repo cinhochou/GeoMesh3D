@@ -4,10 +4,12 @@ import type { Ray3 } from './Ray3'
 import type { GeoVector3 } from './GeoVector3'
 import type { StraightLine3 } from './StraightLine3'
 import type { Line3 } from './Line3'
+import type { ParallelLine3 } from './ParallelLine3'
+import type { PerpendicularLine3 } from './PerpendicularLine3'
 import { Vec3 } from './Vec3'
 import { computePlaneBasis } from './PlanarUtils'
 
-export type IntersectionLinearType = 'line' | 'straightLine' | 'ray' | 'vector'
+export type IntersectionLinearType = 'line' | 'straightLine' | 'ray' | 'vector' | 'parallelLine' | 'perpendicularLine'
 export type IntersectionTargetType = IntersectionLinearType | 'face'
 
 export type IntersectionTargetRef = {
@@ -22,6 +24,8 @@ type IntersectionSceneAccess = {
   rays: Map<string, Ray3>
   vectors: Map<string, GeoVector3>
   faces: Map<string, PlanarPolygon>
+  parallelLines: Map<string, ParallelLine3>
+  perpendicularLines: Map<string, PerpendicularLine3>
 }
 
 type LinearData = {
@@ -65,7 +69,11 @@ const resolveLinearData = (
           ? scene.rays.get(target.id)
           : target.type === 'vector'
             ? scene.vectors.get(target.id)
-            : null
+            : target.type === 'parallelLine'
+              ? scene.parallelLines.get(target.id)
+              : target.type === 'perpendicularLine'
+                ? scene.perpendicularLines.get(target.id)
+                : null
   if (!entity) return null
 
   const origin = entity.p1.position
@@ -131,11 +139,11 @@ const computeLinearFaceIntersection = (
 }
 
 export const isIntersectionTargetType = (type: string): type is IntersectionTargetType =>
-  type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector' || type === 'face'
+  type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector' || type === 'parallelLine' || type === 'perpendicularLine' || type === 'face'
 
 export const isLinearIntersectionTarget = (
   type: IntersectionTargetType,
-): type is IntersectionLinearType => type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector'
+): type is IntersectionLinearType => type === 'line' || type === 'straightLine' || type === 'ray' || type === 'vector' || type === 'parallelLine' || type === 'perpendicularLine'
 
 export const canCreateIntersectionFromTargets = (a: IntersectionTargetRef, b: IntersectionTargetRef) =>
   (isLinearIntersectionTarget(a.type) && isLinearIntersectionTarget(b.type)) ||

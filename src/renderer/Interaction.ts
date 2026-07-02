@@ -8,6 +8,8 @@ import type { Ray3 } from '../core/geometry/Ray3'
 import type { GeoVector3 } from '../core/geometry/GeoVector3'
 import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { Circle3 } from '../core/geometry/Circle3'
+import type { Cylinder3 } from '../core/geometry/Cylinder3'
+import type { Cone3 } from '../core/geometry/Cone3'
 import type { DirectionType } from '../core/geometry/Circle3'
 import { Vec3 } from '../core/geometry/Vec3'
 import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
@@ -1501,7 +1503,7 @@ export class Interaction {
         dp.start,
         dp.end,
         'perpendicularLine',
-        [pl.p1.id],
+        [pl.p1.id, pl.p2.id],
         isConstrainedProtected(id),
       )
     }
@@ -1513,7 +1515,7 @@ export class Interaction {
         dp.start,
         dp.end,
         'parallelLine',
-        [pl.p1.id],
+        [pl.p1.id, pl.p2.id],
         isConstrainedProtected(id),
       )
     }
@@ -2008,22 +2010,61 @@ export class Interaction {
     )
   }
 
-  private canDragRayAroundOrigin(ray: Ray3) {
-    return (
-      ray.p1.id === Scene.ORIGIN_ID &&
-      ray.p1.locked &&
-      !ray.userLocked &&
-      !this.editor.isPointCoordinateLocked(ray.p2)
-    )
+  private getOriginDragRotatingPoint(ray: Ray3): Point3 | null
+  private getOriginDragRotatingPoint(line: StraightLine3): Point3 | null
+  private getOriginDragRotatingPoint(vector: GeoVector3): Point3 | null
+  private getOriginDragRotatingPoint(line: Line3): Point3 | null
+  private getOriginDragRotatingPoint(cylinder: Cylinder3): Point3 | null
+  private getOriginDragRotatingPoint(cone: Cone3): Point3 | null
+  private getOriginDragRotatingPoint(
+    obj: Ray3 | StraightLine3 | GeoVector3 | Line3 | Cylinder3 | Cone3,
+  ): Point3 | null
+  private getOriginDragRotatingPoint(
+    obj: Ray3 | StraightLine3 | GeoVector3 | Line3 | Cylinder3 | Cone3,
+  ): Point3 | null {
+    if (obj.userLocked) return null
+
+    if ('p1' in obj && 'p2' in obj) {
+      if (obj.p1.id === Scene.ORIGIN_ID && obj.p1.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.p2)) return obj.p2
+      }
+      if (obj.p2.id === Scene.ORIGIN_ID && obj.p2.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.p1)) return obj.p1
+      }
+    }
+
+    if ('bottomCenterPoint' in obj && 'topCenterPoint' in obj) {
+      if (obj.bottomCenterPoint.id === Scene.ORIGIN_ID && obj.bottomCenterPoint.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.topCenterPoint)) return obj.topCenterPoint
+      }
+      if (obj.topCenterPoint.id === Scene.ORIGIN_ID && obj.topCenterPoint.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.bottomCenterPoint)) return obj.bottomCenterPoint
+      }
+    }
+
+    if ('baseCenterPoint' in obj && 'apexPoint' in obj) {
+      if (obj.baseCenterPoint.id === Scene.ORIGIN_ID && obj.baseCenterPoint.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.apexPoint)) return obj.apexPoint
+      }
+      if (obj.apexPoint.id === Scene.ORIGIN_ID && obj.apexPoint.locked) {
+        if (!this.editor.isPointCoordinateLocked(obj.baseCenterPoint)) return obj.baseCenterPoint
+      }
+    }
+
+    return null
   }
 
-  private canDragStraightLineAroundOrigin(line: StraightLine3) {
-    return (
-      line.p1.id === Scene.ORIGIN_ID &&
-      line.p1.locked &&
-      !line.userLocked &&
-      !this.editor.isPointCoordinateLocked(line.p2)
-    )
+  private getOriginDragReferencePosition(
+    type: 'line' | 'straightLine' | 'ray' | 'vector' | 'cone' | 'cylinder',
+    geoId: string,
+    rotatingPoint: Point3,
+  ): Vec3 {
+    const hitWorld = this.findClosestHitOnObject(type, geoId)
+    if (hitWorld) {
+      const hitMath = this.renderer.toMathLocalPosition(hitWorld)
+      return new Vec3(hitMath.x, hitMath.y, hitMath.z)
+    }
+    return rotatingPoint.position
   }
 
   private getRayDragReferencePoint(ray: Ray3) {
@@ -2161,6 +2202,86 @@ export class Interaction {
       const line = this.editor.scene.lines.get(this.draggingLineId)
       if (!line) return
 
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(line) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(originPoint, originRotatingPoint, isAltPressed)
+        if (delta) {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (!l) return
+            const rp = this.getOriginDragRotatingPoint(l)
+            if (rp) {
+              toMove.add(rp.id)
+              return
+            }
+            if (!this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.delete(line.p1.id)
+          toMove.delete(line.p2.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
       const pivotPoint = this.getLinePivotDragPoint(line)
       if (pivotPoint) {
         this.handleDrag(
@@ -2252,12 +2373,12 @@ export class Interaction {
     if (this.draggingStraightLineId) {
       const line = this.editor.scene.straightLines.get(this.draggingStraightLineId)
       if (!line) return
-      const canRotateAroundOrigin = this.canDragStraightLineAroundOrigin(line)
-      if (!canRotateAroundOrigin && this.editor.isStraightLineGeometryLocked(line)) return
 
-      this.handleDrag(
-        this.getStraightLineDragReferencePoint(line),
-        (delta) => {
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(line) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(originPoint, originRotatingPoint, isAltPressed)
+        if (delta) {
           const toMove = new Set<string>()
           selection.lines.forEach((lid) => {
             const l = this.editor.scene.lines.get(lid)
@@ -2269,8 +2390,9 @@ export class Interaction {
           selection.straightLines.forEach((sid) => {
             const straightLine = this.editor.scene.straightLines.get(sid)
             if (!straightLine) return
-            if (this.canDragStraightLineAroundOrigin(straightLine)) {
-              toMove.add(straightLine.p2.id)
+            const rp = this.getOriginDragRotatingPoint(straightLine)
+            if (rp) {
+              toMove.add(rp.id)
               return
             }
             if (!this.editor.isStraightLineGeometryLocked(straightLine)) {
@@ -2324,12 +2446,82 @@ export class Interaction {
           })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
-          if (canRotateAroundOrigin) {
-            toMove.add(line.p2.id)
-          } else {
-            toMove.add(line.p1.id)
-            toMove.add(line.p2.id)
-          }
+          toMove.delete(line.p1.id)
+          toMove.delete(line.p2.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
+      if (this.editor.isStraightLineGeometryLocked(line)) return
+
+      this.handleDrag(
+        this.getStraightLineDragReferencePoint(line),
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(line.p1.id)
+          toMove.add(line.p2.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -2341,12 +2533,11 @@ export class Interaction {
       const ray = this.editor.scene.rays.get(this.draggingRayId)
       if (!ray) return
 
-      const canRotateAroundOrigin = this.canDragRayAroundOrigin(ray)
-      if (!canRotateAroundOrigin && this.editor.isRayGeometryLocked(ray)) return
-
-      this.handleDrag(
-        this.getRayDragReferencePoint(ray),
-        (delta) => {
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(ray) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(originPoint, originRotatingPoint, isAltPressed)
+        if (delta) {
           const toMove = new Set<string>()
           selection.lines.forEach((lid) => {
             const l = this.editor.scene.lines.get(lid)
@@ -2358,12 +2549,11 @@ export class Interaction {
           selection.rays.forEach((rid) => {
             const selectedRay = this.editor.scene.rays.get(rid)
             if (!selectedRay) return
-
-            if (this.canDragRayAroundOrigin(selectedRay)) {
-              toMove.add(selectedRay.p2.id)
+            const rp = this.getOriginDragRotatingPoint(selectedRay)
+            if (rp) {
+              toMove.add(rp.id)
               return
             }
-
             if (!this.editor.isRayGeometryLocked(selectedRay)) {
               toMove.add(selectedRay.p1.id)
               toMove.add(selectedRay.p2.id)
@@ -2408,12 +2598,82 @@ export class Interaction {
           })
           this.addSelectedFacePoints(toMove)
           selection.points.forEach((id) => toMove.add(id))
-          if (canRotateAroundOrigin) {
-            toMove.add(ray.p2.id)
-          } else {
-            toMove.add(ray.p1.id)
-            toMove.add(ray.p2.id)
-          }
+          toMove.delete(ray.p1.id)
+          toMove.delete(ray.p2.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
+      if (this.editor.isRayGeometryLocked(ray)) return
+
+      this.handleDrag(
+        this.getRayDragReferencePoint(ray),
+        (delta) => {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const selectedRay = this.editor.scene.rays.get(rid)
+            if (selectedRay && !this.editor.isRayGeometryLocked(selectedRay)) {
+              toMove.add(selectedRay.p1.id)
+              toMove.add(selectedRay.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.add(ray.p1.id)
+          toMove.add(ray.p2.id)
           this.previewMovePoints([...toMove], delta)
         },
         isAltPressed,
@@ -2424,6 +2684,91 @@ export class Interaction {
     if (this.draggingVectorId) {
       const vector = this.editor.scene.vectors.get(this.draggingVectorId)
       if (!vector) return
+
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(vector) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(
+          originPoint,
+          originRotatingPoint,
+          isAltPressed,
+        )
+        if (delta) {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (!v) return
+            const rp = this.getOriginDragRotatingPoint(v)
+            if (rp) {
+              toMove.add(rp.id)
+              return
+            }
+            if (!this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.delete(vector.p1.id)
+          toMove.delete(vector.p2.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
       if (this.editor.isVectorGeometryLocked(vector)) return
 
       this.handleDrag(
@@ -2660,6 +3005,87 @@ export class Interaction {
     if (this.draggingConeId) {
       const cone = this.editor.scene.cones.get(this.draggingConeId)
       if (!cone) return
+
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(cone) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(originPoint, originRotatingPoint, isAltPressed)
+        if (delta) {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (!c) return
+            const rp = this.getOriginDragRotatingPoint(c)
+            if (rp) {
+              toMove.add(rp.id)
+              return
+            }
+            if (!this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (c && !this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.delete(cone.baseCenterPoint.id)
+          toMove.delete(cone.apexPoint.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
       if (this.editor.isConeGeometryLocked(cone)) return
 
       this.handleDrag(
@@ -2738,6 +3164,87 @@ export class Interaction {
     if (this.draggingCylinderId) {
       const cylinder = this.editor.scene.cylinders.get(this.draggingCylinderId)
       if (!cylinder) return
+
+      const originPoint = this.editor.scene.points.get(Scene.ORIGIN_ID)
+      const originRotatingPoint = originPoint ? this.getOriginDragRotatingPoint(cylinder) : null
+      if (originPoint && originRotatingPoint) {
+        const delta = this.handleRotateAroundPointDrag(originPoint, originRotatingPoint, isAltPressed)
+        if (delta) {
+          const toMove = new Set<string>()
+          selection.lines.forEach((lid) => {
+            const l = this.editor.scene.lines.get(lid)
+            if (l && !this.editor.isLineGeometryLocked(l)) {
+              toMove.add(l.p1.id)
+              toMove.add(l.p2.id)
+            }
+          })
+          selection.straightLines.forEach((sid) => {
+            const straightLine = this.editor.scene.straightLines.get(sid)
+            if (straightLine && !this.editor.isStraightLineGeometryLocked(straightLine)) {
+              toMove.add(straightLine.p1.id)
+              toMove.add(straightLine.p2.id)
+            }
+          })
+          selection.rays.forEach((rid) => {
+            const ray = this.editor.scene.rays.get(rid)
+            if (ray && !this.editor.isRayGeometryLocked(ray)) {
+              toMove.add(ray.p1.id)
+              toMove.add(ray.p2.id)
+            }
+          })
+          selection.vectors.forEach((vid) => {
+            const v = this.editor.scene.vectors.get(vid)
+            if (v && !this.editor.isVectorGeometryLocked(v)) {
+              toMove.add(v.p1.id)
+              toMove.add(v.p2.id)
+            }
+          })
+          selection.circles.forEach((cid) => {
+            const c = this.editor.scene.circles.get(cid)
+            if (c && !this.editor.isCircleGeometryLocked(c)) {
+              toMove.add(c.p1.id)
+              if (!c.isNormalCircle()) {
+                toMove.add(c.p2.id)
+                toMove.add(c.p3.id)
+              }
+            }
+          })
+          selection.cylinders.forEach((cid) => {
+            const c = this.editor.scene.cylinders.get(cid)
+            if (!c) return
+            const rp = this.getOriginDragRotatingPoint(c)
+            if (rp) {
+              toMove.add(rp.id)
+              return
+            }
+            if (!this.editor.isCylinderGeometryLocked(c)) {
+              toMove.add(c.bottomCenterPoint.id)
+              toMove.add(c.topCenterPoint.id)
+            }
+          })
+          selection.cones.forEach((cid) => {
+            const c = this.editor.scene.cones.get(cid)
+            if (c && !this.editor.isConeGeometryLocked(c)) {
+              toMove.add(c.baseCenterPoint.id)
+              toMove.add(c.apexPoint.id)
+            }
+          })
+          selection.spheres.forEach((sid) => {
+            const s = this.editor.scene.spheres.get(sid)
+            if (s && !this.editor.isSphereGeometryLocked(s)) {
+              toMove.add(s.centerPoint.id)
+            }
+          })
+          this.addSelectedFacePoints(toMove)
+          selection.points.forEach((id) => toMove.add(id))
+          toMove.delete(cylinder.bottomCenterPoint.id)
+          toMove.delete(cylinder.topCenterPoint.id)
+          toMove.add(originRotatingPoint.id)
+          this.previewMovePoints([...toMove], delta)
+        }
+        return
+      }
+
       if (this.editor.isCylinderGeometryLocked(cylinder)) return
 
       this.handleDrag(
@@ -3185,7 +3692,10 @@ export class Interaction {
           this.editor.scene.selection.selectLine(geoId, true)
           const l = this.editor.scene.lines.get(geoId)
           if (l) {
-            const referencePoint = this.getLineDragReferencePoint(l)
+            const lineOriginRotatingPoint = this.getOriginDragRotatingPoint(l)
+            const referencePoint = lineOriginRotatingPoint
+              ? this.getOriginDragReferencePosition('line', geoId, lineOriginRotatingPoint)
+              : this.getLineDragReferencePoint(l)
             if (this.editor.isLineGeometryLocked(l) && !this.getLinePivotDragPoint(l)) {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
@@ -3201,12 +3711,17 @@ export class Interaction {
           if (line) {
             if (
               this.editor.isStraightLineGeometryLocked(line) &&
-              !this.canDragStraightLineAroundOrigin(line)
+              !this.getOriginDragRotatingPoint(line)
             ) {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingStraightLineId = geoId
-              this.startDrag(this.getStraightLineDragReferencePoint(line))
+              const straightLineOriginRotatingPoint = this.getOriginDragRotatingPoint(line)
+              this.startDrag(
+                straightLineOriginRotatingPoint
+                  ? this.getOriginDragReferencePosition('straightLine', geoId, straightLineOriginRotatingPoint)
+                  : this.getStraightLineDragReferencePoint(line),
+              )
             }
           }
         } else if (type === 'perpendicularLine') {
@@ -3245,11 +3760,14 @@ export class Interaction {
           this.editor.scene.selection.selectRay(geoId, true)
           const ray = this.editor.scene.rays.get(geoId)
           if (ray) {
-            if (this.editor.isRayGeometryLocked(ray) && !this.canDragRayAroundOrigin(ray)) {
+            if (this.editor.isRayGeometryLocked(ray) && !this.getOriginDragRotatingPoint(ray)) {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingRayId = geoId
-              this.startDrag(this.getRayDragReferencePoint(ray))
+              const rayOriginRotatingPoint = this.getOriginDragRotatingPoint(ray)
+              this.startDrag(
+                rayOriginRotatingPoint ? this.getOriginDragReferencePosition('ray', geoId, rayOriginRotatingPoint) : this.getRayDragReferencePoint(ray),
+              )
             }
           }
         } else if (type === 'vector') {
@@ -3258,11 +3776,19 @@ export class Interaction {
           this.editor.scene.selection.selectVector(geoId, true)
           const vector = this.editor.scene.vectors.get(geoId)
           if (vector) {
-            if (this.editor.isVectorGeometryLocked(vector)) {
+            if (
+              this.editor.isVectorGeometryLocked(vector) &&
+              !this.getOriginDragRotatingPoint(vector)
+            ) {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingVectorId = geoId
-              this.startDrag(this.getVectorDragReferencePoint(vector))
+              const vectorOriginRotatingPoint = this.getOriginDragRotatingPoint(vector)
+              this.startDrag(
+                vectorOriginRotatingPoint
+                  ? this.getOriginDragReferencePosition('vector', geoId, vectorOriginRotatingPoint)
+                  : this.getVectorDragReferencePoint(vector),
+              )
             }
           }
         } else if (type === 'circle') {
@@ -3309,11 +3835,15 @@ export class Interaction {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingConeId = geoId
+              const coneOriginRotatingPoint = this.getOriginDragRotatingPoint(cone)
+              const coneReferencePos = coneOriginRotatingPoint
+                ? this.getOriginDragReferencePosition('cone', geoId, coneOriginRotatingPoint)
+                : cone.baseCenterPoint.position
               this.startDrag(
                 new THREE.Vector3(
-                  cone.baseCenterPoint.position.x,
-                  cone.baseCenterPoint.position.y,
-                  cone.baseCenterPoint.position.z,
+                  coneReferencePos.x,
+                  coneReferencePos.y,
+                  coneReferencePos.z,
                 ),
               )
             }
@@ -3329,11 +3859,15 @@ export class Interaction {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingCylinderId = geoId
+              const cylinderOriginRotatingPoint = this.getOriginDragRotatingPoint(cylinder)
+              const cylinderReferencePos = cylinderOriginRotatingPoint
+                ? this.getOriginDragReferencePosition('cylinder', geoId, cylinderOriginRotatingPoint)
+                : cylinder.bottomCenterPoint.position
               this.startDrag(
                 new THREE.Vector3(
-                  cylinder.bottomCenterPoint.position.x,
-                  cylinder.bottomCenterPoint.position.y,
-                  cylinder.bottomCenterPoint.position.z,
+                  cylinderReferencePos.x,
+                  cylinderReferencePos.y,
+                  cylinderReferencePos.z,
                 ),
               )
             }
@@ -3723,6 +4257,8 @@ export class Interaction {
       this.draggingConeId = null
       this.draggingCylinderId = null
       this.draggingFaceId = null
+      this.draggingPerpendicularLineId = null
+      this.draggingParallelLineId = null
       this.pendingToggleSelection = null
       this.clearActiveLabelTarget()
       this.clearActivePointValueTarget()
@@ -4314,7 +4850,10 @@ export class Interaction {
         return
       }
       this.draggingLineId = geoId
-      this.startDrag(this.getLineDragReferencePoint(line))
+      const lineOriginRotatingPoint = this.getOriginDragRotatingPoint(line)
+      this.startDrag(
+        lineOriginRotatingPoint ? this.getOriginDragReferencePosition('line', geoId, lineOriginRotatingPoint) : this.getLineDragReferencePoint(line),
+      )
       return
     }
 
@@ -4339,14 +4878,19 @@ export class Interaction {
       if (
         !line ||
         (this.editor.isStraightLineGeometryLocked(line) &&
-          !this.canDragStraightLineAroundOrigin(line))
+          !this.getOriginDragRotatingPoint(line))
       ) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
       }
       this.draggingStraightLineId = geoId
-      this.startDrag(this.getStraightLineDragReferencePoint(line))
+      const straightLineOriginRotatingPoint = this.getOriginDragRotatingPoint(line)
+      this.startDrag(
+        straightLineOriginRotatingPoint
+          ? this.getOriginDragReferencePosition('straightLine', geoId, straightLineOriginRotatingPoint)
+          : this.getStraightLineDragReferencePoint(line),
+      )
       return
     }
 
@@ -4426,13 +4970,14 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       const ray = this.editor.scene.rays.get(geoId)
-      if (!ray || (this.editor.isRayGeometryLocked(ray) && !this.canDragRayAroundOrigin(ray))) {
+      if (!ray || (this.editor.isRayGeometryLocked(ray) && !this.getOriginDragRotatingPoint(ray))) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
       }
       this.draggingRayId = geoId
-      this.startDrag(this.getRayDragReferencePoint(ray))
+      const rayOriginRotatingPoint = this.getOriginDragRotatingPoint(ray)
+      this.startDrag(rayOriginRotatingPoint ? this.getOriginDragReferencePosition('ray', geoId, rayOriginRotatingPoint) : this.getRayDragReferencePoint(ray))
       return
     }
 
@@ -4454,13 +4999,18 @@ export class Interaction {
       this.renderer.controls.enabled = false
       this.renderer.renderer.domElement.style.cursor = 'grabbing'
       const vector = this.editor.scene.vectors.get(geoId)
-      if (!vector || this.editor.isVectorGeometryLocked(vector)) {
+      if (!vector || (this.editor.isVectorGeometryLocked(vector) && !this.getOriginDragRotatingPoint(vector))) {
         this.syncControlLockState()
         this.renderer.renderer.domElement.style.cursor = 'default'
         return
       }
       this.draggingVectorId = geoId
-      this.startDrag(this.getVectorDragReferencePoint(vector))
+      const vectorOriginRotatingPoint = this.getOriginDragRotatingPoint(vector)
+      this.startDrag(
+        vectorOriginRotatingPoint
+          ? this.getOriginDragReferencePosition('vector', geoId, vectorOriginRotatingPoint)
+          : this.getVectorDragReferencePoint(vector),
+      )
       return
     }
 
@@ -4551,12 +5101,12 @@ export class Interaction {
         return
       }
       this.draggingConeId = geoId
+      const coneOriginRotatingPoint = this.getOriginDragRotatingPoint(cone)
+      const coneReferencePos = coneOriginRotatingPoint
+        ? this.getOriginDragReferencePosition('cone', geoId, coneOriginRotatingPoint)
+        : cone.baseCenterPoint.position
       this.startDrag(
-        new THREE.Vector3(
-          cone.baseCenterPoint.position.x,
-          cone.baseCenterPoint.position.y,
-          cone.baseCenterPoint.position.z,
-        ),
+        new THREE.Vector3(coneReferencePos.x, coneReferencePos.y, coneReferencePos.z),
       )
       return
     }
@@ -4586,11 +5136,15 @@ export class Interaction {
         return
       }
       this.draggingCylinderId = geoId
+      const cylinderOriginRotatingPoint = this.getOriginDragRotatingPoint(cylinder)
+      const cylinderReferencePos = cylinderOriginRotatingPoint
+        ? this.getOriginDragReferencePosition('cylinder', geoId, cylinderOriginRotatingPoint)
+        : cylinder.bottomCenterPoint.position
       this.startDrag(
         new THREE.Vector3(
-          cylinder.bottomCenterPoint.position.x,
-          cylinder.bottomCenterPoint.position.y,
-          cylinder.bottomCenterPoint.position.z,
+          cylinderReferencePos.x,
+          cylinderReferencePos.y,
+          cylinderReferencePos.z,
         ),
       )
       return
@@ -4955,6 +5509,100 @@ export class Interaction {
       applyDelta(delta)
     }
     this.dragLastPos.copy(targetPos)
+  }
+
+  /**
+   * 围绕固定点（如原点）旋转被拖拽端点。
+   * 旋转时保持端点到固定点的距离不变，使鼠标拖动的是“方向”而不是“位置”。
+   * @param pivotPoint 固定点
+   * @param rotatingPoint 被拖拽的旋转端点
+   * @returns 旋转端点在本次事件中的位移增量；若无法计算则返回 null
+   */
+  private handleRotateAroundPointDrag(
+    pivotPoint: Point3,
+    rotatingPoint: Point3,
+    isAltPressed: boolean,
+  ): Vec3 | null {
+    this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+    const targetPos = new THREE.Vector3()
+
+    if (
+      !this.dragPlane ||
+      !this.dragLastPos ||
+      !this.dragStartPointerPos ||
+      !this.dragReferenceStartPos ||
+      !this.dragReferenceStartMathPos
+    ) {
+      this.startDrag(rotatingPoint.position)
+    }
+    if (
+      !this.dragPlane ||
+      !this.dragLastPos ||
+      !this.dragStartPointerPos ||
+      !this.dragReferenceStartPos ||
+      !this.dragReferenceStartMathPos
+    ) {
+      return null
+    }
+
+    let hit = false
+
+    if (this.renderer.isARActive() && this.dragDepth !== null) {
+      const sphere = new THREE.Sphere(this.raycaster.ray.origin.clone(), this.dragDepth)
+      hit = this.raycaster.ray.intersectSphere(sphere, targetPos) !== null
+    }
+
+    if (!hit) {
+      hit = this.raycaster.ray.intersectPlane(this.dragPlane, targetPos) !== null
+    }
+
+    if (!hit) {
+      const fallbackDepth = this.raycaster.ray.origin.distanceTo(this.dragLastPos)
+      targetPos.copy(this.raycaster.ray.at(fallbackDepth, new THREE.Vector3()))
+    }
+
+    const desiredReferencePos = this.dragReferenceStartPos
+      .clone()
+      .add(targetPos.clone().sub(this.dragStartPointerPos))
+
+    const desiredMathPos = this.renderer.toMathLocalPosition(desiredReferencePos)
+
+    if (this.editor.isSnappingEnabled && !isAltPressed) {
+      desiredMathPos.set(
+        this.snap(desiredMathPos.x),
+        this.snap(desiredMathPos.y),
+        this.snap(desiredMathPos.z),
+      )
+    }
+
+    const pivot = pivotPoint.position
+    const dir = new Vec3(
+      desiredMathPos.x - pivot.x,
+      desiredMathPos.y - pivot.y,
+      desiredMathPos.z - pivot.z,
+    )
+    const dirLen = Math.hypot(dir.x, dir.y, dir.z)
+    if (dirLen < 1e-8) {
+      this.dragLastPos.copy(targetPos)
+      return null
+    }
+
+    const startPos = this.dragStartPositions.get(rotatingPoint.id) ?? rotatingPoint.position
+    const radius = Math.hypot(startPos.x - pivot.x, startPos.y - pivot.y, startPos.z - pivot.z)
+    if (radius < 1e-8) {
+      this.dragLastPos.copy(targetPos)
+      return null
+    }
+
+    const target = new Vec3(
+      pivot.x + (dir.x / dirLen) * radius,
+      pivot.y + (dir.y / dirLen) * radius,
+      pivot.z + (dir.z / dirLen) * radius,
+    )
+
+    this.dragLastPos.copy(targetPos)
+
+    return new Vec3(target.x - startPos.x, target.y - startPos.y, target.z - startPos.z)
   }
 
   private startDrag(referencePos: Vec3) {

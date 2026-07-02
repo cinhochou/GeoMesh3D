@@ -1203,6 +1203,7 @@ export class CollabManager {
   private markLinkedGeometryDirtyForPoint(pointId: string) {
     const point = this.scene.points.get(pointId)
     if (point?.cubeId) this.markCubeDirty(point.cubeId)
+    if (point?.regularPolygonId) this.markRegularPolygonDirty(point.regularPolygonId)
     this.scene.intersectionConstraints.forEach((constraint, id) => {
       const dependencyIds = constraint.getDependencyPointIds?.()
       if (!dependencyIds) return
@@ -1948,6 +1949,8 @@ export class CollabManager {
     if (target.type === 'straightLine') return this.scene.straightLines.has(target.id)
     if (target.type === 'ray') return this.scene.rays.has(target.id)
     if (target.type === 'vector') return this.scene.vectors.has(target.id)
+    if (target.type === 'perpendicularLine') return this.scene.perpendicularLines.has(target.id)
+    if (target.type === 'parallelLine') return this.scene.parallelLines.has(target.id)
     return this.scene.faces.has(target.id)
   }
 
@@ -2282,6 +2285,7 @@ export class CollabManager {
       line.p2 = p2
       line.target = { type: targetType, id: targetId }
       this.scene.markAllRenderDirty()
+      this.reconcileIntersectionsForTarget('perpendicularLine', id)
       return
     }
 
@@ -2305,6 +2309,7 @@ export class CollabManager {
     this.scene.addPerpendicularLineConstraint(
       new PerpendicularLineConstraint(this.scene, id, target),
     )
+    this.reconcileIntersectionsForTarget('perpendicularLine', id)
   }
 
   private applyParallelLineRecord(id: string, record: ParallelLineSharedMap) {
@@ -2368,6 +2373,7 @@ export class CollabManager {
       line.p2 = p2
       line.target = { type: targetType, id: targetId }
       this.scene.markAllRenderDirty()
+      this.reconcileIntersectionsForTarget('parallelLine', id)
       return
     }
 
@@ -2391,6 +2397,7 @@ export class CollabManager {
     this.scene.addParallelLineConstraint(
       new ParallelLineConstraint(this.scene, id, target),
     )
+    this.reconcileIntersectionsForTarget('parallelLine', id)
   }
 
   private applyRayRecord(id: string, record: RaySharedMap) {

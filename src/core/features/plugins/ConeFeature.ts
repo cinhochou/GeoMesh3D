@@ -7,6 +7,8 @@ import { Cone3 } from '../../geometry/Cone3'
 import { Vec3 } from '../../geometry/Vec3'
 import type { PerpendicularLine3 } from '../../geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../../geometry/ParallelLine3'
+import type { Point3 } from '../../geometry/Point3'
+import type { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export interface ConeFeatureParams {
   baseCenterPointId: string
@@ -23,6 +25,10 @@ export interface ConeFeatureParams {
 }
 
 export interface DeleteConeParams {
+  dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: IntersectionPointConstraint
+  }>
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
 }
@@ -123,6 +129,12 @@ export const coneFeaturePlugin: FeaturePlugin = {
 
     const cone = scene.cones.get(coneId)
     if (!cone) return
+
+    deleteParams.dependentIntersectionPoints?.forEach(({ point, constraint }) => {
+      scene.removeIntersectionConstraint(constraint.pointId)
+      scene.points.delete(point.id)
+      scene.selection.points.delete(point.id)
+    })
 
     deleteParams.relatedPerpendicularLines?.forEach((line) => {
       scene.removePerpendicularLine(line.id)

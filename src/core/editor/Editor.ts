@@ -387,7 +387,7 @@ export class Editor {
   constructor(scene: Scene) {
     this.scene = scene
     this.historyManager = new HistoryManager(scene)
-    this.featureDocument = new FeatureDocument(scene, (entry) => this.historyManager.push(entry))
+    this.featureDocument = new FeatureDocument(scene)
   }
 
   isPointConstrainedByLockedLinear(pointId: string) {
@@ -463,6 +463,14 @@ export class Editor {
       const ray = this.scene.rays.get(target.id)
       return ray ? `射线${ray.name}` : '射线(已删除)'
     }
+    if (target.type === 'perpendicularLine') {
+      const line = this.scene.perpendicularLines.get(target.id)
+      return line ? `垂线${line.name}` : '垂线(已删除)'
+    }
+    if (target.type === 'parallelLine') {
+      const line = this.scene.parallelLines.get(target.id)
+      return line ? `平行线${line.name}` : '平行线(已删除)'
+    }
     const face = this.scene.faces.get(target.id)
     return face ? `多边形${face.name}` : '多边形(已删除)'
   }
@@ -497,6 +505,35 @@ export class Editor {
     })
 
     return [...matched.values()]
+  }
+
+  /**
+   * 合并多组交点依赖，按 point.id 去重。
+   */
+  private mergeIntersectionPoints(
+    ...arrays: Array<Array<{ point: Point3; constraint: IntersectionPointConstraint }>>
+  ): Array<{ point: Point3; constraint: IntersectionPointConstraint }> {
+    const map = new Map<string, { point: Point3; constraint: IntersectionPointConstraint }>()
+    for (const arr of arrays) {
+      for (const item of arr) {
+        if (!map.has(item.point.id)) map.set(item.point.id, item)
+      }
+    }
+    return [...map.values()]
+  }
+
+  /**
+   * 收集依赖给定垂线/平行线的交点。
+   */
+  private collectIntersectionPointsFromRelatedLines(
+    relatedPerpendicularLines: PerpendicularLine3[],
+    relatedParallelLines: ParallelLine3[],
+  ): Array<{ point: Point3; constraint: IntersectionPointConstraint }> {
+    if (relatedPerpendicularLines.length === 0 && relatedParallelLines.length === 0) return []
+    return this.collectDependentIntersectionPoints([
+      ...relatedPerpendicularLines.map((pl) => ({ type: 'perpendicularLine' as const, id: pl.id })),
+      ...relatedParallelLines.map((pl) => ({ type: 'parallelLine' as const, id: pl.id })),
+    ])
   }
 
   collectDependentCubesByPointId(pointId: string, excludePointIds: string[] = []) {
@@ -1158,7 +1195,8 @@ export class Editor {
     // 清理关联垂线/平行线上的约束点
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeleteConeCommand(this.scene, cone, relatedPerpendicularLines, relatedParallelLines))
+    const cascadedIntersectionPoints = this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines)
+    this.executeHistoryEntry(createDeleteConeCommand(this.scene, cone, cascadedIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateConeTwoPoint(baseCenterPoint: Point3, apexPoint: Point3, radius: number) {
@@ -1417,7 +1455,8 @@ export class Editor {
     // 清理关联垂线/平行线上的约束点
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeleteCylinderCommand(this.scene, cylinder, relatedPerpendicularLines, relatedParallelLines))
+    const cascadedIntersectionPoints = this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines)
+    this.executeHistoryEntry(createDeleteCylinderCommand(this.scene, cylinder, cascadedIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   tryCreateCylinderTwoPoint(bottomCenterPoint: Point3, topCenterPoint: Point3, radius: number) {
@@ -2899,7 +2938,7 @@ export class Editor {
 
   deletePoint(pointId: string) {
     const point = this.scene.points.get(pointId)
-    if (!point || point.locked) return
+    if (!point || (point.locked && point.circleRole !== 'center')) return
     const dependentCubes = this.collectDependentCubesByPointId(pointId, [pointId])
     const cubeFaceIds = new Set(dependentCubes.flatMap(({ faces }) => faces.map((face) => face.id)))
 
@@ -2916,7 +2955,8 @@ export class Editor {
       (line) => line.p1.id === pointId || line.p2.id === pointId,
     )
     const relatedCircles = [...this.scene.circles.values()].filter(
-      (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId,
+      (circle) => circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId ||
+        (point.circleId === circle.id && point.circleRole === 'center'),
     )
     const relatedSpheres = [...this.scene.spheres.values()].filter(
       (sphere) =>
@@ -2935,11 +2975,20 @@ export class Editor {
       (face) => face.includesPoint(pointId) && !cubeFaceIds.has(face.id),
     )
     const pointConstraint = this.scene.getIntersectionConstraint(pointId)
+    // 直接依赖该点的垂线/平行线（p1/p2 引用了该点），需纳入交点依赖收集
+    const directPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+      (pl) => pl.p1.id === pointId || pl.p2.id === pointId,
+    )
+    const directParallelLines = [...this.scene.parallelLines.values()].filter(
+      (pl) => pl.p1.id === pointId || pl.p2.id === pointId,
+    )
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       ...relatedLines.map((line) => ({ type: 'line' as const, id: line.id })),
       ...relatedStraightLines.map((line) => ({ type: 'straightLine' as const, id: line.id })),
       ...relatedRays.map((ray) => ({ type: 'ray' as const, id: ray.id })),
       ...relatedFaces.map((face) => ({ type: 'face' as const, id: face.id })),
+      ...directPerpendicularLines.map((pl) => ({ type: 'perpendicularLine' as const, id: pl.id })),
+      ...directParallelLines.map((pl) => ({ type: 'parallelLine' as const, id: pl.id })),
     ]).filter(({ point }) => point.id !== pointId)
 
     const dependentRegularPolygonConstraints = this.getRegularPolygonConstraints().filter(
@@ -2974,7 +3023,7 @@ export class Editor {
     )
 
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter((pl) => {
-      if (pl.p1.id === pointId) return true
+      if (pl.p1.id === pointId || pl.p2.id === pointId) return true
       if (pl.target.type === 'line' && relatedLines.some((l) => l.id === pl.target.id)) return true
       if (pl.target.type === 'straightLine' && relatedStraightLines.some((l) => l.id === pl.target.id)) return true
       if (pl.target.type === 'ray' && relatedRays.some((r) => r.id === pl.target.id)) return true
@@ -2991,7 +3040,7 @@ export class Editor {
     })
 
     const relatedParallelLines = [...this.scene.parallelLines.values()].filter((pl) => {
-      if (pl.p1.id === pointId) return true
+      if (pl.p1.id === pointId || pl.p2.id === pointId) return true
       if (pl.target.type === 'line' && relatedLines.some((l) => l.id === pl.target.id)) return true
       if (pl.target.type === 'straightLine' && relatedStraightLines.some((l) => l.id === pl.target.id)) return true
       if (pl.target.type === 'ray' && relatedRays.some((r) => r.id === pl.target.id)) return true
@@ -3024,7 +3073,11 @@ export class Editor {
       }
     })
 
-    this.historyManager.push(
+    const allIntersectionPoints = this.mergeIntersectionPoints(
+      dependentIntersectionPoints,
+      this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines),
+    )
+    this.executeHistoryEntry(
       createDeletePointCommand(
         this.scene,
         point,
@@ -3035,7 +3088,7 @@ export class Editor {
         relatedCircles,
         filteredRelatedFaces,
         pointConstraint,
-        dependentIntersectionPoints,
+        allIntersectionPoints,
         dependentCubes,
         relatedSpheres,
         dependentRegularPolygons,
@@ -3045,7 +3098,6 @@ export class Editor {
         relatedCylinders,
       ),
     )
-    this.historyVersion++
     this.selectedPoints = this.selectedPoints.filter((p) => p.id !== pointId)
   }
 
@@ -3124,11 +3176,15 @@ export class Editor {
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
 
+    const allIntersectionPoints = this.mergeIntersectionPoints(
+      dependentIntersectionPoints,
+      this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines),
+    )
     this.executeHistoryEntry(
       createDeleteLineCommand(
         this.scene,
         line,
-        dependentIntersectionPoints,
+        allIntersectionPoints,
         dependentCubes,
         filteredDependentFaces,
         dependentRegularPolygons,
@@ -3210,7 +3266,7 @@ export class Editor {
     })
     geoPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     geoParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeleteCircleCommand(this.scene, circle, relatedCones, relatedCylinders, geoPerpendicularLines, geoParallelLines))
+    this.executeHistoryEntry(createDeleteCircleCommand(this.scene, circle, [], relatedCones, relatedCylinders, geoPerpendicularLines, geoParallelLines))
   }
 
   deleteStraightLine(lineId: string) {
@@ -3285,13 +3341,17 @@ export class Editor {
       // 清理关联垂线/平行线上的约束点
       relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
       relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
+      const allIntersectionPoints = this.mergeIntersectionPoints(
+        dependentIntersectionPoints,
+        this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines),
+      )
       this.executeHistoryEntry(
         createDeleteHexahedronCommand(
           this.scene,
           faces,
           dependentPoints,
           cubeConstraint,
-          dependentIntersectionPoints,
+          allIntersectionPoints,
           relatedPerpendicularLines,
           relatedParallelLines,
         ),
@@ -4153,6 +4213,8 @@ export class Editor {
     this.scene.selection.straightLines.forEach((id) => targets.push({ type: 'straightLine', id }))
     this.scene.selection.rays.forEach((id) => targets.push({ type: 'ray', id }))
     this.scene.selection.vectors.forEach((id) => targets.push({ type: 'vector', id }))
+    this.scene.selection.perpendicularLines.forEach((id) => targets.push({ type: 'perpendicularLine', id }))
+    this.scene.selection.parallelLines.forEach((id) => targets.push({ type: 'parallelLine', id }))
     this.scene.selection.faces.forEach((id) => targets.push({ type: 'face', id }))
     return targets
   }
@@ -4163,6 +4225,8 @@ export class Editor {
     this.scene.selection.straightLines.clear()
     this.scene.selection.rays.clear()
     this.scene.selection.vectors.clear()
+    this.scene.selection.perpendicularLines.clear()
+    this.scene.selection.parallelLines.clear()
     this.scene.selection.faces.clear()
     this.selectedPoints = []
   }
@@ -4362,6 +4426,9 @@ export class Editor {
     const line = this.scene.perpendicularLines.get(lineId)
     if (!line) return
     this.removeConstrainedPointsReferencing('perpendicularLine', lineId)
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'perpendicularLine', id: lineId },
+    ])
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'perpendicularLine' && pl.target.id === lineId,
     )
@@ -4371,7 +4438,7 @@ export class Editor {
     // 清理关联线上的约束点
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeletePerpendicularLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeletePerpendicularLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   private parallelLinePendingTarget: ParallelLineTargetRef | null = null
@@ -4542,6 +4609,9 @@ export class Editor {
     const line = this.scene.parallelLines.get(lineId)
     if (!line) return
     this.removeConstrainedPointsReferencing('parallelLine', lineId)
+    const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
+      { type: 'parallelLine', id: lineId },
+    ])
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) => pl.target.type === 'parallelLine' && pl.target.id === lineId,
     )
@@ -4551,7 +4621,7 @@ export class Editor {
     // 清理关联线上的约束点
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeleteParallelLineCommand(this.scene, line, relatedPerpendicularLines, relatedParallelLines))
+    this.executeHistoryEntry(createDeleteParallelLineCommand(this.scene, line, dependentIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   updateParallelLine(
@@ -4671,6 +4741,8 @@ export class Editor {
       (type === 'straightLine' && this.scene.selection.straightLines.has(geoId)) ||
       (type === 'ray' && this.scene.selection.rays.has(geoId)) ||
       (type === 'vector' && this.scene.selection.vectors.has(geoId)) ||
+      (type === 'perpendicularLine' && this.scene.selection.perpendicularLines.has(geoId)) ||
+      (type === 'parallelLine' && this.scene.selection.parallelLines.has(geoId)) ||
       (type === 'face' && this.scene.selection.faces.has(geoId))
 
     if (isSelected) {
@@ -4678,6 +4750,8 @@ export class Editor {
       else if (type === 'straightLine') this.scene.selection.deselectStraightLine(geoId)
       else if (type === 'ray') this.scene.selection.deselectRay(geoId)
       else if (type === 'vector') this.scene.selection.deselectVector(geoId)
+      else if (type === 'perpendicularLine') this.scene.selection.deselectPerpendicularLine(geoId)
+      else if (type === 'parallelLine') this.scene.selection.deselectParallelLine(geoId)
       else this.scene.selection.deselectFace(geoId)
       return
     }
@@ -4690,6 +4764,8 @@ export class Editor {
     else if (type === 'straightLine') this.scene.selection.selectStraightLine(geoId, true)
     else if (type === 'ray') this.scene.selection.selectRay(geoId, true)
     else if (type === 'vector') this.scene.selection.selectVector(geoId, true)
+    else if (type === 'perpendicularLine') this.scene.selection.selectPerpendicularLine(geoId, true)
+    else if (type === 'parallelLine') this.scene.selection.selectParallelLine(geoId, true)
     else this.scene.selection.selectFace(geoId, true)
 
     this.tryCreateIntersectionPointFromSelection()
@@ -4934,7 +5010,8 @@ export class Editor {
     // 清理关联垂线/平行线上的约束点
     relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
     relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
-    this.executeHistoryEntry(createDeleteVectorCommand(this.scene, vector, relatedPerpendicularLines, relatedParallelLines))
+    const cascadedIntersectionPoints = this.collectIntersectionPointsFromRelatedLines(relatedPerpendicularLines, relatedParallelLines)
+    this.executeHistoryEntry(createDeleteVectorCommand(this.scene, vector, cascadedIntersectionPoints, relatedPerpendicularLines, relatedParallelLines))
   }
 
   isVectorLocked(vector: GeoVector3 | null | undefined) {
@@ -6580,7 +6657,7 @@ export class Editor {
    */
   applyFeatureOperation(operation: FeatureOperation): HistoryEntry {
     const entry = this.featureDocument.applyOperation(operation)
-    this.historyVersion++
+    this.executeHistoryEntry(entry)
     return entry
   }
 

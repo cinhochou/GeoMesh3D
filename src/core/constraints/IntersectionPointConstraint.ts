@@ -64,6 +64,20 @@ export class IntersectionPointConstraint {
         ids.add(ray.p2.id)
         return
       }
+      if (target.type === 'parallelLine') {
+        const line = this.scene.parallelLines.get(target.id)
+        if (!line) return
+        ids.add(line.p1.id)
+        ids.add(line.p2.id)
+        return
+      }
+      if (target.type === 'perpendicularLine') {
+        const line = this.scene.perpendicularLines.get(target.id)
+        if (!line) return
+        ids.add(line.p1.id)
+        ids.add(line.p2.id)
+        return
+      }
       const face = this.scene.faces.get(target.id)
       if (!face) return
       face.memberPointIds.forEach((id) => ids.add(id))
@@ -99,6 +113,20 @@ export class IntersectionPointConstraint {
       if (!ray) return ids
       ids.add(ray.p1.id)
       ids.add(ray.p2.id)
+      return ids
+    }
+    if (target.type === 'parallelLine') {
+      const line = this.scene.parallelLines.get(target.id)
+      if (!line) return ids
+      ids.add(line.p1.id)
+      ids.add(line.p2.id)
+      return ids
+    }
+    if (target.type === 'perpendicularLine') {
+      const line = this.scene.perpendicularLines.get(target.id)
+      if (!line) return ids
+      ids.add(line.p1.id)
+      ids.add(line.p2.id)
       return ids
     }
     const face = this.scene.faces.get(target.id)
@@ -181,13 +209,17 @@ export class IntersectionPointConstraint {
   }
 
   private getTargetCorrection(target: IntersectionTargetRef, pointPosition: Vec3) {
-    if (target.type === 'line' || target.type === 'straightLine' || target.type === 'ray') {
+    if (target.type === 'line' || target.type === 'straightLine' || target.type === 'ray' || target.type === 'parallelLine' || target.type === 'perpendicularLine') {
       const entity =
         target.type === 'line'
           ? this.scene.lines.get(target.id)
           : target.type === 'straightLine'
             ? this.scene.straightLines.get(target.id)
-            : this.scene.rays.get(target.id)
+            : target.type === 'ray'
+              ? this.scene.rays.get(target.id)
+              : target.type === 'parallelLine'
+                ? this.scene.parallelLines.get(target.id)
+                : this.scene.perpendicularLines.get(target.id)
       if (!entity) return null
 
       const origin = entity.p1.position

@@ -1329,7 +1329,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       if (typeof ic.sourceB !== 'object' || ic.sourceB === null || typeof ic.sourceB.type !== 'string' || typeof ic.sourceB.id !== 'string') {
         return { valid: false, error: `交点约束 (pointId=${ic.pointId}) 的 sourceB 无效` }
       }
-      const validTargetTypes = new Set(['line', 'straightLine', 'ray', 'vector', 'face'])
+      const validTargetTypes = new Set(['line', 'straightLine', 'ray', 'vector', 'parallelLine', 'perpendicularLine', 'face'])
       if (!validTargetTypes.has(ic.sourceA.type)) {
         return { valid: false, error: `交点约束 (pointId=${ic.pointId}) 的 sourceA.type 无效` }
       }
@@ -1341,6 +1341,8 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
         if (type === 'straightLine') return straightLineIdSet.has(id)
         if (type === 'ray') return rayIdSet.has(id)
         if (type === 'vector') return vectorIdSet.has(id)
+        if (type === 'parallelLine') return parallelLineIdSet.has(id)
+        if (type === 'perpendicularLine') return perpendicularLineIdSet.has(id)
         if (type === 'face') return faceIdSet.has(id)
         return false
       }

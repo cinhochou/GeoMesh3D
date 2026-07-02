@@ -104,6 +104,10 @@ export interface DeleteRayParams {
 
 export interface DeleteVectorParams {
   vector: GeoVector3
+  dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: IntersectionPointConstraint
+  }>
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
 }
@@ -376,6 +380,12 @@ function deleteVector(scene: Scene, feature: Feature, _geometry: GeneratedGeomet
   void _geometry
   const params = feature.params as unknown as DeleteVectorParams
 
+  params.dependentIntersectionPoints?.forEach(({ point, constraint }) => {
+    scene.removeIntersectionConstraint(constraint.pointId)
+    scene.points.delete(point.id)
+    scene.selection.points.delete(point.id)
+  })
+
   params.relatedPerpendicularLines?.forEach((line) => {
     scene.removePerpendicularLine(line.id)
     scene.selection.perpendicularLines.delete(line.id)
@@ -435,6 +445,15 @@ function deletePoint(scene: Scene, feature: Feature, _geometry: GeneratedGeometr
     scene.selection.points.delete(p.id)
   })
   params.relatedFaces?.forEach((face) => {
+    const deletedBoundaryLines = face.boundaryLineIds
+      .map((lineId) => scene.lines.get(lineId))
+      .filter((line): line is Line3 => line !== undefined && line.faceOwned)
+      .filter((line) => !PlanarPolygon.isBoundaryLineUsedByOtherFace(scene.faces, line.id, face.id))
+
+    deletedBoundaryLines.forEach((line) => {
+      scene.lines.delete(line.id)
+      scene.selection.lines.delete(line.id)
+    })
     scene.removeFace(face.id)
   })
   params.dependentCubes?.forEach(({ faces, dependentPoints, constraint, dependentIntersectionPoints }) => {

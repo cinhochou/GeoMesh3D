@@ -8,6 +8,8 @@ import type { Cone3 } from '../../geometry/Cone3'
 import type { Cylinder3 } from '../../geometry/Cylinder3'
 import type { PerpendicularLine3 } from '../../geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../../geometry/ParallelLine3'
+import type { Point3 } from '../../geometry/Point3'
+import type { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export interface CircleFeatureParams {
   circle: Circle3
@@ -17,6 +19,10 @@ export interface DeleteCircleParams {
   circle: Circle3
   relatedCones: Cone3[]
   relatedCylinders: Cylinder3[]
+  dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: IntersectionPointConstraint
+  }>
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
 }
@@ -156,6 +162,12 @@ export const circleFeaturePlugin: FeaturePlugin = {
       cylinder.topCenterPoint.cylinderId = null
       cylinder.topCenterPoint.cylinderRole = null
       scene.selection.cylinders.delete(cylinder.id)
+    })
+
+    deleteParams.dependentIntersectionPoints?.forEach(({ point, constraint }) => {
+      scene.removeIntersectionConstraint(constraint.pointId)
+      scene.points.delete(point.id)
+      scene.selection.points.delete(point.id)
     })
 
     deleteParams.relatedPerpendicularLines?.forEach((line) => {

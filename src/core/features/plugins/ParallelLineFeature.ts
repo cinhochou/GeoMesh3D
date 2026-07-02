@@ -5,6 +5,8 @@ import type { Feature, FeaturePlugin, GeneratedGeometry } from '../Feature'
 import type { Scene } from '../../scene/Scene'
 import { ParallelLine3 } from '../../geometry/ParallelLine3'
 import type { PerpendicularLine3 } from '../../geometry/PerpendicularLine3'
+import type { Point3 } from '../../geometry/Point3'
+import type { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 
 export interface ParallelLineFeatureParams {
   line: ParallelLine3
@@ -12,6 +14,10 @@ export interface ParallelLineFeatureParams {
 
 export interface DeleteParallelLineParams {
   line: ParallelLine3
+  dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: IntersectionPointConstraint
+  }>
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
 }
@@ -73,6 +79,11 @@ export const parallelLineFeaturePlugin: FeaturePlugin = {
     void _geometry
     const deleteParams = feature.params as unknown as DeleteParallelLineParams
 
+    deleteParams.dependentIntersectionPoints?.forEach(({ point, constraint }) => {
+      scene.removeIntersectionConstraint(constraint.pointId)
+      scene.points.delete(point.id)
+      scene.selection.points.delete(point.id)
+    })
     deleteParams.relatedPerpendicularLines?.forEach((l) => {
       scene.removePerpendicularLine(l.id)
       scene.selection.perpendicularLines.delete(l.id)
