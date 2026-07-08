@@ -39,13 +39,17 @@ export class TransformCommand extends ConstraintAwareCommand {
     const constraint = scene.getObjectConstrainedPointConstraint(pointId)
     if (constraint) {
       const saved = constraint.parametricData
+      // before 用移动前的位置计算（用户拖动前/面变形前的比例）
       constraint.computeParametricDataFromPosition(before)
       this.beforeParametricData = constraint.parametricData
         ? JSON.parse(JSON.stringify(constraint.parametricData))
         : null
-      constraint.computeParametricDataFromPosition(after)
-      this.afterParametricData = constraint.parametricData
-        ? JSON.parse(JSON.stringify(constraint.parametricData))
+      // after 用当前 parametricData：
+      // - 用户拖动时，solve 已实时更新为拖动后的比例；
+      // - 约束对象变形时，resolveConstrainedPointPositions 已保持原始比例不变。
+      // 这样可避免面变形后根据 after 绝对位置错误覆写原始比例。
+      this.afterParametricData = saved
+        ? JSON.parse(JSON.stringify(saved))
         : null
       constraint.parametricData = saved
     } else {

@@ -19,6 +19,7 @@ import type { IntersectionPointConstraint } from '../../constraints/Intersection
 import { PlanarPolygon } from '../../geometry/PlanarPolygon'
 import type { CubeConstraint } from '../../constraints/CubeConstraint'
 import type { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
+import type { PrismConstraint } from '../../constraints/PrismConstraint'
 
 export interface PointFeatureParams {
   position: { x: number; y: number; z: number }
@@ -53,6 +54,27 @@ export interface TwoPointFeatureParams {
   displayLength?: number
 }
 
+/** 棱柱级联删除信息（用于 deletePoint/deleteLine/deleteFace 级联）。 */
+export interface DependentPrismCascade {
+  /** 棱柱所有面（底面 + 顶面 + 侧面）。 */
+  faces: PlanarPolygon[]
+  /** 顶面 dependent 顶点（不含最高点）。 */
+  dependentPoints: Point3[]
+  constraint: PrismConstraint
+  /** 底面 id（用于清除反向引用，不删除底面本身）。 */
+  bottomFaceId: string
+  /** 底面所有顶点 id（owner，用于清除反向引用）。 */
+  bottomOwnerPointIds: string[]
+  /** 最高点 id（owner，用于清除反向引用）。 */
+  topPointId: string
+  dependentIntersectionPoints: Array<{
+    point: Point3
+    constraint: IntersectionPointConstraint
+  }>
+  relatedPerpendicularLines: PerpendicularLine3[]
+  relatedParallelLines: ParallelLine3[]
+}
+
 export interface DeleteLineParams {
   line: Line3
   dependentIntersectionPoints: Array<{
@@ -78,6 +100,7 @@ export interface DeleteLineParams {
       constraint: IntersectionPointConstraint
     }>
   }>
+  dependentPrisms: DependentPrismCascade[]
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
 }
@@ -144,6 +167,7 @@ export interface DeletePointParams {
       constraint: IntersectionPointConstraint
     }>
   }>
+  dependentPrisms: DependentPrismCascade[]
   relatedPerpendicularLines: PerpendicularLine3[]
   relatedParallelLines: ParallelLine3[]
   relatedCones: Cone3[]
@@ -248,6 +272,81 @@ function createTwoPointElement(
   return { elementIds: { [elementKey]: [feature.id] } }
 }
 
+/** 应用棱柱级联删除（供 deleteLine/deletePoint 共用）。 */
+function applyPrismCascade(scene: Scene, cascade: DependentPrismCascade): void {
+  const { constraint, bottomFaceId, bottomOwnerPointIds, topPointId } = cascade
+  const prismId = constraint.prismId
+
+  // 1. 级联：相关垂直线/平行线
+  cascade.relatedPerpendicularLines?.forEach((line) => {
+    scene.removePerpendicularLine(line.id)
+    scene.selection.perpendicularLines.delete(line.id)
+  })
+  cascade.relatedParallelLines?.forEach((line) => {
+    scene.removeParallelLine(line.id)
+    scene.selection.parallelLines.delete(line.id)
+  })
+  // 2. 级联：相关交点
+  cascade.dependentIntersectionPoints?.forEach(({ point, constraint: c }) => {
+    scene.removeIntersectionConstraint(c.pointId)
+    scene.points.delete(point.id)
+    scene.selection.points.delete(point.id)
+  })
+  // 3. 删除约束
+  scene.removePrismConstraint(prismId)
+  // 4. 删除新创建的面（顶面 + 侧面，不含底面——底面是用户原有的，由通用 face 删除逻辑处理）
+  const createdFaces = cascade.faces.filter((f) => f.id !== bottomFaceId)
+  const deletedFaceIds = new Set(createdFaces.map((f) => f.id))
+  createdFaces.forEach((face) => scene.removeFace(face.id))
+  // 5. 删除新创建的边界线（faceOwned 且不被保留面使用）
+  const candidateLineIds = new Set(cascade.faces.flatMap((f) => f.boundaryLineIds))
+  const linesToDelete: Line3[] = []
+  for (const lineId of candidateLineIds) {
+    const line = scene.lines.get(lineId)
+    if (!line || !line.faceOwned) continue
+    let usedByOther = false
+    for (const face of scene.faces.values()) {
+      if (deletedFaceIds.has(face.id)) continue
+      if (face.boundaryLineIds.includes(lineId)) {
+        usedByOther = true
+        break
+      }
+    }
+    if (!usedByOther) linesToDelete.push(line)
+  }
+  linesToDelete.forEach((line) => {
+    scene.lines.delete(line.id)
+    scene.selection.lines.delete(line.id)
+  })
+  // 6. 删除 dependent 顶点
+  cascade.dependentPoints?.forEach((point) => {
+    scene.points.delete(point.id)
+    scene.selection.points.delete(point.id)
+  })
+  // 7. 清除底面反向引用（不删除底面本身）
+  const bottomFace = scene.faces.get(bottomFaceId)
+  if (bottomFace && bottomFace.prismId === prismId) {
+    bottomFace.prismId = null
+    bottomFace.prismRole = null
+    bottomFace.prismOwnerPointIds = []
+    bottomFace.prismDependentPointIds = []
+  }
+  // 8. 清除底面顶点反向引用
+  bottomOwnerPointIds?.forEach((pid) => {
+    const p = scene.points.get(pid)
+    if (p && p.prismId === prismId) {
+      p.prismId = null
+      p.prismRole = null
+    }
+  })
+  // 9. 清除最高点反向引用
+  const topPoint = scene.points.get(topPointId)
+  if (topPoint && topPoint.prismId === prismId) {
+    topPoint.prismId = null
+    topPoint.prismRole = null
+  }
+}
+
 function deleteLine(scene: Scene, feature: Feature, _geometry: GeneratedGeometry): void {
   void _geometry
   const params = feature.params as unknown as DeleteLineParams
@@ -309,6 +408,8 @@ function deleteLine(scene: Scene, feature: Feature, _geometry: GeneratedGeometry
       scene.selection.lines.delete(line.id)
     })
   })
+
+  params.dependentPrisms?.forEach((cascade) => applyPrismCascade(scene, cascade))
 
   params.dependentFaces?.forEach((face) => {
     scene.removeFace(face.id)
@@ -503,6 +604,7 @@ function deletePoint(scene: Scene, feature: Feature, _geometry: GeneratedGeometr
       scene.selection.lines.delete(line.id)
     })
   })
+  params.dependentPrisms?.forEach((cascade) => applyPrismCascade(scene, cascade))
   params.relatedPerpendicularLines?.forEach((line) => {
     scene.removePerpendicularLine(line.id)
     scene.selection.perpendicularLines.delete(line.id)

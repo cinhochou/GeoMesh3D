@@ -16,6 +16,7 @@ import { Vec3 } from '../../geometry/Vec3'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 import { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
+import { PrismConstraint } from '../../constraints/PrismConstraint'
 import { PlanarPolygonConstraint } from '../../constraints/PlanarFaceConstraint'
 import { CylinderConstraint } from '../../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint, type ParametricData } from '../../constraints/ObjectConstrainedPointConstraint'
@@ -58,6 +59,8 @@ type PointSnapshot = {
   coneRole: 'baseCenter' | 'apex' | null
   cylinderId: string | null
   cylinderRole: 'bottomCenter' | 'topCenter' | null
+  prismId: string | null
+  prismRole: 'owner' | 'dependent' | null
   constrainedTo: { type: string; id: string } | null
 }
 
@@ -164,6 +167,10 @@ type FaceSnapshot = {
   regularPolygonId: string | null
   regularPolygonOwnerPointIds: string[]
   regularPolygonDependentPointIds: string[]
+  prismId: string | null
+  prismOwnerPointIds: string[]
+  prismDependentPointIds: string[]
+  prismRole: 'bottom' | 'top' | 'side' | null
 }
 
 type SphereSnapshot = {
@@ -249,6 +256,7 @@ type ConstraintSnapshot =
   | { type: 'cube'; cubeId: string; solidType: 'hexahedron' | 'tetrahedron'; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; x: number; y: number; z: number }>; faceIds: string[]; sourceLineId: string | null; vAxisHint: Vec3Snapshot; name: string; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
   | { type: 'intersection'; pointId: string; sourceA: IntersectionTargetRef; sourceB: IntersectionTargetRef }
   | { type: 'regularPolygon'; constraintId: string; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; angleIndex: number }>; faceId: string; vertexCount: number; vAxisHint: Vec3Snapshot; name: string; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
+  | { type: 'prism'; prismId: string; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; baseIndex: number }>; bottomFaceId: string; topFaceId: string; sideFaceIds: string[]; baseReferenceIndex: number; vAxisHint: Vec3Snapshot; name: string; valueVisible: boolean }
   | { type: 'planar'; faceId: string }
   | { type: 'cylinder'; cylinderId: string; bottomCircleId: string; topCircleId: string; name: string; valueVisible: boolean }
   | { type: 'objectConstrainedPoint'; pointId: string; targetType: ConstrainedToRef['type']; targetId: string; parametricData: ParametricData | null }
@@ -305,6 +313,8 @@ function snapPoint(p: Point3): PointSnapshot {
     coneRole: p.coneRole,
     cylinderId: p.cylinderId,
     cylinderRole: p.cylinderRole,
+    prismId: p.prismId,
+    prismRole: p.prismRole,
     constrainedTo: p.constrainedTo,
   }
 }
@@ -371,6 +381,10 @@ function snapFace(f: PlanarPolygon): FaceSnapshot {
     regularPolygonId: f.regularPolygonId,
     regularPolygonOwnerPointIds: [...f.regularPolygonOwnerPointIds],
     regularPolygonDependentPointIds: [...f.regularPolygonDependentPointIds],
+    prismId: f.prismId,
+    prismOwnerPointIds: [...f.prismOwnerPointIds],
+    prismDependentPointIds: [...f.prismDependentPointIds],
+    prismRole: f.prismRole,
   }
 }
 
@@ -448,6 +462,17 @@ function snapConstraint(c: SceneConstraint): ConstraintSnapshot | null {
       faceId: c.faceId, vertexCount: c.vertexCount,
       vAxisHint: snapVec3(c.getVAxisHint()), name: c.name,
       edgeLengthLocked: c.edgeLengthLocked, lockedEdgeLength: c.lockedEdgeLength,
+      valueVisible: c.valueVisible,
+    }
+  }
+  if (c instanceof PrismConstraint) {
+    return {
+      type: 'prism', prismId: c.prismId,
+      ownerPointIds: [...c.ownerPointIds] as [string, string],
+      dependentLayouts: c.dependentLayouts.map((l) => ({ pointId: l.pointId, baseIndex: l.baseIndex })),
+      bottomFaceId: c.bottomFaceId, topFaceId: c.topFaceId,
+      sideFaceIds: [...c.sideFaceIds], baseReferenceIndex: c.baseReferenceIndex,
+      vAxisHint: snapVec3(c.getVAxisHint()), name: c.name,
       valueVisible: c.valueVisible,
     }
   }
@@ -539,6 +564,8 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       existing.coneRole = sp.coneRole
       existing.cylinderId = sp.cylinderId
       existing.cylinderRole = sp.cylinderRole
+      existing.prismId = sp.prismId
+      existing.prismRole = sp.prismRole
       existing.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
     } else {
       // 场景中不存在，创建新点
@@ -549,6 +576,7 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       p.sphereId = sp.sphereId; p.sphereRole = sp.sphereRole
       p.coneId = sp.coneId; p.coneRole = sp.coneRole
       p.cylinderId = sp.cylinderId; p.cylinderRole = sp.cylinderRole
+      p.prismId = sp.prismId; p.prismRole = sp.prismRole
       p.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
       scene.addPoint(p)
     }
@@ -750,12 +778,17 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       existing.regularPolygonId = sf.regularPolygonId
       existing.regularPolygonOwnerPointIds = [...sf.regularPolygonOwnerPointIds]
       existing.regularPolygonDependentPointIds = [...sf.regularPolygonDependentPointIds]
+      existing.prismId = sf.prismId
+      existing.prismOwnerPointIds = [...sf.prismOwnerPointIds]
+      existing.prismDependentPointIds = [...sf.prismDependentPointIds]
+      existing.prismRole = sf.prismRole
       existing.normalize(scene.points)
     } else {
       const f = new PlanarPolygon(sf.id, sf.name, sf.boundaryPointIds, sf.memberPointIds, sf.boundaryLineIds, sf.nameVisible, sf.visible, sf.userLocked, sf.supportPointIds, sf.areaLocked, sf.lockedArea, sf.edgeLengthLocks, sf.labelOffsetX, sf.labelOffsetY, sf.valueVisible, sf.isRegularPolygon, sf.regularPolygonVertexCount)
       f.fillColor = sf.fillColor; f.fillOpacity = sf.fillOpacity
       f.cubeId = sf.cubeId; f.cubeOwnerPointIds = sf.cubeOwnerPointIds; f.cubeDependentPointIds = sf.cubeDependentPointIds
       f.regularPolygonId = sf.regularPolygonId; f.regularPolygonOwnerPointIds = sf.regularPolygonOwnerPointIds; f.regularPolygonDependentPointIds = sf.regularPolygonDependentPointIds
+      f.prismId = sf.prismId; f.prismOwnerPointIds = sf.prismOwnerPointIds; f.prismDependentPointIds = sf.prismDependentPointIds; f.prismRole = sf.prismRole
       scene.addFace(f)
     }
   }
@@ -934,6 +967,7 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
   const seenFaceIds = new Set<string>()
   const seenPointIds = new Set<string>()
   const seenCubeIds = new Set<string>()
+  const seenPrismIds = new Set<string>()
   const seenRegularPolygonIds = new Set<string>()
   const seenCylinderIds = new Set<string>()
   const seenPerpendicularLineIds = new Set<string>()
@@ -953,6 +987,10 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       if (seenRegularPolygonIds.has(sc.constraintId)) continue
       seenRegularPolygonIds.add(sc.constraintId)
       scene.addRegularPolygonConstraint(new RegularPolygonConstraint(scene, sc.constraintId, sc.ownerPointIds, sc.dependentLayouts, sc.faceId, sc.vertexCount, new Vec3(sc.vAxisHint.x, sc.vAxisHint.y, sc.vAxisHint.z), sc.name, sc.edgeLengthLocked, sc.lockedEdgeLength, sc.valueVisible))
+    } else if (sc.type === 'prism') {
+      if (seenPrismIds.has(sc.prismId)) continue
+      seenPrismIds.add(sc.prismId)
+      scene.addPrismConstraint(new PrismConstraint(scene, sc.prismId, sc.ownerPointIds, sc.dependentLayouts, sc.bottomFaceId, sc.topFaceId, sc.sideFaceIds, sc.baseReferenceIndex, new Vec3(sc.vAxisHint.x, sc.vAxisHint.y, sc.vAxisHint.z), sc.name, sc.valueVisible))
     } else if (sc.type === 'planar') {
       if (seenFaceIds.has(sc.faceId)) continue
       seenFaceIds.add(sc.faceId)

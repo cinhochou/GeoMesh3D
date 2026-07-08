@@ -17,6 +17,7 @@ import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
+
 import type { ParametricRange } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { useUiStore } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
@@ -283,6 +284,29 @@ const selectedHexahedrons = computed(() => {
         constraint !== null,
     )
 })
+const prismsInScene = computed(() => {
+  void commandRevision.value
+  return props.editor.getPrismConstraints()
+})
+const fullySelectedPrismIds = computed(() => {
+  void commandRevision.value
+  return prismsInScene.value
+    .filter((prism) =>
+      props.editor.getPrismFaceIds(prism.prismId).every((faceId) =>
+        props.scene.selection.faces.has(faceId),
+      ),
+    )
+    .map((prism) => prism.prismId)
+})
+const selectedPrisms = computed(() => {
+  void commandRevision.value
+  return fullySelectedPrismIds.value
+    .map((prismId) => props.editor.getPrismConstraint(prismId))
+    .filter(
+      (constraint): constraint is NonNullable<ReturnType<typeof props.editor.getPrismConstraint>> =>
+        constraint !== null,
+    )
+})
 const selectedRegularPolygons = computed(() => {
   void commandRevision.value
   return regularPolygonsInScene.value.filter((constraint) =>
@@ -293,7 +317,8 @@ const selectedEditableFaces = computed(() =>
   selectedFaces.value.filter(
     (face) =>
       (!face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId)) &&
-      !face.regularPolygonId,
+      !face.regularPolygonId &&
+      (!face.prismId || !fullySelectedPrismIds.value.includes(face.prismId)),
   ),
 )
 
@@ -310,6 +335,7 @@ const editing = ref<{
     | 'face'
     | 'hexahedron'
     | 'regularPolygon'
+    | 'prism'
     | 'sphere'
     | 'cone'
     | 'cylinder'
@@ -384,6 +410,8 @@ const isLineConstraintLocked = (line: Line3 | undefined) =>
   )
 const hasCubeConstraint = (point: Point3 | undefined) =>
   Boolean(point?.cubeId && point?.cubeRole === 'dependent')
+const hasPrismConstraint = (point: Point3 | undefined) =>
+  Boolean(point?.prismId && point?.prismRole === 'dependent')
 const hasRegularPolygonConstraint = (point: Point3 | undefined) => Boolean(point?.regularPolygonId)
 const hasCircleConstraint = (point: Point3 | undefined) =>
   Boolean(point?.circleId && point?.circleRole === 'center')
@@ -392,6 +420,7 @@ const FACE_CONSTRAINT_BADGE: Record<string, string> = {
   regularPolygon: '正多边形约束',
   hexahedron: '正六面体约束',
   tetrahedron: '正四面体约束',
+  prism: '棱柱约束',
 }
 const POINT_CONSTRAINT_BADGE: Record<string, string> = {
   line: '线段约束',
@@ -436,6 +465,7 @@ const getLineConstraintBadge = (line: Line3 | undefined): string => {
 const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarPolygon | undefined) => Boolean(face?.cubeId)
+const isPrismFace = (face: PlanarPolygon | undefined) => Boolean(face?.prismId)
 
 const getConeForNormalCircle = (circle: Circle3) => {
   if (!circle.isNormalCircle()) return null
@@ -597,6 +627,11 @@ const isPointObjectConstrained = (point: Point3 | undefined): boolean => {
   return Boolean(point?.constrainedTo)
 }
 
+/** 判断点是否约束到面上（用于显示面上坐标编辑器标题） */
+const isPointConstrainedToFace = (point: Point3 | undefined): boolean => {
+  return point?.constrainedTo?.type === 'face'
+}
+
 /** 同步约束点参数化数据到编辑状态 */
 const syncConstrainedParams = (point: Point3 | undefined) => {
   // 清空旧数据
@@ -616,7 +651,7 @@ const syncConstrainedParams = (point: Point3 | undefined) => {
 }
 
 /** 应用约束点参数化编辑（仅更新位置，不覆盖输入框值） */
-const applyConstrainedParam = (key: string) => {
+const applyConstrainedParam = (key: string, direction?: 'up' | 'down') => {
   if (!editing.value || editing.value.type !== 'point') return
   const point = props.scene.points.get(editing.value.id)
   if (!point || isPointCoordinateLocked(point)) return
@@ -624,24 +659,34 @@ const applyConstrainedParam = (key: string) => {
   if (!constraint) return
   const rawValue = Number(editConstrainedParams[key])
   if (!Number.isFinite(rawValue)) return
+  hideLengthBubble(`constrained.${key}`)
   props.editor.beginCollabTransaction('UpdateConstrainedPointParam')
-  constraint.setParametricValue(key, rawValue)
+  const ok = constraint.setParametricValue(key, rawValue)
   props.scene.solveDirtyConstraints()
   props.scene.markAllRenderDirty()
   props.editor.commitCollabTransaction()
-  // 同步 xyz 显示
+  if (ok && constraint.lastSetClamped) {
+    const message = direction
+      ? `已到达面边界，无法继续${direction === 'up' ? '增加' : '减少'}`
+      : '已到达面边界'
+    showLengthBubble(`constrained.${key}`, message)
+  }
   editPoint.x = toFixed2(point.position.x)
   editPoint.y = toFixed2(point.position.y)
   editPoint.z = toFixed2(point.position.z)
+  // 同步参数值（钳制后可能变化）
+  const val = constraint.getParametricValue(key)
+  if (val !== undefined) editConstrainedParams[key] = toFixed2(val)
 }
 
 /** 约束点参数增减（与普通点坐标增减行为一致，使用 stepCoordInput） */
 const nudgeConstrainedParam = (key: string, direction: 'up' | 'down') => {
   const inputKey = `constrained.${key}`
+  hideLengthBubble(inputKey)
   const nextValue = stepCoordInput(inputKey, direction)
   if (nextValue === null) return
   editConstrainedParams[key] = nextValue
-  applyConstrainedParam(key)
+  applyConstrainedParam(key, direction)
 }
 
 /** 约束点参数输入 focus 处理 */
@@ -775,6 +820,15 @@ const editHexahedron = reactive({
   p1: { x: '', y: '', z: '' },
   p2: { x: '', y: '', z: '' },
 })
+const editPrism = reactive({
+  nameSuffix: '',
+  valueVisible: false,
+  userLocked: false,
+  keepVertical: false,
+  topPoint: { x: '', y: '', z: '' },
+  height: '',
+  bottomEdgeLengths: [] as string[],
+})
 const editRegularPolygon = reactive({
   nameSuffix: '',
   nameVisible: false,
@@ -843,6 +897,7 @@ const selectedEditableFaceIds = computed(() =>
 const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).filter(Boolean))
 const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id).filter(Boolean))
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
+const selectedPrismIds = computed(() => selectedPrisms.value.map((prism) => prism.prismId))
 const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
 const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).filter(Boolean))
 const selectedCylinderIds = computed(() =>
@@ -860,6 +915,7 @@ const totalContentCount = computed(
     circlesInScene.value.length +
     facesInScene.value.length +
     hexahedronsInScene.value.length +
+    prismsInScene.value.length +
     spheresInScene.value.length +
     conesInScene.value.length +
     cylindersInScene.value.length,
@@ -875,6 +931,7 @@ const contentGroupLabels: Record<
   | 'circle'
   | 'face'
   | 'hexahedron'
+  | 'prism'
   | 'sphere'
   | 'cone'
   | 'cylinder',
@@ -890,6 +947,7 @@ const contentGroupLabels: Record<
   circle: '圆',
   face: '多边形',
   hexahedron: '立体',
+  prism: '棱柱',
   sphere: '球体',
   cone: '圆锥',
   cylinder: '圆柱',
@@ -910,6 +968,7 @@ const toggleContentGroup = (
     | 'circle'
     | 'face'
     | 'hexahedron'
+    | 'prism'
     | 'sphere'
     | 'cone'
     | 'cylinder',
@@ -977,6 +1036,14 @@ const selectHexahedronFromContent = (cubeId: string) => {
   const constraint = props.editor.getCubeConstraint(cubeId)
   const firstFaceId = constraint?.faceIds[0]
   if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId)
+  props.scene.markAllRenderDirty()
+}
+
+const selectPrismFromContent = (prismId: string) => {
+  editing.value = null
+  const constraint = props.editor.getPrismConstraint(prismId)
+  const firstFaceId = constraint?.bottomFaceId
+  if (firstFaceId) props.editor.selectPrismByFaceId(firstFaceId)
   props.scene.markAllRenderDirty()
 }
 
@@ -1096,6 +1163,7 @@ watch(
       face: selectedEditableFaceIds.value,
       circle: selectedCircleIds.value,
       hexahedron: selectedHexahedronIds.value,
+      prism: selectedPrismIds.value,
       sphere: selectedSphereIds.value,
       cone: selectedConeIds.value,
       cylinder: selectedCylinderIds.value,
@@ -1105,6 +1173,13 @@ watch(
     if (ids && !ids.includes(id)) editing.value = null
   },
 )
+
+// 编辑态收起时，立即隐藏所有依附于输入框的气泡浮窗
+watch(editing, (newVal, oldVal) => {
+  if (!newVal && oldVal) {
+    hideAllLengthBubbles()
+  }
+})
 
 watch(
   contentGroupsCollapsed,
@@ -1120,6 +1195,7 @@ watch(
     if (circlesInScene.value.length > 0) activeKeys.push('circle')
     if (facesInScene.value.length > 0) activeKeys.push('face')
     if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
+    if (prismsInScene.value.length > 0) activeKeys.push('prism')
     if (spheresInScene.value.length > 0) activeKeys.push('sphere')
     if (conesInScene.value.length > 0) activeKeys.push('cone')
     if (cylindersInScene.value.length > 0) activeKeys.push('cylinder')
@@ -1208,11 +1284,107 @@ const stepLengthValue = (current: number, step: number, direction: 'up' | 'down'
   }
 }
 
-const bubbleState = reactive<Record<string, { show: boolean; message: string }>>({})
+const bubbleState = reactive<
+  Record<string, { show: boolean; message: string; x: number; y: number; below: boolean }>
+>({})
 const bubbleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const bubbleInputCleanups = new Map<string, () => void>()
+
+const detachBubbleInputListener = (key: string) => {
+  const cleanup = bubbleInputCleanups.get(key)
+  if (cleanup) {
+    cleanup()
+    bubbleInputCleanups.delete(key)
+  }
+}
+
+const hideLengthBubble = (key: string) => {
+  if (bubbleState[key]) bubbleState[key].show = false
+  const existing = bubbleTimers.get(key)
+  if (existing) {
+    clearTimeout(existing)
+    bubbleTimers.delete(key)
+  }
+  detachBubbleInputListener(key)
+}
+
+const hideAllLengthBubbles = () => {
+  for (const key of Object.keys(bubbleState)) {
+    hideLengthBubble(key)
+  }
+}
+
+const attachBubbleInputListener = (key: string) => {
+  detachBubbleInputListener(key)
+  const input = coordInputs.get(key)
+  if (!input) return
+  const handler = () => {
+    hideLengthBubble(key)
+    detachBubbleInputListener(key)
+  }
+  input.addEventListener('input', handler)
+  bubbleInputCleanups.set(key, () => input.removeEventListener('input', handler))
+}
+
+// 当前可见的气泡列表，统一 Teleport 到 body 渲染，避免被祖先 overflow 容器裁剪
+const visibleBubbles = computed(() => {
+  const result: Record<
+    string,
+    { message: string; x: number; y: number; transform: string; below: boolean }
+  > = {}
+  for (const [key, val] of Object.entries(bubbleState)) {
+    if (val.show) {
+      const transform = val.below ? 'translate(-50%, 0)' : 'translate(-50%, -100%)'
+      result[key] = { message: val.message, x: val.x, y: val.y, transform, below: val.below }
+    }
+  }
+  return result
+})
 
 const showLengthBubble = (key: string, message: string) => {
-  bubbleState[key] = { show: true, message }
+  // 计算气泡位置：默认显示在对应输入框上方，上方空间不足时改为下方
+  // 左右方向自适应：确保气泡不超出视口边界
+  let x = 0
+  let y = 0
+  let below = false
+  // 估算气泡宽度（中文字符约 14px，英文约 7px，padding 20px），上限 300px
+  const cjkCount = Array.from(message).filter((ch) => ch.charCodeAt(0) > 0x2e7f).length
+  const asciiCount = message.length - cjkCount
+  const estimatedWidth = Math.min(300, cjkCount * 14 + asciiCount * 7 + 20)
+  const halfWidth = estimatedWidth / 2
+  const viewW = window.innerWidth
+  const clampX = (rawX: number) => {
+    if (rawX + halfWidth > viewW - 8) return viewW - halfWidth - 8
+    if (rawX - halfWidth < 8) return halfWidth + 8
+    return rawX
+  }
+  const input = coordInputs.get(key)
+  if (input) {
+    const rect = input.getBoundingClientRect()
+    x = clampX(rect.left + rect.width / 2)
+    if (rect.top < 40) {
+      y = rect.bottom + 6
+      below = true
+    } else {
+      y = rect.top - 6
+      below = false
+    }
+  } else {
+    // 回退：尝试用 data-bubble-key 查找锚点
+    const el = document.querySelector(`[data-bubble-key="${key}"]`)
+    if (el) {
+      const rect = el.getBoundingClientRect()
+      x = clampX(rect.left + rect.width / 2)
+      if (rect.top < 40) {
+        y = rect.bottom + 6
+        below = true
+      } else {
+        y = rect.top - 6
+        below = false
+      }
+    }
+  }
+  bubbleState[key] = { show: true, message, x, y, below }
   const existing = bubbleTimers.get(key)
   if (existing) clearTimeout(existing)
   bubbleTimers.set(
@@ -1220,8 +1392,11 @@ const showLengthBubble = (key: string, message: string) => {
     setTimeout(() => {
       if (bubbleState[key]) bubbleState[key].show = false
       bubbleTimers.delete(key)
+      detachBubbleInputListener(key)
     }, 3000),
   )
+  // 用户在输入框中输入时立即隐藏气泡
+  attachBubbleInputListener(key)
 }
 
 const clampLengthValue = (key: string, value: string, previousValue: string): string => {
@@ -1282,6 +1457,7 @@ const handleLineLengthFocus = () => {
   setCoordFocus('line.lockedLength', true)
 }
 const handleLineLengthBlur = () => {
+  hideLengthBubble('line.lockedLength')
   editLine.lockedLength = clampLengthValue(
     'line.lockedLength',
     editLine.lockedLength,
@@ -1292,6 +1468,7 @@ const handleLineLengthBlur = () => {
   applyEditLine()
 }
 const nudgeLineLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('line.lockedLength')
   const current = Number(editLine.lockedLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('line.lockedLength', '已减到最小值')
@@ -1335,6 +1512,7 @@ const handleRayDisplayLengthFocus = () => {
   setCoordFocus('ray.displayLength', true)
 }
 const handleRayDisplayLengthBlur = () => {
+  hideLengthBubble('ray.displayLength')
   editRay.displayLength = clampLengthValue(
     'ray.displayLength',
     editRay.displayLength,
@@ -1345,6 +1523,7 @@ const handleRayDisplayLengthBlur = () => {
   applyEditRay()
 }
 const nudgeRayDisplayLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('ray.displayLength')
   const current = Number(editRay.displayLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('ray.displayLength', '已减到最小值')
@@ -1358,12 +1537,14 @@ const handleVectorLengthFocus = () => {
   setCoordFocus('vector.length', true)
 }
 const handleVectorLengthBlur = () => {
+  hideLengthBubble('vector.length')
   editVector.length = clampLengthValue('vector.length', editVector.length, editVector.length)
   editVector.length = normalizeVectorLength(editVector.length)
   setCoordFocus('vector.length', false)
   applyEditVector()
 }
 const nudgeVectorLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('vector.length')
   const current = Number(editVector.length)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('vector.length', '已减到最小值')
@@ -1393,6 +1574,7 @@ const handleStraightLineDisplayLengthFocus = () => {
   setCoordFocus('straightLine.displayLength', true)
 }
 const handleStraightLineDisplayLengthBlur = () => {
+  hideLengthBubble('straightLine.displayLength')
   editStraightLine.displayLength = clampLengthValue(
     'straightLine.displayLength',
     editStraightLine.displayLength,
@@ -1403,6 +1585,7 @@ const handleStraightLineDisplayLengthBlur = () => {
   applyEditStraightLine()
 }
 const nudgeStraightLineDisplayLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('straightLine.displayLength')
   const current = Number(editStraightLine.displayLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('straightLine.displayLength', '已减到最小值')
@@ -1416,6 +1599,7 @@ const handlePerpendicularLineDisplayLengthFocus = () => {
   setCoordFocus('perpendicularLine.displayLength', true)
 }
 const handlePerpendicularLineDisplayLengthBlur = () => {
+  hideLengthBubble('perpendicularLine.displayLength')
   editPerpendicularLine.displayLength = clampLengthValue(
     'perpendicularLine.displayLength',
     editPerpendicularLine.displayLength,
@@ -1426,6 +1610,7 @@ const handlePerpendicularLineDisplayLengthBlur = () => {
   applyEditPerpendicularLine()
 }
 const nudgePerpendicularLineDisplayLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('perpendicularLine.displayLength')
   const current = Number(editPerpendicularLine.displayLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('perpendicularLine.displayLength', '已减到最小值')
@@ -1453,6 +1638,7 @@ const handleParallelLineDisplayLengthFocus = () => {
   setCoordFocus('parallelLine.displayLength', true)
 }
 const handleParallelLineDisplayLengthBlur = () => {
+  hideLengthBubble('parallelLine.displayLength')
   editParallelLine.displayLength = clampLengthValue(
     'parallelLine.displayLength',
     editParallelLine.displayLength,
@@ -1463,6 +1649,7 @@ const handleParallelLineDisplayLengthBlur = () => {
   applyEditParallelLine()
 }
 const nudgeParallelLineDisplayLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('parallelLine.displayLength')
   const current = Number(editParallelLine.displayLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('parallelLine.displayLength', '已减到最小值')
@@ -1477,6 +1664,7 @@ const handleFaceEdgeLengthFocus = (edgeIndex: number) => {
 }
 const handleFaceEdgeLengthBlur = (faceId: string, edgeIndex: number) => {
   const key = `face.edge.${edgeIndex}`
+  hideLengthBubble(key)
   const prev = editFace.edgeLengths[edgeIndex] ?? ''
   editFace.edgeLengths[edgeIndex] = clampLengthValue(
     key,
@@ -1489,6 +1677,7 @@ const handleFaceEdgeLengthBlur = (faceId: string, edgeIndex: number) => {
 }
 const nudgeFaceEdgeLength = (faceId: string, edgeIndex: number, direction: 'up' | 'down') => {
   const key = `face.edge.${edgeIndex}`
+  hideLengthBubble(key)
   const current = Number(editFace.edgeLengths[edgeIndex])
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble(key, '已减到最小值')
@@ -1496,12 +1685,26 @@ const nudgeFaceEdgeLength = (faceId: string, edgeIndex: number, direction: 'up' 
   }
   const next = stepLengthValue(current, 1, direction)
   editFace.edgeLengths[edgeIndex] = next.toFixed(2)
-  applyFaceEdgeLength(faceId, edgeIndex)
+  const success = props.editor.updateFaceBoundaryEdgeLength(
+    faceId,
+    edgeIndex,
+    next,
+    getFaceEdgeTargets(faceId),
+  )
+  if (!success) {
+    showLengthBubble(key, direction === 'up' ? '不满足三角形的三边关系，无法增加' : '不满足三角形的三边关系，无法减少')
+    // 恢复为实际边长
+    const face = props.scene.faces.get(faceId)
+    if (face) {
+      editFace.edgeLengths[edgeIndex] = toFixed2(face.getEdgeLength(props.scene.points, edgeIndex))
+    }
+  }
 }
 const handleHexahedronEdgeLengthFocus = () => {
   setCoordFocus('hexa.edgeLength', true)
 }
 const handleHexahedronEdgeLengthBlur = () => {
+  hideLengthBubble('hexa.edgeLength')
   editHexahedron.edgeLength = clampLengthValue(
     'hexa.edgeLength',
     editHexahedron.edgeLength,
@@ -1515,6 +1718,7 @@ const handleHexahedronEdgeLengthBlur = () => {
   applyHexahedronEdgeLength()
 }
 const nudgeHexahedronEdgeLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('hexa.edgeLength')
   const current = Number(editHexahedron.edgeLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('hexa.edgeLength', '已减到最小值')
@@ -1713,6 +1917,31 @@ const startEditHexahedron = (cubeId: string) => {
   editHexahedron.p2.x = toFixed2(ownerPoints[1]!.position.x)
   editHexahedron.p2.y = toFixed2(ownerPoints[1]!.position.y)
   editHexahedron.p2.z = toFixed2(ownerPoints[1]!.position.z)
+}
+
+const startEditPrism = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  if (!constraint) return
+  const ownerPoints = getPrismOwnerPoints(prismId)
+  if (ownerPoints.length < 2) return
+  const topPoint = ownerPoints[1]!
+  editing.value = { type: 'prism', id: prismId }
+  editPrism.nameSuffix = props.editor.getPrismNameSuffix(prismId)
+  editPrism.valueVisible = constraint.valueVisible === true
+  editPrism.userLocked = props.editor
+    .getPrismFaceIds(prismId)
+    .every((faceId) => props.scene.faces.get(faceId)?.userLocked)
+  editPrism.keepVertical = constraint.keepVertical === true
+  editPrism.topPoint.x = toFixed2(topPoint.position.x)
+  editPrism.topPoint.y = toFixed2(topPoint.position.y)
+  editPrism.topPoint.z = toFixed2(topPoint.position.z)
+  editPrism.height = toFixed2(constraint.getHeight())
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  editPrism.bottomEdgeLengths = bottomFace
+    ? bottomFace
+        .getBoundaryPoints(props.scene.points)
+        .map((_, index) => toFixed2(bottomFace.getEdgeLength(props.scene.points, index)))
+    : []
 }
 
 const startEditRegularPolygon = (constraintId: string) => {
@@ -2154,6 +2383,7 @@ const nudgeCirclePointCoord = (
   applyCirclePointCoord(pointKey)
 }
 const nudgeNormalCircleRadius = (direction: 'up' | 'down') => {
+  hideLengthBubble('circle.lockedRadius')
   const state = getEditingCircleState()
   if (!state) return
   const current = parseFloat(editCircle.lockedRadius)
@@ -2200,6 +2430,7 @@ const applyThreePointCircleRadius = () => {
   }
 }
 const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
+  hideLengthBubble('circle.threePointRadius')
   const current = parseFloat(editCircle.threePointRadius)
   if (isNaN(current) || current < 0) return
   if (direction === 'down' && current <= LENGTH_MIN) {
@@ -2274,6 +2505,226 @@ const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
   props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
 }
 
+const getEditingPrismState = () => {
+  if (!editing.value || editing.value.type !== 'prism') return null
+  const constraint = props.editor.getPrismConstraint(editing.value.id)
+  if (!constraint) return null
+  const ownerPoints = getPrismOwnerPoints(editing.value.id)
+  if (ownerPoints.length < 2) return null
+  return {
+    prismId: editing.value.id,
+    constraint,
+    ownerPoints: [ownerPoints[0]!, ownerPoints[1]!] as [Point3, Point3],
+  }
+}
+const applyPrismMeta = () => {
+  const state = getEditingPrismState()
+  if (!state) return
+  props.editor.beginCollabTransaction('UpdatePrismCommand')
+  props.editor.updatePrism(state.prismId, {
+    name: `棱柱${editPrism.nameSuffix.trim()}`,
+    valueVisible: editPrism.valueVisible,
+    keepVertical: editPrism.keepVertical,
+  })
+  props.editor.setPrismLockState(state.prismId, editPrism.userLocked)
+  props.editor.commitCollabTransaction()
+}
+const applyPrismTopPoint = () => {
+  const state = getEditingPrismState()
+  if (!state) return
+  const topPoint = state.ownerPoints[1]
+  if (!topPoint) return
+  if (props.editor.isPointCoordinateLocked(topPoint)) return
+  const nextPosition = {
+    x: Number(editPrism.topPoint.x),
+    y: Number(editPrism.topPoint.y),
+    z: Number(editPrism.topPoint.z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  ) {
+    return
+  }
+  if (
+    Math.abs(nextPosition.x - topPoint.position.x) <= 1e-6 &&
+    Math.abs(nextPosition.y - topPoint.position.y) <= 1e-6 &&
+    Math.abs(nextPosition.z - topPoint.position.z) <= 1e-6
+  ) {
+    return
+  }
+
+  let targetPosition = new Vec3(nextPosition.x, nextPosition.y, nextPosition.z)
+
+  // 垂直保持模式下，将目标点约束到底面法线方向上，保证侧棱垂直。
+  // 只使用与底面法线最对齐的坐标轴来反推高度，其余两轴在 UI 中已被禁用，
+  // 避免 x/z 等法线小分量轴导致高度剧烈跳变。
+  if (state.constraint.keepVertical) {
+    const basis = state.constraint.getBottomPlaneBasis()
+    const baseRefVertex = state.ownerPoints[0]
+    const axis = getPrismVerticalDominantAxis(state.constraint.prismId)
+    if (basis && baseRefVertex && axis) {
+      const normal = basis.normal
+      const getAxis = (v: Vec3, a: typeof axis) => (a === 'x' ? v.x : a === 'y' ? v.y : v.z)
+      const n = getAxis(normal, axis)
+      if (Math.abs(n) > 1e-3) {
+        const signedHeight = (getAxis(targetPosition, axis) - getAxis(baseRefVertex.position, axis)) / n
+        targetPosition = new Vec3(
+          baseRefVertex.position.x + normal.x * signedHeight,
+          baseRefVertex.position.y + normal.y * signedHeight,
+          baseRefVertex.position.z + normal.z * signedHeight,
+        )
+      }
+    }
+  }
+
+  props.editor.setPointPosition(topPoint.id, targetPosition)
+  const axes = state.constraint.getResolvedAxes()
+  if (axes) editPrism.height = toFixed2(axes.height)
+}
+const nudgePrismTopPointCoord = (
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const key = `prism.topPoint.${axis}`
+  const nextValue = stepCoordInput(key, direction)
+  if (nextValue === null) return
+  editPrism.topPoint[axis] = toFixed2(Number(nextValue))
+  // 保持输入框聚焦，避免垂直约束求解后马上把坐标刷新回实际位置，
+  // 让用户先看到本次增减后的值。
+  const input = coordInputs.get(key)
+  if (input) input.focus()
+  applyPrismTopPoint()
+}
+const handlePrismTopPointCoordFocus = (axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`prism.topPoint.${axis}`, true)
+}
+const handlePrismTopPointCoordBlur = (axis: 'x' | 'y' | 'z') => {
+  editPrism.topPoint[axis] = normalizeCoord(editPrism.topPoint[axis])
+  setCoordFocus(`prism.topPoint.${axis}`, false)
+  applyPrismTopPoint()
+}
+const applyPrismHeight = () => {
+  const state = getEditingPrismState()
+  if (!state) return
+  if (state.ownerPoints[1] && props.editor.isPointCoordinateLocked(state.ownerPoints[1])) return
+  const axes = state.constraint.getResolvedAxes()
+  if (!axes) return
+  const nextHeight = Number(editPrism.height)
+  if (!Number.isFinite(nextHeight) || nextHeight <= 0) return
+  if (Math.abs(nextHeight - axes.height) <= 1e-6) return
+
+  const baseRefVertex = state.ownerPoints[0]
+  if (!baseRefVertex) return
+
+  let direction: Vec3
+  if (state.constraint.keepVertical) {
+    const basis = state.constraint.getBottomPlaneBasis()
+    if (!basis) return
+    // 保持当前所在侧：缓存高度为负表示最高点在法线反方向（底面下方）
+    const rawHeight = state.constraint.getRawVerticalHeight()
+    const sign = rawHeight !== null && rawHeight < 0 ? -1 : 1
+    direction = new Vec3(basis.normal.x * sign, basis.normal.y * sign, basis.normal.z * sign)
+  } else {
+    const dirLength = Math.hypot(axes.translation.x, axes.translation.y, axes.translation.z)
+    if (dirLength <= 1e-8) return
+    direction = new Vec3(
+      axes.translation.x / dirLength,
+      axes.translation.y / dirLength,
+      axes.translation.z / dirLength,
+    )
+  }
+
+  const newPosition = new Vec3(
+    baseRefVertex.position.x + direction.x * nextHeight,
+    baseRefVertex.position.y + direction.y * nextHeight,
+    baseRefVertex.position.z + direction.z * nextHeight,
+  )
+  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition)
+  editPrism.topPoint.x = toFixed2(newPosition.x)
+  editPrism.topPoint.y = toFixed2(newPosition.y)
+  editPrism.topPoint.z = toFixed2(newPosition.z)
+}
+const nudgePrismHeight = (direction: 'up' | 'down') => {
+  const state = getEditingPrismState()
+  if (!state) return
+  if (state.ownerPoints[1] && props.editor.isPointCoordinateLocked(state.ownerPoints[1])) return
+  const key = 'prism.height'
+  hideLengthBubble(key)
+  const current = Number(editPrism.height)
+  if (direction === 'down' && current <= 0.1) {
+    showLengthBubble(key, '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editPrism.height = next.toFixed(2)
+  applyPrismHeight()
+}
+const handlePrismHeightFocus = () => {
+  setCoordFocus('prism.height', true)
+}
+const handlePrismHeightBlur = () => {
+  hideLengthBubble('prism.height')
+  editPrism.height = normalizeFaceEdgeLength(editPrism.height)
+  setCoordFocus('prism.height', false)
+  applyPrismHeight()
+}
+
+const applyPrismBottomEdgeLength = (edgeIndex: number) => {
+  const state = getEditingPrismState()
+  if (!state) return
+  const bottomFace = props.scene.faces.get(state.constraint.bottomFaceId)
+  if (!bottomFace) return
+  if (bottomFace.userLocked) return
+  const nextLength = Number(editPrism.bottomEdgeLengths[edgeIndex])
+  if (!Number.isFinite(nextLength)) return
+  const key = `prism.bottomEdge.${edgeIndex}`
+  const targets = editPrism.bottomEdgeLengths.map((value, index) => {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return Math.max(0.01, parsed)
+    return bottomFace.getEdgeLength(props.scene.points, index)
+  })
+  const success = props.editor.updateFaceBoundaryEdgeLength(bottomFace.id, edgeIndex, nextLength, targets)
+  if (!success) {
+    showLengthBubble(key, '不满足多边形边长约束，无法更新')
+    // 恢复为实际边长
+    editPrism.bottomEdgeLengths[edgeIndex] = toFixed2(bottomFace.getEdgeLength(props.scene.points, edgeIndex))
+  }
+}
+const nudgePrismBottomEdgeLength = (edgeIndex: number, direction: 'up' | 'down') => {
+  const state = getEditingPrismState()
+  if (!state) return
+  const bottomFace = props.scene.faces.get(state.constraint.bottomFaceId)
+  if (!bottomFace || bottomFace.userLocked) return
+  const key = `prism.bottomEdge.${edgeIndex}`
+  hideLengthBubble(key)
+  const current = Number(editPrism.bottomEdgeLengths[edgeIndex])
+  if (direction === 'down' && current <= 0.1) {
+    showLengthBubble(key, '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editPrism.bottomEdgeLengths[edgeIndex] = next.toFixed(2)
+  applyPrismBottomEdgeLength(edgeIndex)
+}
+const handlePrismBottomEdgeLengthFocus = (edgeIndex: number) => {
+  setCoordFocus(`prism.bottomEdge.${edgeIndex}`, true)
+}
+const handlePrismBottomEdgeLengthBlur = (edgeIndex: number) => {
+  const key = `prism.bottomEdge.${edgeIndex}`
+  hideLengthBubble(key)
+  const prev = editPrism.bottomEdgeLengths[edgeIndex] ?? ''
+  editPrism.bottomEdgeLengths[edgeIndex] = clampLengthValue(
+    key,
+    editPrism.bottomEdgeLengths[edgeIndex] ?? '',
+    prev,
+  )
+  editPrism.bottomEdgeLengths[edgeIndex] = normalizeFaceEdgeLength(editPrism.bottomEdgeLengths[edgeIndex] ?? '')
+  setCoordFocus(key, false)
+  applyPrismBottomEdgeLength(edgeIndex)
+}
+
 const getEditingRegularPolygonState = () => {
   if (!editing.value || editing.value.type !== 'regularPolygon') return null
   const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
@@ -2331,6 +2782,7 @@ const applyRegularPolygonOwnerPoint = (pointKey: 'p1' | 'p2') => {
 }
 
 const nudgeRegularPolygonEdgeLength = (direction: 'up' | 'down') => {
+  hideLengthBubble('rp.edgeLength')
   const current = Number(editRegularPolygon.edgeLength)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('rp.edgeLength', '已减到最小值')
@@ -2349,6 +2801,7 @@ const handleRegularPolygonEdgeLengthFocus = () => {
 }
 
 const handleRegularPolygonEdgeLengthBlur = () => {
+  hideLengthBubble('rp.edgeLength')
   editRegularPolygon.edgeLength = clampLengthValue(
     'rp.edgeLength',
     editRegularPolygon.edgeLength,
@@ -2461,6 +2914,7 @@ const handleSphereRadiusFocus = () => {
 }
 
 const handleSphereRadiusBlur = () => {
+  hideLengthBubble('sphere.radius')
   editSphere.radius = clampLengthValue('sphere.radius', editSphere.radius, editSphere.radius)
   const n = Number(editSphere.radius)
   editSphere.radius = Number.isFinite(n) ? Math.max(LENGTH_MIN, n).toFixed(2) : editSphere.radius
@@ -2469,6 +2923,7 @@ const handleSphereRadiusBlur = () => {
 }
 
 const nudgeSphereRadius = (direction: 'up' | 'down') => {
+  hideLengthBubble('sphere.radius')
   const current = Number(editSphere.radius)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('sphere.radius', '已减到最小值')
@@ -2591,6 +3046,7 @@ const handleConeRadiusFocus = () => {
 }
 
 const handleConeRadiusBlur = () => {
+  hideLengthBubble('cone.radius')
   editCone.radius = clampLengthValue('cone.radius', editCone.radius, editCone.radius)
   editCone.radius = normalizeDisplayLength(editCone.radius)
   setCoordFocus('cone.radius', false)
@@ -2598,6 +3054,7 @@ const handleConeRadiusBlur = () => {
 }
 
 const nudgeConeRadius = (direction: 'up' | 'down') => {
+  hideLengthBubble('cone.radius')
   const current = Number(editCone.radius)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('cone.radius', '已减到最小值')
@@ -2613,6 +3070,7 @@ const handleConeHeightFocus = () => {
 }
 
 const handleConeHeightBlur = () => {
+  hideLengthBubble('cone.height')
   editCone.height = clampLengthValue('cone.height', editCone.height, editCone.height)
   editCone.height = normalizeDisplayLength(editCone.height)
   setCoordFocus('cone.height', false)
@@ -2620,6 +3078,7 @@ const handleConeHeightBlur = () => {
 }
 
 const nudgeConeHeight = (direction: 'up' | 'down') => {
+  hideLengthBubble('cone.height')
   const current = Number(editCone.height)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('cone.height', '已减到最小值')
@@ -2746,6 +3205,7 @@ const handleCylinderRadiusFocus = () => {
 }
 
 const handleCylinderRadiusBlur = () => {
+  hideLengthBubble('cylinder.radius')
   editCylinder.radius = clampLengthValue(
     'cylinder.radius',
     editCylinder.radius,
@@ -2757,6 +3217,7 @@ const handleCylinderRadiusBlur = () => {
 }
 
 const nudgeCylinderRadius = (direction: 'up' | 'down') => {
+  hideLengthBubble('cylinder.radius')
   const current = Number(editCylinder.radius)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('cylinder.radius', '已减到最小值')
@@ -2772,6 +3233,7 @@ const handleCylinderHeightFocus = () => {
 }
 
 const handleCylinderHeightBlur = () => {
+  hideLengthBubble('cylinder.height')
   editCylinder.height = clampLengthValue(
     'cylinder.height',
     editCylinder.height,
@@ -2783,6 +3245,7 @@ const handleCylinderHeightBlur = () => {
 }
 
 const nudgeCylinderHeight = (direction: 'up' | 'down') => {
+  hideLengthBubble('cylinder.height')
   const current = Number(editCylinder.height)
   if (direction === 'down' && current <= LENGTH_MIN) {
     showLengthBubble('cylinder.height', '已减到最小值')
@@ -2920,6 +3383,73 @@ const getHexahedronVolume = (cubeId: string) => {
   }
   return Math.pow(edgeLength, 3)
 }
+const getPrismOwnerPoints = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  if (!constraint) return [] as Point3[]
+  return constraint.ownerPointIds
+    .map((id) => props.scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined)
+}
+/**
+ * 垂直保持模式下，与底面法线最对齐的世界坐标轴。
+ * 只有该轴的坐标编辑器可用，其余两轴禁用，避免 x/z 小分量导致高度剧烈跳变。
+ */
+const getPrismVerticalDominantAxis = (prismId: string): 'x' | 'y' | 'z' | null => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  if (!constraint || !constraint.keepVertical) return null
+  const basis = constraint.getBottomPlaneBasis()
+  if (!basis) return null
+  const n = basis.normal
+  const abs = { x: Math.abs(n.x), y: Math.abs(n.y), z: Math.abs(n.z) }
+  if (abs.x >= abs.y && abs.x >= abs.z) return 'x'
+  if (abs.y >= abs.x && abs.y >= abs.z) return 'y'
+  return 'z'
+}
+/**
+ * 垂直保持模式下，指定坐标轴是否可用于编辑最高点坐标。
+ * 只有与底面法线最对齐的轴可用，其余两轴禁用。
+ */
+const isPrismTopPointAxisEditable = (
+  prismId: string,
+  axis: 'x' | 'y' | 'z',
+): boolean => {
+  const dominant = getPrismVerticalDominantAxis(prismId)
+  if (dominant === null) return true
+  return dominant === axis
+}
+/** 棱柱来源标签：多边形F-点A（底面多边形 + 最高点）。 */
+const getPrismSourceLabel = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  if (!constraint) return ''
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  const topPoint = props.scene.points.get(constraint.ownerPointIds[1])
+  const faceName = bottomFace?.name ?? ''
+  const pointName = topPoint?.name ?? ''
+  return `多边形${faceName}-点${pointName}`
+}
+const getPrismBottomEdgeLabel = (prismId: string, edgeIndex: number) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  if (!constraint) return `边 ${edgeIndex + 1}`
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  if (!bottomFace) return `边 ${edgeIndex + 1}`
+  const points = bottomFace.getBoundaryPoints(props.scene.points)
+  const current = points[edgeIndex]
+  const next = points[(edgeIndex + 1) % points.length]
+  if (!current || !next) return `边 ${edgeIndex + 1}`
+  return `${current.name}${next.name}`
+}
+const getPrismHeight = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  return constraint?.getHeight() ?? 0
+}
+const getPrismVolume = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  return constraint?.getVolume() ?? 0
+}
+const getPrismSurfaceArea = (prismId: string) => {
+  const constraint = props.editor.getPrismConstraint(prismId)
+  return constraint?.getSurfaceArea() ?? 0
+}
 const getFaceMemberPointNames = (face: PlanarPolygon) =>
   face
     .getMemberPoints(props.scene.points)
@@ -2943,12 +3473,21 @@ const getFaceEdgeTargets = (faceId: string) => {
 const applyFaceEdgeLength = (faceId: string, edgeIndex: number) => {
   const nextLength = Number(editFace.edgeLengths[edgeIndex])
   if (!Number.isFinite(nextLength)) return
-  props.editor.updateFaceBoundaryEdgeLength(
+  const key = `face.edge.${edgeIndex}`
+  const success = props.editor.updateFaceBoundaryEdgeLength(
     faceId,
     edgeIndex,
     nextLength,
     getFaceEdgeTargets(faceId),
   )
+  if (!success) {
+    showLengthBubble(key, '不满足多边形边长约束，无法更新')
+    // 恢复为实际边长
+    const face = props.scene.faces.get(faceId)
+    if (face) {
+      editFace.edgeLengths[edgeIndex] = toFixed2(face.getEdgeLength(props.scene.points, edgeIndex))
+    }
+  }
 }
 
 const handleGlobalClick = (e: MouseEvent) => {
@@ -3354,6 +3893,42 @@ watch(
 
 watch(
   () => {
+    if (!editing.value || editing.value.type !== 'prism') return null
+    const constraint = props.editor.getPrismConstraint(editing.value.id)
+    if (!constraint) return null
+    const ownerPoints = getPrismOwnerPoints(editing.value.id)
+    if (ownerPoints.length < 2) return null
+    return {
+      nameSuffix: props.editor.getPrismNameSuffix(editing.value.id),
+      valueVisible: constraint.valueVisible === true,
+      keepVertical: constraint.keepVertical === true,
+      userLocked: props.editor
+        .getPrismFaceIds(editing.value.id)
+        .every((faceId) => props.scene.faces.get(faceId)?.userLocked),
+      topPoint: {
+        x: ownerPoints[1]!.position.x,
+        y: ownerPoints[1]!.position.y,
+        z: ownerPoints[1]!.position.z,
+      },
+      height: constraint.getHeight(),
+    }
+  },
+  (nextPrism) => {
+    if (!nextPrism) return
+    editPrism.nameSuffix = nextPrism.nameSuffix
+    editPrism.valueVisible = nextPrism.valueVisible
+    editPrism.keepVertical = nextPrism.keepVertical
+    editPrism.userLocked = nextPrism.userLocked
+    if (!focusedCoord['prism.topPoint.x']) editPrism.topPoint.x = toFixed2(nextPrism.topPoint.x)
+    if (!focusedCoord['prism.topPoint.y']) editPrism.topPoint.y = toFixed2(nextPrism.topPoint.y)
+    if (!focusedCoord['prism.topPoint.z']) editPrism.topPoint.z = toFixed2(nextPrism.topPoint.z)
+    if (!focusedCoord['prism.height']) editPrism.height = toFixed2(nextPrism.height)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
     if (!editing.value || editing.value.type !== 'regularPolygon') return null
     const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
     if (!constraint) return null
@@ -3492,6 +4067,7 @@ onUnmounted(() => {
         selectedEditableFaces.length > 0 ||
         selectedHexahedrons.length > 0 ||
         selectedRegularPolygons.length > 0 ||
+        selectedPrisms.length > 0 ||
         selectedSpheres.length > 0 ||
         selectedCones.length > 0 ||
         selectedCylinders.length > 0
@@ -3512,6 +4088,7 @@ onUnmounted(() => {
             selectedEditableFaces.length === 0 &&
             selectedHexahedrons.length === 0 &&
             selectedRegularPolygons.length === 0 &&
+            selectedPrisms.length === 0 &&
             selectedSpheres.length === 0 &&
             selectedCones.length === 0 &&
             selectedCylinders.length === 0
@@ -3553,42 +4130,47 @@ onUnmounted(() => {
               </label>
             </div>
             <!-- 约束点：参数化编辑器 -->
-            <div v-if="isPointObjectConstrained(p!)" class="coord-row constrained-param-row">
-              <div
-                v-for="range in constrainedParamRanges"
-                :key="range.key"
-                class="axis-field"
-              >
-                <label>{{ range.label }}</label>
-                <div class="coord-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeConstrainedParam(range.key, 'down')"
-                    :disabled="isPointCoordinateLocked(p!)"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    :ref="(el) => setCoordInputRef(`constrained.${range.key}`, el)"
-                    v-model="editConstrainedParams[range.key]"
-                    @input="applyConstrainedParam(range.key)"
-                    @focus="handleConstrainedParamFocus(range.key)"
-                    @blur="handleConstrainedParamBlur(range.key)"
-                    step="0.1"
-                    :min="range.min"
-                    :max="range.max"
-                    :disabled="isPointCoordinateLocked(p!)"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    @click="nudgeConstrainedParam(range.key, 'up')"
-                    :disabled="isPointCoordinateLocked(p!)"
-                  >
-                    +
-                  </button>
+            <div v-if="isPointObjectConstrained(p!)" class="constrained-param-wrap">
+              <!-- 面约束：专用标题 -->
+              <div v-if="isPointConstrainedToFace(p!)" class="face-uv-title">面上位置</div>
+              <!-- 通用参数化编辑器（支持所有约束类型，含面约束动态UV范围） -->
+              <div class="coord-row constrained-param-row">
+                <div
+                  v-for="range in constrainedParamRanges"
+                  :key="range.key"
+                  class="axis-field"
+                >
+                  <label>{{ range.label }}</label>
+                  <div class="coord-input">
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeConstrainedParam(range.key, 'down')"
+                      :disabled="isPointCoordinateLocked(p!)"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      :ref="(el) => setCoordInputRef(`constrained.${range.key}`, el)"
+                      v-model="editConstrainedParams[range.key]"
+                      @input="applyConstrainedParam(range.key)"
+                      @focus="handleConstrainedParamFocus(range.key)"
+                      @blur="handleConstrainedParamBlur(range.key)"
+                      :step="range.step"
+                      :min="range.min"
+                      :max="range.max"
+                      :disabled="isPointCoordinateLocked(p!)"
+                    />
+                    <button
+                      type="button"
+                      class="step-btn"
+                      @click="nudgeConstrainedParam(range.key, 'up')"
+                      :disabled="isPointCoordinateLocked(p!)"
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3708,6 +4290,11 @@ onUnmounted(() => {
                 class="constraint-badge"
                 >正多边形约束</span
               >
+              <span
+                v-if="hasPrismConstraint(p!) && p!.prismRole === 'dependent'"
+                class="constraint-badge"
+                >棱柱约束</span
+              >
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
               <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
                 getPointConstraintBadge(p!)
@@ -3807,11 +4394,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['line.lockedLength']?.show" class="length-bubble">
-                    {{ bubbleState['line.lockedLength']?.message }}
-                  </div>
-                </Transition>
               </div>
               <label class="toggle-label">
                 <input
@@ -4135,11 +4717,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['straightLine.displayLength']?.show" class="length-bubble">
-                    {{ bubbleState['straightLine.displayLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div
@@ -4458,14 +5035,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div
-                    v-if="bubbleState['perpendicularLine.displayLength']?.show"
-                    class="length-bubble"
-                  >
-                    {{ bubbleState['perpendicularLine.displayLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="readonly-value-row">
@@ -4691,14 +5260,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div
-                    v-if="bubbleState['parallelLine.displayLength']?.show"
-                    class="length-bubble"
-                  >
-                    {{ bubbleState['parallelLine.displayLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="coord-row-title">
@@ -4885,11 +5446,6 @@ onUnmounted(() => {
                 <button type="button" class="step-btn" @click="nudgeRayDisplayLength('up')">
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['ray.displayLength']?.show" class="length-bubble">
-                    {{ bubbleState['ray.displayLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div
@@ -5180,11 +5736,6 @@ onUnmounted(() => {
                   min="0.1"
                 />
                 <button type="button" class="step-btn" @click="nudgeVectorLength('up')">+</button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['vector.length']?.show" class="length-bubble">
-                    {{ bubbleState['vector.length']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div
@@ -5500,11 +6051,6 @@ onUnmounted(() => {
                   >
                     +
                   </button>
-                  <Transition name="bubble-fade">
-                    <div v-if="bubbleState['circle.lockedRadius']?.show" class="length-bubble">
-                      {{ bubbleState['circle.lockedRadius']?.message }}
-                    </div>
-                  </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
@@ -5662,11 +6208,6 @@ onUnmounted(() => {
                   >
                     +
                   </button>
-                  <Transition name="bubble-fade">
-                    <div v-if="bubbleState['circle.threePointRadius']?.show" class="length-bubble">
-                      {{ bubbleState['circle.threePointRadius']?.message }}
-                    </div>
-                  </Transition>
                 </div>
               </div>
               <div class="face-metric-row">
@@ -6174,11 +6715,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['hexa.edgeLength']?.show" class="length-bubble">
-                    {{ bubbleState['hexa.edgeLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="face-metric-row">原始点坐标</div>
@@ -6422,6 +6958,275 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="prism in selectedPrisms"
+          :key="prism.prismId"
+          class="selectedFace-info prism-info"
+          @dblclick="startEditPrism(prism.prismId)"
+        >
+          <div
+            v-if="editing?.type === 'prism' && editing?.id === prism.prismId"
+            class="edit-grid"
+          >
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editPrism.nameSuffix" @input="applyPrismMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPrism.userLocked"
+                  @change="applyPrismMeta"
+                />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPrism.valueVisible"
+                  @change="applyPrismMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPrism.keepVertical"
+                  @change="applyPrismMeta"
+                />
+                垂直保持
+              </label>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >表面积：{{ getPrismSurfaceArea(prism.prismId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >体积：{{ getPrismVolume(prism.prismId).toFixed(2) }}</span
+              >
+            </div>
+            <div class="length-row">
+              <label>高度：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePrismHeight('down')"
+                  :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('prism.height', el)"
+                  v-model="editPrism.height"
+                  @input="applyPrismHeight"
+                  @focus="handlePrismHeightFocus"
+                  @blur="handlePrismHeightBlur"
+                  :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePrismHeight('up')"
+                  :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1])"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div class="face-metric-row">
+              最高点{{ getPrismOwnerPoints(prism.prismId)[1]?.name ?? '' }}坐标
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('x', 'down')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'x')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('prism.topPoint.x', el)"
+                    v-model="editPrism.topPoint.x"
+                    @input="applyPrismTopPoint"
+                    @focus="handlePrismTopPointCoordFocus('x')"
+                    @blur="handlePrismTopPointCoordBlur('x')"
+                    step="0.5"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'x')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('x', 'up')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'x')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('y', 'down')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'y')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('prism.topPoint.y', el)"
+                    v-model="editPrism.topPoint.y"
+                    @input="applyPrismTopPoint"
+                    @focus="handlePrismTopPointCoordFocus('y')"
+                    @blur="handlePrismTopPointCoordBlur('y')"
+                    step="0.5"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'y')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('y', 'up')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'y')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('z', 'down')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'z')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('prism.topPoint.z', el)"
+                    v-model="editPrism.topPoint.z"
+                    @input="applyPrismTopPoint"
+                    @focus="handlePrismTopPointCoordFocus('z')"
+                    @blur="handlePrismTopPointCoordBlur('z')"
+                    step="0.5"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'z')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismTopPointCoord('z', 'up')"
+                    :disabled="editPrism.userLocked || isPointCoordinateLocked(getPrismOwnerPoints(prism.prismId)[1]) || !isPrismTopPointAxisEditable(prism.prismId, 'z')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="face-metric-row">多边形边长</div>
+            <div class="face-edge-grid">
+              <div
+                v-for="(_, edgeIndex) in editPrism.bottomEdgeLengths"
+                :key="`prism-bottom-edge-${edgeIndex}`"
+                class="face-edge-row length-row axis-field"
+              >
+                <label>{{ getPrismBottomEdgeLabel(prism.prismId, edgeIndex) }}</label>
+                <div class="coord-input compact-length-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismBottomEdgeLength(edgeIndex, 'down')"
+                    :disabled="editPrism.userLocked || props.scene.faces.get(prism.bottomFaceId)?.userLocked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="1"
+                    :ref="(el) => setCoordInputRef(`prism.bottomEdge.${edgeIndex}`, el)"
+                    v-model="editPrism.bottomEdgeLengths[edgeIndex]"
+                    @input="applyPrismBottomEdgeLength(edgeIndex)"
+                    @focus="handlePrismBottomEdgeLengthFocus(edgeIndex)"
+                    @blur="handlePrismBottomEdgeLengthBlur(edgeIndex)"
+                    :disabled="editPrism.userLocked || props.scene.faces.get(prism.bottomFaceId)?.userLocked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePrismBottomEdgeLength(edgeIndex, 'up')"
+                    :disabled="editPrism.userLocked || props.scene.faces.get(prism.bottomFaceId)?.userLocked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div class="card-summary-header">
+              {{ prism.name }}
+              <span
+                v-if="props.editor.getPrismFaceIds(prism.prismId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                class="lock-badge"
+                >🔒</span
+              >
+              <span v-if="props.editor.getPrismFaceIds(prism.prismId).some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('face', prism.bottomFaceId, prism.name)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >表面积：{{ getPrismSurfaceArea(prism.prismId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >体积：{{ getPrismVolume(prism.prismId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >高度：{{ getPrismHeight(prism.prismId).toFixed(2) }}</span
+              >
+            </div>
+            <div>
+              来源：{{ getPrismSourceLabel(prism.prismId) }}
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="rp in selectedRegularPolygons"
           :key="rp.constraintId"
           class="selectedFace-info"
@@ -6515,11 +7320,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['rp.edgeLength']?.show" class="length-bubble">
-                    {{ bubbleState['rp.edgeLength']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="face-metric-row">原始点坐标</div>
@@ -6917,11 +7717,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['sphere.radius']?.show" class="length-bubble">
-                    {{ bubbleState['sphere.radius']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="coord-row-title">
@@ -7272,11 +8067,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cone.radius']?.show" class="length-bubble">
-                    {{ bubbleState['cone.radius']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="length-row">
@@ -7309,11 +8099,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cone.height']?.show" class="length-bubble">
-                    {{ bubbleState['cone.height']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div
@@ -7682,11 +8467,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cylinder.radius']?.show" class="length-bubble">
-                    {{ bubbleState['cylinder.radius']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div class="length-row">
@@ -7719,11 +8499,6 @@ onUnmounted(() => {
                 >
                   +
                 </button>
-                <Transition name="bubble-fade">
-                  <div v-if="bubbleState['cylinder.height']?.show" class="length-bubble">
-                    {{ bubbleState['cylinder.height']?.message }}
-                  </div>
-                </Transition>
               </div>
             </div>
             <div
@@ -8080,11 +8855,6 @@ onUnmounted(() => {
                   >
                     +
                   </button>
-                  <Transition name="bubble-fade">
-                    <div v-if="bubbleState[`face.edge.${edgeIndex}`]?.show" class="length-bubble">
-                      {{ bubbleState[`face.edge.${edgeIndex}`]?.message }}
-                    </div>
-                  </Transition>
                 </div>
               </div>
             </div>
@@ -8099,6 +8869,7 @@ onUnmounted(() => {
               <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                 getSolidConstraintBadge(face!.cubeId)
               }}</span>
+              <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
               <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
@@ -8263,6 +9034,11 @@ onUnmounted(() => {
                   v-if="hasRegularPolygonConstraint(p!) && p!.regularPolygonRole === 'dependent'"
                   class="constraint-badge"
                   >正多边形约束</span
+                >
+                <span
+                  v-if="hasPrismConstraint(p!) && p!.prismRole === 'dependent'"
+                  class="constraint-badge"
+                  >棱柱约束</span
                 >
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
                 <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
@@ -8603,6 +9379,65 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="prismsInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.prism"
+            @click="toggleContentGroup('prism')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.prism ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.prism }}</span>
+            <span class="content-group-count">{{ prismsInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.prism" class="content-group-body">
+            <div
+              v-for="prism in prismsInScene"
+              :key="prism.prismId"
+              class="face-info prism-info selectable-geo"
+              :class="{ 'is-selected': selectedPrismIds.includes(prism.prismId) }"
+              @click="selectPrismFromContent(prism.prismId)"
+              @dblclick="startEditPrism(prism.prismId)"
+            >
+              <div class="card-summary-header">
+                {{ prism.name }}
+                <span
+                  v-if="props.editor.getPrismFaceIds(prism.prismId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                  class="lock-badge"
+                  >🔒</span
+                >
+                <span v-if="props.editor.getPrismFaceIds(prism.prismId).some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+                <button
+                  class="card-delete-btn"
+                  title="删除"
+                  @click.stop="handleDeleteElement('face', prism.bottomFaceId, prism.name)"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="3 6 5 6 21 6" />
+                    <path
+                      d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                    />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              </div>
+              <div>体积：{{ getPrismVolume(prism.prismId).toFixed(2) }}</div>
+              <div>
+                来源：{{ getPrismSourceLabel(prism.prismId) }}
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="spheresInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -8763,6 +9598,7 @@ onUnmounted(() => {
                 <span v-if="isCubeFace(face!)" class="constraint-badge">{{
                   getSolidConstraintBadge(face!.cubeId)
                 }}</span>
+                <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
                 <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                 </span>
@@ -8834,6 +9670,23 @@ onUnmounted(() => {
         </div>
       </div>
     </Transition>
+  </Teleport>
+  <Teleport to="body">
+    <TransitionGroup name="bubble-fade">
+      <div
+        v-for="(bubble, bKey) in visibleBubbles"
+        :key="bKey"
+        class="length-bubble-fixed"
+        :class="{ 'below-anchor': bubble.below }"
+        :style="{
+          left: bubble.x + 'px',
+          top: bubble.y + 'px',
+          transform: bubble.transform,
+        }"
+      >
+        {{ bubble.message }}
+      </div>
+    </TransitionGroup>
   </Teleport>
 </template>
 
@@ -8934,6 +9787,10 @@ hr {
 .face-info {
   background-color: rgba(122, 108, 207, 0.2);
   border-left-color: #d9d0ff;
+}
+.prism-info {
+  background-color: rgba(255, 140, 66, 0.2);
+  border-left-color: #ff8c42;
 }
 .selectedCone-info,
 .cone-info {
@@ -9299,6 +10156,15 @@ hr {
   border-radius: 4px;
   padding: 4px;
 }
+.constrained-param-wrap {
+  grid-column: 1 / -1;
+}
+.face-uv-title {
+  font-size: 12px;
+  color: #b8d4ff;
+  margin-bottom: 4px;
+  padding-left: 2px;
+}
 .coord-row-title {
   font-size: 12px;
   color: #e6ffe9;
@@ -9481,15 +10347,12 @@ hr {
 }
 .face-edge-grid {
   grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px 8px;
   align-items: start;
-  max-width: 240px;
 }
-.face-edge-row {
-  min-width: 0;
-}
+.face-edge-row { min-width: 0; flex: 0 1 auto; }
 .face-edge-row.axis-field {
   grid-template-columns: 14px 1fr;
   gap: 4px;
@@ -9500,12 +10363,15 @@ hr {
   white-space: nowrap;
 }
 .face-edge-row .coord-input {
-  display: grid;
-  grid-template-columns: 24px 1fr 24px;
-  width: 100%;
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  position: relative;
 }
 .face-edge-row .coord-input input[type='number'] {
-  width: auto;
+  width: 54px;
+  text-align: center;
+  border-radius: 0;
   min-width: 0;
 }
 .face-edge-row .step-btn {
@@ -9765,12 +10631,8 @@ hr {
   }
 }
 
-.length-bubble {
-  position: absolute;
-  right: 0;
-  bottom: 100%;
-  transform: translateX(0);
-  margin-bottom: 6px;
+.length-bubble-fixed {
+  position: fixed;
   background: #ffffff;
   border: none;
   border-radius: 8px;
@@ -9779,20 +10641,27 @@ hr {
   font-size: 12px;
   line-height: 1.4;
   white-space: nowrap;
-  z-index: 100;
+  z-index: 99999;
   pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
   width: max-content;
+  max-width: 300px;
 }
 
-.length-bubble::after {
+.length-bubble-fixed::after {
   content: '';
   position: absolute;
-  right: 16px;
-  bottom: -6px;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 6px solid #ffffff;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%) rotate(45deg);
+  width: 8px;
+  height: 8px;
+  background: #ffffff;
+}
+
+.length-bubble-fixed.below-anchor::after {
+  top: -4px;
+  bottom: auto;
 }
 
 .bubble-fade-enter-active,

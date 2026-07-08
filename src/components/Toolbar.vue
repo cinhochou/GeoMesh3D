@@ -324,6 +324,11 @@ const createTetrahedron = () => {
   emit('mode-change', EditorMode.CreateTetrahedron)
 }
 
+const createPrism = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreatePrism)
+}
+
 const createSphereTwoPoints = () => {
   uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
   emit('mode-change', EditorMode.CreateSphereTwoPoints)
@@ -747,6 +752,7 @@ onUnmounted(() => {
             'is-active':
               currentMode === EditorMode.CreateHexahedron ||
               currentMode === EditorMode.CreateTetrahedron ||
+              currentMode === EditorMode.CreatePrism ||
               currentMode === EditorMode.CreateSphereTwoPoints ||
               currentMode === EditorMode.CreateSphereRadius ||
               currentMode === EditorMode.CreateCone ||
@@ -1226,6 +1232,38 @@ onUnmounted(() => {
           <circle cx="10" cy="14.1" r="1.3" fill="currentColor" />
         </svg>
         <span>正六面体</span>
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreatePrism }"
+        @click="createPrism"
+      >
+        <svg
+          class="menu-item-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <line x1="4" y1="18.5" x2="14" y2="21" />
+          <line x1="14" y1="21" x2="20" y2="16.5" />
+          <line x1="20" y1="16.5" x2="4" y2="18.5" />
+          <line x1="4" y1="18.5" x2="7" y2="6" />
+          <line x1="14" y1="21" x2="17" y2="8.5" />
+          <line x1="20" y1="16.5" x2="23" y2="4" />
+          <line x1="7" y1="6" x2="17" y2="8.5" />
+          <line x1="17" y1="8.5" x2="23" y2="4" />
+          <line x1="23" y1="4" x2="7" y2="6" stroke-dasharray="2 2" />
+          <circle cx="4" cy="18.5" r="1.3" fill="currentColor" />
+          <circle cx="14" cy="21" r="1.3" fill="currentColor" />
+          <circle cx="20" cy="16.5" r="1.3" fill="currentColor" />
+          <circle cx="7" cy="6" r="1.3" fill="currentColor" />
+          <circle cx="17" cy="8.5" r="1.3" fill="currentColor" />
+          <circle cx="23" cy="4" r="1.3" fill="currentColor" />
+        </svg>
+        <span>棱柱</span>
       </button>
       <button
         class="menu-item"

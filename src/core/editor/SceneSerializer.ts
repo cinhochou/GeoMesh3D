@@ -19,6 +19,7 @@ import { Scene, type SceneConstraint } from '../scene/Scene'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
+import { PrismConstraint } from '../constraints/PrismConstraint'
 import { PlanarPolygonConstraint } from '../constraints/PlanarFaceConstraint'
 import type { IntersectionTargetRef } from '../geometry/IntersectionPoint3'
 
@@ -47,6 +48,8 @@ type SerializedPoint = {
   coneRole: 'baseCenter' | 'apex' | null
   cylinderId: string | null
   cylinderRole: 'bottomCenter' | 'topCenter' | null
+  prismId: string | null
+  prismRole: 'owner' | 'dependent' | null
   constrainedTo: { type: string; id: string } | null
 }
 
@@ -153,6 +156,10 @@ type SerializedFace = {
   regularPolygonId: string | null
   regularPolygonOwnerPointIds: string[]
   regularPolygonDependentPointIds: string[]
+  prismId: string | null
+  prismOwnerPointIds: string[]
+  prismDependentPointIds: string[]
+  prismRole: 'bottom' | 'top' | 'side' | null
 }
 
 type SerializedSphere = {
@@ -254,6 +261,21 @@ type SerializedRegularPolygonConstraint = {
   valueVisible: boolean
 }
 
+type SerializedPrismConstraint = {
+  type: 'prism'
+  prismId: string
+  ownerPointIds: [string, string]
+  dependentLayouts: Array<{ pointId: string; baseIndex: number }>
+  bottomFaceId: string
+  topFaceId: string
+  sideFaceIds: string[]
+  baseReferenceIndex: number
+  vAxisHint: SerializedVec3
+  name: string
+  valueVisible: boolean
+  keepVertical: boolean
+}
+
 type SerializedPlanarConstraint = {
   type: 'planar'
   faceId: string
@@ -310,6 +332,7 @@ type SerializedConstraint =
   | SerializedCubeConstraint
   | SerializedIntersectionConstraint
   | SerializedRegularPolygonConstraint
+  | SerializedPrismConstraint
   | SerializedPlanarConstraint
   | SerializedCylinderConstraint
   | SerializedObjectConstrainedPointConstraint
@@ -397,6 +420,8 @@ function serializePoint(p: Point3): SerializedPoint {
     coneRole: p.coneRole,
     cylinderId: p.cylinderId,
     cylinderRole: p.cylinderRole,
+    prismId: p.prismId,
+    prismRole: p.prismRole,
     constrainedTo: p.constrainedTo,
   }
 }
@@ -485,6 +510,10 @@ function serializeFace(f: PlanarPolygon): SerializedFace {
     regularPolygonId: f.regularPolygonId,
     regularPolygonOwnerPointIds: f.regularPolygonOwnerPointIds,
     regularPolygonDependentPointIds: f.regularPolygonDependentPointIds,
+    prismId: f.prismId,
+    prismOwnerPointIds: f.prismOwnerPointIds,
+    prismDependentPointIds: f.prismDependentPointIds,
+    prismRole: f.prismRole,
   }
 }
 
@@ -598,6 +627,25 @@ function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
       edgeLengthLocked: c.edgeLengthLocked,
       lockedEdgeLength: c.lockedEdgeLength,
       valueVisible: c.valueVisible,
+    }
+  }
+  if (c instanceof PrismConstraint) {
+    return {
+      type: 'prism',
+      prismId: c.prismId,
+      ownerPointIds: c.ownerPointIds,
+      dependentLayouts: c.dependentLayouts.map((layout) => ({
+        pointId: layout.pointId,
+        baseIndex: layout.baseIndex,
+      })),
+      bottomFaceId: c.bottomFaceId,
+      topFaceId: c.topFaceId,
+      sideFaceIds: [...c.sideFaceIds],
+      baseReferenceIndex: c.baseReferenceIndex,
+      vAxisHint: serializeVec3(c.getVAxisHint()),
+      name: c.name,
+      valueVisible: c.valueVisible,
+      keepVertical: c.keepVertical,
     }
   }
   if (c instanceof PlanarPolygonConstraint) {
@@ -843,6 +891,8 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (p.cylinderRole == null) p.cylinderRole = null
     if (p.regularPolygonId == null) p.regularPolygonId = null
     if (p.regularPolygonRole == null) p.regularPolygonRole = null
+    if (p.prismId == null) p.prismId = null
+    if (p.prismRole == null) p.prismRole = null
     if (p.constrainedTo == null) p.constrainedTo = null
   }
 
@@ -1159,6 +1209,10 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (f.regularPolygonId == null) f.regularPolygonId = null
     if (f.regularPolygonOwnerPointIds == null) f.regularPolygonOwnerPointIds = []
     if (f.regularPolygonDependentPointIds == null) f.regularPolygonDependentPointIds = []
+    if (f.prismId == null) f.prismId = null
+    if (f.prismOwnerPointIds == null) f.prismOwnerPointIds = []
+    if (f.prismDependentPointIds == null) f.prismDependentPointIds = []
+    if (f.prismRole == null) f.prismRole = null
     if (f.fillColor == null) f.fillColor = null
     if (f.fillOpacity == null) f.fillOpacity = null
   }
@@ -1266,7 +1320,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
   }
 
   const constraints = obj.constraints as SerializedConstraint[]
-  const validTypes = new Set(['cube', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint', 'perpendicularLine', 'parallelLine'])
+  const validTypes = new Set(['cube', 'prism', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint', 'perpendicularLine', 'parallelLine'])
   const constraintPointIds = new Set<string>()
   for (const c of constraints) {
     if (!validTypes.has(c.type)) {
@@ -1312,6 +1366,50 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
       if (cc.edgeLengthLocked) {
         const err = validatePositiveFiniteNumber(cc.lockedEdgeLength, `立方体约束 "${cc.name}" 锁定了边长但 lockedEdgeLength 无效`)
         if (err) return { valid: false, error: err }
+      }
+    }
+    if (c.type === 'prism') {
+      const pc = c as SerializedPrismConstraint
+      if (typeof pc.prismId !== 'string' || pc.prismId === '') {
+        return { valid: false, error: '棱柱约束缺少 prismId' }
+      }
+      if (!Array.isArray(pc.ownerPointIds) || pc.ownerPointIds.length !== 2) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 的 ownerPointIds 必须包含 2 个点` }
+      }
+      if (!pointIdSet.has(pc.ownerPointIds[0]) || !pointIdSet.has(pc.ownerPointIds[1])) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 引用了不存在的拥有者点` }
+      }
+      if (pc.ownerPointIds[0] === pc.ownerPointIds[1]) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 的两个拥有者点不能相同` }
+      }
+      if (!Array.isArray(pc.dependentLayouts)) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 缺少 dependentLayouts` }
+      }
+      for (const layout of pc.dependentLayouts) {
+        const err = validateReference(layout.pointId, pointIdSet, `棱柱约束 "${pc.name}" 的依赖布局引用了不存在的点`)
+        if (err) return { valid: false, error: err }
+        if (typeof layout.baseIndex !== 'number' || !Number.isFinite(layout.baseIndex)) {
+          return { valid: false, error: `棱柱约束 "${pc.name}" 的依赖布局 baseIndex 无效` }
+        }
+      }
+      const err1 = validateReference(pc.bottomFaceId, faceIdSet, `棱柱约束 "${pc.name}" 引用了不存在的底面`)
+      if (err1) return { valid: false, error: err1 }
+      const err2 = validateReference(pc.topFaceId, faceIdSet, `棱柱约束 "${pc.name}" 引用了不存在的顶面`)
+      if (err2) return { valid: false, error: err2 }
+      if (!Array.isArray(pc.sideFaceIds)) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 缺少 sideFaceIds` }
+      }
+      for (const fid of pc.sideFaceIds) {
+        const err = validateReference(fid, faceIdSet, `棱柱约束 "${pc.name}" 引用了不存在的侧面`)
+        if (err) return { valid: false, error: err }
+      }
+      if (typeof pc.baseReferenceIndex !== 'number' || !Number.isFinite(pc.baseReferenceIndex)) {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 的 baseReferenceIndex 无效` }
+      }
+      const err3 = validateVec3(pc.vAxisHint, `棱柱约束 "${pc.name}" 的 vAxisHint 无效`)
+      if (err3) return { valid: false, error: err3 }
+      if (typeof pc.keepVertical !== 'boolean') {
+        return { valid: false, error: `棱柱约束 "${pc.name}" 的 keepVertical 无效` }
       }
     }
     if (c.type === 'intersection') {
@@ -1549,6 +1647,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       existing.coneRole = sp.coneRole
       existing.cylinderId = sp.cylinderId ?? null
       existing.cylinderRole = sp.cylinderRole ?? null
+      existing.prismId = sp.prismId ?? null
+      existing.prismRole = sp.prismRole ?? null
       existing.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
       continue
     }
@@ -1577,6 +1677,8 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     p.coneRole = sp.coneRole
     p.cylinderId = sp.cylinderId ?? null
     p.cylinderRole = sp.cylinderRole ?? null
+    p.prismId = sp.prismId ?? null
+    p.prismRole = sp.prismRole ?? null
     p.constrainedTo = (sp.constrainedTo as ConstrainedToRef | null) ?? null
     scene.addPoint(p)
     pointMap.set(p.id, p)
@@ -1718,6 +1820,10 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     f.regularPolygonId = sf.regularPolygonId
     f.regularPolygonOwnerPointIds = sf.regularPolygonOwnerPointIds
     f.regularPolygonDependentPointIds = sf.regularPolygonDependentPointIds
+    f.prismId = sf.prismId ?? null
+    f.prismOwnerPointIds = sf.prismOwnerPointIds ?? []
+    f.prismDependentPointIds = sf.prismDependentPointIds ?? []
+    f.prismRole = sf.prismRole ?? null
     scene.addFace(f)
   }
 
@@ -1849,6 +1955,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   const seenFaceIds = new Set<string>()
   const seenPointIds = new Set<string>()
   const seenCubeIds = new Set<string>()
+  const seenPrismIds = new Set<string>()
   const seenRegularPolygonIds = new Set<string>()
   const seenCylinderIds = new Set<string>()
   const seenPerpendicularLineIds = new Set<string>()
@@ -1904,6 +2011,25 @@ export function importScene(scene: Scene, data: SerializedScene): void {
         rc.valueVisible,
       )
       scene.addRegularPolygonConstraint(constraint)
+    } else if (sc.type === 'prism') {
+      const pc = sc as SerializedPrismConstraint
+      if (seenPrismIds.has(pc.prismId)) continue
+      seenPrismIds.add(pc.prismId)
+      const constraint = new PrismConstraint(
+        scene,
+        pc.prismId,
+        pc.ownerPointIds,
+        pc.dependentLayouts,
+        pc.bottomFaceId,
+        pc.topFaceId,
+        pc.sideFaceIds,
+        pc.baseReferenceIndex,
+        new Vec3(pc.vAxisHint.x, pc.vAxisHint.y, pc.vAxisHint.z),
+        pc.name,
+        pc.valueVisible,
+        pc.keepVertical,
+      )
+      scene.addPrismConstraint(constraint)
     } else if (sc.type === 'planar') {
       const pc = sc as SerializedPlanarConstraint
       if (seenFaceIds.has(pc.faceId)) continue
@@ -2054,6 +2180,8 @@ export function createEmptySerializedScene(): SerializedScene {
       coneRole: null,
       cylinderId: null,
       cylinderRole: null,
+      prismId: null,
+      prismRole: null,
       constrainedTo: null,
     }],
     lines: [],

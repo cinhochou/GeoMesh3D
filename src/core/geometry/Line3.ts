@@ -1,7 +1,7 @@
 import { Point3 } from './Point3'
 import { Vec3 } from './Vec3'
 
-export type FaceConstraintType = 'polygon' | 'regularPolygon' | 'hexahedron' | 'tetrahedron'
+export type FaceConstraintType = 'polygon' | 'regularPolygon' | 'hexahedron' | 'tetrahedron' | 'prism'
 
 export class Line3 {
   static readonly DEFAULT_LABEL_OFFSET_X = 0

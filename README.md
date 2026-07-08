@@ -88,8 +88,21 @@ GeoMesh3D
 │  │  └─ myTraining.patt
 │  ├─ data
 │  │  └─ camera_para.dat
-│  ├─ favicon.ico
-│  └─ GeoMesh3D_logo_black_260x260.png
+│  ├─ GeoMesh3D_logo_black_260x260.png
+│  ├─ icon-192x192.png
+│  ├─ icon-512x512.png
+│  └─ resources
+│     └─ build
+│        ├─ ar.js
+│        ├─ GLTFLoader.js
+│        ├─ MTLLoader.js
+│        ├─ OBJLoader.js
+│        ├─ OBJMTLLoader.js
+│        ├─ OrbitControls.js
+│        ├─ stats.js
+│        ├─ three.js
+│        ├─ three.min.js
+│        └─ threex-arbasecontrols.js
 ├─ README.md
 ├─ scripts
 │  └─ y-websocket-server.mjs
@@ -97,16 +110,24 @@ GeoMesh3D
 │  ├─ api
 │  │  ├─ auth.ts
 │  │  ├─ client.ts
+│  │  ├─ profile.ts
+│  │  ├─ project.ts
 │  │  └─ user.ts
 │  ├─ App.vue
 │  ├─ assets
 │  │  └─ GeoMesh3D_logo_white_1240x300.png
 │  ├─ components
+│  │  ├─ EditProjectDialog.vue
 │  │  ├─ InputDialog.vue
+│  │  ├─ NewProjectDialog.vue
+│  │  ├─ ProxiedImage.vue
 │  │  ├─ SettingsPanel.vue
 │  │  ├─ SideBar.vue
 │  │  ├─ TimeLine.vue
 │  │  └─ Toolbar.vue
+│  ├─ composables
+│  │  ├─ useOrientationLock.ts
+│  │  └─ useSessionGuard.ts
 │  ├─ config
 │  │  └─ api.ts
 │  ├─ core
@@ -121,6 +142,7 @@ GeoMesh3D
 │  │  │  ├─ ParallelLineConstraint.ts
 │  │  │  ├─ PerpendicularLineConstraint.ts
 │  │  │  ├─ PlanarFaceConstraint.ts
+│  │  │  ├─ PrismConstraint.ts
 │  │  │  └─ RegularPolygonConstraint.ts
 │  │  ├─ editor
 │  │  │  ├─ Command.ts
@@ -133,9 +155,11 @@ GeoMesh3D
 │  │  │  │  │  ├─ AddElementCommand.ts
 │  │  │  │  │  ├─ AddHexahedronCommand.ts
 │  │  │  │  │  ├─ AddIntersectionPointCommand.ts
+│  │  │  │  │  ├─ AddPrismCommand.ts
 │  │  │  │  │  ├─ AddRadiusSphereCommand.ts
 │  │  │  │  │  ├─ AddRegularPolygonCommand.ts
 │  │  │  │  │  └─ AddSphereCommand.ts
+│  │  │  │  ├─ ConstraintAwareCommand.ts
 │  │  │  │  ├─ delete
 │  │  │  │  │  ├─ DeleteCircleCommand.ts
 │  │  │  │  │  ├─ DeleteConeCommand.ts
@@ -146,7 +170,7 @@ GeoMesh3D
 │  │  │  │  │  ├─ DeleteParallelLineCommand.ts
 │  │  │  │  │  ├─ DeletePerpendicularLineCommand.ts
 │  │  │  │  │  ├─ DeletePointCommand.ts
-│  │  │  │  │  ├─ DeleteRadiusSphereCommand.ts
+│  │  │  │  │  ├─ DeletePrismCommand.ts
 │  │  │  │  │  ├─ DeleteRayCommand.ts
 │  │  │  │  │  ├─ DeleteRegularPolygonCommand.ts
 │  │  │  │  │  ├─ DeleteSphereCommand.ts
@@ -158,7 +182,9 @@ GeoMesh3D
 │  │  │  │  │  ├─ MergePointsCommand.ts
 │  │  │  │  │  ├─ SyncLockStateCommand.ts
 │  │  │  │  │  ├─ TransformCommand.ts
-│  │  │  │  │  └─ TransformPointsCommand.ts
+│  │  │  │  │  ├─ TransformPointsCommand.ts
+│  │  │  │  │  └─ TransformPrismOwnerPointCommand.ts
+│  │  │  │  ├─ SnapshotCommand.ts
 │  │  │  │  └─ update
 │  │  │  │     ├─ UpdateCircleCommand.ts
 │  │  │  │     ├─ UpdateConeCommand.ts
@@ -173,15 +199,40 @@ GeoMesh3D
 │  │  │  │     ├─ UpdateParallelLineCommand.ts
 │  │  │  │     ├─ UpdatePerpendicularLineCommand.ts
 │  │  │  │     ├─ UpdatePointCommand.ts
+│  │  │  │     ├─ UpdatePrismCommand.ts
 │  │  │  │     ├─ UpdateRayCommand.ts
 │  │  │  │     ├─ UpdateRegularPolygonCommand.ts
 │  │  │  │     ├─ UpdateSphereCommand.ts
 │  │  │  │     ├─ UpdateSphereRadiusCommand.ts
 │  │  │  │     ├─ UpdateStraightLineCommand.ts
 │  │  │  │     └─ UpdateVectorCommand.ts
+│  │  │  ├─ DraftStorageService.ts
 │  │  │  ├─ Editor.ts
 │  │  │  ├─ editorSession.ts
+│  │  │  ├─ HistoryManager.ts
 │  │  │  └─ SceneSerializer.ts
+│  │  ├─ features
+│  │  │  ├─ Feature.ts
+│  │  │  ├─ FeatureAddHelper.ts
+│  │  │  ├─ FeatureDeleteHelper.ts
+│  │  │  ├─ FeatureDocument.ts
+│  │  │  ├─ FeatureRegistry.ts
+│  │  │  ├─ FeatureUpdateCommand.ts
+│  │  │  ├─ index.ts
+│  │  │  └─ plugins
+│  │  │     ├─ BasicElementFeature.ts
+│  │  │     ├─ CircleFeature.ts
+│  │  │     ├─ ConeFeature.ts
+│  │  │     ├─ ConstrainedPointFeature.ts
+│  │  │     ├─ CylinderFeature.ts
+│  │  │     ├─ FaceFeature.ts
+│  │  │     ├─ HexahedronFeature.ts
+│  │  │     ├─ IntersectionPointFeature.ts
+│  │  │     ├─ ParallelLineFeature.ts
+│  │  │     ├─ PerpendicularLineFeature.ts
+│  │  │     ├─ PrismFeature.ts
+│  │  │     ├─ RegularPolygonFeature.ts
+│  │  │     └─ SphereFeature.ts
 │  │  ├─ geometry
 │  │  │  ├─ Circle3.ts
 │  │  │  ├─ Cone3.ts
@@ -210,20 +261,8 @@ GeoMesh3D
 │  │  ├─ GeometrySyncer.ts
 │  │  ├─ Interaction.ts
 │  │  ├─ LabelRenderer.ts
-│  │  ├─ ObjectMapper.ts
 │  │  └─ ThreeRenderer.ts
 │  ├─ resources
-│  │  ├─ build
-│  │  │  ├─ ar.js
-│  │  │  ├─ GLTFLoader.js
-│  │  │  ├─ MTLLoader.js
-│  │  │  ├─ OBJLoader.js
-│  │  │  ├─ OBJMTLLoader.js
-│  │  │  ├─ OrbitControls.js
-│  │  │  ├─ stats.js
-│  │  │  ├─ three.js
-│  │  │  ├─ three.min.js
-│  │  │  └─ threex-arbasecontrols.js
 │  │  └─ pdf
 │  │     ├─ marker89.pdf
 │  │     └─ myTraining_Marker.pdf
@@ -239,10 +278,17 @@ GeoMesh3D
 │  │  ├─ api-service-auth.ts
 │  │  ├─ api-service-user.ts
 │  │  ├─ api.ts
+│  │  ├─ project.ts
 │  │  └─ user.ts
+│  ├─ utils
+│  │  ├─ credentialStorage.ts
+│  │  ├─ orientation.ts
+│  │  └─ sessionEvents.ts
 │  └─ views
 │     ├─ EditorView.vue
 │     ├─ LoginView.vue
+│     ├─ ProfileView.vue
+│     ├─ ProjectListView.vue
 │     └─ RegisterView.vue
 ├─ tsconfig.app.json
 ├─ tsconfig.json

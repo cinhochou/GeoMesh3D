@@ -21,6 +21,7 @@ import { PlanarPolygon } from '../geometry/PlanarPolygon'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
+import { PrismConstraint } from '../constraints/PrismConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import {
   canCreateIntersectionFromTargets,
@@ -75,6 +76,7 @@ type LocalSceneSnapshot = {
   intersections: IntersectionPointConstraint[]
   cubes: CubeConstraint[]
   regularPolygons: RegularPolygonConstraint[]
+  prisms: PrismConstraint[]
   cylinderConstraints: CylinderConstraint[]
   perpendicularLineConstraints: PerpendicularLineConstraint[]
   parallelLineConstraints: ParallelLineConstraint[]
@@ -99,6 +101,7 @@ type FaceSharedMapValue = string | number | boolean | Y.Array<FaceSharedArrayVal
 type FaceSharedMap = Y.Map<FaceSharedMapValue>
 type CubeSharedMap = Y.Map<string | number | boolean>
 type RegularPolygonSharedMap = Y.Map<string | number | boolean>
+type PrismSharedMap = Y.Map<string | number | boolean>
 type WorldTransformSharedMap = Y.Map<string | number | boolean>
 
 export type SharedWorldRotationState = {
@@ -146,6 +149,7 @@ export class CollabManager {
   private yFaces: Y.Map<FaceSharedMap>
   private yCubes: Y.Map<CubeSharedMap>
   private yRegularPolygons: Y.Map<RegularPolygonSharedMap>
+  private yPrisms: Y.Map<PrismSharedMap>
   private yWorldTransform: WorldTransformSharedMap
   private pointsObserver: ((event: Y.YMapEvent<PointSharedMap>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
@@ -163,6 +167,7 @@ export class CollabManager {
   private facesObserver: ((event: Y.YMapEvent<FaceSharedMap>) => void) | null = null
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
   private regularPolygonsObserver: ((event: Y.YMapEvent<RegularPolygonSharedMap>) => void) | null = null
+  private prismsObserver: ((event: Y.YMapEvent<PrismSharedMap>) => void) | null = null
   private worldTransformObserver: ((event: Y.YMapEvent<string | number | boolean>) => void) | null = null
   private readonly pointRecordCleanup = new Map<string, () => void>()
   private readonly lineRecordCleanup = new Map<string, () => void>()
@@ -180,6 +185,7 @@ export class CollabManager {
   private readonly faceRecordCleanup = new Map<string, () => void>()
   private readonly cubeRecordCleanup = new Map<string, () => void>()
   private readonly regularPolygonRecordCleanup = new Map<string, () => void>()
+  private readonly prismRecordCleanup = new Map<string, () => void>()
 
   private roomName: string | null = null
   private connecting = false
@@ -212,6 +218,7 @@ export class CollabManager {
   private readonly dirtyFaceIds = new Set<string>()
   private readonly dirtyCubeIds = new Set<string>()
   private readonly dirtyRegularPolygonIds = new Set<string>()
+  private readonly dirtyPrismIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
@@ -228,6 +235,7 @@ export class CollabManager {
   private readonly deletedFaceIds = new Set<string>()
   private readonly deletedCubeIds = new Set<string>()
   private readonly deletedRegularPolygonIds = new Set<string>()
+  private readonly deletedPrismIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -255,6 +263,7 @@ export class CollabManager {
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
+    this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
@@ -282,6 +291,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.faceRecordCleanup)
     this.cleanupRecordObservers(this.cubeRecordCleanup)
     this.cleanupRecordObservers(this.regularPolygonRecordCleanup)
+    this.cleanupRecordObservers(this.prismRecordCleanup)
   }
 
   private readString<T>(record: Y.Map<T>, key: string, fallback: string) {
@@ -387,6 +397,28 @@ export class CollabManager {
             } =>
               typeof item?.pointId === 'string' &&
               typeof item?.angleIndex === 'number',
+          )
+        : []
+    } catch {
+      return []
+    }
+  }
+
+  private readJsonPrismLayouts<T>(record: Y.Map<T>, key: string) {
+    const raw = record.get(key)
+    if (typeof raw !== 'string') return []
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (
+              item,
+            ): item is {
+              pointId: string
+              baseIndex: number
+            } =>
+              typeof item?.pointId === 'string' &&
+              typeof item?.baseIndex === 'number',
           )
         : []
     } catch {
@@ -613,6 +645,15 @@ export class CollabManager {
     if (!record) {
       record = new Y.Map<string | number | boolean>()
       this.yRegularPolygons.set(id, record)
+    }
+    return record
+  }
+
+  private ensurePrismRecord(id: string) {
+    let record = this.yPrisms.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yPrisms.set(id, record)
     }
     return record
   }
@@ -927,6 +968,9 @@ export class CollabManager {
         (constraint): constraint is RegularPolygonConstraint =>
           constraint instanceof RegularPolygonConstraint,
       ),
+      prisms: [...this.scene.prismConstraints.values()].filter(
+        (constraint): constraint is PrismConstraint => constraint instanceof PrismConstraint,
+      ),
       cylinderConstraints: [...this.scene.cylinderConstraints.values()].filter(
         (constraint): constraint is CylinderConstraint =>
           constraint instanceof CylinderConstraint,
@@ -982,6 +1026,7 @@ export class CollabManager {
     snapshot.objectConstrainedPoints.forEach((constraint) => this.scene.addObjectConstrainedPointConstraint(constraint))
     snapshot.cubes.forEach((cube) => this.scene.addCubeConstraint(cube))
     snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
+    snapshot.prisms.forEach((prism) => this.scene.addPrismConstraint(prism))
     snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
     snapshot.perpendicularLineConstraints.forEach((constraint) => this.scene.addPerpendicularLineConstraint(constraint))
     snapshot.parallelLineConstraints.forEach((constraint) => this.scene.addParallelLineConstraint(constraint))
@@ -1018,8 +1063,10 @@ export class CollabManager {
     this.deletedObjectConstrainedPointIds.clear()
     this.dirtyCubeIds.clear()
     this.dirtyRegularPolygonIds.clear()
+    this.dirtyPrismIds.clear()
     this.deletedCubeIds.clear()
     this.deletedRegularPolygonIds.clear()
+    this.deletedPrismIds.clear()
   }
 
   private markPointDirty(id: string) {
@@ -1190,6 +1237,16 @@ export class CollabManager {
     this.deletedRegularPolygonIds.add(id)
   }
 
+  private markPrismDirty(id: string) {
+    this.deletedPrismIds.delete(id)
+    this.dirtyPrismIds.add(id)
+  }
+
+  private markPrismDeleted(id: string) {
+    this.dirtyPrismIds.delete(id)
+    this.deletedPrismIds.add(id)
+  }
+
   private markObjectConstrainedPointDirty(id: string) {
     this.deletedObjectConstrainedPointIds.delete(id)
     this.dirtyObjectConstrainedPointIds.add(id)
@@ -1204,6 +1261,7 @@ export class CollabManager {
     const point = this.scene.points.get(pointId)
     if (point?.cubeId) this.markCubeDirty(point.cubeId)
     if (point?.regularPolygonId) this.markRegularPolygonDirty(point.regularPolygonId)
+    if (point?.prismId) this.markPrismDirty(point.prismId)
     this.scene.intersectionConstraints.forEach((constraint, id) => {
       const dependencyIds = constraint.getDependencyPointIds?.()
       if (!dependencyIds) return
@@ -1362,6 +1420,9 @@ export class CollabManager {
     this.scene.regularPolygonConstraints.forEach((constraint, id) => {
       if (constraint instanceof RegularPolygonConstraint) this.markRegularPolygonDirty(id)
     })
+    this.scene.prismConstraints.forEach((constraint, id) => {
+      if (constraint instanceof PrismConstraint) this.markPrismDirty(id)
+    })
 
     for (const id of [...this.yPoints.keys()]) {
       if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
@@ -1410,6 +1471,9 @@ export class CollabManager {
     }
     for (const id of [...this.yRegularPolygons.keys()]) {
       if (!this.scene.regularPolygonConstraints.has(id)) this.markRegularPolygonDeleted(id)
+    }
+    for (const id of [...this.yPrisms.keys()]) {
+      if (!this.scene.prismConstraints.has(id)) this.markPrismDeleted(id)
     }
   }
 
@@ -1604,6 +1668,7 @@ export class CollabManager {
     if (this.facesObserver) this.yFaces.unobserve(this.facesObserver)
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
     if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
+    if (this.prismsObserver) this.yPrisms.unobserve(this.prismsObserver)
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     if (this.historyObserver) this.yHistory.unobserve(this.historyObserver)
     if (this.historyIndexObserver) this.yHistoryIndex.unobserve(this.historyIndexObserver)
@@ -1628,6 +1693,7 @@ export class CollabManager {
     this.yFaces = this.ydoc.getMap<FaceSharedMap>('faces')
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
+    this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.setupObservers()
   }
@@ -1679,6 +1745,9 @@ export class CollabManager {
       if (face.includesPoint(id)) {
         if (face.regularPolygonId) {
           this.scene.removeRegularPolygonConstraint(face.regularPolygonId)
+        }
+        if (face.prismId) {
+          this.scene.removePrismConstraint(face.prismId)
         }
         this.scene.removeFace(faceId)
       }
@@ -1918,6 +1987,16 @@ export class CollabManager {
         this.applyRegularPolygonRecord(id, record)
       }
     })
+    this.yPrisms.forEach((record, id) => {
+      const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+      const dependentLayouts = this.readJsonPrismLayouts(record, 'dependentLayouts')
+      if (
+        ownerPointIds.includes(pointId) ||
+        dependentLayouts.some((layout) => layout.pointId === pointId)
+      ) {
+        this.applyPrismRecord(id, record)
+      }
+    })
     const intersectionRecord = this.yIntersections.get(pointId)
     if (intersectionRecord) this.applyIntersectionRecord(pointId, intersectionRecord)
   }
@@ -1932,6 +2011,12 @@ export class CollabManager {
     if (!regularPolygonId) return
     const rpRecord = this.yRegularPolygons.get(regularPolygonId)
     if (rpRecord) this.applyRegularPolygonRecord(regularPolygonId, rpRecord)
+  }
+
+  private reconcilePrismForFace(prismId: string | null) {
+    if (!prismId) return
+    const prismRecord = this.yPrisms.get(prismId)
+    if (prismRecord) this.applyPrismRecord(prismId, prismRecord)
   }
 
   private readIntersectionTarget(
@@ -1999,6 +2084,9 @@ export class CollabManager {
     const regularPolygonId = this.readNullableString(record, 'regularPolygonId')
     const regularPolygonRoleValue = this.readNullableString(record, 'regularPolygonRole')
     const regularPolygonRole = regularPolygonRoleValue === 'owner' || regularPolygonRoleValue === 'dependent' ? regularPolygonRoleValue : null
+    const prismId = this.readNullableString(record, 'prismId')
+    const prismRoleValue = this.readNullableString(record, 'prismRole')
+    const prismRole = prismRoleValue === 'owner' || prismRoleValue === 'dependent' ? prismRoleValue : null
     const sphereId = this.readNullableString(record, 'sphereId')
     const sphereRoleValue = this.readNullableString(record, 'sphereRole')
     const sphereRole = sphereRoleValue === 'center' || sphereRoleValue === 'radius' ? sphereRoleValue : null
@@ -2033,6 +2121,8 @@ export class CollabManager {
       point.circleRole = circleRole
       point.regularPolygonId = regularPolygonId
       point.regularPolygonRole = regularPolygonRole
+      point.prismId = prismId
+      point.prismRole = prismRole
       point.sphereId = sphereId
       point.sphereRole = sphereRole
       point.coneId = coneId
@@ -2073,6 +2163,8 @@ export class CollabManager {
     nextPoint.circleRole = circleRole
     nextPoint.regularPolygonId = regularPolygonId
     nextPoint.regularPolygonRole = regularPolygonRole
+    nextPoint.prismId = prismId
+    nextPoint.prismRole = prismRole
     nextPoint.sphereId = sphereId
     nextPoint.sphereRole = sphereRole
     nextPoint.coneId = coneId
@@ -2976,6 +3068,11 @@ export class CollabManager {
     const regularPolygonId = this.readNullableString(record, 'regularPolygonId')
     const regularPolygonOwnerPointIds = this.readStringArray(record, 'regularPolygonOwnerPointIds')
     const regularPolygonDependentPointIds = this.readStringArray(record, 'regularPolygonDependentPointIds')
+    const prismId = this.readNullableString(record, 'prismId')
+    const prismOwnerPointIds = this.readStringArray(record, 'prismOwnerPointIds')
+    const prismDependentPointIds = this.readStringArray(record, 'prismDependentPointIds')
+    const prismRoleValue = this.readNullableString(record, 'prismRole') as string | null
+    const prismRole = prismRoleValue === 'bottom' || prismRoleValue === 'top' || prismRoleValue === 'side' ? prismRoleValue : null
 
     if (face) {
       face.name = name
@@ -3002,12 +3099,17 @@ export class CollabManager {
       face.regularPolygonId = regularPolygonId
       face.regularPolygonOwnerPointIds = [...regularPolygonOwnerPointIds]
       face.regularPolygonDependentPointIds = [...regularPolygonDependentPointIds]
+      face.prismId = prismId
+      face.prismOwnerPointIds = [...prismOwnerPointIds]
+      face.prismDependentPointIds = [...prismDependentPointIds]
+      face.prismRole = prismRole
       face.normalize(this.scene.points)
       this.scene.requestFaceConstraintSolve(id)
       this.scene.markAllRenderDirty()
       this.reconcileIntersectionsForTarget('face', id)
       this.reconcileCubeForFace(cubeId)
       this.reconcileRegularPolygonForFace(regularPolygonId)
+      this.reconcilePrismForFace(prismId)
       return
     }
 
@@ -3038,12 +3140,17 @@ export class CollabManager {
     nextFace.regularPolygonId = regularPolygonId
     nextFace.regularPolygonOwnerPointIds = [...regularPolygonOwnerPointIds]
     nextFace.regularPolygonDependentPointIds = [...regularPolygonDependentPointIds]
+    nextFace.prismId = prismId
+    nextFace.prismOwnerPointIds = [...prismOwnerPointIds]
+    nextFace.prismDependentPointIds = [...prismDependentPointIds]
+    nextFace.prismRole = prismRole
     this.scene.addFace(nextFace)
     this.scene.requestFaceConstraintSolve(id)
     this.scene.markAllRenderDirty()
     this.reconcileIntersectionsForTarget('face', id)
     this.reconcileCubeForFace(cubeId)
     this.reconcileRegularPolygonForFace(regularPolygonId)
+    this.reconcilePrismForFace(prismId)
   }
 
   private applyCubeRecord(id: string, record: CubeSharedMap) {
@@ -3220,6 +3327,137 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private applyPrismRecord(id: string, record: PrismSharedMap) {
+    const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+    const dependentLayouts = this.readJsonPrismLayouts(record, 'dependentLayouts')
+    if (ownerPointIds.length !== 2) return
+    const ownerPointA = ownerPointIds[0]
+    const ownerPointB = ownerPointIds[1]
+    if (!ownerPointA || !ownerPointB) return
+    if ([ownerPointA, ownerPointB].some((pointId) => !this.scene.points.has(pointId))) return
+    if (dependentLayouts.some((layout) => !this.scene.points.has(layout.pointId))) return
+
+    const bottomFaceId = this.readString(record, 'bottomFaceId', '')
+    const topFaceId = this.readString(record, 'topFaceId', '')
+    const sideFaceIds = this.readJsonStringArray(record, 'sideFaceIds')
+    if (!this.scene.faces.has(bottomFaceId)) return
+    if (!this.scene.faces.has(topFaceId)) return
+    if (sideFaceIds.some((faceId) => !this.scene.faces.has(faceId))) return
+
+    const baseReferenceIndex = this.readNumber(record, 'baseReferenceIndex', 0)
+    const vAxisHint = new Vec3(
+      this.readNumber(record, 'vAxisHintX', 0),
+      this.readNumber(record, 'vAxisHintY', 1),
+      this.readNumber(record, 'vAxisHintZ', 0),
+    )
+    const name = this.readString(record, 'name', '棱柱1')
+    const valueVisible = this.readBoolean(record, 'valueVisible', false)
+    const keepVertical = this.readBoolean(record, 'keepVertical', false)
+    const verticalHeight = this.readNullableNumber(record, 'verticalHeight')
+
+    ;[ownerPointA, ownerPointB].forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.prismId = id
+      point.prismRole = 'owner'
+    })
+    dependentLayouts.forEach(({ pointId }) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.prismId = id
+      point.prismRole = 'dependent'
+    })
+    const bottomFace = this.scene.faces.get(bottomFaceId)
+    if (bottomFace) {
+      bottomFace.prismId = id
+      bottomFace.prismRole = 'bottom'
+      bottomFace.prismOwnerPointIds = [...ownerPointIds]
+      bottomFace.prismDependentPointIds = dependentLayouts.map((layout) => layout.pointId)
+    }
+    const topFace = this.scene.faces.get(topFaceId)
+    if (topFace) {
+      topFace.prismId = id
+      topFace.prismRole = 'top'
+      topFace.prismOwnerPointIds = [...ownerPointIds]
+      topFace.prismDependentPointIds = dependentLayouts.map((layout) => layout.pointId)
+    }
+    sideFaceIds.forEach((faceId) => {
+      const face = this.scene.faces.get(faceId)
+      if (!face) return
+      face.prismId = id
+      face.prismRole = 'side'
+      face.prismOwnerPointIds = [...ownerPointIds]
+      face.prismDependentPointIds = dependentLayouts.map((layout) => layout.pointId)
+    })
+
+    const existing = this.scene.getPrismConstraint(id)
+    if (existing instanceof PrismConstraint) {
+      existing.ownerPointIds[0] = ownerPointA
+      existing.ownerPointIds[1] = ownerPointB
+      existing.dependentLayouts.splice(
+        0,
+        existing.dependentLayouts.length,
+        ...dependentLayouts.map((layout) => ({ ...layout })),
+      )
+      existing.setAxisHint(vAxisHint)
+      existing.name = name
+      existing.valueVisible = valueVisible
+      existing.keepVertical = keepVertical
+      const effectiveVerticalHeight =
+        verticalHeight === null && keepVertical
+          ? existing.computeVerticalHeightForPosition(
+              this.scene.points.get(ownerPointB)?.position ?? new Vec3(0, 0, 0),
+            )
+          : verticalHeight
+      existing.setVerticalHeight(effectiveVerticalHeight)
+      this.scene.requestPrismConstraintSolve(id)
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    const newTopPoint = this.scene.points.get(ownerPointB)
+    const initialVerticalHeight =
+      verticalHeight === null && keepVertical && newTopPoint
+        ? (() => {
+            const tempConstraint = new PrismConstraint(
+              this.scene,
+              id,
+              [ownerPointA, ownerPointB],
+              dependentLayouts.map((layout) => ({ ...layout })),
+              bottomFaceId,
+              topFaceId,
+              [...sideFaceIds],
+              baseReferenceIndex,
+              vAxisHint,
+              name,
+              valueVisible,
+              true,
+            )
+            return tempConstraint.computeVerticalHeightForPosition(newTopPoint.position)
+          })()
+        : verticalHeight
+
+    this.scene.addPrismConstraint(
+      new PrismConstraint(
+        this.scene,
+        id,
+        [ownerPointA, ownerPointB],
+        dependentLayouts.map((layout) => ({ ...layout })),
+        bottomFaceId,
+        topFaceId,
+        [...sideFaceIds],
+        baseReferenceIndex,
+        vAxisHint,
+        name,
+        valueVisible,
+        keepVertical,
+        initialVerticalHeight,
+      ),
+    )
+    this.scene.requestPrismConstraintSolve(id)
+    this.scene.markAllRenderDirty()
+  }
+
   private observePointRecord(id: string, record: PointSharedMap) {
     this.releaseRecordObserver(id, this.pointRecordCleanup)
     const handler = () => {
@@ -3362,6 +3600,15 @@ export class CollabManager {
     }
     record.observe(handler)
     this.regularPolygonRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
+  private observePrismRecord(id: string, record: PrismSharedMap) {
+    this.releaseRecordObserver(id, this.prismRecordCleanup)
+    const handler = () => {
+      this.applyPrismRecord(id, record)
+    }
+    record.observe(handler)
+    this.prismRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
   private setupObservers() {
@@ -3641,6 +3888,9 @@ export class CollabManager {
           if (face?.regularPolygonId) {
             this.scene.removeRegularPolygonConstraint(face.regularPolygonId)
           }
+          if (face?.prismId) {
+            this.scene.removePrismConstraint(face.prismId)
+          }
           this.scene.removeFace(id)
           return
         }
@@ -3699,6 +3949,27 @@ export class CollabManager {
       this.applyRegularPolygonRecord(id, record)
     })
 
+    this.prismsObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.prismRecordCleanup)
+          this.scene.removePrismConstraint(id)
+          this.scene.markAllRenderDirty()
+          return
+        }
+
+        const record = this.yPrisms.get(id)
+        if (!record) return
+        this.observePrismRecord(id, record)
+        this.applyPrismRecord(id, record)
+      })
+    }
+    this.yPrisms.observe(this.prismsObserver)
+    this.yPrisms.forEach((record, id) => {
+      this.observePrismRecord(id, record)
+      this.applyPrismRecord(id, record)
+    })
+
     this.worldTransformObserver = () => {
       this.emitSharedWorldRotation(this.yWorldTransform)
     }
@@ -3726,6 +3997,8 @@ export class CollabManager {
     this.setNullableScalarField(record, 'circleRole', point.circleRole)
     this.setNullableScalarField(record, 'regularPolygonId', point.regularPolygonId)
     this.setNullableScalarField(record, 'regularPolygonRole', point.regularPolygonRole)
+    this.setNullableScalarField(record, 'prismId', point.prismId)
+    this.setNullableScalarField(record, 'prismRole', point.prismRole)
     this.setNullableScalarField(record, 'sphereId', point.sphereId)
     this.setNullableScalarField(record, 'sphereRole', point.sphereRole)
     this.setNullableScalarField(record, 'coneId', point.coneId)
@@ -3928,6 +4201,10 @@ export class CollabManager {
     this.setNullableScalarField(record, 'regularPolygonId', face.regularPolygonId)
     this.syncFaceArrayField(record, 'regularPolygonOwnerPointIds', [...face.regularPolygonOwnerPointIds])
     this.syncFaceArrayField(record, 'regularPolygonDependentPointIds', [...face.regularPolygonDependentPointIds])
+    this.setNullableScalarField(record, 'prismId', face.prismId)
+    this.syncFaceArrayField(record, 'prismOwnerPointIds', [...face.prismOwnerPointIds])
+    this.syncFaceArrayField(record, 'prismDependentPointIds', [...face.prismDependentPointIds])
+    this.setNullableScalarField(record, 'prismRole', face.prismRole)
   }
 
   private syncCubeRecord(record: CubeSharedMap, cube: CubeConstraint) {
@@ -3961,6 +4238,24 @@ export class CollabManager {
     this.setNullableScalarField(record, 'lockedEdgeLength', constraint.lockedEdgeLength)
     this.setScalarField(record, 'nameVisible', constraint.nameVisible)
     this.setScalarField(record, 'valueVisible', constraint.valueVisible)
+  }
+
+  private syncPrismRecord(record: PrismSharedMap, constraint: PrismConstraint) {
+    this.setScalarField(record, 'prismId', constraint.prismId)
+    this.setScalarField(record, 'ownerPointIds', JSON.stringify([...constraint.ownerPointIds]))
+    this.setScalarField(record, 'dependentLayouts', JSON.stringify(constraint.dependentLayouts))
+    this.setScalarField(record, 'bottomFaceId', constraint.bottomFaceId)
+    this.setScalarField(record, 'topFaceId', constraint.topFaceId)
+    this.setScalarField(record, 'sideFaceIds', JSON.stringify([...constraint.sideFaceIds]))
+    this.setScalarField(record, 'baseReferenceIndex', constraint.baseReferenceIndex)
+    const axisHint = constraint.getVAxisHint()
+    this.setScalarField(record, 'vAxisHintX', axisHint.x)
+    this.setScalarField(record, 'vAxisHintY', axisHint.y)
+    this.setScalarField(record, 'vAxisHintZ', axisHint.z)
+    this.setScalarField(record, 'name', constraint.name)
+    this.setScalarField(record, 'valueVisible', constraint.valueVisible)
+    this.setScalarField(record, 'keepVertical', constraint.keepVertical)
+    this.setNullableScalarField(record, 'verticalHeight', constraint.getRawVerticalHeight())
   }
 
   getSharedWorldRotationState() {
@@ -4077,6 +4372,7 @@ export class CollabManager {
     const faceIds = [...this.dirtyFaceIds]
     const cubeIds = [...this.dirtyCubeIds]
     const regularPolygonIds = [...this.dirtyRegularPolygonIds]
+    const prismIds = [...this.dirtyPrismIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
@@ -4092,6 +4388,7 @@ export class CollabManager {
     const deletedFaceIds = [...this.deletedFaceIds]
     const deletedCubeIds = [...this.deletedCubeIds]
     const deletedRegularPolygonIds = [...this.deletedRegularPolygonIds]
+    const deletedPrismIds = [...this.deletedPrismIds]
     const objectConstrainedPointIds = [...this.dirtyObjectConstrainedPointIds]
     const deletedObjectConstrainedPointIds = [...this.deletedObjectConstrainedPointIds]
 
@@ -4112,6 +4409,7 @@ export class CollabManager {
       faceIds.length === 0 &&
       cubeIds.length === 0 &&
       regularPolygonIds.length === 0 &&
+      prismIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
@@ -4127,7 +4425,8 @@ export class CollabManager {
       deletedObjectConstrainedPointIds.length === 0 &&
       deletedFaceIds.length === 0 &&
       deletedCubeIds.length === 0 &&
-      deletedRegularPolygonIds.length === 0
+      deletedRegularPolygonIds.length === 0 &&
+      deletedPrismIds.length === 0
     ) {
       return
     }
@@ -4180,6 +4479,9 @@ export class CollabManager {
       })
       deletedRegularPolygonIds.forEach((id) => {
         this.yRegularPolygons.delete(id)
+      })
+      deletedPrismIds.forEach((id) => {
+        this.yPrisms.delete(id)
       })
 
       pointIds.forEach((id) => {
@@ -4317,6 +4619,15 @@ export class CollabManager {
         this.syncRegularPolygonRecord(this.ensureRegularPolygonRecord(id), constraint)
       })
 
+      prismIds.forEach((id) => {
+        const constraint = this.scene.prismConstraints.get(id)
+        if (!(constraint instanceof PrismConstraint)) {
+          this.yPrisms.delete(id)
+          return
+        }
+        this.syncPrismRecord(this.ensurePrismRecord(id), constraint)
+      })
+
       objectConstrainedPointIds.forEach((id) => {
         const constraint = this.scene.objectConstrainedPointConstraints.get(id)
         if (!(constraint instanceof ObjectConstrainedPointConstraint)) {
@@ -4343,6 +4654,7 @@ export class CollabManager {
     faceIds.forEach((id) => this.dirtyFaceIds.delete(id))
     cubeIds.forEach((id) => this.dirtyCubeIds.delete(id))
     regularPolygonIds.forEach((id) => this.dirtyRegularPolygonIds.delete(id))
+    prismIds.forEach((id) => this.dirtyPrismIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
@@ -4359,6 +4671,7 @@ export class CollabManager {
     deletedFaceIds.forEach((id) => this.deletedFaceIds.delete(id))
     deletedCubeIds.forEach((id) => this.deletedCubeIds.delete(id))
     deletedRegularPolygonIds.forEach((id) => this.deletedRegularPolygonIds.delete(id))
+    deletedPrismIds.forEach((id) => this.deletedPrismIds.delete(id))
   }
 
   getIsApplyingSharedHistory(): boolean {
@@ -4559,6 +4872,9 @@ export class CollabManager {
       for (const id of [...this.yRegularPolygons.keys()]) {
         if (!this.scene.regularPolygonConstraints.has(id)) this.yRegularPolygons.delete(id)
       }
+      for (const id of [...this.yPrisms.keys()]) {
+        if (!this.scene.prismConstraints.has(id)) this.yPrisms.delete(id)
+      }
 
       this.scene.points.forEach((p, id) => {
         this.syncPointRecord(this.ensurePointRecord(id), p)
@@ -4612,6 +4928,11 @@ export class CollabManager {
       this.scene.regularPolygonConstraints.forEach((c, id) => {
         if (c instanceof RegularPolygonConstraint) {
           this.syncRegularPolygonRecord(this.ensureRegularPolygonRecord(id), c)
+        }
+      })
+      this.scene.prismConstraints.forEach((c, id) => {
+        if (c instanceof PrismConstraint) {
+          this.syncPrismRecord(this.ensurePrismRecord(id), c)
         }
       })
     })

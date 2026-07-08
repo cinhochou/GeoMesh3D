@@ -3,6 +3,7 @@ import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { HistoryManager, type HistoryEntry } from './HistoryManager'
 import { TransformCommand } from './commands/scene/TransformCommand'
+import { TransformPrismOwnerPointCommand } from './commands/scene/TransformPrismOwnerPointCommand'
 import { createAddElementCommand } from './commands/add/AddElementCommand'
 import { SnapshotCommand } from './commands/SnapshotCommand'
 import { Point3, type ConstrainedToRef } from '../geometry/Point3'
@@ -74,7 +75,11 @@ import { UpdateCylinderRadiusCommand } from './commands/update/UpdateCylinderRad
 import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHeightCommand'
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { createAddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
+import { createAddPrismCommand } from './commands/add/AddPrismCommand'
+import { createDeletePrismCommand } from './commands/delete/DeletePrismCommand'
+import { UpdatePrismCommand } from './commands/update/UpdatePrismCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
+import { PrismConstraint } from '../constraints/PrismConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { FeatureDocument, type FeatureOperation } from '../features'
@@ -109,6 +114,7 @@ export enum EditorMode {
   CreateSphereRadius,
   CreateCone,
   CreateCylinder,
+  CreatePrism,
   CreatePerpendicularLine,
   CreateParallelLine,
 }
@@ -654,7 +660,293 @@ export class Editor {
     )
   }
 
+  getPrismConstraints() {
+    return [...this.scene.prismConstraints.values()].filter(
+      (constraint): constraint is PrismConstraint => constraint instanceof PrismConstraint,
+    )
+  }
+
+  getPrismConstraint(prismId: string) {
+    const constraint = this.scene.getPrismConstraint(prismId)
+    return constraint instanceof PrismConstraint ? constraint : null
+  }
+
+  getPrismConstraintByFaceId(faceId: string) {
+    const face = this.scene.faces.get(faceId)
+    if (!face?.prismId) return null
+    const constraint = this.scene.getPrismConstraint(face.prismId)
+    if (!(constraint instanceof PrismConstraint)) return null
+    return constraint
+  }
+
+  /** 获取棱柱所有面 id（底面 + 顶面 + 侧面）。 */
+  getPrismFaceIds(prismId: string) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return []
+    return [constraint.bottomFaceId, constraint.topFaceId, ...constraint.sideFaceIds]
+  }
+
+  selectPrismByFaceId(faceId: string, additive = false) {
+    const prismConstraint = this.getPrismConstraintByFaceId(faceId)
+    if (!prismConstraint) {
+      this.scene.selection.selectFace(faceId, additive)
+      return
+    }
+    if (!additive) this.scene.selection.clear()
+    this.getPrismFaceIds(prismConstraint.prismId).forEach((id) =>
+      this.scene.selection.selectFace(id, true),
+    )
+  }
+
+  deselectPrismByFaceId(faceId: string) {
+    const prismConstraint = this.getPrismConstraintByFaceId(faceId)
+    if (!prismConstraint) {
+      this.scene.selection.deselectFace(faceId)
+      return
+    }
+    this.getPrismFaceIds(prismConstraint.prismId).forEach((id) =>
+      this.scene.selection.deselectFace(id),
+    )
+  }
+
+  updatePrism(
+    prismId: string,
+    patch: {
+      name?: string
+      valueVisible?: boolean
+      keepVertical?: boolean
+    },
+  ) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return
+
+    const willToggleKeepVertical =
+      patch.keepVertical !== undefined && patch.keepVertical !== constraint.keepVertical
+    const topPoint = willToggleKeepVertical
+      ? this.scene.points.get(constraint.ownerPointIds[1])
+      : null
+    const beforeTopPosition = topPoint?.position.clone()
+    const afterTopPosition =
+      willToggleKeepVertical && patch.keepVertical
+        ? constraint.computeVerticalTopPosition() ?? beforeTopPosition
+        : beforeTopPosition
+
+    const before: ConstructorParameters<typeof UpdatePrismCommand>[1] = {
+      name: constraint.name,
+      valueVisible: constraint.valueVisible,
+      keepVertical: constraint.keepVertical,
+      topPointPosition: beforeTopPosition
+        ? { x: beforeTopPosition.x, y: beforeTopPosition.y, z: beforeTopPosition.z }
+        : undefined,
+    }
+    const after: ConstructorParameters<typeof UpdatePrismCommand>[2] = {
+      name: patch.name ?? constraint.name,
+      valueVisible: patch.valueVisible ?? constraint.valueVisible,
+      keepVertical: patch.keepVertical ?? constraint.keepVertical,
+      topPointPosition: afterTopPosition
+        ? { x: afterTopPosition.x, y: afterTopPosition.y, z: afterTopPosition.z }
+        : undefined,
+    }
+    this.executeCommand(new UpdatePrismCommand(constraint.prismId, before, after, this.scene))
+    this.scene.markAllRenderDirty()
+  }
+
+  updatePrismName(prismId: string, name: string) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return
+    constraint.name = name.trim()
+    this.scene.markAllRenderDirty()
+  }
+
+  /** 获取棱柱名称去掉「棱柱」前缀后的后缀（如 "1"、"2" 等）。 */
+  getPrismNameSuffix(prismId: string) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return ''
+    return constraint.name.replace(/^棱柱/, '')
+  }
+
+  setPrismValueVisible(prismId: string, visible: boolean) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint || constraint.valueVisible === visible) return
+    constraint.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setPrismLockState(prismId: string, locked: boolean) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return
+    constraint.ownerPointIds.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (point) point.userLocked = locked
+    })
+    constraint.dependentLayouts.forEach(({ pointId }) => {
+      const point = this.scene.points.get(pointId)
+      if (point) point.userLocked = locked
+    })
+    this.getPrismFaceIds(prismId).forEach((faceId) => {
+      const face = this.scene.faces.get(faceId)
+      if (!face || face.userLocked === locked) return
+      face.userLocked = locked
+    })
+  }
+
+  /** 收集依赖某点的所有棱柱（owner 或 dependent）。 */
+  collectDependentPrismsByPointId(pointId: string): Array<{
+    faces: PlanarPolygon[]
+    dependentPoints: Point3[]
+    constraint: PrismConstraint
+    bottomFaceId: string
+    bottomOwnerPointIds: string[]
+    topPointId: string
+    dependentIntersectionPoints: Array<{
+      point: Point3
+      constraint: IntersectionPointConstraint
+    }>
+    relatedPerpendicularLines: PerpendicularLine3[]
+    relatedParallelLines: ParallelLine3[]
+  }> {
+    const result: Array<{
+      faces: PlanarPolygon[]
+      dependentPoints: Point3[]
+      constraint: PrismConstraint
+      bottomFaceId: string
+      bottomOwnerPointIds: string[]
+      topPointId: string
+      dependentIntersectionPoints: Array<{
+        point: Point3
+        constraint: IntersectionPointConstraint
+      }>
+      relatedPerpendicularLines: PerpendicularLine3[]
+      relatedParallelLines: ParallelLine3[]
+    }> = []
+
+    this.scene.prismConstraints.forEach((constraint) => {
+      if (!(constraint instanceof PrismConstraint)) return
+      const bottomFaceForCheck = this.scene.faces.get(constraint.bottomFaceId)
+      const bottomPointIds = bottomFaceForCheck ? [...bottomFaceForCheck.boundaryPointIds] : []
+      const allPointIds = [
+        ...constraint.ownerPointIds,
+        ...constraint.dependentLayouts.map((layout) => layout.pointId),
+        ...bottomPointIds,
+      ]
+      if (!allPointIds.includes(pointId)) return
+
+      const faceIds = this.getPrismFaceIds(constraint.prismId)
+      const faces = faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarPolygon => face !== undefined)
+      const dependentPoints = constraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((point): point is Point3 => point !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      const allBoundaryLineIds = new Set(faces.flatMap((f) => f.boundaryLineIds))
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) =>
+          (pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id)) ||
+          (pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id)),
+      )
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const bottomFace = this.scene.faces.get(constraint.bottomFaceId)
+      result.push({
+        faces,
+        dependentPoints,
+        constraint,
+        bottomFaceId: constraint.bottomFaceId,
+        bottomOwnerPointIds: bottomFace ? [...bottomFace.boundaryPointIds] : [],
+        topPointId: constraint.ownerPointIds[1],
+        dependentIntersectionPoints,
+        relatedPerpendicularLines,
+        relatedParallelLines,
+      })
+    })
+
+    return result
+  }
+
+  /** 收集依赖某条线的所有棱柱（该线为棱柱任一面的边界线）。 */
+  collectDependentPrismsByLineId(lineId: string): Array<{
+    faces: PlanarPolygon[]
+    dependentPoints: Point3[]
+    constraint: PrismConstraint
+    bottomFaceId: string
+    bottomOwnerPointIds: string[]
+    topPointId: string
+    dependentIntersectionPoints: Array<{
+      point: Point3
+      constraint: IntersectionPointConstraint
+    }>
+    relatedPerpendicularLines: PerpendicularLine3[]
+    relatedParallelLines: ParallelLine3[]
+  }> {
+    const result: Array<{
+      faces: PlanarPolygon[]
+      dependentPoints: Point3[]
+      constraint: PrismConstraint
+      bottomFaceId: string
+      bottomOwnerPointIds: string[]
+      topPointId: string
+      dependentIntersectionPoints: Array<{
+        point: Point3
+        constraint: IntersectionPointConstraint
+      }>
+      relatedPerpendicularLines: PerpendicularLine3[]
+      relatedParallelLines: ParallelLine3[]
+    }> = []
+
+    this.scene.prismConstraints.forEach((constraint) => {
+      if (!(constraint instanceof PrismConstraint)) return
+      const faceIds = this.getPrismFaceIds(constraint.prismId)
+      const faces = faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarPolygon => face !== undefined)
+      const isBoundaryLine = faces.some((face) => face.boundaryLineIds.includes(lineId))
+      if (!isBoundaryLine) return
+      const dependentPoints = constraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((point): point is Point3 => point !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      const allBoundaryLineIds = new Set(faces.flatMap((f) => f.boundaryLineIds))
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) =>
+          (pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id)) ||
+          (pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id)),
+      )
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const bottomFace = this.scene.faces.get(constraint.bottomFaceId)
+      result.push({
+        faces,
+        dependentPoints,
+        constraint,
+        bottomFaceId: constraint.bottomFaceId,
+        bottomOwnerPointIds: bottomFace ? [...bottomFace.boundaryPointIds] : [],
+        topPointId: constraint.ownerPointIds[1],
+        dependentIntersectionPoints,
+        relatedPerpendicularLines,
+        relatedParallelLines,
+      })
+    })
+
+    return result
+  }
+
   selectCubeByFaceId(faceId: string, additive = false) {
+    // 优先检查棱柱：点击棱柱任一面应高亮整个棱柱
+    const prismConstraint = this.getPrismConstraintByFaceId(faceId)
+    if (prismConstraint) {
+      if (!additive) this.scene.selection.clear()
+      this.getPrismFaceIds(prismConstraint.prismId).forEach((id) =>
+        this.scene.selection.selectFace(id, true),
+      )
+      return
+    }
     const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
     if (!cubeConstraint) {
       this.scene.selection.selectFace(faceId, additive)
@@ -665,6 +957,14 @@ export class Editor {
   }
 
   deselectCubeByFaceId(faceId: string) {
+    // 优先检查棱柱
+    const prismConstraint = this.getPrismConstraintByFaceId(faceId)
+    if (prismConstraint) {
+      this.getPrismFaceIds(prismConstraint.prismId).forEach((id) =>
+        this.scene.selection.deselectFace(id),
+      )
+      return
+    }
     const cubeConstraint = this.getCubeConstraintByFaceId(faceId)
     if (!cubeConstraint) {
       this.scene.selection.deselectFace(faceId)
@@ -817,6 +1117,12 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point?.regularPolygonId) return null
     return this.getRegularPolygonConstraint(point.regularPolygonId)
+  }
+
+  private getPrismConstraintByPointId(pointId: string) {
+    const point = this.scene.points.get(pointId)
+    if (!point?.prismId) return null
+    return this.getPrismConstraint(point.prismId)
   }
 
   private getRegularPolygonConstraintByFaceId(faceId: string) {
@@ -2340,6 +2646,90 @@ export class Editor {
     ])
   }
 
+  /**
+   * 拖动棱柱 dependent 点：平移整个棱柱（owner + 所有 dependent 点同步移动 delta）。
+   */
+  private translatePrism(prismId: string, draggedPointId: string, position: Vec3) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return
+    const dragged = this.scene.points.get(draggedPointId)
+    if (!dragged || this.isPointCoordinateLocked(dragged)) return
+
+    const delta = new Vec3(
+      position.x - dragged.position.x,
+      position.y - dragged.position.y,
+      position.z - dragged.position.z,
+    )
+    if (Math.abs(delta.x) < 1e-9 && Math.abs(delta.y) < 1e-9 && Math.abs(delta.z) < 1e-9) return
+
+    // 收集棱柱所有关联点（owner + dependent），统一平移
+    const allPointIds = new Set<string>([
+      ...constraint.ownerPointIds,
+      ...constraint.dependentLayouts.map((l) => l.pointId),
+    ])
+    const transforms: Array<{ pointId: string; before: Vec3; after: Vec3 }> = []
+    allPointIds.forEach((pid) => {
+      const p = this.scene.points.get(pid)
+      if (!p || this.isPointCoordinateLocked(p)) return
+      const before = p.position.clone()
+      const after = new Vec3(before.x + delta.x, before.y + delta.y, before.z + delta.z)
+      if (
+        Math.abs(after.x - before.x) <= 1e-9 &&
+        Math.abs(after.y - before.y) <= 1e-9 &&
+        Math.abs(after.z - before.z) <= 1e-9
+      )
+        return
+      transforms.push({ pointId: pid, before, after })
+    })
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      const t = transforms[0]!
+      this.executeCommand(new TransformCommand(t.pointId, t.before, t.after, [], this.scene))
+      return
+    }
+    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+  }
+
+  /**
+   * 拖动棱柱 owner 点（最高点或底面参考顶点）：
+   * 移动该点，并重新求解所有 dependent 点位置。
+   */
+  private setPrismOwnerPointPosition(prismId: string, pointId: string, position: Vec3) {
+    const constraint = this.getPrismConstraint(prismId)
+    if (!constraint) return
+    const point = this.scene.points.get(pointId)
+    if (!point || this.isPointCoordinateLocked(point)) return
+
+    const ownerBefore = point.position.clone()
+    if (
+      Math.abs(position.x - ownerBefore.x) <= 1e-9 &&
+      Math.abs(position.y - ownerBefore.y) <= 1e-9 &&
+      Math.abs(position.z - ownerBefore.z) <= 1e-9
+    )
+      return
+
+    // 垂直保持模式下移动最高点时，需要同时记录并更新缓存高度
+    let beforeVerticalHeight: number | null = null
+    let afterVerticalHeight: number | null = null
+    if (constraint.keepVertical && pointId === constraint.ownerPointIds[1]) {
+      beforeVerticalHeight = constraint.getRawVerticalHeight()
+      afterVerticalHeight = constraint.computeVerticalHeightForPosition(position)
+    }
+
+    this.executeCommand(
+      new TransformPrismOwnerPointCommand(
+        this.scene,
+        constraint,
+        pointId,
+        ownerBefore,
+        position.clone(),
+        beforeVerticalHeight,
+        afterVerticalHeight,
+      ),
+    )
+  }
+
   isPointCoordinateLocked(point: Point3 | null | undefined) {
     return Boolean(
       point &&
@@ -3018,8 +3408,18 @@ export class Editor {
     const regularPolygonFaceIds = new Set(
       dependentRegularPolygons.map((item) => item.face.id),
     )
+    const dependentPrisms = this.collectDependentPrismsByPointId(pointId)
+    // prismFaceIds 只包含顶面和侧面（不含底面）：
+    // - 删除最高点时，底面不含最高点，不会被 relatedFaces 收集，自然保留；
+    // - 删除底面顶点时，底面含该顶点，应被通用 face 删除逻辑处理（破坏删除），
+    //   因此不能放入 prismFaceIds 排除，否则底面会残留。
+    const prismFaceIds = new Set(
+      dependentPrisms.flatMap(({ faces, bottomFaceId }) =>
+        faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
+      ),
+    )
     const filteredRelatedFaces = relatedFaces.filter(
-      (face) => !regularPolygonFaceIds.has(face.id),
+      (face) => !regularPolygonFaceIds.has(face.id) && !prismFaceIds.has(face.id),
     )
 
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter((pl) => {
@@ -3035,6 +3435,7 @@ export class Editor {
         if (filteredRelatedFaces.some((f) => f.id === pl.target.id)) return true
         if (dependentCubes.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
         if (dependentRegularPolygons.some(({ face }) => face.id === pl.target.id)) return true
+        if (dependentPrisms.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
       }
       return false
     })
@@ -3092,6 +3493,7 @@ export class Editor {
         dependentCubes,
         relatedSpheres,
         dependentRegularPolygons,
+        dependentPrisms,
         relatedPerpendicularLines,
         relatedParallelLines,
         relatedCones,
@@ -3140,15 +3542,25 @@ export class Editor {
     const regularPolygonFaceIds = new Set(
       dependentRegularPolygons.map((item) => item.face.id),
     )
+    const dependentPrisms = this.collectDependentPrismsByLineId(lineId)
+    // prismFaceIds 只包含顶面和侧面（不含底面）：
+    // - 删除棱柱边界线时，若该线属于底面，底面应由通用 face 删除逻辑处理（破坏删除），
+    //   因此不能放入 prismFaceIds 排除，否则底面会残留。
+    const prismFaceIds = new Set(
+      dependentPrisms.flatMap(({ faces, bottomFaceId }) =>
+        faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
+      ),
+    )
     const cubeFaceIds = new Set(dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)))
     const filteredDependentFaces = dependentFaces.filter(
-      (face) => !cubeFaceIds.has(face.id) && !regularPolygonFaceIds.has(face.id),
+      (face) => !cubeFaceIds.has(face.id) && !regularPolygonFaceIds.has(face.id) && !prismFaceIds.has(face.id),
     )
 
     const allDeletedFaceIds = new Set([
       ...filteredDependentFaces.map((f) => f.id),
       ...dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)),
       ...dependentRegularPolygons.map(({ face }) => face.id),
+      ...dependentPrisms.flatMap(({ faces }) => faces.map((f) => f.id)),
     ])
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) =>
@@ -3188,6 +3600,7 @@ export class Editor {
         dependentCubes,
         filteredDependentFaces,
         dependentRegularPolygons,
+        dependentPrisms,
         relatedPerpendicularLines,
         relatedParallelLines,
       ),
@@ -3395,6 +3808,61 @@ export class Editor {
           face,
           regularPolygonConstraint,
           dependentPoints,
+          dependentIntersectionPoints,
+          relatedPerpendicularLines,
+          relatedParallelLines,
+        ),
+      )
+      return
+    }
+
+    const prismConstraint = this.getPrismConstraintByFaceId(faceId)
+    if (prismConstraint) {
+      // 棱柱所有面（底面 + 顶面 + 侧面）
+      const allPrismFaceIds = this.getPrismFaceIds(prismConstraint.prismId)
+      const prismFaces = allPrismFaceIds
+        .map((id) => this.scene.faces.get(id))
+        .filter((item): item is PlanarPolygon => item !== undefined)
+      // dependent 顶点（顶面除最高点外的顶点）
+      const dependentPoints = prismConstraint.dependentLayouts
+        .map((layout) => this.scene.points.get(layout.pointId))
+        .filter((item): item is Point3 => item !== undefined)
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        prismFaces.map((prismFace) => ({ type: 'face' as const, id: prismFace.id })),
+      )
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) => pl.target.type === 'face' && prismFaces.some((f) => f.id === pl.target.id),
+      )
+      const allBoundaryLineIds = new Set(prismFaces.flatMap((f) => f.boundaryLineIds))
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+      const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+      ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+        if (_rplIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      })
+      ;[...this.scene.parallelLines.values()].forEach((pl) => {
+        if (_rllIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      })
+      // 清理关联垂线/平行线上的约束点
+      relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+      relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
+      const bottomFace = this.scene.faces.get(prismConstraint.bottomFaceId)
+      const bottomOwnerPointIds = bottomFace ? [...bottomFace.boundaryPointIds] : []
+      this.executeHistoryEntry(
+        createDeletePrismCommand(
+          this.scene,
+          prismFaces,
+          dependentPoints,
+          prismConstraint,
+          prismConstraint.bottomFaceId,
+          bottomOwnerPointIds,
+          prismConstraint.ownerPointIds[1],
           dependentIntersectionPoints,
           relatedPerpendicularLines,
           relatedParallelLines,
@@ -3624,6 +4092,20 @@ export class Editor {
     if (rpConstraint && point.regularPolygonRole === 'owner') {
       this.setRegularPolygonOwnerPointPosition(rpConstraint.constraintId, pointId, position)
       return
+    }
+
+    const prismConstraint = this.getPrismConstraintByPointId(pointId)
+    if (prismConstraint) {
+      if (point.prismRole === 'dependent') {
+        // 拖动 dependent 点：平移整个棱柱（owner + 所有 dependent 点）
+        this.translatePrism(prismConstraint.prismId, pointId, position)
+        return
+      }
+      if (point.prismRole === 'owner') {
+        // 拖动 owner 点（最高点或底面参考顶点）：移动该点并重新求解 dependent 点
+        this.setPrismOwnerPointPosition(prismConstraint.prismId, pointId, position)
+        return
+      }
     }
 
     const before = point.position.clone()
@@ -4893,6 +5375,26 @@ export class Editor {
       return
     }
 
+    // 棱柱守卫：同一棱柱内部的点禁止合并；棱柱 dependent 顶点不允许被外部点替换
+    const keepPrismConstraint = keepPoint.prismId
+      ? this.getPrismConstraint(keepPoint.prismId)
+      : null
+    const removePrismConstraint = removePoint.prismId
+      ? this.getPrismConstraint(removePoint.prismId)
+      : null
+    if (
+      keepPrismConstraint &&
+      removePrismConstraint &&
+      keepPrismConstraint.prismId === removePrismConstraint.prismId
+    ) {
+      emitToast('同一棱柱内部的点禁止合并')
+      return
+    }
+    if (removePoint.prismRole === 'dependent') {
+      emitToast('棱柱的受约束点不允许被外部点替换')
+      return
+    }
+
     if (
       keepPoint.cylinderId &&
       removePoint.cylinderId &&
@@ -5706,6 +6208,211 @@ export class Editor {
     this.selectCubeByFaceId(faces[0]!.id)
   }
 
+  /**
+   * 棱柱创建：以一个已存在的多边形作为底面，再选中底面外的一点作为最高点。
+   * 底面多边形沿「底面参考顶点 → 最高点」向量平移得到顶面，顶面其余顶点为 dependent。
+   * 参考顶点取底面 boundaryPointIds 中距离最高点最近的那个，保证几何直观。
+   */
+  tryCreatePrism(bottomFace: PlanarPolygon, topPoint: Point3) {
+    if (bottomFace.boundaryPointIds.length < 3) {
+      emitToast('棱柱的底面多边形至少需要 3 个顶点')
+      return
+    }
+    if (bottomFace.boundaryPointIds.includes(topPoint.id)) {
+      emitToast('最高点不能在底面多边形上')
+      return
+    }
+    // 已被其他棱柱引用的底面禁止重复作为棱柱底
+    if (bottomFace.prismId) {
+      emitToast('该多边形已作为另一个棱柱的底面')
+      return
+    }
+    if (topPoint.prismId) {
+      emitToast('该点已属于另一个棱柱')
+      return
+    }
+
+    // 1. 计算底面参考顶点（距离最高点最近的底面顶点）与平移向量
+    let baseReferenceIndex = 0
+    let minDist = Infinity
+    bottomFace.boundaryPointIds.forEach((pid, idx) => {
+      const v = this.scene.points.get(pid)
+      if (!v) return
+      const d = Math.hypot(
+        v.position.x - topPoint.position.x,
+        v.position.y - topPoint.position.y,
+        v.position.z - topPoint.position.z,
+      )
+      if (d < minDist) {
+        minDist = d
+        baseReferenceIndex = idx
+      }
+    })
+    const baseRefVertex = this.scene.points.get(
+      bottomFace.boundaryPointIds[baseReferenceIndex]!,
+    )
+    if (!baseRefVertex) {
+      emitToast('底面参考顶点缺失，无法创建棱柱')
+      return
+    }
+    const translation = new Vec3(
+      topPoint.position.x - baseRefVertex.position.x,
+      topPoint.position.y - baseRefVertex.position.y,
+      topPoint.position.z - baseRefVertex.position.z,
+    )
+    const height = Math.hypot(translation.x, translation.y, translation.z)
+    if (height <= 1e-6) {
+      emitToast('最高点与底面参考顶点距离过近，无法创建棱柱')
+      return
+    }
+
+    const prismId = genId('prism')
+    const bottomOwnerPointIds = [...bottomFace.boundaryPointIds]
+
+    // 2. 创建顶面 dependent 顶点（底面顶点中除参考顶点外，全部平移）
+    const usedPointNames = new Set([...this.scene.points.values()].map((point) => point.name))
+    const nextPointName = () => {
+      const name = genNextAvailableName(usedPointNames, 65)
+      usedPointNames.add(name)
+      return name
+    }
+    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
+    const nextFaceName = () => {
+      const name = genNextAvailableName(usedFaceNames, 0, (index) =>
+        index === 0 ? 'F' : `F${index}`,
+      )
+      usedFaceNames.add(name)
+      return name
+    }
+
+    const dependentPoints: Point3[] = []
+    const dependentLayouts: Array<{ pointId: string; baseIndex: number }> = []
+    // 顶面 boundaryPointIds：按底面顺序，参考顶点位置放 topPoint.id，其余放 dependent 顶点 id
+    const topBoundaryPointIds: string[] = []
+    bottomFace.boundaryPointIds.forEach((pid, idx) => {
+      if (idx === baseReferenceIndex) {
+        topBoundaryPointIds.push(topPoint.id)
+        return
+      }
+      const bottomVertex = this.scene.points.get(pid)
+      if (!bottomVertex) return
+      const point = new Point3(
+        genId('p'),
+        nextPointName(),
+        new Vec3(
+          bottomVertex.position.x + translation.x,
+          bottomVertex.position.y + translation.y,
+          bottomVertex.position.z + translation.z,
+        ),
+      )
+      point.prismId = prismId
+      point.prismRole = 'dependent'
+      dependentPoints.push(point)
+      dependentLayouts.push({ pointId: point.id, baseIndex: idx })
+      topBoundaryPointIds.push(point.id)
+    })
+
+    // 3. 构建顶面 + 侧面
+    const makeFace = (
+      boundaryPointIds: string[],
+      role: 'top' | 'side',
+    ) => {
+      const face = new PlanarPolygon(
+        genId('f'),
+        nextFaceName(),
+        boundaryPointIds,
+        boundaryPointIds,
+      )
+      face.fillColor = 0xa7c8f4
+      face.fillOpacity = 0.22
+      face.userLocked = false
+      face.nameVisible = false
+      face.prismId = prismId
+      face.prismRole = role
+      face.prismOwnerPointIds = [...bottomOwnerPointIds, topPoint.id]
+      face.prismDependentPointIds = dependentPoints.map((p) => p.id)
+      return face
+    }
+
+    const topFace = makeFace(topBoundaryPointIds, 'top')
+    const sideFaces: PlanarPolygon[] = []
+    const n = bottomFace.boundaryPointIds.length
+    for (let i = 0; i < n; i++) {
+      const cur = i
+      const next = (i + 1) % n
+      const bottomA = bottomFace.boundaryPointIds[cur]!
+      const bottomB = bottomFace.boundaryPointIds[next]!
+      const topA = topBoundaryPointIds[cur]!
+      const topB = topBoundaryPointIds[next]!
+      // 侧面四边形顺序：底A → 底B → 顶B → 顶A
+      sideFaces.push(makeFace([bottomA, bottomB, topB, topA], 'side'))
+    }
+
+    const newFaces = [topFace, ...sideFaces]
+
+    // 4. 创建边界线（顶面边 + 侧面竖直边），底面已有边界线复用
+    const boundaryLines = this.ensureBoundaryLinesForFaces(
+      newFaces,
+      new Map(dependentPoints.map((p) => [p.id, p])),
+      'prism',
+    )
+
+    // 5. 标记 owner 反向引用（底面所有顶点 + 最高点）
+    bottomOwnerPointIds.forEach((pid) => {
+      const p = this.scene.points.get(pid)
+      if (p) {
+        p.prismId = prismId
+        p.prismRole = 'owner'
+      }
+    })
+    topPoint.prismId = prismId
+    topPoint.prismRole = 'owner'
+
+    // 6. 创建约束
+    const prismName = genNextAvailableName(
+      this.getPrismConstraints().map((constraint) => constraint.name),
+      0,
+      (index) => `棱柱${index + 1}`,
+    )
+    const vAxisHint = new Vec3(
+      translation.x / height,
+      translation.y / height,
+      translation.z / height,
+    )
+    const constraint = new PrismConstraint(
+      this.scene,
+      prismId,
+      [baseRefVertex.id, topPoint.id],
+      dependentLayouts,
+      bottomFace.id,
+      topFace.id,
+      sideFaces.map((f) => f.id),
+      baseReferenceIndex,
+      vAxisHint,
+      prismName,
+    )
+
+    // 7. 规范化面（计算法向等）
+    newFaces.forEach((face) => face.normalize(this.scene.points))
+
+    this.executeHistoryEntry(
+      createAddPrismCommand(
+        this.scene,
+        dependentPoints,
+        boundaryLines,
+        newFaces,
+        bottomFace.id,
+        bottomOwnerPointIds,
+        topPoint.id,
+        constraint,
+      ),
+    )
+
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.selectPrismByFaceId(topFace.id)
+  }
+
   getFacePreviewFromSelection(): FacePreviewData | null {
     if (this.mode !== EditorMode.CreatePlane) return null
 
@@ -6344,7 +7051,8 @@ export class Editor {
         if (recomputed) {
           const finalPos = constraint.projectPosition(recomputed) ?? recomputed
           nextPositions.set(constraint.pointId, finalPos)
-          constraint.computeParametricDataFromPosition(finalPos)
+          // 不重新计算 parametricData：保持原始归一化比例不变，
+          // 避免 projectPosition 边界钳制后比例被覆写导致漂移。
           return
         }
       }
@@ -6480,18 +7188,18 @@ export class Editor {
     edgeIndex: number,
     nextLength: number,
     edgeTargets?: Array<number | null>,
-  ) {
+  ): boolean {
     const face = this.scene.faces.get(faceId)
-    if (!face || face.areaLocked) return
+    if (!face || face.areaLocked) return false
 
     const normalizedLength = Line3.normalizeLockedLength(nextLength)
     const boundaryPoints = face.getBoundaryPoints(this.scene.points)
-    if (boundaryPoints.length < 3) return
+    if (boundaryPoints.length < 3) return false
 
     const plane =
       computePlaneBasis(face.getSupportPoints(this.scene.points).map((point) => point.position)) ??
       computePlaneBasis(boundaryPoints.map((point) => point.position))
-    if (!plane) return
+    if (!plane) return false
 
     const projectedBoundary = boundaryPoints.map((point) =>
       projectPoint2D(projectPointToPlane(point.position, plane), plane),
@@ -6508,11 +7216,11 @@ export class Editor {
     const endIndex = (edgeIndex + 1) % boundaryPoints.length
     const startPoint = boundaryPoints[startIndex]
     const endPoint = boundaryPoints[endIndex]
-    if (!startPoint || !endPoint) return
+    if (!startPoint || !endPoint) return false
 
     const startLocked = this.isPointCoordinateLocked(startPoint)
     const endLocked = this.isPointCoordinateLocked(endPoint)
-    if (startLocked && endLocked) return
+    if (startLocked && endLocked) return false
 
     const start2D = projectedBoundary[startIndex]!
     const end2D = projectedBoundary[endIndex]!
@@ -6624,7 +7332,7 @@ export class Editor {
       const next = solvedBoundary2D[(index + 1) % solvedBoundary2D.length]!
       return Math.abs(Math.hypot(next.x - current.x, next.y - current.y) - target) <= tolerance
     })
-    if (!lengthsSatisfied) return
+    if (!lengthsSatisfied) return false
 
     const updates: Array<{ id: string; position: Vec3 }> = []
     face.memberPointIds.forEach((pointId) => {
@@ -6649,6 +7357,7 @@ export class Editor {
     })
 
     this.setPointsPositions(updates)
+    return true
   }
 
   /**

@@ -5,6 +5,7 @@ import { Vec3 } from '../../../geometry/Vec3'
 import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
+import { PrismConstraint } from '../../../constraints/PrismConstraint'
 
 /**
  * 合并点的核心逻辑（不含快照捕获）。
@@ -68,6 +69,8 @@ function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3
     face.cubeDependentPointIds = replacePointId(face.cubeDependentPointIds)
     face.regularPolygonOwnerPointIds = replacePointId(face.regularPolygonOwnerPointIds)
     face.regularPolygonDependentPointIds = replacePointId(face.regularPolygonDependentPointIds)
+    face.prismOwnerPointIds = replacePointId(face.prismOwnerPointIds)
+    face.prismDependentPointIds = replacePointId(face.prismDependentPointIds)
     face.boundaryLineIds = face.boundaryLineIds.filter((lineId) => scene.lines.has(lineId))
 
     if (face.boundaryPointIds.length < 3 || face.memberPointIds.length < 3) {
@@ -127,6 +130,29 @@ function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3
   if (!keepPoint.regularPolygonId && removePoint.regularPolygonId) {
     keepPoint.regularPolygonId = removePoint.regularPolygonId
     keepPoint.regularPolygonRole = removePoint.regularPolygonRole
+  }
+
+  // ─── 棱柱约束 ──────────────────────────────────────
+  for (const constraint of [...scene.prismConstraints.values()]) {
+    const prismConstraint = constraint as unknown as PrismConstraint
+    const allPointIds = [
+      prismConstraint.ownerPointIds[0],
+      prismConstraint.ownerPointIds[1],
+      ...prismConstraint.dependentLayouts.map((item) => item.pointId),
+    ]
+    if (!allPointIds.some((pid) => pid === keepId || pid === removeId)) continue
+
+    if (prismConstraint.ownerPointIds[0] === removeId) prismConstraint.ownerPointIds[0] = keepId
+    if (prismConstraint.ownerPointIds[1] === removeId) prismConstraint.ownerPointIds[1] = keepId
+    prismConstraint.dependentLayouts.forEach((layout) => {
+      if (layout.pointId === removeId) layout.pointId = keepId
+    })
+  }
+
+  // 继承 removePoint 的 prismId/prismRole
+  if (!keepPoint.prismId && removePoint.prismId) {
+    keepPoint.prismId = removePoint.prismId
+    keepPoint.prismRole = removePoint.prismRole
   }
 
   // ─── 圆 ────────────────────────────────────────────

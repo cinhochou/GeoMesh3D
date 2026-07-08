@@ -33,6 +33,7 @@ export class LabelRenderer {
   public pointLabelMeshes = new Map<string, THREE.Sprite>()
   public linearLabelMeshes = new Map<string, THREE.Sprite>()
   public cubeValueLabels = new Map<string, THREE.Sprite>()
+  public prismValueLabels = new Map<string, THREE.Sprite>()
 
   private pointTextureCache = new Map<string, THREE.CanvasTexture>()
   private readonly deps: LabelRendererDeps

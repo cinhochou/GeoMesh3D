@@ -8,6 +8,7 @@ import { Cone3 } from '../core/geometry/Cone3'
 import { Cylinder3 } from '../core/geometry/Cylinder3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
+import { PrismConstraint } from '../core/constraints/PrismConstraint'
 import { PerpendicularLineConstraint } from '../core/constraints/PerpendicularLineConstraint'
 import { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -105,6 +106,7 @@ const LINE_LABEL_CENTER_Y = 0.3
 const LINEAR_COLOR = 0xffffff
 const CONSTRAINED_POINT_COLOR = 0xffd84a
 const CUBE_DEPENDENT_POINT_COLOR = 0xcfd3d8
+const PRISM_DEPENDENT_POINT_COLOR = 0xcfd3d8
 export const DEFAULT_POINT_COLOR = 0xff5555
 export const SELECTED_COLOR = 0x43f260
 const FACE_FILL_COLOR = 0x74a4ff
@@ -192,6 +194,9 @@ function computePointBaseColor(p: Point3, scene: GeoScene): number {
   }
   if (p.cubeRole === 'dependent') {
     return CUBE_DEPENDENT_POINT_COLOR
+  }
+  if (p.prismRole === 'dependent') {
+    return PRISM_DEPENDENT_POINT_COLOR
   }
   if (p.regularPolygonRole === 'dependent') {
     return 0xffffff
@@ -434,6 +439,7 @@ export class GeometrySyncer {
       this.syncCones(geoScene, dirtyState)
       this.syncCylinders(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
+      this.syncPrismValueLabels(geoScene)
     }
     this.updateRubberBand(previewData)
     this.updateFacePreview(facePreviewData)
@@ -1583,7 +1589,18 @@ export class GeometrySyncer {
           cubeConstraint.faceIds.length > 0 &&
           cubeConstraint.faceIds.every((faceId) => scene.selection.faces.has(faceId)),
       )
-      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected
+      const prismConstraint = faceData.prismId
+        ? (scene.getPrismConstraint(faceData.prismId) as PrismConstraint | null)
+        : null
+      const prismFaceIds = prismConstraint
+        ? [prismConstraint.bottomFaceId, prismConstraint.topFaceId, ...prismConstraint.sideFaceIds]
+        : []
+      const isPrismFullySelected = Boolean(
+        prismConstraint &&
+          prismFaceIds.length > 0 &&
+          prismFaceIds.every((faceId) => scene.selection.faces.has(faceId)),
+      )
+      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected && !isPrismFullySelected
       const baseColor = faceData.fillColor ?? FACE_FILL_COLOR
       const baseOpacity = faceData.fillOpacity ?? FACE_FILL_OPACITY
       ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(
@@ -2117,6 +2134,72 @@ export class GeometrySyncer {
     })
   }
 
+  syncPrismValueLabels(scene: GeoScene): void {
+    const isDragging = scene.activeDraggedPointIds.size > 0
+    const prisms = [...scene.prismConstraints.values()].filter(
+      (constraint): constraint is PrismConstraint => constraint instanceof PrismConstraint,
+    )
+    const activePrismIds = new Set(prisms.map((prism) => prism.prismId))
+    this.deps.labelRenderer.prismValueLabels.forEach((label, prismId) => {
+      if (activePrismIds.has(prismId)) return
+      this.deps.world.remove(label)
+      this.deps.labelRenderer.prismValueLabels.delete(prismId)
+    })
+
+    prisms.forEach((prism) => {
+      const centroid = prism.getCentroid()
+      const visible = prism.valueVisible === true && centroid !== null
+      const existing = this.deps.labelRenderer.prismValueLabels.get(prism.prismId)
+      if (!visible) {
+        if (existing) existing.visible = false
+        return
+      }
+      const text = `=${this.deps.labelRenderer.formatMetricNumber(prism.getVolume())}`
+      const color = LINEAR_COLOR
+      if (!existing) {
+        const sprite = this.deps.labelRenderer.makeValueLabelSprite(text, color, false)
+        sprite.center.set(0.5, LINE_LABEL_CENTER_Y)
+        sprite.renderOrder = 10
+        this.deps.labelRenderer.setAdaptiveSpriteScale(sprite, this.getLineLabelScale())
+        const userData = this.getLabelUserData(sprite)
+        userData.text = text
+        userData.isNameLabel = true
+        userData.isValueLabel = true
+        userData.geoId = prism.topFaceId ?? prism.prismId
+        userData.geoType = 'face'
+        this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
+        sprite.position.copy(
+          this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
+        )
+        this.deps.labelRenderer.prismValueLabels.set(prism.prismId, sprite)
+        this.deps.world.add(sprite)
+        return
+      }
+      existing.visible = true
+      this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
+      existing.position.copy(
+        this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
+      )
+      if (isDragging && this.syncFrameCounter % GeometrySyncer.DRAG_LABEL_UPDATE_INTERVAL !== 0) return
+      const labelData = this.getLabelUserData(existing)
+      if (labelData.text !== text) {
+        labelData.text = text
+        const material = existing.material as THREE.SpriteMaterial
+        const oldMap = material.map as THREE.CanvasTexture | null
+        const nextSprite = this.deps.labelRenderer.makeValueLabelSprite(text, color, false)
+        material.map = (nextSprite.material as THREE.SpriteMaterial).map
+        if (oldMap) oldMap.dispose()
+        Object.assign(labelData, this.getLabelUserData(nextSprite))
+        labelData.text = text
+        labelData.isNameLabel = true
+        labelData.isValueLabel = true
+        labelData.geoId = prism.topFaceId ?? prism.prismId
+        labelData.geoType = 'face'
+        this.deps.labelRenderer.setAdaptiveSpriteScale(existing, this.getLineLabelScale())
+      }
+    })
+  }
+
   syncLinearLabel(
     object: THREE.Object3D,
     text: string,
@@ -2265,6 +2348,17 @@ export class GeometrySyncer {
       if (activeCubeIds.has(cubeId)) return
       this.deps.world.remove(label)
       this.deps.labelRenderer.cubeValueLabels.delete(cubeId)
+    })
+
+    const activePrismIds = new Set(
+      [...scene.prismConstraints.values()]
+        .filter((constraint): constraint is PrismConstraint => constraint instanceof PrismConstraint)
+        .map((constraint) => constraint.prismId),
+    )
+    this.deps.labelRenderer.prismValueLabels.forEach((label, prismId) => {
+      if (activePrismIds.has(prismId)) return
+      this.deps.world.remove(label)
+      this.deps.labelRenderer.prismValueLabels.delete(prismId)
     })
 
     this.hiddenLineMap.forEach((obj, id) => {

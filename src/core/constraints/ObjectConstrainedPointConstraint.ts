@@ -61,10 +61,10 @@ export type ParametricData =
   | { type: 'line' | 'vector'; t: number }
   | { type: 'straightLine'; t: number }
   | { type: 'ray'; t: number }
-  | { type: 'perpendicularLine'; distance: number }
-  | { type: 'parallelLine'; distance: number }
+  | { type: 'perpendicularLine'; t: number }
+  | { type: 'parallelLine'; t: number }
   | { type: 'circle'; angle: number; normal: [number, number, number]; center: [number, number, number] }
-  | { type: 'face'; localU: number; localV: number }
+  | { type: 'face'; barycentric: [number, number, number] }
   | { type: 'sphere'; theta: number; phi: number }
   | {
       type: 'cone'
@@ -115,6 +115,8 @@ export class ObjectConstrainedPointConstraint {
   private static readonly EPSILON = 1e-5
 
   parametricData: ParametricData | null = null
+
+  lastSetClamped: boolean = false
 
   constructor(
     private scene: Scene,
@@ -247,7 +249,9 @@ export class ObjectConstrainedPointConstraint {
         const dist = length(sub(point.position, finalPos))
         if (dist <= ObjectConstrainedPointConstraint.EPSILON) return
         point.setPosition(finalPos)
-        this.computeParametricDataFromPosition(finalPos)
+        // 不重新计算 parametricData：保持原始归一化比例不变，
+        // 避免 projectToConstraint 边界钳制后比例被覆写导致漂移。
+        // parametricData 仅在用户拖动点时（走下方路径）更新。
         return
       }
     }
@@ -257,6 +261,109 @@ export class ObjectConstrainedPointConstraint {
     if (dist <= ObjectConstrainedPointConstraint.EPSILON) return
     point.setPosition(projected)
     this.computeParametricDataFromPosition(projected)
+  }
+
+  /** 计算点相对于三角形 (a,b,c) 的重心坐标 (a,b,c)，满足 p = a*A + b*B + c*C 且 a+b+c=1 */
+  private computeBarycentricCoordinates(
+    p: Vec3,
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+  ): { a: number; b: number; c: number } | null {
+    const v0 = sub(b, a)
+    const v1 = sub(c, a)
+    const v2 = sub(p, a)
+    const d00 = dot(v0, v0)
+    const d01 = dot(v0, v1)
+    const d11 = dot(v1, v1)
+    const d20 = dot(v2, v0)
+    const d21 = dot(v2, v1)
+    const denom = d00 * d11 - d01 * d01
+    if (Math.abs(denom) <= 1e-10) return null
+    const beta = (d11 * d20 - d01 * d21) / denom
+    const gamma = (d00 * d21 - d01 * d20) / denom
+    const alpha = 1 - beta - gamma
+    return { a: alpha, b: beta, c: gamma }
+  }
+
+  /** 获取面约束的局部坐标系（基于支撑三角形） */
+  private getFaceBasis() {
+    if (this.target.type !== 'face') return null
+    const face = this.scene.faces.get(this.target.id)
+    if (!face) return null
+    const supportPoints = face.getSupportPoints(this.scene.points)
+    if (supportPoints.length < 3) return null
+    const sp0 = supportPoints[0]
+    const sp1 = supportPoints[1]
+    const sp2 = supportPoints[2]
+    if (!sp0 || !sp1 || !sp2) return null
+    const origin = sp0.position
+    const edge1 = sub(sp1.position, sp0.position)
+    const edge1Len = length(edge1)
+    if (edge1Len <= 1e-10) return null
+    const uAxis = scale(edge1, 1 / edge1Len)
+    const edge2 = sub(sp2.position, sp0.position)
+    const nRaw = cross(edge1, edge2)
+    const nLen = length(nRaw)
+    if (nLen <= 1e-10) return null
+    const nAxis = scale(nRaw, 1 / nLen)
+    const vAxis = cross(nAxis, uAxis)
+    const edge2VLen = dot(edge2, vAxis)
+    if (Math.abs(edge2VLen) <= 1e-10) return null
+    return { face, sp0, sp1, sp2, origin, uAxis, vAxis, edge1Len, edge2VLen, nAxis }
+  }
+
+  /** 将世界坐标点投影到面的 UV 坐标系（u 沿首边比例，v 垂直首边比例） */
+  private worldToUV(pos: Vec3, basis: NonNullable<ReturnType<ObjectConstrainedPointConstraint['getFaceBasis']>>) {
+    const diff = sub(pos, basis.origin)
+    const u = dot(diff, basis.uAxis) / basis.edge1Len
+    const v = dot(diff, basis.vAxis) / basis.edge2VLen
+    return { u, v }
+  }
+
+  /** 从重心坐标计算 UV 值（u 沿首边比例 0~1，v 垂直首边比例） */
+  private barycentricToUV(bary: [number, number, number], basis: NonNullable<ReturnType<ObjectConstrainedPointConstraint['getFaceBasis']>>) {
+    const [a, b, c] = bary
+    const pos = add(
+      add(scale(basis.sp0.position, a), scale(basis.sp1.position, b)),
+      scale(basis.sp2.position, c),
+    )
+    return this.worldToUV(pos, basis)
+  }
+
+  /** 从 UV 值计算世界坐标 */
+  private uvToPosition(u: number, v: number, basis: NonNullable<ReturnType<ObjectConstrainedPointConstraint['getFaceBasis']>>): Vec3 {
+    const { origin, uAxis, vAxis, edge1Len, edge2VLen } = basis
+    return add(
+      origin,
+      add(scale(uAxis, u * edge1Len), scale(vAxis, v * edge2VLen)),
+    )
+  }
+
+  /** 计算面约束的动态 UV 边界：将所有边界点投影到 UV 空间，取包围盒并添加 15% padding */
+  private computeFaceUVBounds(basis: NonNullable<ReturnType<ObjectConstrainedPointConstraint['getFaceBasis']>>) {
+    const boundaryPoints = basis.face.getBoundaryPoints(this.scene.points)
+    if (boundaryPoints.length < 3) return null
+    let minU = Infinity
+    let maxU = -Infinity
+    let minV = Infinity
+    let maxV = -Infinity
+    for (const bp of boundaryPoints) {
+      const uv = this.worldToUV(bp.position, basis)
+      if (uv.u < minU) minU = uv.u
+      if (uv.u > maxU) maxU = uv.u
+      if (uv.v < minV) minV = uv.v
+      if (uv.v > maxV) maxV = uv.v
+    }
+    if (!isFinite(minU) || !isFinite(maxU) || !isFinite(minV) || !isFinite(maxV)) return null
+    const padU = (maxU - minU) * 0.15
+    const padV = (maxV - minV) * 0.15
+    return {
+      minU: minU - padU,
+      maxU: maxU + padU,
+      minV: minV - padV,
+      maxV: maxV + padV,
+    }
   }
 
   projectPosition(pos: Vec3): Vec3 | null {
@@ -305,16 +412,25 @@ export class ObjectConstrainedPointConstraint {
       case 'ray':
         return [{ key: 't', label: 't', min: 0, max: 100, step: 0.1 }]
       case 'perpendicularLine':
-        return [{ key: 'distance', label: '距离', min: -100, max: 100, step: 0.1 }]
+        return [{ key: 't', label: 't', min: -2, max: 2, step: 0.05 }]
       case 'parallelLine':
-        return [{ key: 'distance', label: '距离', min: -100, max: 100, step: 0.1 }]
+        return [{ key: 't', label: 't', min: -2, max: 2, step: 0.05 }]
       case 'circle':
         return [{ key: 'angle', label: '角度', min: 0, max: 2 * Math.PI, step: 0.1 }]
-      case 'face':
+      case 'face': {
+        const basis = this.getFaceBasis()
+        const bounds = basis ? this.computeFaceUVBounds(basis) : null
+        if (bounds) {
+          return [
+            { key: 'u', label: 'U', min: bounds.minU, max: bounds.maxU, step: 0.05 },
+            { key: 'v', label: 'V', min: bounds.minV, max: bounds.maxV, step: 0.05 },
+          ]
+        }
         return [
-          { key: 'localU', label: 'U', min: -100, max: 100, step: 0.1 },
-          { key: 'localV', label: 'V', min: -100, max: 100, step: 0.1 },
+          { key: 'u', label: 'U', min: -10, max: 10, step: 0.05 },
+          { key: 'v', label: 'V', min: -10, max: 10, step: 0.05 },
         ]
+      }
       case 'sphere':
         return [
           { key: 'theta', label: 'θ', min: 0, max: Math.PI, step: 0.1 },
@@ -354,13 +470,55 @@ export class ObjectConstrainedPointConstraint {
   getParametricValue(key: string): number | undefined {
     const pd = this.parametricData
     if (!pd) return undefined
+    if (pd.type === 'face') {
+      const basis = this.getFaceBasis()
+      if (!basis) return undefined
+      const uv = this.barycentricToUV(pd.barycentric, basis)
+      return (uv as Record<string, number>)[key]
+    }
     return (pd as Record<string, unknown>)[key] as number | undefined
   }
 
-  /** 设置当前参数化数据的某个参数值，并重新计算点位置 */
+  /** 设置当前参数化数据的某个参数值，并重新计算点位置。
+   * 返回是否成功设置；lastSetClamped 标记是否被面边界钳制。 */
   setParametricValue(key: string, value: number): boolean {
     const pd = this.parametricData
     if (!pd) return false
+    this.lastSetClamped = false
+
+    if (pd.type === 'face' && (key === 'u' || key === 'v')) {
+      const basis = this.getFaceBasis()
+      if (!basis) return false
+      const point = this.scene.points.get(this.pointId)
+      if (!point || point.locked) return false
+      const bounds = this.computeFaceUVBounds(basis)
+      const oldPos = point.position.clone()
+      // 先获取当前 UV，只更新指定轴
+      const currentUV = this.barycentricToUV(pd.barycentric, basis)
+      let newU = key === 'u' ? value : currentUV.u
+      let newV = key === 'v' ? value : currentUV.v
+      // 钳制到动态 UV 包围盒（含15% padding），防止输入极端值导致数值异常，但不触发气泡
+      if (bounds) {
+        if (key === 'u') {
+          if (newU < bounds.minU) newU = bounds.minU
+          else if (newU > bounds.maxU) newU = bounds.maxU
+        } else {
+          if (newV < bounds.minV) newV = bounds.minV
+          else if (newV > bounds.maxV) newV = bounds.maxV
+        }
+      }
+      const desiredPos = this.uvToPosition(newU, newV, basis)
+      const finalPos = this.projectToConstraint(desiredPos) ?? desiredPos
+      // 只有当设置后的位置与设置前几乎相同时，才判定为"无法移动"（已到达边界被挡住）
+      const moveDist = length(sub(finalPos, oldPos))
+      if (moveDist < 1e-4) {
+        this.lastSetClamped = true
+      }
+      point.setPosition(finalPos)
+      this.computeParametricDataFromPosition(finalPos)
+      return true
+    }
+
     const ranges = this.getParametricRanges()
     const range = ranges.find((r) => r.key === key)
     if (!range) return false
@@ -410,17 +568,23 @@ export class ObjectConstrainedPointConstraint {
       case 'perpendicularLine': {
         const pl = this.scene.perpendicularLines.get(this.target.id)
         if (!pl) return
+        const plLen = pl.getDirectionLength()
+        if (plLen <= 1e-10) return
         const plDir = pl.getNormalizedDirectionVector(this.scene)
         const plAp = sub(pos, pl.p1.position)
-        this.parametricData = { type: 'perpendicularLine', distance: dot(plAp, plDir) }
+        // 存储归一化比例，线长度变化时保持相对位置不变
+        this.parametricData = { type: 'perpendicularLine', t: dot(plAp, plDir) / plLen }
         break
       }
       case 'parallelLine': {
         const pll = this.scene.parallelLines.get(this.target.id)
         if (!pll) return
+        const pllLen = pll.getDirectionLength()
+        if (pllLen <= 1e-10) return
         const pllDir = pll.getNormalizedDirectionVector(this.scene)
         const pllAp = sub(pos, pll.p1.position)
-        this.parametricData = { type: 'parallelLine', distance: dot(pllAp, pllDir) }
+        // 存储归一化比例，线长度变化时保持相对位置不变
+        this.parametricData = { type: 'parallelLine', t: dot(pllAp, pllDir) / pllLen }
         break
       }
       case 'circle': {
@@ -447,21 +611,19 @@ export class ObjectConstrainedPointConstraint {
         const sp1 = supportPoints[1]
         const sp2 = supportPoints[2]
         if (!sp0 || !sp1 || !sp2) return
-        const origin = sp0.position
-        const edge1 = sub(sp1.position, sp0.position)
-        const edge1Len = length(edge1)
-        if (edge1Len <= 1e-10) return
-        const uAxis = scale(edge1, 1 / edge1Len)
-        const edge2 = sub(sp2.position, sp0.position)
-        const nRaw = this.getCrossProduct(edge1, edge2)
-        const nLen = length(nRaw)
-        if (nLen <= 1e-10) return
-        const nAxis = scale(nRaw, 1 / nLen)
-        const vAxis = this.getCrossProduct(nAxis, uAxis)
-        const diff = sub(pos, origin)
-        const localU = dot(diff, uAxis)
-        const localV = dot(diff, vAxis)
-        this.parametricData = { type: 'face', localU, localV }
+        const bary = this.computeBarycentricCoordinates(
+          pos,
+          sp0.position,
+          sp1.position,
+          sp2.position,
+        )
+        if (!bary) return
+        // 使用重心坐标：点 = a*sp0 + b*sp1 + c*sp2，
+        // 在面非均匀缩放/剪切时仍保持与支撑三角形的相对位置
+        this.parametricData = {
+          type: 'face',
+          barycentric: [bary.a, bary.b, bary.c],
+        }
         break
       }
       case 'sphere': {
@@ -641,14 +803,20 @@ export class ObjectConstrainedPointConstraint {
       case 'perpendicularLine': {
         const pl = this.scene.perpendicularLines.get(this.target.id)
         if (!pl) return null
+        const plLen = pl.getDirectionLength()
+        if (plLen <= 1e-10) return null
         const plDir = pl.getNormalizedDirectionVector(this.scene)
-        return add(pl.p1.position, scale(plDir, pd.distance))
+        // 用归一化比例 × 当前线长反推位置，保持相对位置不变
+        return add(pl.p1.position, scale(plDir, pd.t * plLen))
       }
       case 'parallelLine': {
         const pll = this.scene.parallelLines.get(this.target.id)
         if (!pll) return null
+        const pllLen = pll.getDirectionLength()
+        if (pllLen <= 1e-10) return null
         const pllDir = pll.getNormalizedDirectionVector(this.scene)
-        return add(pll.p1.position, scale(pllDir, pd.distance))
+        // 用归一化比例 × 当前线长反推位置，保持相对位置不变
+        return add(pll.p1.position, scale(pllDir, pd.t * pllLen))
       }
       case 'circle': {
         const circle = this.scene.circles.get(this.target.id)
@@ -669,18 +837,13 @@ export class ObjectConstrainedPointConstraint {
         const sp1 = supportPoints[1]
         const sp2 = supportPoints[2]
         if (!sp0 || !sp1 || !sp2) return null
-        const origin = sp0.position
-        const edge1 = sub(sp1.position, sp0.position)
-        const edge1Len = length(edge1)
-        if (edge1Len <= 1e-10) return null
-        const uAxis = scale(edge1, 1 / edge1Len)
-        const edge2 = sub(sp2.position, sp0.position)
-        const nRaw = this.getCrossProduct(edge1, edge2)
-        const nLen = length(nRaw)
-        if (nLen <= 1e-10) return null
-        const nAxis = scale(nRaw, 1 / nLen)
-        const vAxis = this.getCrossProduct(nAxis, uAxis)
-        return add(origin, add(scale(uAxis, pd.localU), scale(vAxis, pd.localV)))
+        // 使用重心坐标反推位置：P = a*sp0 + b*sp1 + c*sp2
+        // 对非均匀缩放（如棱柱侧面底边改变而高度不变）仍保持相对位置
+        const [a, b, c] = pd.barycentric
+        return add(
+          add(scale(sp0.position, a), scale(sp1.position, b)),
+          scale(sp2.position, c),
+        )
       }
       case 'sphere': {
         const sphere = this.scene.spheres.get(this.target.id)

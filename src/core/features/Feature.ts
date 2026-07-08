@@ -25,6 +25,7 @@ export type FeatureType =
   | 'intersectionPoint'
   | 'constrainedPoint'
   | 'regularPolygon'
+  | 'prism'
 
 /**
  * 一个 Feature 是用户一次作图意图的参数化描述。

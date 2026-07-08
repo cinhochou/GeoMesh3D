@@ -14,6 +14,7 @@ import { ParallelLine3 } from '../geometry/ParallelLine3'
 import { ParallelLineConstraint } from '../constraints/ParallelLineConstraint'
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
+import { PrismConstraint } from '../constraints/PrismConstraint'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
@@ -23,6 +24,7 @@ export type SceneConstraint = {
   faceId?: string
   pointId?: string
   cubeId?: string
+  prismId?: string
   isEffective?: () => boolean
   getDependencyPointIds?: () => Iterable<string>
 }
@@ -66,6 +68,7 @@ export class Scene {
   faceConstraints = new Map<string, SceneConstraint>()
   intersectionConstraints = new Map<string, SceneConstraint>()
   cubeConstraints = new Map<string, SceneConstraint>()
+  prismConstraints = new Map<string, SceneConstraint>()
   regularPolygonConstraints = new Map<string, SceneConstraint>()
   cylinderConstraints = new Map<string, CylinderConstraint>()
   objectConstrainedPointConstraints = new Map<string, ObjectConstrainedPointConstraint>()
@@ -484,6 +487,37 @@ export class Scene {
     this.dirtyConstraints.delete(existing)
   }
 
+  addPrismConstraint(c: SceneConstraint & { prismId: string }) {
+    const existing = this.prismConstraints.get(c.prismId)
+    if (existing) {
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.prismConstraints.set(c.prismId, c)
+    this.constraints.push(c)
+    this.markConstraintDirty(c)
+  }
+
+  removePrismConstraint(prismId: string) {
+    const existing = this.prismConstraints.get(prismId)
+    if (!existing) return
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
+    this.prismConstraints.delete(prismId)
+    this.dirtyConstraints.delete(existing)
+  }
+
+  getPrismConstraint(prismId: string) {
+    const constraint = this.prismConstraints.get(prismId)
+    if (!constraint || !constraint.prismId) return null
+    return constraint
+  }
+
+  requestPrismConstraintSolve(prismId: string) {
+    this.requestConstraintSolve(this.prismConstraints.get(prismId))
+  }
+
   removeCylinderConstraint(cylinderId: string) {
     const existing = this.cylinderConstraints.get(cylinderId)
     if (!existing) return
@@ -638,6 +672,7 @@ export class Scene {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
+    this.prismConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
@@ -654,6 +689,7 @@ export class Scene {
     this.faceConstraints.clear()
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
+    this.prismConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
@@ -663,11 +699,15 @@ export class Scene {
       if (constraint.faceId) this.faceConstraints.set(constraint.faceId, constraint)
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
       if (constraint.cubeId) this.cubeConstraints.set(constraint.cubeId, constraint)
+      if (constraint.prismId) this.prismConstraints.set(constraint.prismId, constraint)
       if ('constraintId' in constraint && typeof (constraint as { constraintId: string }).constraintId === 'string') {
         this.regularPolygonConstraints.set((constraint as { constraintId: string }).constraintId, constraint)
       }
       if (constraint instanceof CylinderConstraint) {
         this.cylinderConstraints.set((constraint as CylinderConstraint).cylinderId, constraint as CylinderConstraint)
+      }
+      if (constraint instanceof PrismConstraint) {
+        this.prismConstraints.set((constraint as PrismConstraint).prismId, constraint)
       }
       if (constraint instanceof ObjectConstrainedPointConstraint) {
         this.objectConstrainedPointConstraints.set((constraint as ObjectConstrainedPointConstraint).pointId, constraint as ObjectConstrainedPointConstraint)
@@ -687,6 +727,10 @@ export class Scene {
     return () => {
       this.solverListeners.delete(listener)
     }
+  }
+
+  isPointDirty(pointId: string): boolean {
+    return this.dirtyIds.point.has(pointId)
   }
 
   markPointDirty(pointId: string) {

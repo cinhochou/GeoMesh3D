@@ -55,6 +55,8 @@ export class Point3 {
   coneRole: 'baseCenter' | 'apex' | null
   cylinderId: string | null
   cylinderRole: 'bottomCenter' | 'topCenter' | null
+  prismId: string | null
+  prismRole: 'owner' | 'dependent' | null
   constrainedTo: ConstrainedToRef | null = null
   onPositionChanged: ((point: Point3, previous: Vec3, next: Vec3) => void) | null = null
 
@@ -96,6 +98,8 @@ export class Point3 {
     this.coneRole = null
     this.cylinderId = null
     this.cylinderRole = null
+    this.prismId = null
+    this.prismRole = null
   }
 
   setPosition(v: Vec3) {

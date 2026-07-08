@@ -199,6 +199,8 @@ export class Interaction {
   coneBaseCenterPointId: string | null = null
   coneNormalCircleId: string | null = null
   cylinderBottomCenterPointId: string | null = null
+  /** 棱柱创建：第一步选中的底面多边形 id。 */
+  prismBottomFaceId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -974,6 +976,47 @@ export class Interaction {
     this.editor.tryCreateTetrahedronFromSelection()
   }
 
+  /**
+   * 棱柱创建两步工作流：
+   * 1. 第一次点击：选中一个多边形面作为底面（prismBottomFaceId）。
+   * 2. 第二次点击：选中一个点作为最高点，调用 editor.tryCreatePrism 完成创建。
+   * 重复点击同一面/点可取消选择。
+   *
+   * 优化：若进入模式前已恰好选中一个面，可直接点击点完成创建，无需再点一次面。
+   */
+  private commitCreatePrismSelection(type: 'face' | 'point', geoId: string) {
+    if (type === 'face') {
+      // 取消已选底面
+      if (this.prismBottomFaceId === geoId) {
+        this.prismBottomFaceId = null
+        this.editor.scene.selection.deselectFace(geoId)
+        return
+      }
+      this.prismBottomFaceId = geoId
+      this.editor.scene.selection.selectFace(geoId, true)
+      return
+    }
+    // type === 'point'：需要已选底面
+    let bottomFaceId = this.prismBottomFaceId
+    // 尚未点击选择底面时，若当前选区中恰好只有一个面，则自动将其作为底面
+    if (!bottomFaceId && this.editor.scene.selection.faces.size === 1) {
+      const selectedFaceId = Array.from(this.editor.scene.selection.faces)[0]
+      if (selectedFaceId) {
+        bottomFaceId = selectedFaceId
+        this.prismBottomFaceId = selectedFaceId
+      }
+    }
+    if (!bottomFaceId) return
+    const bottomFace = this.editor.scene.faces.get(bottomFaceId)
+    const topPoint = this.editor.scene.points.get(geoId)
+    if (!bottomFace || !topPoint) {
+      this.resetPrismCreation()
+      return
+    }
+    this.editor.tryCreatePrism(bottomFace, topPoint)
+    this.resetPrismCreation()
+  }
+
   private isTouchPreferredDevice() {
     return (
       navigator.maxTouchPoints > 0 ||
@@ -1114,6 +1157,23 @@ export class Interaction {
       mobile: Interaction.SCREEN_LINE_HIT_RADIUS_MOBILE_PX,
       desktop: Interaction.SCREEN_LINE_HIT_RADIUS_PX,
     })
+  }
+
+  /**
+   * 计算与屏幕像素对应的世界空间线宽阈值。
+   * 当相机距离很远时，固定 0.5 世界单位的阈值对应的屏幕距离极小，
+   * 导致长线段难以通过 Raycaster 命中；动态阈值可随观察距离放大。
+   */
+  private getDynamicLinePickThreshold(screenPx: number = 5): number {
+    const camera = this.renderer.getActiveCamera()
+    const perspective = camera as THREE.PerspectiveCamera
+    if (!perspective.isPerspectiveCamera) return 0.5
+    const rect = this.getPointerClientRect()
+    if (rect.height <= 0) return 0.5
+    const distance = camera.position.distanceTo(this.renderer.controls.target)
+    const worldHeight = 2 * distance * Math.tan(((perspective.fov * Math.PI) / 180) / 2)
+    const worldPerPixel = worldHeight / rect.height
+    return Math.max(0.5, screenPx * worldPerPixel)
   }
 
   private getScreenCircleHitRadiusPx(): number {
@@ -1375,12 +1435,20 @@ export class Interaction {
     const constrainedPointsOnObject = new Map<string, Set<string>>()
     for (const [, constraint] of this.editor.scene.objectConstrainedPointConstraints) {
       if (protectedPointIds.has(constraint.pointId)) {
-        let set = constrainedPointsOnObject.get(constraint.target.id)
-        if (!set) {
-          set = new Set()
-          constrainedPointsOnObject.set(constraint.target.id, set)
+        const targetIds = [constraint.target.id]
+        // 若约束目标是面，同时保护面的边界线，使面边缘的受约束点不会被线段抢占
+        if (constraint.target.type === 'face') {
+          const face = this.editor.scene.faces.get(constraint.target.id)
+          if (face) targetIds.push(...face.boundaryLineIds)
         }
-        set.add(constraint.pointId)
+        for (const tid of targetIds) {
+          let set = constrainedPointsOnObject.get(tid)
+          if (!set) {
+            set = new Set()
+            constrainedPointsOnObject.set(tid, set)
+          }
+          set.add(constraint.pointId)
+        }
       }
     }
 
@@ -1403,11 +1471,19 @@ export class Interaction {
       // 命中半径在端点附近大面积重叠，14px 的端点保护会把线段在端点
       // 附近 4-14px 的"线段方向上"位置也屏蔽掉，导致视觉上"鼠标在线
       // 上"却选不到线。4px 是真正的"鼠标就在端点上"范围。
+      // 受保护端点（棱柱/cube 的 dependent 点等）在点命中半径内时给更大惩罚，
+      // 确保点在线段上时也能被选中。
       let endpointPenalty = 0
       for (const pid of endpointIds) {
         const screenPos = pointScreenPositions.get(pid)
-        if (screenPos && pointer.distanceTo(screenPos) <= 4) {
+        if (!screenPos) continue
+        const epDist = pointer.distanceTo(screenPos)
+        if (epDist <= 4) {
           endpointPenalty = 6
+          break
+        }
+        if (protectedPointIds.has(pid) && epDist <= pointHitRadius) {
+          endpointPenalty = pointHitRadius
           break
         }
       }
@@ -1905,6 +1981,47 @@ export class Interaction {
             geoId,
           })
         }
+      }
+    }
+
+    // 屏幕空间检测依赖端点投影；当线段很长且相机距离较远时，端点可能
+    // 超出视锥导致整条线被遗漏。此时使用 Raycaster 作为补充检测，阈值
+    // 按屏幕像素动态计算，保证在远距离下仍有合理的命中容差。
+    const LINEAR_TYPES_FOR_PICK = [
+      'line',
+      'straightLine',
+      'perpendicularLine',
+      'parallelLine',
+      'ray',
+      'vector',
+    ] as const
+    const hasLinearCandidate = candidates.some((c) =>
+      (LINEAR_TYPES_FOR_PICK as readonly string[]).includes(c.type),
+    )
+    if (!hasLinearCandidate) {
+      this.raycaster.setFromCamera(this.mouse, camera)
+      const previousThreshold = this.raycaster.params.Line?.threshold ?? 0.5
+      this.raycaster.params.Line = { threshold: this.getDynamicLinePickThreshold() }
+      const linearMeshCandidates = [...this.renderer.geometrySyncer.meshMap.values()].filter((obj) =>
+        (LINEAR_TYPES_FOR_PICK as readonly string[]).includes(obj.userData?.type),
+      )
+      const linearHits = this.raycaster.intersectObjects(linearMeshCandidates)
+      this.raycaster.params.Line = { threshold: previousThreshold }
+      for (const hit of linearHits) {
+        const obj = hit.object
+        const type = obj.userData?.type as string | undefined
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        if (this.isLinearNearProtectedPoint(type, geoId, protectedPointIds, constrainedPointsOnObject)) {
+          continue
+        }
+        candidates.push({
+          object: obj,
+          screenDist: 0,
+          depth: hit.distance,
+          type,
+          geoId,
+        })
       }
     }
 
@@ -3588,6 +3705,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreatePrism ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -3975,6 +4093,10 @@ export class Interaction {
         this.commitCreateTetrahedronSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateTetrahedron && type === 'line') {
         this.commitCreateTetrahedronSelection('line', geoId)
+      } else if (this.editor.mode === EditorMode.CreatePrism && type === 'face') {
+        this.commitCreatePrismSelection('face', geoId)
+      } else if (this.editor.mode === EditorMode.CreatePrism && type === 'point') {
+        this.commitCreatePrismSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateSphereTwoPoints && type === 'point') {
         if (!this.sphereTwoPointsFirstPointId) {
           this.sphereTwoPointsFirstPointId = geoId
@@ -4105,6 +4227,7 @@ export class Interaction {
       else if (
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreatePrism ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints
       )
         this.editor.scene.selection.clear()
@@ -4160,6 +4283,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateRegularPolygon ||
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
+        this.editor.mode === EditorMode.CreatePrism ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -4423,6 +4547,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreatePrism) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetPrismCreation()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -4599,6 +4730,15 @@ export class Interaction {
       e.stopPropagation()
       if (type === 'point') this.commitCreateTetrahedronSelection('point', geoId)
       else if (type === 'line') this.commitCreateTetrahedronSelection('line', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreatePrism) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'face') this.commitCreatePrismSelection('face', geoId)
+      else if (type === 'point') this.commitCreatePrismSelection('point', geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -5653,7 +5793,26 @@ export class Interaction {
   }
 
   private previewMovePoints(pointIds: string[], delta: Vec3) {
-    const expandedPointIds = this.expandLockedLinePreviewPointIds(pointIds)
+    // 棱柱 dependent 点拖动：展开为整个棱柱的点集（owner + dependent），实现平移整个棱柱
+    const expandedForPrism = new Set<string>(pointIds)
+    pointIds.forEach((pid) => {
+      const point = this.editor.scene.points.get(pid)
+      if (!point || point.prismRole !== 'dependent' || !point.prismId) return
+      const constraint = this.editor.getPrismConstraint(point.prismId)
+      if (!constraint) return
+      // 添加棱柱所有关联点（owner + dependent + 底面所有顶点）
+      constraint.ownerPointIds.forEach((id) => expandedForPrism.add(id))
+      constraint.dependentLayouts.forEach((l) => expandedForPrism.add(l.pointId))
+      // 添加底面所有顶点：拖动 dependent 点平移整个棱柱时，底面顶点也需同步移动，
+      // 否则 solve() 会根据未移动的底面顶点重新计算 dependent 点位置，导致拉回原位
+      const bottomFace = this.editor.scene.faces.get(constraint.bottomFaceId)
+      if (bottomFace) {
+        bottomFace.boundaryPointIds.forEach((id) => expandedForPrism.add(id))
+      }
+    })
+    const prismExpandedIds = [...expandedForPrism]
+
+    const expandedPointIds = this.expandLockedLinePreviewPointIds(prismExpandedIds)
     this.editor.scene.activeDraggedPointIds = new Set(expandedPointIds)
     expandedPointIds.forEach((id) => {
       const point = this.editor.scene.points.get(id)
@@ -5811,6 +5970,11 @@ export class Interaction {
     this.editor.scene.selection.clear()
   }
 
+  resetPrismCreation() {
+    this.prismBottomFaceId = null
+    this.editor.scene.selection.clear()
+  }
+
   confirmCylinderRadius(bottomCenterPointId: string, topCenterPointId: string, radius: number) {
     const bottomCenterPoint = this.editor.scene.points.get(bottomCenterPointId)
     const topCenterPoint = this.editor.scene.points.get(topCenterPointId)
@@ -5870,6 +6034,7 @@ export class Interaction {
     this.regularPolygonFirstPointId = null
     this.sphereTwoPointsFirstPointId = null
     this.cylinderBottomCenterPointId = null
+    this.prismBottomFaceId = null
   }
 
   private endDrag() {
