@@ -15,6 +15,7 @@ import { ParallelLineConstraint } from '../constraints/ParallelLineConstraint'
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { PrismConstraint } from '../constraints/PrismConstraint'
+import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Selection } from './Selection'
@@ -25,6 +26,7 @@ export type SceneConstraint = {
   pointId?: string
   cubeId?: string
   prismId?: string
+  pyramidId?: string
   isEffective?: () => boolean
   getDependencyPointIds?: () => Iterable<string>
 }
@@ -69,6 +71,7 @@ export class Scene {
   intersectionConstraints = new Map<string, SceneConstraint>()
   cubeConstraints = new Map<string, SceneConstraint>()
   prismConstraints = new Map<string, SceneConstraint>()
+  pyramidConstraints = new Map<string, SceneConstraint>()
   regularPolygonConstraints = new Map<string, SceneConstraint>()
   cylinderConstraints = new Map<string, CylinderConstraint>()
   objectConstrainedPointConstraints = new Map<string, ObjectConstrainedPointConstraint>()
@@ -518,6 +521,37 @@ export class Scene {
     this.requestConstraintSolve(this.prismConstraints.get(prismId))
   }
 
+  addPyramidConstraint(c: SceneConstraint & { pyramidId: string }) {
+    const existing = this.pyramidConstraints.get(c.pyramidId)
+    if (existing) {
+      const idx = this.constraints.indexOf(existing)
+      if (idx >= 0) this.constraints.splice(idx, 1)
+      this.dirtyConstraints.delete(existing)
+    }
+    this.pyramidConstraints.set(c.pyramidId, c)
+    this.constraints.push(c)
+    this.markConstraintDirty(c)
+  }
+
+  removePyramidConstraint(pyramidId: string) {
+    const existing = this.pyramidConstraints.get(pyramidId)
+    if (!existing) return
+    const idx = this.constraints.indexOf(existing)
+    if (idx >= 0) this.constraints.splice(idx, 1)
+    this.pyramidConstraints.delete(pyramidId)
+    this.dirtyConstraints.delete(existing)
+  }
+
+  getPyramidConstraint(pyramidId: string) {
+    const constraint = this.pyramidConstraints.get(pyramidId)
+    if (!constraint || !constraint.pyramidId) return null
+    return constraint
+  }
+
+  requestPyramidConstraintSolve(pyramidId: string) {
+    this.requestConstraintSolve(this.pyramidConstraints.get(pyramidId))
+  }
+
   removeCylinderConstraint(cylinderId: string) {
     const existing = this.cylinderConstraints.get(cylinderId)
     if (!existing) return
@@ -673,6 +707,7 @@ export class Scene {
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
     this.prismConstraints.clear()
+    this.pyramidConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
@@ -690,6 +725,7 @@ export class Scene {
     this.intersectionConstraints.clear()
     this.cubeConstraints.clear()
     this.prismConstraints.clear()
+    this.pyramidConstraints.clear()
     this.regularPolygonConstraints.clear()
     this.cylinderConstraints.clear()
     this.objectConstrainedPointConstraints.clear()
@@ -700,6 +736,7 @@ export class Scene {
       if (constraint.pointId) this.intersectionConstraints.set(constraint.pointId, constraint)
       if (constraint.cubeId) this.cubeConstraints.set(constraint.cubeId, constraint)
       if (constraint.prismId) this.prismConstraints.set(constraint.prismId, constraint)
+      if (constraint.pyramidId) this.pyramidConstraints.set(constraint.pyramidId, constraint)
       if ('constraintId' in constraint && typeof (constraint as { constraintId: string }).constraintId === 'string') {
         this.regularPolygonConstraints.set((constraint as { constraintId: string }).constraintId, constraint)
       }
@@ -708,6 +745,9 @@ export class Scene {
       }
       if (constraint instanceof PrismConstraint) {
         this.prismConstraints.set((constraint as PrismConstraint).prismId, constraint)
+      }
+      if (constraint instanceof PyramidConstraint) {
+        this.pyramidConstraints.set((constraint as PyramidConstraint).pyramidId, constraint)
       }
       if (constraint instanceof ObjectConstrainedPointConstraint) {
         this.objectConstrainedPointConstraints.set((constraint as ObjectConstrainedPointConstraint).pointId, constraint as ObjectConstrainedPointConstraint)

@@ -15,7 +15,7 @@ import { ParallelLine3 } from '../../../geometry/ParallelLine3'
 import { Cone3 } from '../../../geometry/Cone3'
 import { Cylinder3 } from '../../../geometry/Cylinder3'
 import { createDeleteFeatureCommand } from '../../../features'
-import type { DependentPrismCascade } from '../../../features/plugins/BasicElementFeature'
+import type { DependentPrismCascade, DependentPyramidCascade } from '../../../features/plugins/BasicElementFeature'
 
 export function createDeletePointCommand(
   scene: Scene,
@@ -51,6 +51,7 @@ export function createDeletePointCommand(
     }>
   }> = [],
   dependentPrisms: DependentPrismCascade[] = [],
+  dependentPyramids: DependentPyramidCascade[] = [],
   relatedPerpendicularLines: PerpendicularLine3[] = [],
   relatedParallelLines: ParallelLine3[] = [],
   relatedCones: Cone3[] = [],
@@ -76,6 +77,7 @@ export function createDeletePointCommand(
           ...dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)),
           ...dependentRegularPolygons.map(({ face }) => face.id),
           ...dependentPrisms.flatMap(({ faces }) => faces.map((f) => f.id)),
+          ...dependentPyramids.flatMap(({ faces }) => faces.map((f) => f.id)),
         ],
       },
     },
@@ -93,6 +95,7 @@ export function createDeletePointCommand(
       relatedSpheres,
       dependentRegularPolygons,
       dependentPrisms,
+      dependentPyramids,
       relatedPerpendicularLines,
       relatedParallelLines,
       relatedCones,

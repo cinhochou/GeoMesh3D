@@ -307,6 +307,29 @@ const selectedPrisms = computed(() => {
         constraint !== null,
     )
 })
+const pyramidsInScene = computed(() => {
+  void commandRevision.value
+  return props.editor.getPyramidConstraints()
+})
+const fullySelectedPyramidIds = computed(() => {
+  void commandRevision.value
+  return pyramidsInScene.value
+    .filter((pyramid) =>
+      props.editor.getPyramidFaceIds(pyramid.pyramidId).every((faceId) =>
+        props.scene.selection.faces.has(faceId),
+      ),
+    )
+    .map((pyramid) => pyramid.pyramidId)
+})
+const selectedPyramids = computed(() => {
+  void commandRevision.value
+  return fullySelectedPyramidIds.value
+    .map((pyramidId) => props.editor.getPyramidConstraint(pyramidId))
+    .filter(
+      (constraint): constraint is NonNullable<ReturnType<typeof props.editor.getPyramidConstraint>> =>
+        constraint !== null,
+    )
+})
 const selectedRegularPolygons = computed(() => {
   void commandRevision.value
   return regularPolygonsInScene.value.filter((constraint) =>
@@ -318,7 +341,8 @@ const selectedEditableFaces = computed(() =>
     (face) =>
       (!face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId)) &&
       !face.regularPolygonId &&
-      (!face.prismId || !fullySelectedPrismIds.value.includes(face.prismId)),
+      (!face.prismId || !fullySelectedPrismIds.value.includes(face.prismId)) &&
+      (!face.pyramidId || !fullySelectedPyramidIds.value.includes(face.pyramidId)),
   ),
 )
 
@@ -336,6 +360,7 @@ const editing = ref<{
     | 'hexahedron'
     | 'regularPolygon'
     | 'prism'
+    | 'pyramid'
     | 'sphere'
     | 'cone'
     | 'cylinder'
@@ -412,6 +437,8 @@ const hasCubeConstraint = (point: Point3 | undefined) =>
   Boolean(point?.cubeId && point?.cubeRole === 'dependent')
 const hasPrismConstraint = (point: Point3 | undefined) =>
   Boolean(point?.prismId && point?.prismRole === 'dependent')
+const hasPyramidConstraint = (point: Point3 | undefined) =>
+  Boolean(point?.pyramidId && point?.pyramidRole === 'dependent')
 const hasRegularPolygonConstraint = (point: Point3 | undefined) => Boolean(point?.regularPolygonId)
 const hasCircleConstraint = (point: Point3 | undefined) =>
   Boolean(point?.circleId && point?.circleRole === 'center')
@@ -421,6 +448,7 @@ const FACE_CONSTRAINT_BADGE: Record<string, string> = {
   hexahedron: '正六面体约束',
   tetrahedron: '正四面体约束',
   prism: '棱柱约束',
+  pyramid: '棱锥约束',
 }
 const POINT_CONSTRAINT_BADGE: Record<string, string> = {
   line: '线段约束',
@@ -466,6 +494,7 @@ const getCircleCenterPoint = (circleId: string) =>
   [...props.scene.points.values()].find((p) => p.circleId === circleId && p.circleRole === 'center')
 const isCubeFace = (face: PlanarPolygon | undefined) => Boolean(face?.cubeId)
 const isPrismFace = (face: PlanarPolygon | undefined) => Boolean(face?.prismId)
+const isPyramidFace = (face: PlanarPolygon | undefined) => Boolean(face?.pyramidId)
 
 const getConeForNormalCircle = (circle: Circle3) => {
   if (!circle.isNormalCircle()) return null
@@ -829,6 +858,15 @@ const editPrism = reactive({
   height: '',
   bottomEdgeLengths: [] as string[],
 })
+const editPyramid = reactive({
+  nameSuffix: '',
+  valueVisible: false,
+  userLocked: false,
+  keepVertical: false,
+  apexPoint: { x: '', y: '', z: '' },
+  height: '',
+  bottomEdgeLengths: [] as string[],
+})
 const editRegularPolygon = reactive({
   nameSuffix: '',
   nameVisible: false,
@@ -898,6 +936,9 @@ const selectedFaceIds = computed(() => selectedFaces.value.map((f) => f?.id).fil
 const selectedCircleIds = computed(() => selectedCircles.value.map((c) => c?.id).filter(Boolean))
 const selectedHexahedronIds = computed(() => selectedHexahedrons.value.map((cube) => cube.cubeId))
 const selectedPrismIds = computed(() => selectedPrisms.value.map((prism) => prism.prismId))
+const selectedPyramidIds = computed(() =>
+  selectedPyramids.value.map((pyramid) => pyramid.pyramidId),
+)
 const selectedSphereIds = computed(() => selectedSpheres.value.map((s) => s?.id).filter(Boolean))
 const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).filter(Boolean))
 const selectedCylinderIds = computed(() =>
@@ -916,6 +957,7 @@ const totalContentCount = computed(
     facesInScene.value.length +
     hexahedronsInScene.value.length +
     prismsInScene.value.length +
+    pyramidsInScene.value.length +
     spheresInScene.value.length +
     conesInScene.value.length +
     cylindersInScene.value.length,
@@ -932,6 +974,7 @@ const contentGroupLabels: Record<
   | 'face'
   | 'hexahedron'
   | 'prism'
+  | 'pyramid'
   | 'sphere'
   | 'cone'
   | 'cylinder',
@@ -948,6 +991,7 @@ const contentGroupLabels: Record<
   face: '多边形',
   hexahedron: '立体',
   prism: '棱柱',
+  pyramid: '棱锥',
   sphere: '球体',
   cone: '圆锥',
   cylinder: '圆柱',
@@ -969,6 +1013,7 @@ const toggleContentGroup = (
     | 'face'
     | 'hexahedron'
     | 'prism'
+    | 'pyramid'
     | 'sphere'
     | 'cone'
     | 'cylinder',
@@ -1044,6 +1089,14 @@ const selectPrismFromContent = (prismId: string) => {
   const constraint = props.editor.getPrismConstraint(prismId)
   const firstFaceId = constraint?.bottomFaceId
   if (firstFaceId) props.editor.selectPrismByFaceId(firstFaceId)
+  props.scene.markAllRenderDirty()
+}
+
+const selectPyramidFromContent = (pyramidId: string) => {
+  editing.value = null
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  const firstFaceId = constraint?.bottomFaceId
+  if (firstFaceId) props.editor.selectPyramidByFaceId(firstFaceId)
   props.scene.markAllRenderDirty()
 }
 
@@ -1164,6 +1217,7 @@ watch(
       circle: selectedCircleIds.value,
       hexahedron: selectedHexahedronIds.value,
       prism: selectedPrismIds.value,
+      pyramid: selectedPyramidIds.value,
       sphere: selectedSphereIds.value,
       cone: selectedConeIds.value,
       cylinder: selectedCylinderIds.value,
@@ -1196,6 +1250,7 @@ watch(
     if (facesInScene.value.length > 0) activeKeys.push('face')
     if (hexahedronsInScene.value.length > 0) activeKeys.push('hexahedron')
     if (prismsInScene.value.length > 0) activeKeys.push('prism')
+    if (pyramidsInScene.value.length > 0) activeKeys.push('pyramid')
     if (spheresInScene.value.length > 0) activeKeys.push('sphere')
     if (conesInScene.value.length > 0) activeKeys.push('cone')
     if (cylindersInScene.value.length > 0) activeKeys.push('cylinder')
@@ -1938,6 +1993,31 @@ const startEditPrism = (prismId: string) => {
   editPrism.height = toFixed2(constraint.getHeight())
   const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
   editPrism.bottomEdgeLengths = bottomFace
+    ? bottomFace
+        .getBoundaryPoints(props.scene.points)
+        .map((_, index) => toFixed2(bottomFace.getEdgeLength(props.scene.points, index)))
+    : []
+}
+
+const startEditPyramid = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  if (!constraint) return
+  const ownerPoints = getPyramidOwnerPoints(pyramidId)
+  if (ownerPoints.length < 2) return
+  const apexPoint = ownerPoints[1]!
+  editing.value = { type: 'pyramid', id: pyramidId }
+  editPyramid.nameSuffix = props.editor.getPyramidNameSuffix(pyramidId)
+  editPyramid.valueVisible = constraint.valueVisible === true
+  editPyramid.userLocked = props.editor
+    .getPyramidFaceIds(pyramidId)
+    .every((faceId) => props.scene.faces.get(faceId)?.userLocked)
+  editPyramid.keepVertical = constraint.keepVertical === true
+  editPyramid.apexPoint.x = toFixed2(apexPoint.position.x)
+  editPyramid.apexPoint.y = toFixed2(apexPoint.position.y)
+  editPyramid.apexPoint.z = toFixed2(apexPoint.position.z)
+  editPyramid.height = toFixed2(constraint.getHeight())
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  editPyramid.bottomEdgeLengths = bottomFace
     ? bottomFace
         .getBoundaryPoints(props.scene.points)
         .map((_, index) => toFixed2(bottomFace.getEdgeLength(props.scene.points, index)))
@@ -2725,6 +2805,223 @@ const handlePrismBottomEdgeLengthBlur = (edgeIndex: number) => {
   applyPrismBottomEdgeLength(edgeIndex)
 }
 
+const getEditingPyramidState = () => {
+  if (!editing.value || editing.value.type !== 'pyramid') return null
+  const constraint = props.editor.getPyramidConstraint(editing.value.id)
+  if (!constraint) return null
+  const ownerPoints = getPyramidOwnerPoints(editing.value.id)
+  if (ownerPoints.length < 2) return null
+  return {
+    pyramidId: editing.value.id,
+    constraint,
+    ownerPoints: [ownerPoints[0]!, ownerPoints[1]!] as [Point3, Point3],
+  }
+}
+const applyPyramidMeta = () => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  props.editor.beginCollabTransaction('UpdatePyramidCommand')
+  props.editor.updatePyramid(state.pyramidId, {
+    name: `棱锥${editPyramid.nameSuffix.trim()}`,
+    valueVisible: editPyramid.valueVisible,
+    keepVertical: editPyramid.keepVertical,
+  })
+  props.editor.setPyramidLockState(state.pyramidId, editPyramid.userLocked)
+  props.editor.commitCollabTransaction()
+}
+const applyPyramidApexPoint = () => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  const apexPoint = state.ownerPoints[1]
+  if (!apexPoint) return
+  if (props.editor.isPointCoordinateLocked(apexPoint)) return
+  const nextPosition = {
+    x: Number(editPyramid.apexPoint.x),
+    y: Number(editPyramid.apexPoint.y),
+    z: Number(editPyramid.apexPoint.z),
+  }
+  if (
+    !Number.isFinite(nextPosition.x) ||
+    !Number.isFinite(nextPosition.y) ||
+    !Number.isFinite(nextPosition.z)
+  ) {
+    return
+  }
+  if (
+    Math.abs(nextPosition.x - apexPoint.position.x) <= 1e-6 &&
+    Math.abs(nextPosition.y - apexPoint.position.y) <= 1e-6 &&
+    Math.abs(nextPosition.z - apexPoint.position.z) <= 1e-6
+  ) {
+    return
+  }
+
+  let targetPosition = new Vec3(nextPosition.x, nextPosition.y, nextPosition.z)
+
+  // 垂直保持模式下，将目标点约束到底面法线方向上，保证侧棱垂直。
+  // 只使用与底面法线最对齐的坐标轴来反推高度，其余两轴在 UI 中已被禁用，
+  // 避免 x/z 等法线小分量轴导致高度剧烈跳变。
+  if (state.constraint.keepVertical) {
+    const basis = state.constraint.getBottomPlaneBasis()
+    const centroid = state.constraint.getBottomCentroid()
+    const axis = getPyramidVerticalDominantAxis(state.constraint.pyramidId)
+    if (basis && centroid && axis) {
+      const normal = basis.normal
+      const getAxis = (v: Vec3, a: typeof axis) => (a === 'x' ? v.x : a === 'y' ? v.y : v.z)
+      const n = getAxis(normal, axis)
+      if (Math.abs(n) > 1e-3) {
+        const signedHeight = (getAxis(targetPosition, axis) - getAxis(centroid, axis)) / n
+        targetPosition = new Vec3(
+          centroid.x + normal.x * signedHeight,
+          centroid.y + normal.y * signedHeight,
+          centroid.z + normal.z * signedHeight,
+        )
+      }
+    }
+  }
+
+  props.editor.setPointPosition(apexPoint.id, targetPosition)
+  const axes = state.constraint.getResolvedAxes()
+  if (axes) editPyramid.height = toFixed2(axes.height)
+}
+const nudgePyramidApexPointCoord = (
+  axis: 'x' | 'y' | 'z',
+  direction: 'up' | 'down',
+) => {
+  const key = `pyramid.apexPoint.${axis}`
+  const nextValue = stepCoordInput(key, direction)
+  if (nextValue === null) return
+  editPyramid.apexPoint[axis] = toFixed2(Number(nextValue))
+  // 保持输入框聚焦，避免垂直约束求解后马上把坐标刷新回实际位置，
+  // 让用户先看到本次增减后的值。
+  const input = coordInputs.get(key)
+  if (input) input.focus()
+  applyPyramidApexPoint()
+}
+const handlePyramidApexPointCoordFocus = (axis: 'x' | 'y' | 'z') => {
+  setCoordFocus(`pyramid.apexPoint.${axis}`, true)
+}
+const handlePyramidApexPointCoordBlur = (axis: 'x' | 'y' | 'z') => {
+  editPyramid.apexPoint[axis] = normalizeCoord(editPyramid.apexPoint[axis])
+  setCoordFocus(`pyramid.apexPoint.${axis}`, false)
+  applyPyramidApexPoint()
+}
+const applyPyramidHeight = () => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  if (state.ownerPoints[1] && props.editor.isPointCoordinateLocked(state.ownerPoints[1])) return
+  const axes = state.constraint.getResolvedAxes()
+  if (!axes) return
+  const nextHeight = Number(editPyramid.height)
+  if (!Number.isFinite(nextHeight) || nextHeight <= 0) return
+  if (Math.abs(nextHeight - axes.height) <= 1e-6) return
+
+  let direction: Vec3
+  if (state.constraint.keepVertical) {
+    const basis = state.constraint.getBottomPlaneBasis()
+    if (!basis) return
+    // 保持当前所在侧：缓存高度为负表示最高点在法线反方向（底面下方）
+    const rawHeight = state.constraint.getRawVerticalHeight()
+    const sign = rawHeight !== null && rawHeight < 0 ? -1 : 1
+    direction = new Vec3(basis.normal.x * sign, basis.normal.y * sign, basis.normal.z * sign)
+  } else {
+    const dirLength = Math.hypot(axes.translation.x, axes.translation.y, axes.translation.z)
+    if (dirLength <= 1e-8) return
+    direction = new Vec3(
+      axes.translation.x / dirLength,
+      axes.translation.y / dirLength,
+      axes.translation.z / dirLength,
+    )
+  }
+
+  const newPosition = new Vec3(
+    axes.origin.x + direction.x * nextHeight,
+    axes.origin.y + direction.y * nextHeight,
+    axes.origin.z + direction.z * nextHeight,
+  )
+  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition)
+  editPyramid.apexPoint.x = toFixed2(newPosition.x)
+  editPyramid.apexPoint.y = toFixed2(newPosition.y)
+  editPyramid.apexPoint.z = toFixed2(newPosition.z)
+}
+const nudgePyramidHeight = (direction: 'up' | 'down') => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  if (state.ownerPoints[1] && props.editor.isPointCoordinateLocked(state.ownerPoints[1])) return
+  const key = 'pyramid.height'
+  hideLengthBubble(key)
+  const current = Number(editPyramid.height)
+  if (direction === 'down' && current <= 0.1) {
+    showLengthBubble(key, '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 0.5, direction)
+  editPyramid.height = next.toFixed(2)
+  applyPyramidHeight()
+}
+const handlePyramidHeightFocus = () => {
+  setCoordFocus('pyramid.height', true)
+}
+const handlePyramidHeightBlur = () => {
+  hideLengthBubble('pyramid.height')
+  editPyramid.height = normalizeFaceEdgeLength(editPyramid.height)
+  setCoordFocus('pyramid.height', false)
+  applyPyramidHeight()
+}
+
+const applyPyramidBottomEdgeLength = (edgeIndex: number) => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  const bottomFace = props.scene.faces.get(state.constraint.bottomFaceId)
+  if (!bottomFace) return
+  if (bottomFace.userLocked) return
+  const nextLength = Number(editPyramid.bottomEdgeLengths[edgeIndex])
+  if (!Number.isFinite(nextLength)) return
+  const key = `pyramid.bottomEdge.${edgeIndex}`
+  const targets = editPyramid.bottomEdgeLengths.map((value, index) => {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return Math.max(0.01, parsed)
+    return bottomFace.getEdgeLength(props.scene.points, index)
+  })
+  const success = props.editor.updateFaceBoundaryEdgeLength(bottomFace.id, edgeIndex, nextLength, targets)
+  if (!success) {
+    showLengthBubble(key, '不满足多边形边长约束，无法更新')
+    // 恢复为实际边长
+    editPyramid.bottomEdgeLengths[edgeIndex] = toFixed2(bottomFace.getEdgeLength(props.scene.points, edgeIndex))
+  }
+}
+const nudgePyramidBottomEdgeLength = (edgeIndex: number, direction: 'up' | 'down') => {
+  const state = getEditingPyramidState()
+  if (!state) return
+  const bottomFace = props.scene.faces.get(state.constraint.bottomFaceId)
+  if (!bottomFace || bottomFace.userLocked) return
+  const key = `pyramid.bottomEdge.${edgeIndex}`
+  hideLengthBubble(key)
+  const current = Number(editPyramid.bottomEdgeLengths[edgeIndex])
+  if (direction === 'down' && current <= 0.1) {
+    showLengthBubble(key, '已减到最小值')
+    return
+  }
+  const next = stepLengthValue(current, 1, direction)
+  editPyramid.bottomEdgeLengths[edgeIndex] = next.toFixed(2)
+  applyPyramidBottomEdgeLength(edgeIndex)
+}
+const handlePyramidBottomEdgeLengthFocus = (edgeIndex: number) => {
+  setCoordFocus(`pyramid.bottomEdge.${edgeIndex}`, true)
+}
+const handlePyramidBottomEdgeLengthBlur = (edgeIndex: number) => {
+  const key = `pyramid.bottomEdge.${edgeIndex}`
+  hideLengthBubble(key)
+  const prev = editPyramid.bottomEdgeLengths[edgeIndex] ?? ''
+  editPyramid.bottomEdgeLengths[edgeIndex] = clampLengthValue(
+    key,
+    editPyramid.bottomEdgeLengths[edgeIndex] ?? '',
+    prev,
+  )
+  editPyramid.bottomEdgeLengths[edgeIndex] = normalizeFaceEdgeLength(editPyramid.bottomEdgeLengths[edgeIndex] ?? '')
+  setCoordFocus(key, false)
+  applyPyramidBottomEdgeLength(edgeIndex)
+}
+
 const getEditingRegularPolygonState = () => {
   if (!editing.value || editing.value.type !== 'regularPolygon') return null
   const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
@@ -3450,6 +3747,73 @@ const getPrismSurfaceArea = (prismId: string) => {
   const constraint = props.editor.getPrismConstraint(prismId)
   return constraint?.getSurfaceArea() ?? 0
 }
+const getPyramidOwnerPoints = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  if (!constraint) return [] as Point3[]
+  return constraint.ownerPointIds
+    .map((id) => props.scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined)
+}
+/**
+ * 垂直保持模式下，与底面法线最对齐的世界坐标轴。
+ * 只有该轴的坐标编辑器可用，其余两轴禁用，避免 x/z 小分量导致高度剧烈跳变。
+ */
+const getPyramidVerticalDominantAxis = (pyramidId: string): 'x' | 'y' | 'z' | null => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  if (!constraint || !constraint.keepVertical) return null
+  const basis = constraint.getBottomPlaneBasis()
+  if (!basis) return null
+  const n = basis.normal
+  const abs = { x: Math.abs(n.x), y: Math.abs(n.y), z: Math.abs(n.z) }
+  if (abs.x >= abs.y && abs.x >= abs.z) return 'x'
+  if (abs.y >= abs.x && abs.y >= abs.z) return 'y'
+  return 'z'
+}
+/**
+ * 垂直保持模式下，指定坐标轴是否可用于编辑最高点坐标。
+ * 只有与底面法线最对齐的轴可用，其余两轴禁用。
+ */
+const isPyramidApexAxisEditable = (
+  pyramidId: string,
+  axis: 'x' | 'y' | 'z',
+): boolean => {
+  const dominant = getPyramidVerticalDominantAxis(pyramidId)
+  if (dominant === null) return true
+  return dominant === axis
+}
+/** 棱锥来源标签：多边形F-点A（底面多边形 + 最高点）。 */
+const getPyramidSourceLabel = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  if (!constraint) return ''
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  const apexPoint = props.scene.points.get(constraint.ownerPointIds[1])
+  const faceName = bottomFace?.name ?? ''
+  const pointName = apexPoint?.name ?? ''
+  return `多边形${faceName}-点${pointName}`
+}
+const getPyramidBottomEdgeLabel = (pyramidId: string, edgeIndex: number) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  if (!constraint) return `边 ${edgeIndex + 1}`
+  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
+  if (!bottomFace) return `边 ${edgeIndex + 1}`
+  const points = bottomFace.getBoundaryPoints(props.scene.points)
+  const current = points[edgeIndex]
+  const next = points[(edgeIndex + 1) % points.length]
+  if (!current || !next) return `边 ${edgeIndex + 1}`
+  return `${current.name}${next.name}`
+}
+const getPyramidHeight = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  return constraint?.getHeight() ?? 0
+}
+const getPyramidVolume = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  return constraint?.getVolume() ?? 0
+}
+const getPyramidSurfaceArea = (pyramidId: string) => {
+  const constraint = props.editor.getPyramidConstraint(pyramidId)
+  return constraint?.getSurfaceArea() ?? 0
+}
 const getFaceMemberPointNames = (face: PlanarPolygon) =>
   face
     .getMemberPoints(props.scene.points)
@@ -3929,6 +4293,42 @@ watch(
 
 watch(
   () => {
+    if (!editing.value || editing.value.type !== 'pyramid') return null
+    const constraint = props.editor.getPyramidConstraint(editing.value.id)
+    if (!constraint) return null
+    const ownerPoints = getPyramidOwnerPoints(editing.value.id)
+    if (ownerPoints.length < 2) return null
+    return {
+      nameSuffix: props.editor.getPyramidNameSuffix(editing.value.id),
+      valueVisible: constraint.valueVisible === true,
+      keepVertical: constraint.keepVertical === true,
+      userLocked: props.editor
+        .getPyramidFaceIds(editing.value.id)
+        .every((faceId) => props.scene.faces.get(faceId)?.userLocked),
+      apexPoint: {
+        x: ownerPoints[1]!.position.x,
+        y: ownerPoints[1]!.position.y,
+        z: ownerPoints[1]!.position.z,
+      },
+      height: constraint.getHeight(),
+    }
+  },
+  (nextPyramid) => {
+    if (!nextPyramid) return
+    editPyramid.nameSuffix = nextPyramid.nameSuffix
+    editPyramid.valueVisible = nextPyramid.valueVisible
+    editPyramid.keepVertical = nextPyramid.keepVertical
+    editPyramid.userLocked = nextPyramid.userLocked
+    if (!focusedCoord['pyramid.apexPoint.x']) editPyramid.apexPoint.x = toFixed2(nextPyramid.apexPoint.x)
+    if (!focusedCoord['pyramid.apexPoint.y']) editPyramid.apexPoint.y = toFixed2(nextPyramid.apexPoint.y)
+    if (!focusedCoord['pyramid.apexPoint.z']) editPyramid.apexPoint.z = toFixed2(nextPyramid.apexPoint.z)
+    if (!focusedCoord['pyramid.height']) editPyramid.height = toFixed2(nextPyramid.height)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => {
     if (!editing.value || editing.value.type !== 'regularPolygon') return null
     const constraint = props.editor.getRegularPolygonConstraint(editing.value.id)
     if (!constraint) return null
@@ -4294,6 +4694,11 @@ onUnmounted(() => {
                 v-if="hasPrismConstraint(p!) && p!.prismRole === 'dependent'"
                 class="constraint-badge"
                 >棱柱约束</span
+              >
+              <span
+                v-if="hasPyramidConstraint(p!) && p!.pyramidRole === 'dependent'"
+                class="constraint-badge"
+                >棱锥约束</span
               >
               <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
               <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
@@ -7227,6 +7632,275 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="pyramid in selectedPyramids"
+          :key="pyramid.pyramidId"
+          class="selectedFace-info pyramid-info"
+          @dblclick="startEditPyramid(pyramid.pyramidId)"
+        >
+          <div
+            v-if="editing?.type === 'pyramid' && editing?.id === pyramid.pyramidId"
+            class="edit-grid"
+          >
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editPyramid.nameSuffix" @input="applyPyramidMeta" />
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPyramid.userLocked"
+                  @change="applyPyramidMeta"
+                />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPyramid.valueVisible"
+                  @change="applyPyramidMeta"
+                />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  v-model="editPyramid.keepVertical"
+                  @change="applyPyramidMeta"
+                />
+                垂直保持
+              </label>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >表面积：{{ getPyramidSurfaceArea(pyramid.pyramidId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >体积：{{ getPyramidVolume(pyramid.pyramidId).toFixed(2) }}</span
+              >
+            </div>
+            <div class="length-row">
+              <label>高度：</label>
+              <div class="coord-input compact-length-input">
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePyramidHeight('down')"
+                  :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1])"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  :ref="(el) => setCoordInputRef('pyramid.height', el)"
+                  v-model="editPyramid.height"
+                  @input="applyPyramidHeight"
+                  @focus="handlePyramidHeightFocus"
+                  @blur="handlePyramidHeightBlur"
+                  :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1])"
+                />
+                <button
+                  type="button"
+                  class="step-btn"
+                  @click="nudgePyramidHeight('up')"
+                  :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1])"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            <div class="face-metric-row">
+              最高点{{ getPyramidOwnerPoints(pyramid.pyramidId)[1]?.name ?? '' }}坐标
+            </div>
+            <div class="coord-row">
+              <div class="axis-field">
+                <label>x</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('x', 'down')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'x')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('pyramid.apexPoint.x', el)"
+                    v-model="editPyramid.apexPoint.x"
+                    @input="applyPyramidApexPoint"
+                    @focus="handlePyramidApexPointCoordFocus('x')"
+                    @blur="handlePyramidApexPointCoordBlur('x')"
+                    step="0.5"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'x')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('x', 'up')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'x')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>y</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('y', 'down')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'y')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('pyramid.apexPoint.y', el)"
+                    v-model="editPyramid.apexPoint.y"
+                    @input="applyPyramidApexPoint"
+                    @focus="handlePyramidApexPointCoordFocus('y')"
+                    @blur="handlePyramidApexPointCoordBlur('y')"
+                    step="0.5"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'y')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('y', 'up')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'y')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div class="axis-field">
+                <label>z</label>
+                <div class="coord-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('z', 'down')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'z')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    :ref="(el) => setCoordInputRef('pyramid.apexPoint.z', el)"
+                    v-model="editPyramid.apexPoint.z"
+                    @input="applyPyramidApexPoint"
+                    @focus="handlePyramidApexPointCoordFocus('z')"
+                    @blur="handlePyramidApexPointCoordBlur('z')"
+                    step="0.5"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'z')"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidApexPointCoord('z', 'up')"
+                    :disabled="editPyramid.userLocked || isPointCoordinateLocked(getPyramidOwnerPoints(pyramid.pyramidId)[1]) || !isPyramidApexAxisEditable(pyramid.pyramidId, 'z')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="face-metric-row">多边形边长</div>
+            <div class="face-edge-grid">
+              <div
+                v-for="(_, edgeIndex) in editPyramid.bottomEdgeLengths"
+                :key="`pyramid-bottom-edge-${edgeIndex}`"
+                class="face-edge-row length-row axis-field"
+              >
+                <label>{{ getPyramidBottomEdgeLabel(pyramid.pyramidId, edgeIndex) }}</label>
+                <div class="coord-input compact-length-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidBottomEdgeLength(edgeIndex, 'down')"
+                    :disabled="editPyramid.userLocked || props.scene.faces.get(pyramid.bottomFaceId)?.userLocked"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="1"
+                    :ref="(el) => setCoordInputRef(`pyramid.bottomEdge.${edgeIndex}`, el)"
+                    v-model="editPyramid.bottomEdgeLengths[edgeIndex]"
+                    @input="applyPyramidBottomEdgeLength(edgeIndex)"
+                    @focus="handlePyramidBottomEdgeLengthFocus(edgeIndex)"
+                    @blur="handlePyramidBottomEdgeLengthBlur(edgeIndex)"
+                    :disabled="editPyramid.userLocked || props.scene.faces.get(pyramid.bottomFaceId)?.userLocked"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    @click="nudgePyramidBottomEdgeLength(edgeIndex, 'up')"
+                    :disabled="editPyramid.userLocked || props.scene.faces.get(pyramid.bottomFaceId)?.userLocked"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div class="card-summary-header">
+              {{ pyramid.name }}
+              <span
+                v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                class="lock-badge"
+                >🔒</span
+              >
+              <span v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="handleDeleteElement('face', pyramid.bottomFaceId, pyramid.name)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >表面积：{{ getPyramidSurfaceArea(pyramid.pyramidId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >体积：{{ getPyramidVolume(pyramid.pyramidId).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item"
+                >高度：{{ getPyramidHeight(pyramid.pyramidId).toFixed(2) }}</span
+              >
+            </div>
+            <div>
+              来源：{{ getPyramidSourceLabel(pyramid.pyramidId) }}
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="rp in selectedRegularPolygons"
           :key="rp.constraintId"
           class="selectedFace-info"
@@ -8870,6 +9544,7 @@ onUnmounted(() => {
                 getSolidConstraintBadge(face!.cubeId)
               }}</span>
               <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
+              <span v-if="isPyramidFace(face!)" class="constraint-badge">棱锥约束</span>
               <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
                 class="card-delete-btn"
@@ -9039,6 +9714,11 @@ onUnmounted(() => {
                   v-if="hasPrismConstraint(p!) && p!.prismRole === 'dependent'"
                   class="constraint-badge"
                   >棱柱约束</span
+                >
+                <span
+                  v-if="hasPyramidConstraint(p!) && p!.pyramidRole === 'dependent'"
+                  class="constraint-badge"
+                  >棱锥约束</span
                 >
                 <span v-if="hasCircleConstraint(p!)" class="constraint-badge">圆心约束</span>
                 <span v-if="getPointConstraintBadge(p!)" class="constraint-badge">{{
@@ -9438,6 +10118,65 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="pyramidsInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.pyramid"
+            @click="toggleContentGroup('pyramid')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.pyramid ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.pyramid }}</span>
+            <span class="content-group-count">{{ pyramidsInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.pyramid" class="content-group-body">
+            <div
+              v-for="pyramid in pyramidsInScene"
+              :key="pyramid.pyramidId"
+              class="face-info pyramid-info selectable-geo"
+              :class="{ 'is-selected': selectedPyramidIds.includes(pyramid.pyramidId) }"
+              @click="selectPyramidFromContent(pyramid.pyramidId)"
+              @dblclick="startEditPyramid(pyramid.pyramidId)"
+            >
+              <div class="card-summary-header">
+                {{ pyramid.name }}
+                <span
+                  v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
+                  class="lock-badge"
+                  >🔒</span
+                >
+                <span v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).some((faceId) => props.scene.faces.get(faceId)?.visible === false)" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+                <button
+                  class="card-delete-btn"
+                  title="删除"
+                  @click.stop="handleDeleteElement('face', pyramid.bottomFaceId, pyramid.name)"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="3 6 5 6 21 6" />
+                    <path
+                      d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                    />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              </div>
+              <div>体积：{{ getPyramidVolume(pyramid.pyramidId).toFixed(2) }}</div>
+              <div>
+                来源：{{ getPyramidSourceLabel(pyramid.pyramidId) }}
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="spheresInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -9599,6 +10338,7 @@ onUnmounted(() => {
                   getSolidConstraintBadge(face!.cubeId)
                 }}</span>
                 <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
+                <span v-if="isPyramidFace(face!)" class="constraint-badge">棱锥约束</span>
                 <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                 </span>
@@ -9791,6 +10531,10 @@ hr {
 .prism-info {
   background-color: rgba(255, 140, 66, 0.2);
   border-left-color: #ff8c42;
+}
+.pyramid-info {
+  background-color: rgba(236, 72, 153, 0.18);
+  border-left-color: #ec4899;
 }
 .selectedCone-info,
 .cone-info {
@@ -10407,6 +11151,7 @@ hr {
   .vector-info,
   .circle-info,
   .cone-info,
+  .pyramid-info,
   .cylinder-info {
     padding: 6px;
     font-size: 12px;
@@ -10625,6 +11370,7 @@ hr {
   .ray-info,
   .circle-info,
   .cone-info,
+  .pyramid-info,
   .cylinder-info {
     padding: 4px;
     font-size: 10px;
@@ -10720,6 +11466,7 @@ hr {
   .vector-info,
   .circle-info,
   .cone-info,
+  .pyramid-info,
   .cylinder-info {
     margin-bottom: 4px;
     padding: 5px;

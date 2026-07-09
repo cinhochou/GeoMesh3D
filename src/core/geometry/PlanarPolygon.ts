@@ -42,6 +42,10 @@ export class PlanarPolygon {
   prismOwnerPointIds: string[]
   prismDependentPointIds: string[]
   prismRole: 'bottom' | 'top' | 'side' | null
+  pyramidId: string | null
+  pyramidOwnerPointIds: string[]
+  pyramidDependentPointIds: string[]
+  pyramidRole: 'bottom' | 'side' | null
 
   _cachedIndices?: number[]
   _cachedBoundaryKey?: string
@@ -90,6 +94,10 @@ export class PlanarPolygon {
     this.prismOwnerPointIds = []
     this.prismDependentPointIds = []
     this.prismRole = null
+    this.pyramidId = null
+    this.pyramidOwnerPointIds = []
+    this.pyramidDependentPointIds = []
+    this.pyramidRole = null
     if (this.edgeLengthLocks.length < this.boundaryPointIds.length) {
       this.edgeLengthLocks = [
         ...this.edgeLengthLocks,

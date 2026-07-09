@@ -26,6 +26,7 @@ export type FeatureType =
   | 'constrainedPoint'
   | 'regularPolygon'
   | 'prism'
+  | 'pyramid'
 
 /**
  * 一个 Feature 是用户一次作图意图的参数化描述。

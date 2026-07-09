@@ -329,6 +329,11 @@ const createPrism = () => {
   emit('mode-change', EditorMode.CreatePrism)
 }
 
+const createPyramid = () => {
+  uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
+  emit('mode-change', EditorMode.CreatePyramid)
+}
+
 const createSphereTwoPoints = () => {
   uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
   emit('mode-change', EditorMode.CreateSphereTwoPoints)
@@ -753,6 +758,7 @@ onUnmounted(() => {
               currentMode === EditorMode.CreateHexahedron ||
               currentMode === EditorMode.CreateTetrahedron ||
               currentMode === EditorMode.CreatePrism ||
+              currentMode === EditorMode.CreatePyramid ||
               currentMode === EditorMode.CreateSphereTwoPoints ||
               currentMode === EditorMode.CreateSphereRadius ||
               currentMode === EditorMode.CreateCone ||
@@ -1247,23 +1253,53 @@ onUnmounted(() => {
           stroke-linecap="round"
           stroke-linejoin="round"
         >
-          <line x1="4" y1="18.5" x2="14" y2="21" />
-          <line x1="14" y1="21" x2="20" y2="16.5" />
-          <line x1="20" y1="16.5" x2="4" y2="18.5" />
-          <line x1="4" y1="18.5" x2="7" y2="6" />
-          <line x1="14" y1="21" x2="17" y2="8.5" />
-          <line x1="20" y1="16.5" x2="23" y2="4" />
-          <line x1="7" y1="6" x2="17" y2="8.5" />
-          <line x1="17" y1="8.5" x2="23" y2="4" />
-          <line x1="23" y1="4" x2="7" y2="6" stroke-dasharray="2 2" />
-          <circle cx="4" cy="18.5" r="1.3" fill="currentColor" />
-          <circle cx="14" cy="21" r="1.3" fill="currentColor" />
-          <circle cx="20" cy="16.5" r="1.3" fill="currentColor" />
-          <circle cx="7" cy="6" r="1.3" fill="currentColor" />
-          <circle cx="17" cy="8.5" r="1.3" fill="currentColor" />
-          <circle cx="23" cy="4" r="1.3" fill="currentColor" />
+          <line x1="3" y1="17.5" x2="13" y2="21.5" />
+          <line x1="13" y1="21.5" x2="20" y2="14.5" />
+          <line x1="20" y1="14.5" x2="3" y2="17.5" stroke-dasharray="2 2" />
+          <line x1="3" y1="17.5" x2="5" y2="5.5" />
+          <line x1="13" y1="21.5" x2="15" y2="9.5" />
+          <line x1="20" y1="14.5" x2="22" y2="2.5" />
+          <line x1="5" y1="5.5" x2="15" y2="9.5" />
+          <line x1="15" y1="9.5" x2="22" y2="2.5" />
+          <line x1="22" y1="2.5" x2="5" y2="5.5" />
+          <circle cx="3" cy="17.5" r="1.3" fill="currentColor" />
+          <circle cx="13" cy="21.5" r="1.3" fill="currentColor" />
+          <circle cx="20" cy="14.5" r="1.3" fill="currentColor" />
+          <circle cx="5" cy="5.5" r="1.3" fill="currentColor" />
+          <circle cx="15" cy="9.5" r="1.3" fill="currentColor" />
+          <circle cx="22" cy="2.5" r="1.3" fill="currentColor" />
         </svg>
         <span>棱柱</span>
+      </button>
+      <button
+        class="menu-item"
+        :class="{ 'menu-item-active': currentMode === EditorMode.CreatePyramid }"
+        @click="createPyramid"
+      >
+        <svg
+          class="menu-item-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <line x1="5" y1="18" x2="19" y2="18" />
+          <line x1="19" y1="18" x2="22" y2="12" />
+          <line x1="22" y1="12" x2="2" y2="12" stroke-dasharray="2 2" />
+          <line x1="2" y1="12" x2="5" y2="18" />
+          <line x1="12" y1="3.5" x2="5" y2="18" />
+          <line x1="12" y1="3.5" x2="19" y2="18" />
+          <line x1="12" y1="3.5" x2="22" y2="12" />
+          <line x1="12" y1="3.5" x2="2" y2="12" />
+          <circle cx="12" cy="3.5" r="1.3" fill="currentColor" />
+          <circle cx="5" cy="18" r="1.3" fill="currentColor" />
+          <circle cx="19" cy="18" r="1.3" fill="currentColor" />
+          <circle cx="22" cy="12" r="1.3" fill="currentColor" />
+          <circle cx="2" cy="12" r="1.3" fill="currentColor" />
+        </svg>
+        <span>棱锥</span>
       </button>
       <button
         class="menu-item"

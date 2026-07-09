@@ -17,6 +17,7 @@ import { intersectionPointFeaturePlugin } from './plugins/IntersectionPointFeatu
 import { constrainedPointFeaturePlugin } from './plugins/ConstrainedPointFeature'
 import { regularPolygonFeaturePlugin } from './plugins/RegularPolygonFeature'
 import { prismFeaturePlugin } from './plugins/PrismFeature'
+import { pyramidFeaturePlugin } from './plugins/PyramidFeature'
 import { circleFeaturePlugin } from './plugins/CircleFeature'
 import { faceFeaturePlugin } from './plugins/FaceFeature'
 import { perpendicularLineFeaturePlugin } from './plugins/PerpendicularLineFeature'
@@ -36,6 +37,7 @@ export { intersectionPointFeaturePlugin }
 export { constrainedPointFeaturePlugin }
 export { regularPolygonFeaturePlugin }
 export { prismFeaturePlugin }
+export { pyramidFeaturePlugin }
 export { circleFeaturePlugin }
 export { faceFeaturePlugin }
 export { perpendicularLineFeaturePlugin }
@@ -55,6 +57,7 @@ featureRegistry.register(intersectionPointFeaturePlugin)
 featureRegistry.register(constrainedPointFeaturePlugin)
 featureRegistry.register(regularPolygonFeaturePlugin)
 featureRegistry.register(prismFeaturePlugin)
+featureRegistry.register(pyramidFeaturePlugin)
 featureRegistry.register(circleFeaturePlugin)
 featureRegistry.register(faceFeaturePlugin)
 featureRegistry.register(perpendicularLineFeaturePlugin)

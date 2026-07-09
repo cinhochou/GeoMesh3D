@@ -34,6 +34,8 @@ export class LabelRenderer {
   public linearLabelMeshes = new Map<string, THREE.Sprite>()
   public cubeValueLabels = new Map<string, THREE.Sprite>()
   public prismValueLabels = new Map<string, THREE.Sprite>()
+  // 棱锥体积标签（与棱柱体积标签样式一致，白色文本）
+  public pyramidValueLabels = new Map<string, THREE.Sprite>()
 
   private pointTextureCache = new Map<string, THREE.CanvasTexture>()
   private readonly deps: LabelRendererDeps

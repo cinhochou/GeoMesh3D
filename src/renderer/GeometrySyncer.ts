@@ -9,6 +9,7 @@ import { Cylinder3 } from '../core/geometry/Cylinder3'
 import { computePlaneBasis, projectPoint2D, triangulateFace } from '../core/geometry/PlanarUtils'
 import { CubeConstraint } from '../core/constraints/CubeConstraint'
 import { PrismConstraint } from '../core/constraints/PrismConstraint'
+import { PyramidConstraint } from '../core/constraints/PyramidConstraint'
 import { PerpendicularLineConstraint } from '../core/constraints/PerpendicularLineConstraint'
 import { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { FacePreviewData } from '../core/editor/Editor'
@@ -198,6 +199,8 @@ function computePointBaseColor(p: Point3, scene: GeoScene): number {
   if (p.prismRole === 'dependent') {
     return PRISM_DEPENDENT_POINT_COLOR
   }
+  // 棱锥无 dependent 顶点（apex 与底面顶点均为 owner），使用默认颜色，无需特殊颜色分支
+  // pyramidRole 与 prismRole 为不同字段，不会误入 prism 分支
   if (p.regularPolygonRole === 'dependent') {
     return 0xffffff
   }
@@ -217,6 +220,9 @@ export class GeometrySyncer {
   public facePreviewMesh: THREE.Mesh | null = null
   public rubberBandLine: THREE.Line | null = null
   public footMarkerMap = new Map<string, THREE.Mesh>()
+
+  // 棱锥垂直保持模式拖拽时的辅助引导线（重心→apex）
+  private pyramidVerticalGuides = new Map<string, THREE.LineSegments>()
 
   private syncFrameCounter = 0
   private static readonly DRAG_LABEL_UPDATE_INTERVAL = 3
@@ -440,6 +446,8 @@ export class GeometrySyncer {
       this.syncCylinders(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
       this.syncPrismValueLabels(geoScene)
+      this.syncPyramidValueLabels(geoScene)
+      this.syncPyramidVerticalGuides(geoScene)
     }
     this.updateRubberBand(previewData)
     this.updateFacePreview(facePreviewData)
@@ -1600,7 +1608,19 @@ export class GeometrySyncer {
           prismFaceIds.length > 0 &&
           prismFaceIds.every((faceId) => scene.selection.faces.has(faceId)),
       )
-      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected && !isPrismFullySelected
+      // 棱锥面选中态判定：与棱柱一致，整个棱锥全选则不高亮单面
+      const pyramidConstraint = faceData.pyramidId
+        ? (scene.getPyramidConstraint(faceData.pyramidId) as PyramidConstraint | null)
+        : null
+      const pyramidFaceIds = pyramidConstraint
+        ? [pyramidConstraint.bottomFaceId, ...pyramidConstraint.sideFaceIds]
+        : []
+      const isPyramidFullySelected = Boolean(
+        pyramidConstraint &&
+          pyramidFaceIds.length > 0 &&
+          pyramidFaceIds.every((faceId) => scene.selection.faces.has(faceId)),
+      )
+      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected && !isPrismFullySelected && !isPyramidFullySelected
       const baseColor = faceData.fillColor ?? FACE_FILL_COLOR
       const baseOpacity = faceData.fillOpacity ?? FACE_FILL_OPACITY
       ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(
@@ -2200,6 +2220,136 @@ export class GeometrySyncer {
     })
   }
 
+  // 棱锥体积标签：镜像 syncPrismValueLabels，标签文本格式为 =体积，颜色为白色
+  syncPyramidValueLabels(scene: GeoScene): void {
+    const isDragging = scene.activeDraggedPointIds.size > 0
+    const pyramids = [...scene.pyramidConstraints.values()].filter(
+      (constraint): constraint is PyramidConstraint => constraint instanceof PyramidConstraint,
+    )
+    const activePyramidIds = new Set(pyramids.map((pyramid) => pyramid.pyramidId))
+    this.deps.labelRenderer.pyramidValueLabels.forEach((label, pyramidId) => {
+      if (activePyramidIds.has(pyramidId)) return
+      this.deps.world.remove(label)
+      this.deps.labelRenderer.pyramidValueLabels.delete(pyramidId)
+    })
+
+    pyramids.forEach((pyramid) => {
+      const centroid = pyramid.getCentroid()
+      const visible = pyramid.valueVisible === true && centroid !== null
+      const existing = this.deps.labelRenderer.pyramidValueLabels.get(pyramid.pyramidId)
+      if (!visible) {
+        if (existing) existing.visible = false
+        return
+      }
+      const text = `=${this.deps.labelRenderer.formatMetricNumber(pyramid.getVolume())}`
+      const color = LINEAR_COLOR
+      if (!existing) {
+        const sprite = this.deps.labelRenderer.makeValueLabelSprite(text, color, false)
+        sprite.center.set(0.5, LINE_LABEL_CENTER_Y)
+        sprite.renderOrder = 10
+        this.deps.labelRenderer.setAdaptiveSpriteScale(sprite, this.getLineLabelScale())
+        const userData = this.getLabelUserData(sprite)
+        userData.text = text
+        userData.isNameLabel = true
+        userData.isValueLabel = true
+        userData.geoId = pyramid.bottomFaceId ?? pyramid.pyramidId
+        userData.geoType = 'face'
+        this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
+        sprite.position.copy(
+          this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
+        )
+        this.deps.labelRenderer.pyramidValueLabels.set(pyramid.pyramidId, sprite)
+        this.deps.world.add(sprite)
+        return
+      }
+      existing.visible = true
+      this._syncTmpA.set(centroid!.x, centroid!.y, centroid!.z)
+      existing.position.copy(
+        this.getScreenOffsetPosition(this._syncTmpA, 0, LINE_LABEL_OFFSET_Y),
+      )
+      if (isDragging && this.syncFrameCounter % GeometrySyncer.DRAG_LABEL_UPDATE_INTERVAL !== 0) return
+      const labelData = this.getLabelUserData(existing)
+      if (labelData.text !== text) {
+        labelData.text = text
+        const material = existing.material as THREE.SpriteMaterial
+        const oldMap = material.map as THREE.CanvasTexture | null
+        const nextSprite = this.deps.labelRenderer.makeValueLabelSprite(text, color, false)
+        material.map = (nextSprite.material as THREE.SpriteMaterial).map
+        if (oldMap) oldMap.dispose()
+        Object.assign(labelData, this.getLabelUserData(nextSprite))
+        labelData.text = text
+        labelData.isNameLabel = true
+        labelData.isValueLabel = true
+        labelData.geoId = pyramid.bottomFaceId ?? pyramid.pyramidId
+        labelData.geoType = 'face'
+        this.deps.labelRenderer.setAdaptiveSpriteScale(existing, this.getLineLabelScale())
+      }
+    })
+  }
+
+  /**
+   * 棱锥垂直保持模式拖拽时，在底面重心与 apex 之间渲染辅助引导虚线。
+   * 仅在 keepVertical 开启且 apex 正在被拖拽时显示。
+   */
+  syncPyramidVerticalGuides(scene: GeoScene): void {
+    const pyramids = [...scene.pyramidConstraints.values()].filter(
+      (constraint): constraint is PyramidConstraint => constraint instanceof PyramidConstraint,
+    )
+    const activePyramidIds = new Set(pyramids.map((p) => p.pyramidId))
+
+    // 清理已删除的棱锥辅助线
+    this.pyramidVerticalGuides.forEach((line, pyramidId) => {
+      if (activePyramidIds.has(pyramidId)) return
+      this.deps.world.remove(line)
+      line.geometry.dispose()
+      ;(line.material as THREE.Material).dispose()
+      this.pyramidVerticalGuides.delete(pyramidId)
+    })
+
+    pyramids.forEach((pyramid) => {
+      const apexPointId = pyramid.ownerPointIds[1]
+      const apexPoint = scene.points.get(apexPointId)
+      const centroid = pyramid.getBottomCentroid()
+      // 仅在垂直保持模式且 apex 正在拖拽时显示
+      const shouldShow =
+        pyramid.keepVertical === true &&
+        apexPoint !== undefined &&
+        centroid !== null &&
+        scene.activeDraggedPointIds.has(apexPointId)
+
+      let line = this.pyramidVerticalGuides.get(pyramid.pyramidId)
+      if (!shouldShow) {
+        if (line) line.visible = false
+        return
+      }
+
+      if (!line) {
+        const geometry = new THREE.BufferGeometry()
+        const material = new THREE.LineDashedMaterial({
+          color: 0xffd166,
+          dashSize: 0.2,
+          gapSize: 0.1,
+          transparent: true,
+          opacity: 0.8,
+          depthTest: false,
+        })
+        line = new THREE.LineSegments(geometry, material)
+        line.name = `pyramidVerticalGuide_${pyramid.pyramidId}`
+        line.renderOrder = 5
+        this.deps.world.add(line)
+        this.pyramidVerticalGuides.set(pyramid.pyramidId, line)
+      }
+
+      line.visible = true
+      const positions = new Float32Array([
+        centroid!.x, centroid!.y, centroid!.z,
+        apexPoint!.position.x, apexPoint!.position.y, apexPoint!.position.z,
+      ])
+      line.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+      line.computeLineDistances()
+    })
+  }
+
   syncLinearLabel(
     object: THREE.Object3D,
     text: string,
@@ -2359,6 +2509,18 @@ export class GeometrySyncer {
       if (activePrismIds.has(prismId)) return
       this.deps.world.remove(label)
       this.deps.labelRenderer.prismValueLabels.delete(prismId)
+    })
+
+    // 清理不再存在的棱锥体积标签
+    const activePyramidIds = new Set(
+      [...scene.pyramidConstraints.values()]
+        .filter((constraint): constraint is PyramidConstraint => constraint instanceof PyramidConstraint)
+        .map((constraint) => constraint.pyramidId),
+    )
+    this.deps.labelRenderer.pyramidValueLabels.forEach((label, pyramidId) => {
+      if (activePyramidIds.has(pyramidId)) return
+      this.deps.world.remove(label)
+      this.deps.labelRenderer.pyramidValueLabels.delete(pyramidId)
     })
 
     this.hiddenLineMap.forEach((obj, id) => {

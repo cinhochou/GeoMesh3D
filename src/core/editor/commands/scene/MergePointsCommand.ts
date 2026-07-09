@@ -6,6 +6,7 @@ import { PlanarPolygon } from '../../../geometry/PlanarPolygon'
 import { CubeConstraint } from '../../../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../../../constraints/RegularPolygonConstraint'
 import { PrismConstraint } from '../../../constraints/PrismConstraint'
+import { PyramidConstraint } from '../../../constraints/PyramidConstraint'
 
 /**
  * 合并点的核心逻辑（不含快照捕获）。
@@ -71,6 +72,8 @@ function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3
     face.regularPolygonDependentPointIds = replacePointId(face.regularPolygonDependentPointIds)
     face.prismOwnerPointIds = replacePointId(face.prismOwnerPointIds)
     face.prismDependentPointIds = replacePointId(face.prismDependentPointIds)
+    face.pyramidOwnerPointIds = replacePointId(face.pyramidOwnerPointIds)
+    face.pyramidDependentPointIds = replacePointId(face.pyramidDependentPointIds)
     face.boundaryLineIds = face.boundaryLineIds.filter((lineId) => scene.lines.has(lineId))
 
     if (face.boundaryPointIds.length < 3 || face.memberPointIds.length < 3) {
@@ -153,6 +156,112 @@ function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3
   if (!keepPoint.prismId && removePoint.prismId) {
     keepPoint.prismId = removePoint.prismId
     keepPoint.prismRole = removePoint.prismRole
+  }
+
+  // ─── 棱锥约束 ──────────────────────────────────────
+  const degeneratePyramidIds: string[] = []
+  for (const constraint of [...scene.pyramidConstraints.values()]) {
+    const pyramidConstraint = constraint as unknown as PyramidConstraint
+
+    // 更新 ownerPointIds 中的引用
+    if (pyramidConstraint.ownerPointIds[0] === removeId) pyramidConstraint.ownerPointIds[0] = keepId
+    if (pyramidConstraint.ownerPointIds[1] === removeId) pyramidConstraint.ownerPointIds[1] = keepId
+
+    // 退化检测：
+    // 1) 两个 owner 点合并为同一点（baseRefVertex 与 apex 重合）
+    // 2) apex 与底面任一边界点重合（高度为0）
+    // 3) 底面已被面循环删除（边界点 < 3 导致面退化）
+    const bottomFace = scene.faces.get(pyramidConstraint.bottomFaceId)
+    const bottomPointIds = bottomFace ? [...bottomFace.boundaryPointIds] : []
+    const apexId = pyramidConstraint.ownerPointIds[1]
+    const isApexOnBottom = bottomPointIds.includes(apexId)
+    const isBottomMissing = !bottomFace
+    if (
+      pyramidConstraint.ownerPointIds[0] === pyramidConstraint.ownerPointIds[1] ||
+      isApexOnBottom ||
+      isBottomMissing
+    ) {
+      degeneratePyramidIds.push(pyramidConstraint.pyramidId)
+    }
+  }
+
+  // 继承 removePoint 的 pyramidId/pyramidRole
+  if (!keepPoint.pyramidId && removePoint.pyramidId) {
+    keepPoint.pyramidId = removePoint.pyramidId
+    keepPoint.pyramidRole = removePoint.pyramidRole
+  }
+
+  // 级联删除退化的棱锥（owner点重合/apex落到底面/底面被删除）
+  for (const pyramidId of degeneratePyramidIds) {
+    const constraint = scene.pyramidConstraints.get(pyramidId)
+    if (!constraint) continue
+    const pyramidConstraint = constraint as unknown as PyramidConstraint
+
+    // 收集侧面信息（删除前）
+    const sideFaces: PlanarPolygon[] = []
+    for (const faceId of pyramidConstraint.sideFaceIds) {
+      const face = scene.faces.get(faceId)
+      if (face) sideFaces.push(face)
+    }
+    const allFaces = [...sideFaces]
+    const bottomFace = scene.faces.get(pyramidConstraint.bottomFaceId)
+    if (bottomFace) allFaces.push(bottomFace)
+    const candidateLineIds = new Set(allFaces.flatMap((f) => f.boundaryLineIds))
+
+    // 删除约束
+    scene.removePyramidConstraint(pyramidId)
+
+    // 删除侧面（底面若仍存在则保留，若已被面循环删除则不存在）
+    const deletedFaceIds = new Set(sideFaces.map((f) => f.id))
+    sideFaces.forEach((face) => scene.removeFace(face.id))
+
+    // 删除 faceOwned 且不被保留面使用的边界线（侧面斜棱）
+    for (const lineId of candidateLineIds) {
+      const line = scene.lines.get(lineId)
+      if (!line || !line.faceOwned) continue
+      let usedByOther = false
+      for (const face of scene.faces.values()) {
+        if (deletedFaceIds.has(face.id)) continue
+        if (face.boundaryLineIds.includes(lineId)) {
+          usedByOther = true
+          break
+        }
+      }
+      if (!usedByOther) {
+        scene.lines.delete(lineId)
+        scene.selection.lines.delete(lineId)
+      }
+    }
+
+    // 清除底面反向引用（若底面仍存在）
+    if (bottomFace && bottomFace.pyramidId === pyramidId) {
+      bottomFace.pyramidId = null
+      bottomFace.pyramidRole = null
+      bottomFace.pyramidOwnerPointIds = []
+      bottomFace.pyramidDependentPointIds = []
+    }
+
+    // 清除所有底面顶点反向引用
+    const bottomPointIds = bottomFace?.boundaryPointIds ?? []
+    for (const pid of bottomPointIds) {
+      const p = scene.points.get(pid)
+      if (p && p.pyramidId === pyramidId) {
+        p.pyramidId = null
+        p.pyramidRole = null
+      }
+    }
+
+    // 清除 apex 反向引用
+    const apexId = pyramidConstraint.ownerPointIds[1]
+    const apexPoint = scene.points.get(apexId)
+    if (apexPoint && apexPoint.pyramidId === pyramidId) {
+      apexPoint.pyramidId = null
+      apexPoint.pyramidRole = null
+    }
+    if (keepPoint.pyramidId === pyramidId) {
+      keepPoint.pyramidId = null
+      keepPoint.pyramidRole = null
+    }
   }
 
   // ─── 圆 ────────────────────────────────────────────

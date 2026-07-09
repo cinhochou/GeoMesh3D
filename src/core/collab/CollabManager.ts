@@ -22,6 +22,7 @@ import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { PrismConstraint } from '../constraints/PrismConstraint'
+import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import {
   canCreateIntersectionFromTargets,
@@ -77,6 +78,7 @@ type LocalSceneSnapshot = {
   cubes: CubeConstraint[]
   regularPolygons: RegularPolygonConstraint[]
   prisms: PrismConstraint[]
+  pyramids: PyramidConstraint[]
   cylinderConstraints: CylinderConstraint[]
   perpendicularLineConstraints: PerpendicularLineConstraint[]
   parallelLineConstraints: ParallelLineConstraint[]
@@ -102,6 +104,7 @@ type FaceSharedMap = Y.Map<FaceSharedMapValue>
 type CubeSharedMap = Y.Map<string | number | boolean>
 type RegularPolygonSharedMap = Y.Map<string | number | boolean>
 type PrismSharedMap = Y.Map<string | number | boolean>
+type PyramidSharedMap = Y.Map<string | number | boolean>
 type WorldTransformSharedMap = Y.Map<string | number | boolean>
 
 export type SharedWorldRotationState = {
@@ -150,6 +153,7 @@ export class CollabManager {
   private yCubes: Y.Map<CubeSharedMap>
   private yRegularPolygons: Y.Map<RegularPolygonSharedMap>
   private yPrisms: Y.Map<PrismSharedMap>
+  private yPyramids: Y.Map<PyramidSharedMap>
   private yWorldTransform: WorldTransformSharedMap
   private pointsObserver: ((event: Y.YMapEvent<PointSharedMap>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
@@ -168,6 +172,7 @@ export class CollabManager {
   private cubesObserver: ((event: Y.YMapEvent<CubeSharedMap>) => void) | null = null
   private regularPolygonsObserver: ((event: Y.YMapEvent<RegularPolygonSharedMap>) => void) | null = null
   private prismsObserver: ((event: Y.YMapEvent<PrismSharedMap>) => void) | null = null
+  private pyramidsObserver: ((event: Y.YMapEvent<PyramidSharedMap>) => void) | null = null
   private worldTransformObserver: ((event: Y.YMapEvent<string | number | boolean>) => void) | null = null
   private readonly pointRecordCleanup = new Map<string, () => void>()
   private readonly lineRecordCleanup = new Map<string, () => void>()
@@ -186,6 +191,7 @@ export class CollabManager {
   private readonly cubeRecordCleanup = new Map<string, () => void>()
   private readonly regularPolygonRecordCleanup = new Map<string, () => void>()
   private readonly prismRecordCleanup = new Map<string, () => void>()
+  private readonly pyramidRecordCleanup = new Map<string, () => void>()
 
   private roomName: string | null = null
   private connecting = false
@@ -219,6 +225,7 @@ export class CollabManager {
   private readonly dirtyCubeIds = new Set<string>()
   private readonly dirtyRegularPolygonIds = new Set<string>()
   private readonly dirtyPrismIds = new Set<string>()
+  private readonly dirtyPyramidIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
@@ -236,6 +243,7 @@ export class CollabManager {
   private readonly deletedCubeIds = new Set<string>()
   private readonly deletedRegularPolygonIds = new Set<string>()
   private readonly deletedPrismIds = new Set<string>()
+  private readonly deletedPyramidIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -264,6 +272,7 @@ export class CollabManager {
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
+    this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
@@ -292,6 +301,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.cubeRecordCleanup)
     this.cleanupRecordObservers(this.regularPolygonRecordCleanup)
     this.cleanupRecordObservers(this.prismRecordCleanup)
+    this.cleanupRecordObservers(this.pyramidRecordCleanup)
   }
 
   private readString<T>(record: Y.Map<T>, key: string, fallback: string) {
@@ -658,6 +668,15 @@ export class CollabManager {
     return record
   }
 
+  private ensurePyramidRecord(id: string) {
+    let record = this.yPyramids.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yPyramids.set(id, record)
+    }
+    return record
+  }
+
   private ensureObjectConstrainedPointRecord(id: string) {
     let record = this.yObjectConstrainedPoints.get(id)
     if (!record) {
@@ -971,6 +990,9 @@ export class CollabManager {
       prisms: [...this.scene.prismConstraints.values()].filter(
         (constraint): constraint is PrismConstraint => constraint instanceof PrismConstraint,
       ),
+      pyramids: [...this.scene.pyramidConstraints.values()].filter(
+        (constraint): constraint is PyramidConstraint => constraint instanceof PyramidConstraint,
+      ),
       cylinderConstraints: [...this.scene.cylinderConstraints.values()].filter(
         (constraint): constraint is CylinderConstraint =>
           constraint instanceof CylinderConstraint,
@@ -1027,6 +1049,7 @@ export class CollabManager {
     snapshot.cubes.forEach((cube) => this.scene.addCubeConstraint(cube))
     snapshot.regularPolygons.forEach((constraint) => this.scene.addRegularPolygonConstraint(constraint))
     snapshot.prisms.forEach((prism) => this.scene.addPrismConstraint(prism))
+    snapshot.pyramids.forEach((pyramid) => this.scene.addPyramidConstraint(pyramid))
     snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
     snapshot.perpendicularLineConstraints.forEach((constraint) => this.scene.addPerpendicularLineConstraint(constraint))
     snapshot.parallelLineConstraints.forEach((constraint) => this.scene.addParallelLineConstraint(constraint))
@@ -1064,9 +1087,11 @@ export class CollabManager {
     this.dirtyCubeIds.clear()
     this.dirtyRegularPolygonIds.clear()
     this.dirtyPrismIds.clear()
+    this.dirtyPyramidIds.clear()
     this.deletedCubeIds.clear()
     this.deletedRegularPolygonIds.clear()
     this.deletedPrismIds.clear()
+    this.deletedPyramidIds.clear()
   }
 
   private markPointDirty(id: string) {
@@ -1247,6 +1272,16 @@ export class CollabManager {
     this.deletedPrismIds.add(id)
   }
 
+  private markPyramidDirty(id: string) {
+    this.deletedPyramidIds.delete(id)
+    this.dirtyPyramidIds.add(id)
+  }
+
+  private markPyramidDeleted(id: string) {
+    this.dirtyPyramidIds.delete(id)
+    this.deletedPyramidIds.add(id)
+  }
+
   private markObjectConstrainedPointDirty(id: string) {
     this.deletedObjectConstrainedPointIds.delete(id)
     this.dirtyObjectConstrainedPointIds.add(id)
@@ -1262,6 +1297,7 @@ export class CollabManager {
     if (point?.cubeId) this.markCubeDirty(point.cubeId)
     if (point?.regularPolygonId) this.markRegularPolygonDirty(point.regularPolygonId)
     if (point?.prismId) this.markPrismDirty(point.prismId)
+    if (point?.pyramidId) this.markPyramidDirty(point.pyramidId)
     this.scene.intersectionConstraints.forEach((constraint, id) => {
       const dependencyIds = constraint.getDependencyPointIds?.()
       if (!dependencyIds) return
@@ -1423,6 +1459,9 @@ export class CollabManager {
     this.scene.prismConstraints.forEach((constraint, id) => {
       if (constraint instanceof PrismConstraint) this.markPrismDirty(id)
     })
+    this.scene.pyramidConstraints.forEach((constraint, id) => {
+      if (constraint instanceof PyramidConstraint) this.markPyramidDirty(id)
+    })
 
     for (const id of [...this.yPoints.keys()]) {
       if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
@@ -1474,6 +1513,9 @@ export class CollabManager {
     }
     for (const id of [...this.yPrisms.keys()]) {
       if (!this.scene.prismConstraints.has(id)) this.markPrismDeleted(id)
+    }
+    for (const id of [...this.yPyramids.keys()]) {
+      if (!this.scene.pyramidConstraints.has(id)) this.markPyramidDeleted(id)
     }
   }
 
@@ -1669,6 +1711,7 @@ export class CollabManager {
     if (this.cubesObserver) this.yCubes.unobserve(this.cubesObserver)
     if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
     if (this.prismsObserver) this.yPrisms.unobserve(this.prismsObserver)
+    if (this.pyramidsObserver) this.yPyramids.unobserve(this.pyramidsObserver)
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     if (this.historyObserver) this.yHistory.unobserve(this.historyObserver)
     if (this.historyIndexObserver) this.yHistoryIndex.unobserve(this.historyIndexObserver)
@@ -1694,6 +1737,7 @@ export class CollabManager {
     this.yCubes = this.ydoc.getMap<CubeSharedMap>('cubes')
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
+    this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.setupObservers()
   }
@@ -1748,6 +1792,9 @@ export class CollabManager {
         }
         if (face.prismId) {
           this.scene.removePrismConstraint(face.prismId)
+        }
+        if (face.pyramidId) {
+          this.scene.removePyramidConstraint(face.pyramidId)
         }
         this.scene.removeFace(faceId)
       }
@@ -1997,6 +2044,12 @@ export class CollabManager {
         this.applyPrismRecord(id, record)
       }
     })
+    this.yPyramids.forEach((record, id) => {
+      const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+      if (ownerPointIds.includes(pointId)) {
+        this.applyPyramidRecord(id, record)
+      }
+    })
     const intersectionRecord = this.yIntersections.get(pointId)
     if (intersectionRecord) this.applyIntersectionRecord(pointId, intersectionRecord)
   }
@@ -2017,6 +2070,12 @@ export class CollabManager {
     if (!prismId) return
     const prismRecord = this.yPrisms.get(prismId)
     if (prismRecord) this.applyPrismRecord(prismId, prismRecord)
+  }
+
+  private reconcilePyramidForFace(pyramidId: string | null) {
+    if (!pyramidId) return
+    const pyramidRecord = this.yPyramids.get(pyramidId)
+    if (pyramidRecord) this.applyPyramidRecord(pyramidId, pyramidRecord)
   }
 
   private readIntersectionTarget(
@@ -2087,6 +2146,9 @@ export class CollabManager {
     const prismId = this.readNullableString(record, 'prismId')
     const prismRoleValue = this.readNullableString(record, 'prismRole')
     const prismRole = prismRoleValue === 'owner' || prismRoleValue === 'dependent' ? prismRoleValue : null
+    const pyramidId = this.readNullableString(record, 'pyramidId')
+    const pyramidRoleValue = this.readNullableString(record, 'pyramidRole')
+    const pyramidRole = pyramidRoleValue === 'owner' || pyramidRoleValue === 'dependent' ? pyramidRoleValue : null
     const sphereId = this.readNullableString(record, 'sphereId')
     const sphereRoleValue = this.readNullableString(record, 'sphereRole')
     const sphereRole = sphereRoleValue === 'center' || sphereRoleValue === 'radius' ? sphereRoleValue : null
@@ -2123,6 +2185,8 @@ export class CollabManager {
       point.regularPolygonRole = regularPolygonRole
       point.prismId = prismId
       point.prismRole = prismRole
+      point.pyramidId = pyramidId
+      point.pyramidRole = pyramidRole
       point.sphereId = sphereId
       point.sphereRole = sphereRole
       point.coneId = coneId
@@ -2165,6 +2229,8 @@ export class CollabManager {
     nextPoint.regularPolygonRole = regularPolygonRole
     nextPoint.prismId = prismId
     nextPoint.prismRole = prismRole
+    nextPoint.pyramidId = pyramidId
+    nextPoint.pyramidRole = pyramidRole
     nextPoint.sphereId = sphereId
     nextPoint.sphereRole = sphereRole
     nextPoint.coneId = coneId
@@ -3073,6 +3139,11 @@ export class CollabManager {
     const prismDependentPointIds = this.readStringArray(record, 'prismDependentPointIds')
     const prismRoleValue = this.readNullableString(record, 'prismRole') as string | null
     const prismRole = prismRoleValue === 'bottom' || prismRoleValue === 'top' || prismRoleValue === 'side' ? prismRoleValue : null
+    const pyramidId = this.readNullableString(record, 'pyramidId')
+    const pyramidOwnerPointIds = this.readStringArray(record, 'pyramidOwnerPointIds')
+    const pyramidDependentPointIds = this.readStringArray(record, 'pyramidDependentPointIds')
+    const pyramidRoleValue = this.readNullableString(record, 'pyramidRole') as string | null
+    const pyramidRole = pyramidRoleValue === 'bottom' || pyramidRoleValue === 'side' ? pyramidRoleValue : null
 
     if (face) {
       face.name = name
@@ -3103,6 +3174,10 @@ export class CollabManager {
       face.prismOwnerPointIds = [...prismOwnerPointIds]
       face.prismDependentPointIds = [...prismDependentPointIds]
       face.prismRole = prismRole
+      face.pyramidId = pyramidId
+      face.pyramidOwnerPointIds = [...pyramidOwnerPointIds]
+      face.pyramidDependentPointIds = [...pyramidDependentPointIds]
+      face.pyramidRole = pyramidRole
       face.normalize(this.scene.points)
       this.scene.requestFaceConstraintSolve(id)
       this.scene.markAllRenderDirty()
@@ -3110,6 +3185,7 @@ export class CollabManager {
       this.reconcileCubeForFace(cubeId)
       this.reconcileRegularPolygonForFace(regularPolygonId)
       this.reconcilePrismForFace(prismId)
+      this.reconcilePyramidForFace(pyramidId)
       return
     }
 
@@ -3144,6 +3220,10 @@ export class CollabManager {
     nextFace.prismOwnerPointIds = [...prismOwnerPointIds]
     nextFace.prismDependentPointIds = [...prismDependentPointIds]
     nextFace.prismRole = prismRole
+    nextFace.pyramidId = pyramidId
+    nextFace.pyramidOwnerPointIds = [...pyramidOwnerPointIds]
+    nextFace.pyramidDependentPointIds = [...pyramidDependentPointIds]
+    nextFace.pyramidRole = pyramidRole
     this.scene.addFace(nextFace)
     this.scene.requestFaceConstraintSolve(id)
     this.scene.markAllRenderDirty()
@@ -3151,6 +3231,7 @@ export class CollabManager {
     this.reconcileCubeForFace(cubeId)
     this.reconcileRegularPolygonForFace(regularPolygonId)
     this.reconcilePrismForFace(prismId)
+    this.reconcilePyramidForFace(pyramidId)
   }
 
   private applyCubeRecord(id: string, record: CubeSharedMap) {
@@ -3458,6 +3539,109 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private applyPyramidRecord(id: string, record: PyramidSharedMap) {
+    const ownerPointIds = this.readJsonStringArray(record, 'ownerPointIds')
+    if (ownerPointIds.length !== 2) return
+    const ownerPointA = ownerPointIds[0]
+    const ownerPointB = ownerPointIds[1]
+    if (!ownerPointA || !ownerPointB) return
+    if ([ownerPointA, ownerPointB].some((pointId) => !this.scene.points.has(pointId))) return
+
+    const bottomFaceId = this.readString(record, 'bottomFaceId', '')
+    const sideFaceIds = this.readJsonStringArray(record, 'sideFaceIds')
+    if (!this.scene.faces.has(bottomFaceId)) return
+    if (sideFaceIds.some((faceId) => !this.scene.faces.has(faceId))) return
+
+    const baseReferenceIndex = this.readNumber(record, 'baseReferenceIndex', 0)
+    const vAxisHint = new Vec3(
+      this.readNumber(record, 'vAxisHintX', 0),
+      this.readNumber(record, 'vAxisHintY', 1),
+      this.readNumber(record, 'vAxisHintZ', 0),
+    )
+    const name = this.readString(record, 'name', '棱锥1')
+    const valueVisible = this.readBoolean(record, 'valueVisible', false)
+    const keepVertical = this.readBoolean(record, 'keepVertical', false)
+    const verticalHeight = this.readNullableNumber(record, 'verticalHeight')
+
+    ;[ownerPointA, ownerPointB].forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (!point) return
+      point.pyramidId = id
+      point.pyramidRole = 'owner'
+    })
+    const bottomFace = this.scene.faces.get(bottomFaceId)
+    if (bottomFace) {
+      bottomFace.pyramidId = id
+      bottomFace.pyramidRole = 'bottom'
+      bottomFace.pyramidOwnerPointIds = [...ownerPointIds]
+      bottomFace.pyramidDependentPointIds = []
+    }
+    sideFaceIds.forEach((faceId) => {
+      const face = this.scene.faces.get(faceId)
+      if (!face) return
+      face.pyramidId = id
+      face.pyramidRole = 'side'
+      face.pyramidOwnerPointIds = [...ownerPointIds]
+      face.pyramidDependentPointIds = []
+    })
+
+    const existing = this.scene.getPyramidConstraint(id)
+    if (existing instanceof PyramidConstraint) {
+      existing.setAxisHint(vAxisHint)
+      existing.name = name
+      existing.valueVisible = valueVisible
+      existing.keepVertical = keepVertical
+      const effectiveVerticalHeight =
+        verticalHeight === null && keepVertical
+          ? existing.computeVerticalHeightForPosition(
+              this.scene.points.get(ownerPointB)?.position ?? new Vec3(0, 0, 0),
+            )
+          : verticalHeight
+      existing.setVerticalHeight(effectiveVerticalHeight)
+      this.scene.requestPyramidConstraintSolve(id)
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    const newTopPoint = this.scene.points.get(ownerPointB)
+    const initialVerticalHeight =
+      verticalHeight === null && keepVertical && newTopPoint
+        ? (() => {
+            const tempConstraint = new PyramidConstraint(
+              this.scene,
+              id,
+              [ownerPointA, ownerPointB],
+              bottomFaceId,
+              [...sideFaceIds],
+              baseReferenceIndex,
+              vAxisHint,
+              name,
+              valueVisible,
+              true,
+            )
+            return tempConstraint.computeVerticalHeightForPosition(newTopPoint.position)
+          })()
+        : verticalHeight
+
+    this.scene.addPyramidConstraint(
+      new PyramidConstraint(
+        this.scene,
+        id,
+        [ownerPointA, ownerPointB],
+        bottomFaceId,
+        [...sideFaceIds],
+        baseReferenceIndex,
+        vAxisHint,
+        name,
+        valueVisible,
+        keepVertical,
+        initialVerticalHeight,
+      ),
+    )
+    this.scene.requestPyramidConstraintSolve(id)
+    this.scene.markAllRenderDirty()
+  }
+
   private observePointRecord(id: string, record: PointSharedMap) {
     this.releaseRecordObserver(id, this.pointRecordCleanup)
     const handler = () => {
@@ -3609,6 +3793,15 @@ export class CollabManager {
     }
     record.observe(handler)
     this.prismRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
+  private observePyramidRecord(id: string, record: PyramidSharedMap) {
+    this.releaseRecordObserver(id, this.pyramidRecordCleanup)
+    const handler = () => {
+      this.applyPyramidRecord(id, record)
+    }
+    record.observe(handler)
+    this.pyramidRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
   private setupObservers() {
@@ -3891,6 +4084,9 @@ export class CollabManager {
           if (face?.prismId) {
             this.scene.removePrismConstraint(face.prismId)
           }
+          if (face?.pyramidId) {
+            this.scene.removePyramidConstraint(face.pyramidId)
+          }
           this.scene.removeFace(id)
           return
         }
@@ -3970,6 +4166,27 @@ export class CollabManager {
       this.applyPrismRecord(id, record)
     })
 
+    this.pyramidsObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.pyramidRecordCleanup)
+          this.scene.removePyramidConstraint(id)
+          this.scene.markAllRenderDirty()
+          return
+        }
+
+        const record = this.yPyramids.get(id)
+        if (!record) return
+        this.observePyramidRecord(id, record)
+        this.applyPyramidRecord(id, record)
+      })
+    }
+    this.yPyramids.observe(this.pyramidsObserver)
+    this.yPyramids.forEach((record, id) => {
+      this.observePyramidRecord(id, record)
+      this.applyPyramidRecord(id, record)
+    })
+
     this.worldTransformObserver = () => {
       this.emitSharedWorldRotation(this.yWorldTransform)
     }
@@ -3999,6 +4216,8 @@ export class CollabManager {
     this.setNullableScalarField(record, 'regularPolygonRole', point.regularPolygonRole)
     this.setNullableScalarField(record, 'prismId', point.prismId)
     this.setNullableScalarField(record, 'prismRole', point.prismRole)
+    this.setNullableScalarField(record, 'pyramidId', point.pyramidId)
+    this.setNullableScalarField(record, 'pyramidRole', point.pyramidRole)
     this.setNullableScalarField(record, 'sphereId', point.sphereId)
     this.setNullableScalarField(record, 'sphereRole', point.sphereRole)
     this.setNullableScalarField(record, 'coneId', point.coneId)
@@ -4205,6 +4424,10 @@ export class CollabManager {
     this.syncFaceArrayField(record, 'prismOwnerPointIds', [...face.prismOwnerPointIds])
     this.syncFaceArrayField(record, 'prismDependentPointIds', [...face.prismDependentPointIds])
     this.setNullableScalarField(record, 'prismRole', face.prismRole)
+    this.setNullableScalarField(record, 'pyramidId', face.pyramidId)
+    this.syncFaceArrayField(record, 'pyramidOwnerPointIds', [...face.pyramidOwnerPointIds])
+    this.syncFaceArrayField(record, 'pyramidDependentPointIds', [...face.pyramidDependentPointIds])
+    this.setNullableScalarField(record, 'pyramidRole', face.pyramidRole)
   }
 
   private syncCubeRecord(record: CubeSharedMap, cube: CubeConstraint) {
@@ -4246,6 +4469,22 @@ export class CollabManager {
     this.setScalarField(record, 'dependentLayouts', JSON.stringify(constraint.dependentLayouts))
     this.setScalarField(record, 'bottomFaceId', constraint.bottomFaceId)
     this.setScalarField(record, 'topFaceId', constraint.topFaceId)
+    this.setScalarField(record, 'sideFaceIds', JSON.stringify([...constraint.sideFaceIds]))
+    this.setScalarField(record, 'baseReferenceIndex', constraint.baseReferenceIndex)
+    const axisHint = constraint.getVAxisHint()
+    this.setScalarField(record, 'vAxisHintX', axisHint.x)
+    this.setScalarField(record, 'vAxisHintY', axisHint.y)
+    this.setScalarField(record, 'vAxisHintZ', axisHint.z)
+    this.setScalarField(record, 'name', constraint.name)
+    this.setScalarField(record, 'valueVisible', constraint.valueVisible)
+    this.setScalarField(record, 'keepVertical', constraint.keepVertical)
+    this.setNullableScalarField(record, 'verticalHeight', constraint.getRawVerticalHeight())
+  }
+
+  private syncPyramidRecord(record: PyramidSharedMap, constraint: PyramidConstraint) {
+    this.setScalarField(record, 'pyramidId', constraint.pyramidId)
+    this.setScalarField(record, 'ownerPointIds', JSON.stringify([...constraint.ownerPointIds]))
+    this.setScalarField(record, 'bottomFaceId', constraint.bottomFaceId)
     this.setScalarField(record, 'sideFaceIds', JSON.stringify([...constraint.sideFaceIds]))
     this.setScalarField(record, 'baseReferenceIndex', constraint.baseReferenceIndex)
     const axisHint = constraint.getVAxisHint()
@@ -4373,6 +4612,7 @@ export class CollabManager {
     const cubeIds = [...this.dirtyCubeIds]
     const regularPolygonIds = [...this.dirtyRegularPolygonIds]
     const prismIds = [...this.dirtyPrismIds]
+    const pyramidIds = [...this.dirtyPyramidIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
@@ -4389,6 +4629,7 @@ export class CollabManager {
     const deletedCubeIds = [...this.deletedCubeIds]
     const deletedRegularPolygonIds = [...this.deletedRegularPolygonIds]
     const deletedPrismIds = [...this.deletedPrismIds]
+    const deletedPyramidIds = [...this.deletedPyramidIds]
     const objectConstrainedPointIds = [...this.dirtyObjectConstrainedPointIds]
     const deletedObjectConstrainedPointIds = [...this.deletedObjectConstrainedPointIds]
 
@@ -4410,6 +4651,7 @@ export class CollabManager {
       cubeIds.length === 0 &&
       regularPolygonIds.length === 0 &&
       prismIds.length === 0 &&
+      pyramidIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
@@ -4426,7 +4668,8 @@ export class CollabManager {
       deletedFaceIds.length === 0 &&
       deletedCubeIds.length === 0 &&
       deletedRegularPolygonIds.length === 0 &&
-      deletedPrismIds.length === 0
+      deletedPrismIds.length === 0 &&
+      deletedPyramidIds.length === 0
     ) {
       return
     }
@@ -4482,6 +4725,9 @@ export class CollabManager {
       })
       deletedPrismIds.forEach((id) => {
         this.yPrisms.delete(id)
+      })
+      deletedPyramidIds.forEach((id) => {
+        this.yPyramids.delete(id)
       })
 
       pointIds.forEach((id) => {
@@ -4628,6 +4874,15 @@ export class CollabManager {
         this.syncPrismRecord(this.ensurePrismRecord(id), constraint)
       })
 
+      pyramidIds.forEach((id) => {
+        const constraint = this.scene.pyramidConstraints.get(id)
+        if (!(constraint instanceof PyramidConstraint)) {
+          this.yPyramids.delete(id)
+          return
+        }
+        this.syncPyramidRecord(this.ensurePyramidRecord(id), constraint)
+      })
+
       objectConstrainedPointIds.forEach((id) => {
         const constraint = this.scene.objectConstrainedPointConstraints.get(id)
         if (!(constraint instanceof ObjectConstrainedPointConstraint)) {
@@ -4655,6 +4910,7 @@ export class CollabManager {
     cubeIds.forEach((id) => this.dirtyCubeIds.delete(id))
     regularPolygonIds.forEach((id) => this.dirtyRegularPolygonIds.delete(id))
     prismIds.forEach((id) => this.dirtyPrismIds.delete(id))
+    pyramidIds.forEach((id) => this.dirtyPyramidIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
@@ -4672,6 +4928,7 @@ export class CollabManager {
     deletedCubeIds.forEach((id) => this.deletedCubeIds.delete(id))
     deletedRegularPolygonIds.forEach((id) => this.deletedRegularPolygonIds.delete(id))
     deletedPrismIds.forEach((id) => this.deletedPrismIds.delete(id))
+    deletedPyramidIds.forEach((id) => this.deletedPyramidIds.delete(id))
   }
 
   getIsApplyingSharedHistory(): boolean {
@@ -4875,6 +5132,9 @@ export class CollabManager {
       for (const id of [...this.yPrisms.keys()]) {
         if (!this.scene.prismConstraints.has(id)) this.yPrisms.delete(id)
       }
+      for (const id of [...this.yPyramids.keys()]) {
+        if (!this.scene.pyramidConstraints.has(id)) this.yPyramids.delete(id)
+      }
 
       this.scene.points.forEach((p, id) => {
         this.syncPointRecord(this.ensurePointRecord(id), p)
@@ -4933,6 +5193,11 @@ export class CollabManager {
       this.scene.prismConstraints.forEach((c, id) => {
         if (c instanceof PrismConstraint) {
           this.syncPrismRecord(this.ensurePrismRecord(id), c)
+        }
+      })
+      this.scene.pyramidConstraints.forEach((c, id) => {
+        if (c instanceof PyramidConstraint) {
+          this.syncPyramidRecord(this.ensurePyramidRecord(id), c)
         }
       })
     })

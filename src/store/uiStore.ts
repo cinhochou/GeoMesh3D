@@ -87,6 +87,7 @@ type ContentGroupKey =
   | 'hexahedron'
   | 'tetrahedron'
   | 'prism'
+  | 'pyramid'
   | 'sphere'
   | 'cone'
   | 'cylinder'
@@ -141,6 +142,7 @@ interface ContentGroupCollapseState {
   hexahedron: boolean
   tetrahedron: boolean
   prism: boolean
+  pyramid: boolean
   sphere: boolean
   cone: boolean
   cylinder: boolean
@@ -159,6 +161,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   hexahedron: true,
   tetrahedron: true,
   prism: true,
+  pyramid: true,
   sphere: true,
   cone: true,
   cylinder: true,
@@ -477,6 +480,7 @@ export const useUiStore = defineStore('ui', () => {
       hexahedron: collapsed,
       tetrahedron: collapsed,
       prism: collapsed,
+      pyramid: collapsed,
       sphere: collapsed,
       cone: collapsed,
       cylinder: collapsed,

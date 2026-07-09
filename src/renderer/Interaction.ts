@@ -201,6 +201,8 @@ export class Interaction {
   cylinderBottomCenterPointId: string | null = null
   /** 棱柱创建：第一步选中的底面多边形 id。 */
   prismBottomFaceId: string | null = null
+  /** 棱锥创建：第一步选中的底面多边形 id。 */
+  pyramidBottomFaceId: string | null = null
   private dragPlane: THREE.Plane | null = null
   private dragLastPos: THREE.Vector3 | null = null
   private dragStartPointerPos: THREE.Vector3 | null = null
@@ -1015,6 +1017,47 @@ export class Interaction {
     }
     this.editor.tryCreatePrism(bottomFace, topPoint)
     this.resetPrismCreation()
+  }
+
+  /**
+   * 棱锥创建两步工作流：
+   * 1. 第一次点击：选中一个多边形面作为底面（pyramidBottomFaceId）。
+   * 2. 第二次点击：选中一个点作为顶点（apex），调用 editor.tryCreatePyramid 完成创建。
+   * 重复点击同一面/点可取消选择。
+   *
+   * 优化：若进入模式前已恰好选中一个面，可直接点击点完成创建，无需再点一次面。
+   */
+  private commitCreatePyramidSelection(type: 'face' | 'point', geoId: string) {
+    if (type === 'face') {
+      // 取消已选底面
+      if (this.pyramidBottomFaceId === geoId) {
+        this.pyramidBottomFaceId = null
+        this.editor.scene.selection.deselectFace(geoId)
+        return
+      }
+      this.pyramidBottomFaceId = geoId
+      this.editor.scene.selection.selectFace(geoId, true)
+      return
+    }
+    // type === 'point'：需要已选底面
+    let bottomFaceId = this.pyramidBottomFaceId
+    // 尚未点击选择底面时，若当前选区中恰好只有一个面，则自动将其作为底面
+    if (!bottomFaceId && this.editor.scene.selection.faces.size === 1) {
+      const selectedFaceId = Array.from(this.editor.scene.selection.faces)[0]
+      if (selectedFaceId) {
+        bottomFaceId = selectedFaceId
+        this.pyramidBottomFaceId = selectedFaceId
+      }
+    }
+    if (!bottomFaceId) return
+    const bottomFace = this.editor.scene.faces.get(bottomFaceId)
+    const apexPoint = this.editor.scene.points.get(geoId)
+    if (!bottomFace || !apexPoint) {
+      this.resetPyramidCreation()
+      return
+    }
+    this.editor.tryCreatePyramid(bottomFace, apexPoint)
+    this.resetPyramidCreation()
   }
 
   private isTouchPreferredDevice() {
@@ -3706,6 +3749,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreatePrism ||
+        this.editor.mode === EditorMode.CreatePyramid ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -4097,6 +4141,10 @@ export class Interaction {
         this.commitCreatePrismSelection('face', geoId)
       } else if (this.editor.mode === EditorMode.CreatePrism && type === 'point') {
         this.commitCreatePrismSelection('point', geoId)
+      } else if (this.editor.mode === EditorMode.CreatePyramid && type === 'face') {
+        this.commitCreatePyramidSelection('face', geoId)
+      } else if (this.editor.mode === EditorMode.CreatePyramid && type === 'point') {
+        this.commitCreatePyramidSelection('point', geoId)
       } else if (this.editor.mode === EditorMode.CreateSphereTwoPoints && type === 'point') {
         if (!this.sphereTwoPointsFirstPointId) {
           this.sphereTwoPointsFirstPointId = geoId
@@ -4228,6 +4276,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreatePrism ||
+        this.editor.mode === EditorMode.CreatePyramid ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints
       )
         this.editor.scene.selection.clear()
@@ -4284,6 +4333,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateHexahedron ||
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreatePrism ||
+        this.editor.mode === EditorMode.CreatePyramid ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -4554,6 +4604,13 @@ export class Interaction {
         this.resetMobileInteractionState()
         return
       }
+      if (this.editor.mode === EditorMode.CreatePyramid) {
+        e.preventDefault()
+        e.stopPropagation()
+        this.resetPyramidCreation()
+        this.resetMobileInteractionState()
+        return
+      }
       if (this.editor.mode === EditorMode.IntersectionPoint) {
         e.preventDefault()
         e.stopPropagation()
@@ -4739,6 +4796,15 @@ export class Interaction {
       e.stopPropagation()
       if (type === 'face') this.commitCreatePrismSelection('face', geoId)
       else if (type === 'point') this.commitCreatePrismSelection('point', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreatePyramid) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (type === 'face') this.commitCreatePyramidSelection('face', geoId)
+      else if (type === 'point') this.commitCreatePyramidSelection('point', geoId)
       this.resetMobileInteractionState()
       return
     }
@@ -5975,6 +6041,11 @@ export class Interaction {
     this.editor.scene.selection.clear()
   }
 
+  resetPyramidCreation() {
+    this.pyramidBottomFaceId = null
+    this.editor.scene.selection.clear()
+  }
+
   confirmCylinderRadius(bottomCenterPointId: string, topCenterPointId: string, radius: number) {
     const bottomCenterPoint = this.editor.scene.points.get(bottomCenterPointId)
     const topCenterPoint = this.editor.scene.points.get(topCenterPointId)
@@ -6035,6 +6106,7 @@ export class Interaction {
     this.sphereTwoPointsFirstPointId = null
     this.cylinderBottomCenterPointId = null
     this.prismBottomFaceId = null
+    this.pyramidBottomFaceId = null
   }
 
   private endDrag() {

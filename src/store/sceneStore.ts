@@ -50,6 +50,7 @@ const modeNameMap: Record<EditorMode, string> = {
   [EditorMode.CreateHexahedron]: '创建正六面体',
   [EditorMode.CreateTetrahedron]: '创建正四面体',
   [EditorMode.CreatePrism]: '创建棱柱',
+  [EditorMode.CreatePyramid]: '创建棱锥',
   [EditorMode.CreateSphereTwoPoints]: '创建两点球',
   [EditorMode.CreateSphereRadius]: '创建半径球',
   [EditorMode.CreateCone]: '创建圆锥',
@@ -76,6 +77,7 @@ const modeHintMap: Record<EditorMode, string> = {
   [EditorMode.CreateHexahedron]: '选中两个点或一条线段以创建正六面体~',
   [EditorMode.CreateTetrahedron]: '选中两个点或一条线段以创建正四面体~',
   [EditorMode.CreatePrism]: '先选中一个多边形作为底面，再选中底面外的一点作为最高点以创建棱柱~',
+  [EditorMode.CreatePyramid]: '先选中一个多边形作为底面，再选中底面外的一点作为最高点以创建棱锥~',
   [EditorMode.CreateSphereTwoPoints]: '先选中一点作为球心，再选中一点以创建球体~',
   [EditorMode.CreateSphereRadius]: '先选中一点作为球心，输入半径以创建球体~',
   [EditorMode.CreateCone]:

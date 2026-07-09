@@ -200,9 +200,10 @@ export const prismFeaturePlugin: FeaturePlugin = {
     // 删除约束
     scene.removePrismConstraint(prismId)
 
-    // 删除新创建的面（顶面 + 侧面）
-    const deletedFaceIds = new Set(deleteParams.faces.map((f) => f.id))
-    deleteParams.faces.forEach((face) => scene.removeFace(face.id))
+    // 删除新创建的面（顶面 + 侧面，不含底面——底面是用户原有的）
+    const createdFaces = deleteParams.faces.filter((f) => f.id !== deleteParams.bottomFaceId)
+    const deletedFaceIds = new Set(createdFaces.map((f) => f.id))
+    createdFaces.forEach((face) => scene.removeFace(face.id))
 
     // 删除新创建的边界线：faceOwned 且不被任何保留面使用
     const candidateLineIds = new Set(deleteParams.faces.flatMap((f) => f.boundaryLineIds))

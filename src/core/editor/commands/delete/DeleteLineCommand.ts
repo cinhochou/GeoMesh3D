@@ -8,7 +8,7 @@ import { IntersectionPointConstraint } from '../../../constraints/IntersectionPo
 import { PerpendicularLine3 } from '../../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../../geometry/ParallelLine3'
 import { createDeleteFeatureCommand } from '../../../features'
-import type { DependentPrismCascade } from '../../../features/plugins/BasicElementFeature'
+import type { DependentPrismCascade, DependentPyramidCascade } from '../../../features/plugins/BasicElementFeature'
 
 export function createDeleteLineCommand(
   scene: Scene,
@@ -37,6 +37,7 @@ export function createDeleteLineCommand(
     }>
   }> = [],
   dependentPrisms: DependentPrismCascade[] = [],
+  dependentPyramids: DependentPyramidCascade[] = [],
   relatedPerpendicularLines: PerpendicularLine3[] = [],
   relatedParallelLines: ParallelLine3[] = [],
 ): ReturnType<typeof createDeleteFeatureCommand> {
@@ -47,6 +48,9 @@ export function createDeleteLineCommand(
     face.boundaryLineIds,
   )
   const prismBoundaryLineIds = dependentPrisms.flatMap(({ faces }) =>
+    faces.flatMap((face) => face.boundaryLineIds),
+  )
+  const pyramidBoundaryLineIds = dependentPyramids.flatMap(({ faces }) =>
     faces.flatMap((face) => face.boundaryLineIds),
   )
   const faceBoundaryLineIds = dependentFaces.flatMap((face) => face.boundaryLineIds)
@@ -63,6 +67,7 @@ export function createDeleteLineCommand(
             ...cubeBoundaryLineIds,
             ...regularPolygonBoundaryLineIds,
             ...prismBoundaryLineIds,
+            ...pyramidBoundaryLineIds,
             ...faceBoundaryLineIds,
           ]),
         ],
@@ -70,6 +75,7 @@ export function createDeleteLineCommand(
           ...dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)),
           ...dependentRegularPolygons.map(({ face }) => face.id),
           ...dependentPrisms.flatMap(({ faces }) => faces.map((f) => f.id)),
+          ...dependentPyramids.flatMap(({ faces }) => faces.map((f) => f.id)),
           ...dependentFaces.map((f) => f.id),
         ],
         points: [
@@ -87,6 +93,10 @@ export function createDeleteLineCommand(
               ...dependentPoints.map((p) => p.id),
               ...dependentIntersectionPoints.map(({ point }) => point.id),
             ]),
+            ...dependentPyramids.flatMap(({ dependentPoints, dependentIntersectionPoints }) => [
+              ...dependentPoints.map((p) => p.id),
+              ...dependentIntersectionPoints.map(({ point }) => point.id),
+            ]),
           ]),
         ],
       },
@@ -98,6 +108,7 @@ export function createDeleteLineCommand(
       dependentFaces,
       dependentRegularPolygons,
       dependentPrisms,
+      dependentPyramids,
       relatedPerpendicularLines,
       relatedParallelLines,
     },

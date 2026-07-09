@@ -4,6 +4,7 @@ import type { Command } from './Command'
 import { HistoryManager, type HistoryEntry } from './HistoryManager'
 import { TransformCommand } from './commands/scene/TransformCommand'
 import { TransformPrismOwnerPointCommand } from './commands/scene/TransformPrismOwnerPointCommand'
+import { TransformPyramidOwnerPointCommand } from './commands/scene/TransformPyramidOwnerPointCommand'
 import { createAddElementCommand } from './commands/add/AddElementCommand'
 import { SnapshotCommand } from './commands/SnapshotCommand'
 import { Point3, type ConstrainedToRef } from '../geometry/Point3'
@@ -76,10 +77,14 @@ import { UpdateCylinderHeightCommand } from './commands/update/UpdateCylinderHei
 import { Cylinder3 } from '../geometry/Cylinder3'
 import { createAddRegularPolygonCommand } from './commands/add/AddRegularPolygonCommand'
 import { createAddPrismCommand } from './commands/add/AddPrismCommand'
+import { createAddPyramidCommand } from './commands/add/AddPyramidCommand'
 import { createDeletePrismCommand } from './commands/delete/DeletePrismCommand'
+import { createDeletePyramidCommand } from './commands/delete/DeletePyramidCommand'
 import { UpdatePrismCommand } from './commands/update/UpdatePrismCommand'
+import { UpdatePyramidCommand } from './commands/update/UpdatePyramidCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { PrismConstraint } from '../constraints/PrismConstraint'
+import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { IntersectionPointConstraint } from '../constraints/IntersectionPointConstraint'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { FeatureDocument, type FeatureOperation } from '../features'
@@ -115,6 +120,7 @@ export enum EditorMode {
   CreateCone,
   CreateCylinder,
   CreatePrism,
+  CreatePyramid,
   CreatePerpendicularLine,
   CreateParallelLine,
 }
@@ -709,6 +715,55 @@ export class Editor {
     )
   }
 
+  getPyramidConstraints() {
+    return [...this.scene.pyramidConstraints.values()].filter(
+      (constraint): constraint is PyramidConstraint => constraint instanceof PyramidConstraint,
+    )
+  }
+
+  getPyramidConstraint(pyramidId: string) {
+    const constraint = this.scene.getPyramidConstraint(pyramidId)
+    return constraint instanceof PyramidConstraint ? constraint : null
+  }
+
+  getPyramidConstraintByFaceId(faceId: string) {
+    const face = this.scene.faces.get(faceId)
+    if (!face?.pyramidId) return null
+    const constraint = this.scene.getPyramidConstraint(face.pyramidId)
+    if (!(constraint instanceof PyramidConstraint)) return null
+    return constraint
+  }
+
+  /** 获取棱锥所有面 id（底面 + 侧面，无顶面）。 */
+  getPyramidFaceIds(pyramidId: string) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return []
+    return [constraint.bottomFaceId, ...constraint.sideFaceIds]
+  }
+
+  selectPyramidByFaceId(faceId: string, additive = false) {
+    const pyramidConstraint = this.getPyramidConstraintByFaceId(faceId)
+    if (!pyramidConstraint) {
+      this.scene.selection.selectFace(faceId, additive)
+      return
+    }
+    if (!additive) this.scene.selection.clear()
+    this.getPyramidFaceIds(pyramidConstraint.pyramidId).forEach((id) =>
+      this.scene.selection.selectFace(id, true),
+    )
+  }
+
+  deselectPyramidByFaceId(faceId: string) {
+    const pyramidConstraint = this.getPyramidConstraintByFaceId(faceId)
+    if (!pyramidConstraint) {
+      this.scene.selection.deselectFace(faceId)
+      return
+    }
+    this.getPyramidFaceIds(pyramidConstraint.pyramidId).forEach((id) =>
+      this.scene.selection.deselectFace(id),
+    )
+  }
+
   updatePrism(
     prismId: string,
     patch: {
@@ -784,6 +839,83 @@ export class Editor {
       if (point) point.userLocked = locked
     })
     this.getPrismFaceIds(prismId).forEach((faceId) => {
+      const face = this.scene.faces.get(faceId)
+      if (!face || face.userLocked === locked) return
+      face.userLocked = locked
+    })
+  }
+
+  updatePyramid(
+    pyramidId: string,
+    patch: {
+      name?: string
+      valueVisible?: boolean
+      keepVertical?: boolean
+    },
+  ) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return
+
+    const willToggleKeepVertical =
+      patch.keepVertical !== undefined && patch.keepVertical !== constraint.keepVertical
+    const apexPoint = willToggleKeepVertical
+      ? this.scene.points.get(constraint.ownerPointIds[1])
+      : null
+    const beforeApexPosition = apexPoint?.position.clone()
+    const afterApexPosition =
+      willToggleKeepVertical && patch.keepVertical
+        ? constraint.computeVerticalTopPosition() ?? beforeApexPosition
+        : beforeApexPosition
+
+    const before: ConstructorParameters<typeof UpdatePyramidCommand>[1] = {
+      name: constraint.name,
+      valueVisible: constraint.valueVisible,
+      keepVertical: constraint.keepVertical,
+      apexPointPosition: beforeApexPosition
+        ? { x: beforeApexPosition.x, y: beforeApexPosition.y, z: beforeApexPosition.z }
+        : undefined,
+    }
+    const after: ConstructorParameters<typeof UpdatePyramidCommand>[2] = {
+      name: patch.name ?? constraint.name,
+      valueVisible: patch.valueVisible ?? constraint.valueVisible,
+      keepVertical: patch.keepVertical ?? constraint.keepVertical,
+      apexPointPosition: afterApexPosition
+        ? { x: afterApexPosition.x, y: afterApexPosition.y, z: afterApexPosition.z }
+        : undefined,
+    }
+    this.executeCommand(new UpdatePyramidCommand(constraint.pyramidId, before, after, this.scene))
+    this.scene.markAllRenderDirty()
+  }
+
+  updatePyramidName(pyramidId: string, name: string) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return
+    constraint.name = name.trim()
+    this.scene.markAllRenderDirty()
+  }
+
+  /** 获取棱锥名称去掉「棱锥」前缀后的后缀（如 "1"、"2" 等）。 */
+  getPyramidNameSuffix(pyramidId: string) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return ''
+    return constraint.name.replace(/^棱锥/, '')
+  }
+
+  setPyramidValueVisible(pyramidId: string, visible: boolean) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint || constraint.valueVisible === visible) return
+    constraint.valueVisible = visible
+    this.scene.markAllRenderDirty()
+  }
+
+  setPyramidLockState(pyramidId: string, locked: boolean) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return
+    constraint.ownerPointIds.forEach((pointId) => {
+      const point = this.scene.points.get(pointId)
+      if (point) point.userLocked = locked
+    })
+    this.getPyramidFaceIds(pyramidId).forEach((faceId) => {
       const face = this.scene.faces.get(faceId)
       if (!face || face.userLocked === locked) return
       face.userLocked = locked
@@ -937,7 +1069,158 @@ export class Editor {
     return result
   }
 
+  /** 收集依赖某点的所有棱锥（owner，含底面顶点与 apex）。 */
+  collectDependentPyramidsByPointId(pointId: string): Array<{
+    faces: PlanarPolygon[]
+    dependentPoints: Point3[]
+    constraint: PyramidConstraint
+    bottomFaceId: string
+    bottomOwnerPointIds: string[]
+    apexPointId: string
+    dependentIntersectionPoints: Array<{
+      point: Point3
+      constraint: IntersectionPointConstraint
+    }>
+    relatedPerpendicularLines: PerpendicularLine3[]
+    relatedParallelLines: ParallelLine3[]
+  }> {
+    const result: Array<{
+      faces: PlanarPolygon[]
+      dependentPoints: Point3[]
+      constraint: PyramidConstraint
+      bottomFaceId: string
+      bottomOwnerPointIds: string[]
+      apexPointId: string
+      dependentIntersectionPoints: Array<{
+        point: Point3
+        constraint: IntersectionPointConstraint
+      }>
+      relatedPerpendicularLines: PerpendicularLine3[]
+      relatedParallelLines: ParallelLine3[]
+    }> = []
+
+    this.scene.pyramidConstraints.forEach((constraint) => {
+      if (!(constraint instanceof PyramidConstraint)) return
+      const bottomFaceForCheck = this.scene.faces.get(constraint.bottomFaceId)
+      const bottomPointIds = bottomFaceForCheck ? [...bottomFaceForCheck.boundaryPointIds] : []
+      const allPointIds = [
+        ...constraint.ownerPointIds,
+        ...bottomPointIds,
+      ]
+      if (!allPointIds.includes(pointId)) return
+
+      const faceIds = this.getPyramidFaceIds(constraint.pyramidId)
+      const faces = faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarPolygon => face !== undefined)
+      const dependentPoints: Point3[] = []
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      const allBoundaryLineIds = new Set(faces.flatMap((f) => f.boundaryLineIds))
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) =>
+          (pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id)) ||
+          (pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id)),
+      )
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const bottomFace = this.scene.faces.get(constraint.bottomFaceId)
+      result.push({
+        faces,
+        dependentPoints,
+        constraint,
+        bottomFaceId: constraint.bottomFaceId,
+        bottomOwnerPointIds: bottomFace ? [...bottomFace.boundaryPointIds] : [],
+        apexPointId: constraint.ownerPointIds[1],
+        dependentIntersectionPoints,
+        relatedPerpendicularLines,
+        relatedParallelLines,
+      })
+    })
+
+    return result
+  }
+
+  /** 收集依赖某条线的所有棱锥（该线为棱锥任一面的边界线）。 */
+  collectDependentPyramidsByLineId(lineId: string): Array<{
+    faces: PlanarPolygon[]
+    dependentPoints: Point3[]
+    constraint: PyramidConstraint
+    bottomFaceId: string
+    bottomOwnerPointIds: string[]
+    apexPointId: string
+    dependentIntersectionPoints: Array<{
+      point: Point3
+      constraint: IntersectionPointConstraint
+    }>
+    relatedPerpendicularLines: PerpendicularLine3[]
+    relatedParallelLines: ParallelLine3[]
+  }> {
+    const result: Array<{
+      faces: PlanarPolygon[]
+      dependentPoints: Point3[]
+      constraint: PyramidConstraint
+      bottomFaceId: string
+      bottomOwnerPointIds: string[]
+      apexPointId: string
+      dependentIntersectionPoints: Array<{
+        point: Point3
+        constraint: IntersectionPointConstraint
+      }>
+      relatedPerpendicularLines: PerpendicularLine3[]
+      relatedParallelLines: ParallelLine3[]
+    }> = []
+
+    this.scene.pyramidConstraints.forEach((constraint) => {
+      if (!(constraint instanceof PyramidConstraint)) return
+      const faceIds = this.getPyramidFaceIds(constraint.pyramidId)
+      const faces = faceIds
+        .map((faceId) => this.scene.faces.get(faceId))
+        .filter((face): face is PlanarPolygon => face !== undefined)
+      const isBoundaryLine = faces.some((face) => face.boundaryLineIds.includes(lineId))
+      if (!isBoundaryLine) return
+      const dependentPoints: Point3[] = []
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        faces.map((face) => ({ type: 'face' as const, id: face.id })),
+      )
+      const allBoundaryLineIds = new Set(faces.flatMap((f) => f.boundaryLineIds))
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) =>
+          (pl.target.type === 'face' && faces.some((f) => f.id === pl.target.id)) ||
+          (pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id)),
+      )
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const bottomFace = this.scene.faces.get(constraint.bottomFaceId)
+      result.push({
+        faces,
+        dependentPoints,
+        constraint,
+        bottomFaceId: constraint.bottomFaceId,
+        bottomOwnerPointIds: bottomFace ? [...bottomFace.boundaryPointIds] : [],
+        apexPointId: constraint.ownerPointIds[1],
+        dependentIntersectionPoints,
+        relatedPerpendicularLines,
+        relatedParallelLines,
+      })
+    })
+
+    return result
+  }
+
   selectCubeByFaceId(faceId: string, additive = false) {
+    // 优先检查棱锥：点击棱锥任一面应高亮整个棱锥
+    const pyramidConstraint = this.getPyramidConstraintByFaceId(faceId)
+    if (pyramidConstraint) {
+      if (!additive) this.scene.selection.clear()
+      this.getPyramidFaceIds(pyramidConstraint.pyramidId).forEach((id) =>
+        this.scene.selection.selectFace(id, true),
+      )
+      return
+    }
     // 优先检查棱柱：点击棱柱任一面应高亮整个棱柱
     const prismConstraint = this.getPrismConstraintByFaceId(faceId)
     if (prismConstraint) {
@@ -957,6 +1240,14 @@ export class Editor {
   }
 
   deselectCubeByFaceId(faceId: string) {
+    // 优先检查棱锥
+    const pyramidConstraint = this.getPyramidConstraintByFaceId(faceId)
+    if (pyramidConstraint) {
+      this.getPyramidFaceIds(pyramidConstraint.pyramidId).forEach((id) =>
+        this.scene.selection.deselectFace(id),
+      )
+      return
+    }
     // 优先检查棱柱
     const prismConstraint = this.getPrismConstraintByFaceId(faceId)
     if (prismConstraint) {
@@ -1123,6 +1414,12 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point?.prismId) return null
     return this.getPrismConstraint(point.prismId)
+  }
+
+  private getPyramidConstraintByPointId(pointId: string) {
+    const point = this.scene.points.get(pointId)
+    if (!point?.pyramidId) return null
+    return this.getPyramidConstraint(point.pyramidId)
   }
 
   private getRegularPolygonConstraintByFaceId(faceId: string) {
@@ -2730,6 +3027,91 @@ export class Editor {
     )
   }
 
+  /**
+   * 拖动棱锥 owner 点（apex 或底面顶点）：平移整个棱锥（所有 owner 点同步移动 delta）。
+   * 棱锥无 dependent 顶点，所有底面顶点与 apex 均为 owner，拖拽任一底面顶点应平移整个棱锥。
+   */
+  private translatePyramid(pyramidId: string, draggedPointId: string, position: Vec3) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return
+    const dragged = this.scene.points.get(draggedPointId)
+    if (!dragged || this.isPointCoordinateLocked(dragged)) return
+
+    const delta = new Vec3(
+      position.x - dragged.position.x,
+      position.y - dragged.position.y,
+      position.z - dragged.position.z,
+    )
+    if (Math.abs(delta.x) < 1e-9 && Math.abs(delta.y) < 1e-9 && Math.abs(delta.z) < 1e-9) return
+
+    // 收集棱锥所有关联点（owner + 底面所有顶点），统一平移
+    const allPointIds = new Set<string>([...constraint.ownerPointIds])
+    const bottomFace = this.scene.faces.get(constraint.bottomFaceId)
+    if (bottomFace) {
+      bottomFace.boundaryPointIds.forEach((pid) => allPointIds.add(pid))
+    }
+    const transforms: Array<{ pointId: string; before: Vec3; after: Vec3 }> = []
+    allPointIds.forEach((pid) => {
+      const p = this.scene.points.get(pid)
+      if (!p || this.isPointCoordinateLocked(p)) return
+      const before = p.position.clone()
+      const after = new Vec3(before.x + delta.x, before.y + delta.y, before.z + delta.z)
+      if (
+        Math.abs(after.x - before.x) <= 1e-9 &&
+        Math.abs(after.y - before.y) <= 1e-9 &&
+        Math.abs(after.z - before.z) <= 1e-9
+      )
+        return
+      transforms.push({ pointId: pid, before, after })
+    })
+
+    if (transforms.length === 0) return
+    if (transforms.length === 1) {
+      const t = transforms[0]!
+      this.executeCommand(new TransformCommand(t.pointId, t.before, t.after, [], this.scene))
+      return
+    }
+    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+  }
+
+  /**
+   * 拖动棱锥 apex（最高点）：移动该点，垂直保持模式下约束到底面法线方向。
+   */
+  private setPyramidApexPosition(pyramidId: string, pointId: string, position: Vec3) {
+    const constraint = this.getPyramidConstraint(pyramidId)
+    if (!constraint) return
+    const point = this.scene.points.get(pointId)
+    if (!point || this.isPointCoordinateLocked(point)) return
+
+    const ownerBefore = point.position.clone()
+    if (
+      Math.abs(position.x - ownerBefore.x) <= 1e-9 &&
+      Math.abs(position.y - ownerBefore.y) <= 1e-9 &&
+      Math.abs(position.z - ownerBefore.z) <= 1e-9
+    )
+      return
+
+    // 垂直保持模式下移动 apex 时，需要同时记录并更新缓存高度
+    let beforeVerticalHeight: number | null = null
+    let afterVerticalHeight: number | null = null
+    if (constraint.keepVertical && pointId === constraint.ownerPointIds[1]) {
+      beforeVerticalHeight = constraint.getRawVerticalHeight()
+      afterVerticalHeight = constraint.computeVerticalHeightForPosition(position)
+    }
+
+    this.executeCommand(
+      new TransformPyramidOwnerPointCommand(
+        this.scene,
+        constraint,
+        pointId,
+        ownerBefore,
+        position.clone(),
+        beforeVerticalHeight,
+        afterVerticalHeight,
+      ),
+    )
+  }
+
   isPointCoordinateLocked(point: Point3 | null | undefined) {
     return Boolean(
       point &&
@@ -3418,8 +3800,18 @@ export class Editor {
         faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
       ),
     )
+    const dependentPyramids = this.collectDependentPyramidsByPointId(pointId)
+    // pyramidFaceIds 只包含侧面（不含底面），原因同 prismFaceIds。
+    const pyramidFaceIds = new Set(
+      dependentPyramids.flatMap(({ faces, bottomFaceId }) =>
+        faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
+      ),
+    )
     const filteredRelatedFaces = relatedFaces.filter(
-      (face) => !regularPolygonFaceIds.has(face.id) && !prismFaceIds.has(face.id),
+      (face) =>
+        !regularPolygonFaceIds.has(face.id) &&
+        !prismFaceIds.has(face.id) &&
+        !pyramidFaceIds.has(face.id),
     )
 
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter((pl) => {
@@ -3436,6 +3828,7 @@ export class Editor {
         if (dependentCubes.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
         if (dependentRegularPolygons.some(({ face }) => face.id === pl.target.id)) return true
         if (dependentPrisms.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
+        if (dependentPyramids.some(({ faces }) => faces.some((f) => f.id === pl.target.id))) return true
       }
       return false
     })
@@ -3494,6 +3887,7 @@ export class Editor {
         relatedSpheres,
         dependentRegularPolygons,
         dependentPrisms,
+        dependentPyramids,
         relatedPerpendicularLines,
         relatedParallelLines,
         relatedCones,
@@ -3551,9 +3945,19 @@ export class Editor {
         faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
       ),
     )
+    const dependentPyramids = this.collectDependentPyramidsByLineId(lineId)
+    const pyramidFaceIds = new Set(
+      dependentPyramids.flatMap(({ faces, bottomFaceId }) =>
+        faces.filter((f) => f.id !== bottomFaceId).map((f) => f.id),
+      ),
+    )
     const cubeFaceIds = new Set(dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)))
     const filteredDependentFaces = dependentFaces.filter(
-      (face) => !cubeFaceIds.has(face.id) && !regularPolygonFaceIds.has(face.id) && !prismFaceIds.has(face.id),
+      (face) =>
+        !cubeFaceIds.has(face.id) &&
+        !regularPolygonFaceIds.has(face.id) &&
+        !prismFaceIds.has(face.id) &&
+        !pyramidFaceIds.has(face.id),
     )
 
     const allDeletedFaceIds = new Set([
@@ -3561,6 +3965,7 @@ export class Editor {
       ...dependentCubes.flatMap(({ faces }) => faces.map((f) => f.id)),
       ...dependentRegularPolygons.map(({ face }) => face.id),
       ...dependentPrisms.flatMap(({ faces }) => faces.map((f) => f.id)),
+      ...dependentPyramids.flatMap(({ faces }) => faces.map((f) => f.id)),
     ])
     const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
       (pl) =>
@@ -3601,6 +4006,7 @@ export class Editor {
         filteredDependentFaces,
         dependentRegularPolygons,
         dependentPrisms,
+        dependentPyramids,
         relatedPerpendicularLines,
         relatedParallelLines,
       ),
@@ -3871,6 +4277,60 @@ export class Editor {
       return
     }
 
+    const pyramidConstraint = this.getPyramidConstraintByFaceId(faceId)
+    if (pyramidConstraint) {
+      // 棱锥所有面（底面 + 侧面，无顶面）
+      const allPyramidFaceIds = this.getPyramidFaceIds(pyramidConstraint.pyramidId)
+      const pyramidFaces = allPyramidFaceIds
+        .map((id) => this.scene.faces.get(id))
+        .filter((item): item is PlanarPolygon => item !== undefined)
+      // 棱锥无 dependent 顶点
+      const dependentPoints: Point3[] = []
+      const dependentIntersectionPoints = this.collectDependentIntersectionPoints(
+        pyramidFaces.map((pyramidFace) => ({ type: 'face' as const, id: pyramidFace.id })),
+      )
+      const relatedPerpendicularLines = [...this.scene.perpendicularLines.values()].filter(
+        (pl) => pl.target.type === 'face' && pyramidFaces.some((f) => f.id === pl.target.id),
+      )
+      const allBoundaryLineIds = new Set(pyramidFaces.flatMap((f) => f.boundaryLineIds))
+      const relatedParallelLines = [...this.scene.parallelLines.values()].filter(
+        (pl) => pl.target.type === 'line' && allBoundaryLineIds.has(pl.target.id),
+      )
+      const _rplIds = new Set(relatedPerpendicularLines.map((l) => l.id))
+      const _rllIds = new Set(relatedParallelLines.map((l) => l.id))
+      ;[...this.scene.perpendicularLines.values()].forEach((pl) => {
+        if (_rplIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedPerpendicularLines.push(pl); _rplIds.add(pl.id) }
+      })
+      ;[...this.scene.parallelLines.values()].forEach((pl) => {
+        if (_rllIds.has(pl.id)) return
+        if (pl.target.type === 'perpendicularLine' && _rplIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+        if (pl.target.type === 'parallelLine' && _rllIds.has(pl.target.id)) { relatedParallelLines.push(pl); _rllIds.add(pl.id) }
+      })
+      relatedPerpendicularLines.forEach((pl) => this.removeConstrainedPointsReferencing('perpendicularLine', pl.id))
+      relatedParallelLines.forEach((pl) => this.removeConstrainedPointsReferencing('parallelLine', pl.id))
+      const bottomFace = this.scene.faces.get(pyramidConstraint.bottomFaceId)
+      const bottomOwnerPointIds = bottomFace ? [...bottomFace.boundaryPointIds] : []
+      const isDeletingBottomFace = faceId === pyramidConstraint.bottomFaceId
+      this.executeHistoryEntry(
+        createDeletePyramidCommand(
+          this.scene,
+          pyramidFaces,
+          dependentPoints,
+          pyramidConstraint,
+          pyramidConstraint.bottomFaceId,
+          bottomOwnerPointIds,
+          pyramidConstraint.ownerPointIds[1],
+          isDeletingBottomFace,
+          dependentIntersectionPoints,
+          relatedPerpendicularLines,
+          relatedParallelLines,
+        ),
+      )
+      return
+    }
+
     this.removeConstrainedPointsReferencing('face', faceId)
     const dependentIntersectionPoints = this.collectDependentIntersectionPoints([
       { type: 'face', id: faceId },
@@ -4106,6 +4566,18 @@ export class Editor {
         this.setPrismOwnerPointPosition(prismConstraint.prismId, pointId, position)
         return
       }
+    }
+
+    const pyramidConstraint = this.getPyramidConstraintByPointId(pointId)
+    if (pyramidConstraint) {
+      if (pointId === pyramidConstraint.ownerPointIds[1]) {
+        // 拖动 apex：移动该点，垂直保持模式下约束到底面法线方向
+        this.setPyramidApexPosition(pyramidConstraint.pyramidId, pointId, position)
+        return
+      }
+      // 拖动底面顶点：平移整个棱锥（所有 owner 点同步移动 delta）
+      this.translatePyramid(pyramidConstraint.pyramidId, pointId, position)
+      return
     }
 
     const before = point.position.clone()
@@ -5395,6 +5867,22 @@ export class Editor {
       return
     }
 
+    // 棱锥守卫：同一棱锥内部的点禁止合并
+    const keepPyramidConstraint = keepPoint.pyramidId
+      ? this.getPyramidConstraint(keepPoint.pyramidId)
+      : null
+    const removePyramidConstraint = removePoint.pyramidId
+      ? this.getPyramidConstraint(removePoint.pyramidId)
+      : null
+    if (
+      keepPyramidConstraint &&
+      removePyramidConstraint &&
+      keepPyramidConstraint.pyramidId === removePyramidConstraint.pyramidId
+    ) {
+      emitToast('同一棱锥内部的点禁止合并')
+      return
+    }
+
     if (
       keepPoint.cylinderId &&
       removePoint.cylinderId &&
@@ -6411,6 +6899,173 @@ export class Editor {
     this.selectedPoints = []
     this.scene.selection.clear()
     this.selectPrismByFaceId(topFace.id)
+  }
+
+  /**
+   * 棱锥创建：以一个已存在的多边形作为底面，再选中底面外的一点作为 apex（最高点）。
+   * 侧面为三角形（底边 + apex），无顶面、无 dependent 顶点。
+   * 参考顶点取底面 boundaryPointIds 中距离 apex 最近的那个，用于定义高度向量与垂直保持基准。
+   */
+  tryCreatePyramid(bottomFace: PlanarPolygon, apexPoint: Point3) {
+    if (bottomFace.boundaryPointIds.length < 3) {
+      emitToast('棱锥的底面多边形至少需要 3 个顶点')
+      return
+    }
+    if (bottomFace.boundaryPointIds.includes(apexPoint.id)) {
+      emitToast('最高点不能在底面多边形上')
+      return
+    }
+    // 已被其他棱锥/棱柱引用的底面禁止重复作为底
+    if (bottomFace.pyramidId) {
+      emitToast('该多边形已作为另一个棱锥的底面')
+      return
+    }
+    if (bottomFace.prismId) {
+      emitToast('该多边形已作为另一个棱柱的底面')
+      return
+    }
+    if (apexPoint.pyramidId) {
+      emitToast('该点已属于另一个棱锥')
+      return
+    }
+
+    // 1. 计算底面参考顶点（距离 apex 最近的底面顶点）与高度向量
+    let baseReferenceIndex = 0
+    let minDist = Infinity
+    bottomFace.boundaryPointIds.forEach((pid, idx) => {
+      const v = this.scene.points.get(pid)
+      if (!v) return
+      const d = Math.hypot(
+        v.position.x - apexPoint.position.x,
+        v.position.y - apexPoint.position.y,
+        v.position.z - apexPoint.position.z,
+      )
+      if (d < minDist) {
+        minDist = d
+        baseReferenceIndex = idx
+      }
+    })
+    const baseRefVertex = this.scene.points.get(
+      bottomFace.boundaryPointIds[baseReferenceIndex]!,
+    )
+    if (!baseRefVertex) {
+      emitToast('底面参考顶点缺失，无法创建棱锥')
+      return
+    }
+    const translation = new Vec3(
+      apexPoint.position.x - baseRefVertex.position.x,
+      apexPoint.position.y - baseRefVertex.position.y,
+      apexPoint.position.z - baseRefVertex.position.z,
+    )
+    const height = Math.hypot(translation.x, translation.y, translation.z)
+    if (height <= 1e-6) {
+      emitToast('最高点与底面参考顶点距离过近，无法创建棱锥')
+      return
+    }
+
+    const pyramidId = genId('pyramid')
+    const bottomOwnerPointIds = [...bottomFace.boundaryPointIds]
+
+    // 2. 生成面名
+    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
+    const nextFaceName = () => {
+      const name = genNextAvailableName(usedFaceNames, 0, (index) =>
+        index === 0 ? 'F' : `F${index}`,
+      )
+      usedFaceNames.add(name)
+      return name
+    }
+
+    // 3. 构建侧面（三角形：底边 + apex）
+    const makeFace = (boundaryPointIds: string[]) => {
+      const face = new PlanarPolygon(
+        genId('f'),
+        nextFaceName(),
+        boundaryPointIds,
+        boundaryPointIds,
+      )
+      face.fillColor = 0xa7c8f4
+      face.fillOpacity = 0.22
+      face.userLocked = false
+      face.nameVisible = false
+      face.pyramidId = pyramidId
+      face.pyramidRole = 'side'
+      face.pyramidOwnerPointIds = [...bottomOwnerPointIds, apexPoint.id]
+      face.pyramidDependentPointIds = []
+      return face
+    }
+
+    const sideFaces: PlanarPolygon[] = []
+    const n = bottomFace.boundaryPointIds.length
+    for (let i = 0; i < n; i++) {
+      const cur = i
+      const next = (i + 1) % n
+      const bottomA = bottomFace.boundaryPointIds[cur]!
+      const bottomB = bottomFace.boundaryPointIds[next]!
+      // 侧面三角形顺序：底A → 底B → apex
+      sideFaces.push(makeFace([bottomA, bottomB, apexPoint.id]))
+    }
+
+    const newFaces = sideFaces
+
+    // 4. 创建边界线（侧面斜棱：apex 与各底面顶点连线），底面已有边界线复用
+    const boundaryLines = this.ensureBoundaryLinesForFaces(
+      newFaces,
+      new Map(),
+      'pyramid',
+    )
+
+    // 5. 标记 owner 反向引用（底面所有顶点 + apex）
+    bottomOwnerPointIds.forEach((pid) => {
+      const p = this.scene.points.get(pid)
+      if (p) {
+        p.pyramidId = pyramidId
+        p.pyramidRole = 'owner'
+      }
+    })
+    apexPoint.pyramidId = pyramidId
+    apexPoint.pyramidRole = 'owner'
+
+    // 6. 创建约束
+    const pyramidName = genNextAvailableName(
+      this.getPyramidConstraints().map((constraint) => constraint.name),
+      0,
+      (index) => `棱锥${index + 1}`,
+    )
+    const vAxisHint = new Vec3(
+      translation.x / height,
+      translation.y / height,
+      translation.z / height,
+    )
+    const constraint = new PyramidConstraint(
+      this.scene,
+      pyramidId,
+      [baseRefVertex.id, apexPoint.id],
+      bottomFace.id,
+      sideFaces.map((f) => f.id),
+      baseReferenceIndex,
+      vAxisHint,
+      pyramidName,
+    )
+
+    // 7. 规范化面（计算法向等）
+    newFaces.forEach((face) => face.normalize(this.scene.points))
+
+    this.executeHistoryEntry(
+      createAddPyramidCommand(
+        this.scene,
+        boundaryLines,
+        newFaces,
+        bottomFace.id,
+        bottomOwnerPointIds,
+        apexPoint.id,
+        constraint,
+      ),
+    )
+
+    this.selectedPoints = []
+    this.scene.selection.clear()
+    this.selectPyramidByFaceId(sideFaces[0]!.id)
   }
 
   getFacePreviewFromSelection(): FacePreviewData | null {
