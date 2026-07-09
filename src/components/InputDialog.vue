@@ -9,11 +9,13 @@ const props = withDefaults(
     canConfirm?: boolean
     minStepHint?: string
     minStepValue?: number
+    bodyClass?: string
   }>(),
   {
     errorMessage: '',
     canConfirm: true,
     minStepHint: '',
+    bodyClass: '',
   },
 )
 
@@ -122,6 +124,7 @@ onUnmounted(() => {
         <div
           ref="dialogRef"
           class="dialog-content"
+          :class="bodyClass"
           @input="handleDialogInput"
           @pointerdown="handleDialogPointerDown"
         >
@@ -174,6 +177,7 @@ onUnmounted(() => {
   position: relative;
   min-width: 320px;
   max-width: 420px;
+  max-height: calc(100vh - 32px);
   padding: 20px;
   background: linear-gradient(180deg, #1f1f1f 0%, #191919 100%);
   border: 1px solid #3d3d3d;
@@ -216,6 +220,11 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dialog-error {
@@ -308,5 +317,56 @@ onUnmounted(() => {
 .fade-overlay-enter-from,
 .fade-overlay-leave-to {
   opacity: 0;
+}
+
+.dialog-content.shake-warning {
+  position: relative;
+  animation: hold-red-border 1.4s ease-in-out forwards;
+}
+
+.dialog-content.shake-warning::before,
+.dialog-content.shake-warning::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  border: 2px solid transparent;
+}
+
+.dialog-content.shake-warning::before {
+  box-shadow: 0 0 14px 2px rgba(255, 80, 80, 0.35);
+  animation: wave-red-glow 1.4s ease-in-out infinite;
+}
+
+.dialog-content.shake-warning::after {
+  box-shadow: 0 0 20px 6px rgba(255, 80, 80, 0.22);
+  animation: wave-red-glow 1.4s ease-in-out 0.45s infinite;
+}
+
+@keyframes hold-red-border {
+  0% {
+    border-color: #3d3d3d;
+  }
+  20%,
+  100% {
+    border-color: #ff5050;
+  }
+}
+
+@keyframes wave-red-glow {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
 }
 </style>

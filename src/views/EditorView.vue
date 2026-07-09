@@ -17,6 +17,8 @@ import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
 import type { HistoryEntry } from '../core/editor/HistoryManager'
 import type { Point3 } from '../core/geometry/Point3'
+import { Vec3 } from '../core/geometry/Vec3'
+import type { ObjectConstrainedPointConstraint } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { getEditorSession, resetEditorSession } from '../core/editor/editorSession'
 import {
   createEmptySerializedScene,
@@ -142,6 +144,7 @@ const {
   toastVisible,
   toastScope,
   mergePointDialog,
+  alignPointsDialog,
   regularPolygonDialog,
   normalCircleRadiusDialog,
   radiusSphereDialog,
@@ -1234,6 +1237,159 @@ const handleCancelMergePoints = () => {
   uiStore.closeMergePointDialog()
 }
 
+// ============ 点轴对齐 ============
+const alignPointsSelection = computed(() =>
+  [...scene.selection.points]
+    .map((id) => scene.points.get(id))
+    .filter((point): point is Point3 => point !== undefined),
+)
+
+/** 当前选中的点是否可以作为基准点（弹窗可见时） */
+const alignPointsReferenceCandidates = computed(() => alignPointsSelection.value)
+
+/** 计算某点在指定轴对齐后的目标坐标 */
+const computeAlignedPosition = (point: Point3, ref: Point3, axis: 'x' | 'y' | 'z'): Vec3 => {
+  const after = point.position.clone()
+  if (axis === 'x') after.x = ref.position.x
+  else if (axis === 'y') after.y = ref.position.y
+  else after.z = ref.position.z
+  return after
+}
+
+/** 判断某点是否无法被矫正到目标坐标 */
+const isPointUnalignable = (point: Point3, after: Vec3): boolean => {
+  // 1. 锁定点（系统锁 / 用户锁）
+  if (point.locked || point.userLocked) return true
+  // 2. 交点约束：位置完全由两源对象决定
+  if (scene.intersectionConstraints.has(point.id)) return true
+  // 3. 立体 dependent 点：由约束求解决定
+  if (
+    point.cubeRole === 'dependent' ||
+    point.regularPolygonRole === 'dependent' ||
+    point.prismRole === 'dependent' ||
+    point.pyramidRole === 'dependent'
+  ) {
+    return true
+  }
+  // 4. ObjectConstrainedPointConstraint：投影后能否落到目标
+  const constraint = scene.objectConstrainedPointConstraints.get(point.id) as
+    | ObjectConstrainedPointConstraint
+    | undefined
+  if (constraint) {
+    const projected = constraint.projectPosition(after)
+    if (!projected) return true
+    const dx = projected.x - after.x
+    const dy = projected.y - after.y
+    const dz = projected.z - after.z
+    if (Math.sqrt(dx * dx + dy * dy + dz * dz) > 1e-4) return true
+  }
+  return false
+}
+
+/** 警告点列表（无法被矫正到目标坐标的非基准点） */
+const alignPointsWarningPoints = computed(() => {
+  if (!alignPointsDialog.value.visible) return [] as Array<{ point: Point3; after: Vec3 }>
+  const refId = alignPointsDialog.value.referenceId
+  const axis = alignPointsDialog.value.axis
+  const ref = scene.points.get(refId)
+  if (!ref) return [] as Array<{ point: Point3; after: Vec3 }>
+  return alignPointsSelection.value
+    .filter((p) => p.id !== refId)
+    .map((p) => ({ point: p, after: computeAlignedPosition(p, ref, axis) }))
+    .filter((entry) => isPointUnalignable(entry.point, entry.after))
+})
+
+/** 警告点 ID 集合 */
+const alignPointsWarningIds = computed(
+  () => new Set(alignPointsWarningPoints.value.map((entry) => entry.point.id)),
+)
+
+/** 可矫正点的预览坐标映射（非基准、非警告点） */
+const alignPointsPreviewMap = computed(() => {
+  const map = new Map<string, Vec3>()
+  if (!alignPointsDialog.value.visible) return map
+  const refId = alignPointsDialog.value.referenceId
+  const axis = alignPointsDialog.value.axis
+  const ref = scene.points.get(refId)
+  if (!ref) return map
+  const warningIds = alignPointsWarningIds.value
+  for (const p of alignPointsSelection.value) {
+    if (p.id === refId || warningIds.has(p.id)) continue
+    map.set(p.id, computeAlignedPosition(p, ref, axis))
+  }
+  return map
+})
+
+const handleOpenAlignPoints = () => {
+  const selected = [...scene.selection.points]
+  if (selected.length < 2) {
+    showToast('请先选中两个及以上的点')
+    return
+  }
+  const first = scene.points.get(selected[0]!)
+  uiStore.openAlignPointsDialog(first ? first.id : selected[0]!, 'y')
+}
+
+const alignShakeActive = ref(false)
+let alignShakeTimer: number | null = null
+
+const triggerAlignShake = () => {
+  if (alignShakeTimer) {
+    clearTimeout(alignShakeTimer)
+    alignShakeTimer = null
+  }
+  alignShakeActive.value = false
+  // 强制重排以重新触发动画
+  requestAnimationFrame(() => {
+    alignShakeActive.value = true
+    alignShakeTimer = window.setTimeout(() => {
+      alignShakeActive.value = false
+      alignShakeTimer = null
+    }, 1400)
+  })
+}
+
+const handleConfirmAlignPoints = () => {
+  if (alignPointsWarningPoints.value.length > 0) {
+    triggerAlignShake()
+    return
+  }
+  const refId = alignPointsDialog.value.referenceId
+  const axis = alignPointsDialog.value.axis
+  const ref = scene.points.get(refId)
+  if (!ref) {
+    uiStore.closeAlignPointsDialog()
+    return
+  }
+  const transforms = alignPointsSelection.value
+    .filter((p) => p.id !== refId)
+    .map((p) => ({
+      pointId: p.id,
+      before: p.position.clone(),
+      after: computeAlignedPosition(p, ref, axis),
+    }))
+  editor.alignPoints(transforms)
+  uiStore.closeAlignPointsDialog()
+  showToast(`已对齐 ${transforms.length} 个点`)
+}
+
+const handleCancelAlignPoints = () => {
+  uiStore.closeAlignPointsDialog()
+}
+
+const handleRemoveAlignWarningPoint = (pointId: string) => {
+  scene.selection.deselectPoint(pointId)
+}
+
+watch(
+  () => [...scene.selection.points],
+  (ids) => {
+    if (alignPointsDialog.value.visible && ids.length < 2) {
+      uiStore.closeAlignPointsDialog()
+    }
+  },
+)
+
 const handleOpenRegularPolygonDialog = (e: Event) => {
   const detail = (e as CustomEvent).detail
   uiStore.openRegularPolygonDialog(detail.firstPointId, detail.secondPointId)
@@ -1971,6 +2127,115 @@ const handleSaveScene = async () => {
     </InputDialog>
 
     <InputDialog
+      :visible="alignPointsDialog.visible"
+      title="点轴对齐"
+      :can-confirm="alignPointsReferenceCandidates.length >= 2"
+      :body-class="alignShakeActive ? 'shake-warning' : ''"
+      @confirm="handleConfirmAlignPoints"
+      @cancel="handleCancelAlignPoints"
+    >
+      <div class="align-dialog-desc">选择基准点与基准轴，其他选中点将沿基准轴对齐到基准点</div>
+      <div class="dialog-label">基准点</div>
+      <label
+        v-for="point in alignPointsReferenceCandidates"
+        :key="point.id"
+        class="merge-point-option align-point-option"
+      >
+        <input
+          :value="point.id"
+          :checked="alignPointsDialog.referenceId === point.id"
+          type="radio"
+          name="align-points-reference"
+          @change="uiStore.setAlignPointsReference(point.id)"
+        />
+        <span class="align-point-name">{{ point.name }}</span>
+        <span class="align-point-coord"
+          >（{{ point.position.x.toFixed(2) }}, {{ point.position.y.toFixed(2) }},
+          {{ point.position.z.toFixed(2) }}）</span
+        >
+        <span
+          v-if="alignPointsPreviewMap.has(point.id)"
+          class="align-point-preview"
+        >
+          <svg
+            class="align-point-arrow"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <polyline points="14 6 20 12 14 18" />
+          </svg>
+          <span class="align-point-preview-coord">
+            （{{ alignPointsPreviewMap.get(point.id)!.x.toFixed(2) }},
+            {{ alignPointsPreviewMap.get(point.id)!.y.toFixed(2) }},
+            {{ alignPointsPreviewMap.get(point.id)!.z.toFixed(2) }}）
+          </span>
+        </span>
+      </label>
+      <div class="dialog-label">基准轴</div>
+      <div class="align-axis-group">
+        <button
+          type="button"
+          class="align-axis-btn"
+          :class="{ active: alignPointsDialog.axis === 'x' }"
+          @click="uiStore.setAlignPointsAxis('x')"
+        >
+          X 轴
+        </button>
+        <button
+          type="button"
+          class="align-axis-btn"
+          :class="{ active: alignPointsDialog.axis === 'y' }"
+          @click="uiStore.setAlignPointsAxis('y')"
+        >
+          Y 轴
+        </button>
+        <button
+          type="button"
+          class="align-axis-btn"
+          :class="{ active: alignPointsDialog.axis === 'z' }"
+          @click="uiStore.setAlignPointsAxis('z')"
+        >
+          Z 轴
+        </button>
+      </div>
+      <div v-if="alignPointsWarningPoints.length > 0" class="align-points-warning">
+        <div class="align-points-warning-title">以下点无法矫正，可删除后重试：</div>
+        <div class="align-points-warning-tags">
+          <span
+            v-for="entry in alignPointsWarningPoints"
+            :key="entry.point.id"
+            class="align-warning-tag"
+          >
+            <span class="align-warning-tag-label">{{ entry.point.name }}</span>
+            <button
+              v-if="alignPointsReferenceCandidates.length >= 3"
+              type="button"
+              class="align-warning-tag-remove"
+              title="取消选中该点"
+              @click="handleRemoveAlignWarningPoint(entry.point.id)"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+              >
+                <line x1="6" y1="6" x2="18" y2="18" />
+                <line x1="18" y1="6" x2="6" y2="18" />
+              </svg>
+            </button>
+          </span>
+        </div>
+      </div>
+    </InputDialog>
+
+    <InputDialog
       :visible="regularPolygonDialog.visible"
       title="正多边形"
       :error-message="regularPolygonVertexError"
@@ -2104,6 +2369,7 @@ const handleSaveScene = async () => {
       @new-project="handleNewProjectFromMenu"
       @exit-project="handleExitProject"
       @edit-project="handleEditProject"
+      @open-align-points="handleOpenAlignPoints"
     />
 
     <div ref="editorBodyRef" class="editor-body">
@@ -2484,6 +2750,143 @@ select.axis-control option {
   color: #ffd75a;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.align-axis-group {
+  display: flex;
+  gap: 8px;
+}
+
+.align-axis-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #cfcfcf;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.align-axis-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.align-axis-btn.active {
+  background: rgba(80, 150, 255, 0.22);
+  border-color: #5096ff;
+  color: #ffffff;
+}
+
+.align-points-warning {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.32);
+}
+
+.align-points-warning-title {
+  color: #ff8a80;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.align-points-warning-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.align-warning-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 10px;
+  background: rgba(255, 80, 80, 0.18);
+  border: 1px solid rgba(255, 80, 80, 0.4);
+}
+
+.align-warning-tag-label {
+  color: #ffb4a8;
+  font-size: 12px;
+}
+
+.align-warning-tag-remove {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #ff8a80;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.align-warning-tag-remove:hover {
+  background: rgba(255, 80, 80, 0.4);
+  color: #ffffff;
+}
+
+.align-warning-tag-remove svg {
+  width: 10px;
+  height: 10px;
+}
+
+.align-point-option {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.align-point-name {
+  color: #ffffff;
+}
+
+.align-point-coord {
+  color: #a0a0a0;
+}
+
+.align-point-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+.align-point-arrow {
+  width: 14px;
+  height: 14px;
+  color: #5096ff;
+  flex-shrink: 0;
+}
+
+.align-point-preview-coord {
+  color: #5096ff;
+  font-size: 12px;
+}
+
+.align-dialog-desc {
+  color: #7a8a9a;
+  font-size: 12px;
+  line-height: 1.5;
+  padding-left: 8px;
+  border-left: 2px solid #3a4a5a;
+  font-style: italic;
 }
 
 .dialog-desc {

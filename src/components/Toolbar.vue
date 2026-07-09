@@ -33,6 +33,7 @@ const emit = defineEmits<{
   (e: 'new-project'): void
   (e: 'exit-project'): void
   (e: 'edit-project'): void
+  (e: 'open-align-points'): void
 }>()
 
 const uiStore = useUiStore()
@@ -116,6 +117,12 @@ const profileMenuStyle = ref({
   left: '0px',
   minWidth: '248px',
 })
+const showAlignHint = ref(false)
+const alignHintPinned = ref(false)
+const alignHintTriggerRef = ref<HTMLElement | null>(null)
+const alignHintPopoverRef = ref<HTMLElement | null>(null)
+const alignHintStyle = ref<Record<string, string>>({})
+let alignHintRafId = 0
 const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
 const displayEmail = computed(() => user.value?.username || '请先登录后查看账号信息')
 const userRoleText = computed(() => user.value?.role || 'GUEST')
@@ -272,6 +279,11 @@ const selectIntersectionPointMode = () => {
   setMode(EditorMode.IntersectionPoint)
 }
 
+const selectAlignPoints = () => {
+  uiStore.setToolbarMenuOpen('pointOpen', false, { exclusive: false })
+  emit('open-align-points')
+}
+
 const selectCreateLineMode = () => {
   setMode(EditorMode.CreateLine)
 }
@@ -424,6 +436,72 @@ const updateProfileMenuPosition = () => {
   }
 }
 
+const updateAlignHintPosition = () => {
+  if (!showAlignHint.value) return
+  const el = alignHintTriggerRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const popEl = alignHintPopoverRef.value
+  const popW = popEl?.offsetWidth || 260
+  const popH = popEl?.offsetHeight || 160
+  const gap = 8
+  const margin = 8
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+
+  // 默认：问号右侧、顶部对齐
+  let left = rect.right + gap
+  let top = rect.top
+
+  // 右侧放不下 → 放左侧
+  if (left + popW > vw - margin) {
+    left = rect.left - popW - gap
+  }
+  // 左侧也放不下（窄屏）→ 下方居中
+  if (left < margin) {
+    left = Math.max(margin, Math.min(rect.left, vw - popW - margin))
+    top = rect.bottom + gap
+  }
+
+  // 垂直方向防溢出
+  if (top + popH > vh - margin) {
+    top = Math.max(margin, vh - popH - margin)
+  }
+  if (top < margin) top = margin
+
+  alignHintStyle.value = {
+    position: 'fixed',
+    top: `${top}px`,
+    left: `${left}px`,
+  }
+  alignHintRafId = requestAnimationFrame(updateAlignHintPosition)
+}
+
+const openAlignHint = (pointerType: string) => {
+  if (pointerType !== 'touch') showAlignHint.value = true
+}
+
+const closeAlignHint = (pointerType: string) => {
+  if (pointerType !== 'touch' && !alignHintPinned.value) showAlignHint.value = false
+}
+
+const toggleAlignHintPinned = () => {
+  alignHintPinned.value = !alignHintPinned.value
+  showAlignHint.value = alignHintPinned.value
+}
+
+watch(showAlignHint, (show) => {
+  if (show) {
+    updateAlignHintPosition()
+  } else {
+    if (alignHintRafId) {
+      cancelAnimationFrame(alignHintRafId)
+      alignHintRafId = 0
+    }
+    alignHintPinned.value = false
+  }
+})
+
 const goLogin = async () => {
   profileMenuOpen.value = false
   await router.push({
@@ -539,6 +617,14 @@ const handleClickOutside = (event: MouseEvent) => {
     !sideMenuOverlayRef.value?.contains(target)
   ) {
     sideMenuOpen.value = false
+  }
+  if (
+    alignHintPinned.value &&
+    !alignHintTriggerRef.value?.contains(target) &&
+    !alignHintPopoverRef.value?.contains(target)
+  ) {
+    alignHintPinned.value = false
+    showAlignHint.value = false
   }
 }
 
@@ -943,6 +1029,69 @@ onUnmounted(() => {
         </svg>
         <span>交点</span>
       </button>
+      <div class="align-item-layer">
+        <button class="menu-item" @click="selectAlignPoints">
+          <svg
+            class="menu-item-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.3"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="17" y1="4" x2="17" y2="20" stroke-dasharray="2 1.8" stroke-opacity="0.45" />
+            <circle cx="5" cy="6" r="1.6" />
+            <line x1="6.8" y1="6" x2="13.5" y2="6" stroke-width="1.8" />
+            <polyline points="11 4 13.5 6 11 8" stroke-width="1.8" />
+            <circle cx="5" cy="12" r="1.6" />
+            <line x1="6.8" y1="12" x2="13.5" y2="12" stroke-width="1.8" />
+            <polyline points="11 10 13.5 12 11 14" stroke-width="1.8" />
+            <circle cx="5" cy="18" r="1.6" />
+            <line x1="6.8" y1="18" x2="13.5" y2="18" stroke-width="1.8" />
+            <polyline points="11 16 13.5 18 11 20" stroke-width="1.8" />
+            <circle cx="17" cy="6" r="1.8" fill="currentColor" />
+            <circle cx="17" cy="12" r="1.8" fill="currentColor" />
+            <circle cx="17" cy="18" r="1.8" fill="currentColor" />
+          </svg>
+          <span>点轴对齐</span>
+        </button>
+        <span
+          class="align-hint-wrapper"
+          @pointerenter="(e: PointerEvent) => openAlignHint(e.pointerType)"
+          @pointerleave="(e: PointerEvent) => closeAlignHint(e.pointerType)"
+          @click.stop="toggleAlignHintPinned"
+        >
+          <button
+            ref="alignHintTriggerRef"
+            type="button"
+            class="align-hint-trigger"
+            :class="{ active: alignHintPinned }"
+          >
+            ?
+          </button>
+        </span>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
+      v-if="showAlignHint"
+      ref="alignHintPopoverRef"
+      class="align-hint-popover"
+      :style="alignHintStyle"
+      @mousedown.stop
+      @touchstart.stop
+    >
+      <div class="align-hint-title">点轴对齐</div>
+      <div class="align-hint-desc">
+        选中两个及以上的点后点击本工具，选择基准点和基准轴，其他点在该轴上的坐标将变为基准点的值。
+      </div>
+      <div class="align-hint-example">
+        例：A(2,11,-4)、B(-8,5,-13)，基准点 A、Y 轴 → B 变为 (-8,11,-13)。
+      </div>
+      <div class="align-hint-note">锁定或受约束无法矫正的点会提示，可删除后重试。</div>
     </div>
   </Teleport>
 
@@ -2223,5 +2372,104 @@ button.is-active {
     max-width: 70px;
     font-size: 11px;
   }
+}
+
+.align-item-layer {
+  position: relative;
+  display: flex;
+}
+
+.align-item-layer > .menu-item {
+  width: 100%;
+}
+
+.align-hint-wrapper {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  padding-left: 4px;
+  pointer-events: auto;
+}
+
+.align-hint-trigger {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.align-hint-trigger:hover {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.9);
+  color: #fff;
+}
+
+.align-hint-trigger:active {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.75) !important;
+  transform: scale(0.85);
+}
+
+.align-hint-trigger.active {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.align-hint-popover {
+  position: fixed;
+  z-index: 1200;
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #1f1f1f 0%, #191919 100%);
+  border: 1px solid #3d3d3d;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
+  color: #d6d6d6;
+  font-size: 12px;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.align-hint-title {
+  color: #f3f3f3;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.align-hint-desc {
+  color: #c5c5c5;
+}
+
+.align-hint-example {
+  color: #9aa6b2;
+  font-style: italic;
+}
+
+.align-hint-note {
+  color: #ffb4a8;
 }
 </style>

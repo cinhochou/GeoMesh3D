@@ -97,6 +97,14 @@ interface MergePointDialogState {
   targetId: string
 }
 
+type AlignAxis = 'x' | 'y' | 'z'
+
+interface AlignPointsDialogState {
+  visible: boolean
+  referenceId: string
+  axis: AlignAxis
+}
+
 interface RegularPolygonDialogState {
   visible: boolean
   firstPointId: string
@@ -189,6 +197,12 @@ export const useUiStore = defineStore('ui', () => {
   const mergePointDialog = ref<MergePointDialogState>({
     visible: false,
     targetId: '',
+  })
+
+  const alignPointsDialog = ref<AlignPointsDialogState>({
+    visible: false,
+    referenceId: '',
+    axis: 'y',
   })
 
   const regularPolygonDialog = ref<RegularPolygonDialogState>({
@@ -339,6 +353,36 @@ export const useUiStore = defineStore('ui', () => {
     mergePointDialog.value = {
       visible: false,
       targetId: '',
+    }
+  }
+
+  const openAlignPointsDialog = (referenceId: string, axis: AlignAxis = 'y') => {
+    alignPointsDialog.value = {
+      visible: true,
+      referenceId,
+      axis,
+    }
+  }
+
+  const closeAlignPointsDialog = () => {
+    alignPointsDialog.value = {
+      visible: false,
+      referenceId: '',
+      axis: 'y',
+    }
+  }
+
+  const setAlignPointsReference = (referenceId: string) => {
+    alignPointsDialog.value = {
+      ...alignPointsDialog.value,
+      referenceId,
+    }
+  }
+
+  const setAlignPointsAxis = (axis: AlignAxis) => {
+    alignPointsDialog.value = {
+      ...alignPointsDialog.value,
+      axis,
     }
   }
 
@@ -512,6 +556,7 @@ export const useUiStore = defineStore('ui', () => {
     lastModeBeforeCoordinateOff.value = null
     clearToast()
     closeMergePointDialog()
+    closeAlignPointsDialog()
     closeRegularPolygonDialog()
     closeNormalCircleRadiusDialog()
     closeRadiusSphereDialog()
@@ -557,6 +602,7 @@ export const useUiStore = defineStore('ui', () => {
     toastVisible,
     toastScope,
     mergePointDialog,
+    alignPointsDialog,
     regularPolygonDialog,
     normalCircleRadiusDialog,
     radiusSphereDialog,
@@ -587,6 +633,10 @@ export const useUiStore = defineStore('ui', () => {
     setLastModeBeforeCoordinateOff,
     openMergePointDialog,
     closeMergePointDialog,
+    openAlignPointsDialog,
+    closeAlignPointsDialog,
+    setAlignPointsReference,
+    setAlignPointsAxis,
     openRegularPolygonDialog,
     closeRegularPolygonDialog,
     openNormalCircleRadiusDialog,

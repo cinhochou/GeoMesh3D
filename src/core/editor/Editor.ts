@@ -5923,6 +5923,17 @@ export class Editor {
     this.scene.selection.selectPoint(keepPointId)
   }
 
+  /**
+   * 点轴对齐：将多个点在指定轴上的分量统一为基准点的对应值。
+   * transforms 由调用方预先计算好 before/after，这里仅负责走命令栈。
+   */
+  alignPoints(
+    transforms: Array<{ pointId: string; before: Vec3; after: Vec3 }>,
+  ): void {
+    if (transforms.length === 0) return
+    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+  }
+
   tryCreateStraightLineWith(point: Point3) {
     if (this.mode !== EditorMode.CreateStraightLine) return
     this.tryCreateLinearWith(point, 'straightLine')
