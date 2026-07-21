@@ -57,6 +57,7 @@ const modeNameMap: Record<EditorMode, string> = {
   [EditorMode.CreateCylinder]: '创建圆柱',
   [EditorMode.CreatePerpendicularLine]: '创建垂线',
   [EditorMode.CreateParallelLine]: '创建平行线',
+  [EditorMode.CreateNet]: '创建展开图',
 }
 
 const modeHintMap: Record<EditorMode, string> = {
@@ -85,6 +86,7 @@ const modeHintMap: Record<EditorMode, string> = {
   [EditorMode.CreateCylinder]: '先选中两点作为两底圆心，再输入底面半径以创建圆柱~',
   [EditorMode.CreatePerpendicularLine]: '先选中要经过的点，再选中要垂直的线或平面以创建垂线~',
   [EditorMode.CreateParallelLine]: '先选中要平行的线，再选中要通过的点以创建平行线~',
+  [EditorMode.CreateNet]: '选中一个多面体以创建展开图~',
 }
 
 const getModeName = (mode: EditorMode) => modeNameMap[mode] ?? ''

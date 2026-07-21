@@ -17,6 +17,7 @@ import type { StraightLine3 } from '../core/geometry/StraightLine3'
 import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
+import { Net } from '../core/geometry/Net'
 
 import type { ParametricRange } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { useUiStore } from '@/store/uiStore'
@@ -201,6 +202,12 @@ const selectedCylinders = computed(() => {
     .map((id) => props.scene.cylinders.get(id))
     .filter((cylinder): cylinder is Cylinder3 => cylinder !== undefined)
 })
+const selectedNets = computed(() => {
+  void commandRevision.value
+  return [...props.scene.selection.nets]
+    .map((id) => props.scene.nets.get(id))
+    .filter((net): net is Net => net !== undefined)
+})
 const isConstrainedPoint = (point: Point3) =>
   (point.cubeId !== null && point.cubeRole === 'dependent') ||
   (point.regularPolygonId !== null && point.regularPolygonRole === 'dependent')
@@ -260,6 +267,10 @@ const conesInScene = computed(() => {
 const cylindersInScene = computed(() => {
   void commandRevision.value
   return [...props.scene.cylinders.values()]
+})
+const netsInScene = computed(() => {
+  void commandRevision.value
+  return [...props.scene.nets.values()]
 })
 const hexahedronsInScene = computed(() => {
   void commandRevision.value
@@ -364,6 +375,7 @@ const editing = ref<{
     | 'sphere'
     | 'cone'
     | 'cylinder'
+    | 'net'
   id: string
 } | null>(null)
 
@@ -383,6 +395,7 @@ const deleteByType: Record<string, (editor: Editor, id: string) => void> = {
   cone: (e, id) => e.deleteCone(id),
   cylinder: (e, id) => e.deleteCylinder(id),
   face: (e, id) => e.deleteFace(id),
+  net: (e, id) => e.deleteNet(id),
 }
 
 const handleDeleteElement = (type: string, id: string, name: string) => {
@@ -906,6 +919,15 @@ const editCylinder = reactive({
   bottomCenterPoint: { x: '', y: '', z: '' },
   topCenterPoint: { x: '', y: '', z: '' },
 })
+const editNet = reactive({
+  name: '',
+  visible: true,
+  unfoldRatio: 0,
+  mode: 'attached' as 'attached' | 'free',
+})
+const isDraggingNetSlider = ref(false)
+const netSliderStartRatio = new Map<string, number>()
+const contentNetSliderStartRatio = new Map<string, number>()
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 const splitPaneRef = ref<HTMLElement | null>(null)
@@ -944,6 +966,7 @@ const selectedConeIds = computed(() => selectedCones.value.map((c) => c?.id).fil
 const selectedCylinderIds = computed(() =>
   selectedCylinders.value.map((c) => c?.id).filter(Boolean),
 )
+const selectedNetIds = computed(() => selectedNets.value.map((n) => n?.id).filter(Boolean))
 const totalContentCount = computed(
   () =>
     pointsInScene.value.length +
@@ -960,7 +983,8 @@ const totalContentCount = computed(
     pyramidsInScene.value.length +
     spheresInScene.value.length +
     conesInScene.value.length +
-    cylindersInScene.value.length,
+    cylindersInScene.value.length +
+    netsInScene.value.length,
 )
 const contentGroupLabels: Record<
   | 'point'
@@ -977,7 +1001,8 @@ const contentGroupLabels: Record<
   | 'pyramid'
   | 'sphere'
   | 'cone'
-  | 'cylinder',
+  | 'cylinder'
+  | 'net',
   string
 > = {
   point: '点',
@@ -995,6 +1020,7 @@ const contentGroupLabels: Record<
   sphere: '球体',
   cone: '圆锥',
   cylinder: '圆柱',
+  net: '展开图',
 }
 const setContentGroupsCollapsed = (collapsed: boolean) => {
   uiStore.setContentGroupsCollapsed(collapsed)
@@ -1016,7 +1042,8 @@ const toggleContentGroup = (
     | 'pyramid'
     | 'sphere'
     | 'cone'
-    | 'cylinder',
+    | 'cylinder'
+    | 'net',
 ) => {
   uiStore.toggleContentGroup(type)
 }
@@ -1042,6 +1069,7 @@ const SELECT_FROM_CONTENT_MAP: Record<string, (id: string) => void> = {
   sphere: (id) => props.scene.selection.selectSphere(id),
   cone: (id) => props.scene.selection.selectCone(id),
   cylinder: (id) => props.scene.selection.selectCylinder(id),
+  net: (id) => props.scene.selection.selectNet(id),
 }
 
 const selectFromContent = (type: string, id: string) => {
@@ -1075,6 +1103,8 @@ const selectSphereFromContent = (sphereId: string) => selectFromContent('sphere'
 const selectConeFromContent = (coneId: string) => selectFromContent('cone', coneId)
 
 const selectCylinderFromContent = (cylinderId: string) => selectFromContent('cylinder', cylinderId)
+
+const selectNetFromContent = (netId: string) => selectFromContent('net', netId)
 
 const selectHexahedronFromContent = (cubeId: string) => {
   editing.value = null
@@ -1201,6 +1231,7 @@ watch(
     selectedSphereIds,
     selectedConeIds,
     selectedCylinderIds,
+    selectedNetIds,
   ],
   () => {
     if (!editing.value) return
@@ -1221,6 +1252,7 @@ watch(
       sphere: selectedSphereIds.value,
       cone: selectedConeIds.value,
       cylinder: selectedCylinderIds.value,
+      net: selectedNetIds.value,
       regularPolygon: selectedRegularPolygons.value.map((rp) => rp.constraintId),
     }
     const ids = idsMap[type]
@@ -1234,6 +1266,31 @@ watch(editing, (newVal, oldVal) => {
     hideAllLengthBubbles()
   }
 })
+
+// 当远端 net 属性变更（或本地通过 UpdateNetCommand 变更）时，把实际 Net 对象的
+// 属性同步到 editNet reactive 对象。否则 sidebar 编辑卡片中的名称输入框、对象显示
+// 开关、展开度数值/滑杆、模式切换开关不会反映远端修改。
+// 用户正在拖动滑块时跳过，避免远端覆盖本地正在进行的拖拽输入。
+watch(
+  () => {
+    if (editing.value?.type !== 'net') return null
+    return props.scene.nets.get(editing.value.id)
+  },
+  (net) => {
+    if (!net) return
+    if (isDraggingNetSlider.value) return
+    const name = net.name?.replace(/^展开图/, '') ?? ''
+    const visible = net.visible !== false
+    const unfoldRatio = Math.round(net.unfoldRatio * 100)
+    const mode = net.mode
+    // 仅在值真正变化时赋值，避免无谓的重渲染与输入框光标跳动
+    if (editNet.name !== name) editNet.name = name
+    if (editNet.visible !== visible) editNet.visible = visible
+    if (editNet.unfoldRatio !== unfoldRatio) editNet.unfoldRatio = unfoldRatio
+    if (editNet.mode !== mode) editNet.mode = mode
+  },
+  { deep: true },
+)
 
 watch(
   contentGroupsCollapsed,
@@ -1254,6 +1311,7 @@ watch(
     if (spheresInScene.value.length > 0) activeKeys.push('sphere')
     if (conesInScene.value.length > 0) activeKeys.push('cone')
     if (cylindersInScene.value.length > 0) activeKeys.push('cylinder')
+    if (netsInScene.value.length > 0) activeKeys.push('net')
     if (activeKeys.length === 0) return
     const allCollapsed = activeKeys.every((k) => c[k])
     const allExpanded = activeKeys.every((k) => !c[k])
@@ -3578,6 +3636,205 @@ const nudgeCylinderPointCoord = (
   if (nextValue === null) return
   editCylinder[pointKey][axis] = nextValue
   applyCylinderPointCoord(pointKey)
+}
+
+const startEditNet = (net: Net | undefined) => {
+  if (!net) return
+  editing.value = { type: 'net', id: net.id }
+  editNet.name = net.name?.replace(/^展开图/, '') ?? ''
+  editNet.visible = net.visible !== false
+  editNet.unfoldRatio = Math.round(net.unfoldRatio * 100)
+  editNet.mode = net.mode
+}
+
+const applyEditNet = () => {
+  if (!editing.value || editing.value.type !== 'net') return
+  const net = props.scene.nets.get(editing.value.id)
+  if (!net) return
+  props.editor.beginCollabTransaction('UpdateNetCommand')
+  props.editor.updateNet(editing.value.id, {
+    name: `展开图${editNet.name.trim()}`,
+    visible: editNet.visible,
+  })
+  props.editor.commitCollabTransaction()
+  // 触发实时同步（33ms 节流），避免仅依赖 50ms 节流的 syncAction 导致远端延迟感知
+  props.editor.syncLiveNet(editing.value.id)
+}
+
+const startNetSliderDrag = (netId: string) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  netSliderStartRatio.set(netId, net.unfoldRatio)
+  isDraggingNetSlider.value = true
+}
+
+const applyEditNetUnfoldRatio = () => {
+  if (!editing.value || editing.value.type !== 'net') return
+  const net = props.scene.nets.get(editing.value.id)
+  if (!net) return
+  const val = Math.max(0, Math.min(100, editNet.unfoldRatio))
+  editNet.unfoldRatio = val
+  net.setUnfoldRatio(val / 100)
+  props.scene.markNetDirty(editing.value.id)
+  props.editor.syncLiveNet(editing.value.id)
+}
+
+const commitEditNetUnfoldRatio = () => {
+  if (!editing.value || editing.value.type !== 'net') return
+  const netId = editing.value.id
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const startRatio = netSliderStartRatio.get(netId)
+  const curRatio = net.unfoldRatio
+  isDraggingNetSlider.value = false
+  netSliderStartRatio.delete(netId)
+  if (startRatio === undefined || Math.abs(curRatio - startRatio) < 1e-6) return
+  net.setUnfoldRatio(startRatio)
+  props.editor.beginCollabTransaction('UpdateNetUnfoldRatio')
+  props.editor.updateNet(netId, { unfoldRatio: curRatio })
+  props.editor.commitCollabTransaction()
+}
+
+const nudgeNetUnfoldRatio = (netId: string, delta: number) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const currentPercent = Math.round(net.unfoldRatio * 100)
+  const newPercent = Math.max(0, Math.min(100, currentPercent + delta))
+  if (newPercent === currentPercent) return
+  const newVal = newPercent
+  if (editing.value?.type === 'net' && editing.value.id === netId) {
+    editNet.unfoldRatio = newVal
+  }
+  props.editor.beginCollabTransaction('NudgeNetUnfoldRatio')
+  props.editor.updateNet(netId, { unfoldRatio: newVal / 100 })
+  props.editor.commitCollabTransaction()
+}
+
+const getNetSourceLabel = (net: Net) => {
+  if (net.solidType === 'hexahedron' || net.solidType === 'tetrahedron') {
+    const constraint = props.editor.getCubeConstraint(net.solidId)
+    return constraint?.name ?? (net.solidType === 'tetrahedron' ? '正四面体' : '正六面体')
+  } else if (net.solidType === 'prism') {
+    const constraint = props.editor.getPrismConstraint(net.solidId)
+    return constraint?.name ?? '棱柱'
+  } else if (net.solidType === 'pyramid') {
+    const constraint = props.editor.getPyramidConstraint(net.solidId)
+    return constraint?.name ?? '棱锥'
+  }
+  return '多面体'
+}
+
+const startContentNetSliderDrag = (netId: string) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  contentNetSliderStartRatio.set(netId, net.unfoldRatio)
+}
+
+const handleContentNetUnfoldRatioInput = (netId: string, event: Event) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const target = event.target as HTMLInputElement
+  const val = parseInt(target.value, 10)
+  const ratio = isNaN(val) ? 0 : Math.max(0, Math.min(100, val)) / 100
+  net.setUnfoldRatio(ratio)
+  props.scene.markNetDirty(netId)
+  props.editor.syncLiveNet(netId)
+  if (editing.value?.type === 'net' && editing.value.id === netId) {
+    editNet.unfoldRatio = Math.round(ratio * 100)
+  }
+}
+
+const handleContentNetUnfoldRatioChange = (netId: string, event: Event) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const target = event.target as HTMLInputElement
+  const val = parseInt(target.value, 10)
+  const curRatio = (isNaN(val) ? 0 : Math.max(0, Math.min(100, val))) / 100
+  const startRatio = contentNetSliderStartRatio.get(netId)
+  contentNetSliderStartRatio.delete(netId)
+  if (startRatio === undefined || Math.abs(curRatio - startRatio) < 1e-6) {
+    net.setUnfoldRatio(curRatio)
+    props.scene.markNetDirty(netId)
+    return
+  }
+  net.setUnfoldRatio(startRatio)
+  props.editor.beginCollabTransaction('UpdateNetUnfoldRatio')
+  props.editor.updateNet(netId, { unfoldRatio: curRatio })
+  props.editor.commitCollabTransaction()
+  if (editing.value?.type === 'net' && editing.value.id === netId) {
+    editNet.unfoldRatio = Math.round(curRatio * 100)
+  }
+}
+
+const handleNetUnfoldRatioInput = (netId: string, event: Event) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const target = event.target as HTMLInputElement
+  const val = parseInt(target.value, 10)
+  editNet.unfoldRatio = isNaN(val) ? 0 : val
+  net.setUnfoldRatio(editNet.unfoldRatio / 100)
+  props.scene.markNetDirty(netId)
+  props.editor.syncLiveNet(netId)
+}
+
+const handleNetUnfoldRatioChange = (netId: string, event: Event) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const target = event.target as HTMLInputElement
+  const val = parseInt(target.value, 10)
+  editNet.unfoldRatio = isNaN(val) ? 0 : val
+  const startRatio = netSliderStartRatio.get(netId)
+  const curRatio = editNet.unfoldRatio / 100
+  isDraggingNetSlider.value = false
+  netSliderStartRatio.delete(netId)
+  if (startRatio === undefined || Math.abs(curRatio - startRatio) < 1e-6) {
+    net.setUnfoldRatio(curRatio)
+    props.scene.markNetDirty(netId)
+    return
+  }
+  net.setUnfoldRatio(startRatio)
+  props.editor.beginCollabTransaction('UpdateNetUnfoldRatio')
+  props.editor.updateNet(netId, { unfoldRatio: curRatio })
+  props.editor.commitCollabTransaction()
+}
+
+const toggleNetVisibility = (netId: string) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  props.editor.updateNet(netId, { visible: !net.visible })
+  props.scene.markAllRenderDirty()
+}
+
+const setNetMode = (netId: string, mode: 'attached' | 'free') => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  if (mode === 'free' && net.mode !== 'free') {
+    props.editor.beginCollabTransaction('UpdateNetMode')
+    props.editor.updateNet(netId, { mode: 'free', position: { x: 0, y: 0, z: 0 } })
+    props.editor.commitCollabTransaction()
+  } else if (mode === 'attached' && net.mode !== 'attached') {
+    props.editor.beginCollabTransaction('UpdateNetMode')
+    props.editor.updateNet(netId, { mode: 'attached' })
+    props.editor.commitCollabTransaction()
+  }
+  // 触发实时同步，让远端立即看到模式切换
+  props.editor.syncLiveNet(netId)
+}
+
+const resetNet = (netId: string) => {
+  const net = props.scene.nets.get(netId)
+  if (!net) return
+  const alreadyReset = net.unfoldRatio === 0 && net.mode === 'attached' &&
+    net.position.x === 0 && net.position.y === 0 && net.position.z === 0
+  if (alreadyReset) return
+  props.editor.beginCollabTransaction('ResetNet')
+  props.editor.updateNet(netId, { reset: true })
+  props.editor.commitCollabTransaction()
+  if (editing.value?.type === 'net' && editing.value.id === netId) {
+    editNet.unfoldRatio = 0
+    editNet.mode = 'attached'
+  }
+  props.scene.markAllRenderDirty()
 }
 
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
@@ -9455,6 +9712,87 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="net in selectedNets"
+          :key="net!.id"
+          class="selectedNet-info"
+          @dblclick="startEditNet(net!)"
+        >
+          <div v-if="editing?.type === 'net' && editing?.id === net!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editNet.name" @input="applyEditNet" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editNet.visible" @change="applyEditNet" />
+                对象显示
+              </label>
+            </div>
+            <div class="net-unfold-row">
+              <label class="net-unfold-label">展开度（{{ editNet.unfoldRatio }}%）：</label>
+              <div class="net-unfold-controls">
+                <button
+                  type="button"
+                  class="net-round-btn"
+                  @click="nudgeNetUnfoldRatio(net!.id, -1)"
+                >−</button>
+                <input
+                  type="range"
+                  class="net-slider"
+                  min="0"
+                  max="100"
+                  v-model.number="editNet.unfoldRatio"
+                  @mousedown="startNetSliderDrag(net!.id)"
+                  @touchstart="startNetSliderDrag(net!.id)"
+                  @input="applyEditNetUnfoldRatio"
+                  @change="commitEditNetUnfoldRatio"
+                />
+                <button
+                  type="button"
+                  class="net-round-btn"
+                  @click="nudgeNetUnfoldRatio(net!.id, 1)"
+                >+</button>
+              </div>
+            </div>
+            <div class="name-row">
+              <label>模式：</label>
+              <label class="toggle-label">
+                <input
+                  type="radio"
+                  :value="'attached'"
+                  :checked="editNet.mode === 'attached'"
+                  @change="setNetMode(net!.id, 'attached'); editNet.mode = 'attached'"
+                />
+                附着（跟随多面体）
+              </label>
+              <label class="toggle-label">
+                <input
+                  type="radio"
+                  :value="'free'"
+                  :checked="editNet.mode === 'free'"
+                  @change="setNetMode(net!.id, 'free'); editNet.mode = 'free'"
+                />
+                自由（可拖拽移动）
+              </label>
+              <button type="button" class="tool-button net-reset-btn" @click="resetNet(net!.id)">复位</button>
+            </div>
+          </div>
+          <div v-else>
+            <div class="card-summary-header">
+              {{ net!.name ?? '' }}
+              <span class="constraint-badge">{{ net!.mode === 'free' ? '自由' : '附着' }}</span>
+              <span v-if="net!.visible === false" class="hidden-badge" title="对象隐藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </span>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item">展开：{{ Math.round(net!.unfoldRatio * 100) }}%</span>
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面数：{{ net!.faceIds.length }}</span>
+            </div>
+            <div>来源：{{ getNetSourceLabel(net!) }}</div>
+          </div>
+        </div>
+
+        <div
           v-for="face in selectedEditableFaces"
           :key="face!.id"
           class="selectedFace-info"
@@ -10307,6 +10645,56 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        <div v-if="netsInScene.length > 0" class="content-group">
+          <button
+            type="button"
+            class="content-group-header content-group-toggle"
+            :aria-expanded="!collapsedContentGroups.net"
+            @click="toggleContentGroup('net')"
+          >
+            <span class="content-group-toggle-icon">
+              {{ collapsedContentGroups.net ? '▸' : '▾' }}
+            </span>
+            <span class="content-group-label">{{ contentGroupLabels.net }}</span>
+            <span class="content-group-count">{{ netsInScene.length }}</span>
+          </button>
+          <div v-show="!collapsedContentGroups.net" class="content-group-body">
+            <div
+              v-for="net in netsInScene"
+              :key="net.id"
+              class="net-info selectable-geo"
+              :class="{ 'is-selected': selectedNetIds.includes(net.id) }"
+              @click="selectNetFromContent(net.id)"
+            >
+              <div class="card-summary-header">
+                {{ net.name ?? '' }}
+                <span class="constraint-badge">{{ net.mode === 'free' ? '自由' : '附着' }}</span>
+                <span v-if="net.visible === false" class="hidden-badge" title="对象隐藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </span>
+              </div>
+              <div class="face-metric-row">
+                <span class="metric-item">展开：{{ Math.round(net.unfoldRatio * 100) }}%</span>
+                <span class="metric-sep">/</span>
+                <span class="metric-item">面数：{{ net.faceIds.length }}</span>
+              </div>
+              <div>来源：{{ getNetSourceLabel(net) }}</div>
+              <div class="net-slider-row">
+                <input
+                  type="range"
+                  class="net-slider"
+                  min="0"
+                  max="100"
+                  :value="Math.round(net.unfoldRatio * 100)"
+                  @mousedown="startContentNetSliderDrag(net.id)"
+                  @touchstart="startContentNetSliderDrag(net.id)"
+                  @input="handleContentNetUnfoldRatioInput(net.id, $event)"
+                  @change="handleContentNetUnfoldRatioChange(net.id, $event)"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="facesInScene.length > 0" class="content-group">
           <button
             type="button"
@@ -10545,6 +10933,109 @@ hr {
 .cylinder-info {
   background-color: rgba(232, 96, 122, 0.22);
   border-left-color: #e8607a;
+}
+.selectedNet-info,
+.net-info {
+  background-color: rgba(74, 158, 255, 0.18);
+  border-left: 3px solid #4a9eff;
+  margin-bottom: 6px;
+  padding: 8px;
+  font-size: 13px;
+}
+.net-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.net-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(74, 158, 255, 0.25);
+  outline: none;
+  cursor: pointer;
+}
+.net-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+}
+.net-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  border: none;
+}
+.net-unfold-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+}
+.net-unfold-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: #b8d4ff;
+}
+.net-unfold-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 200px;
+  min-width: 200px;
+}
+.net-unfold-controls .net-slider {
+  flex: 1;
+}
+.net-round-btn {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #4a9eff;
+  background: rgba(74, 158, 255, 0.2);
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.net-round-btn:hover:not(:disabled) {
+  background: rgba(74, 158, 255, 0.4);
+}
+.net-round-btn:active:not(:disabled) {
+  background: #4a9eff;
+  color: #000;
+  transform: scale(0.92);
+}
+.net-reset-btn {
+  margin-left: auto;
+  background: rgba(74, 158, 255, 0.25);
+  border: 1px solid #4a9eff;
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.net-reset-btn:hover {
+  background: rgba(74, 158, 255, 0.4);
 }
 .selectable-geo {
   cursor: pointer;

@@ -23,6 +23,7 @@ import { PrismConstraint } from '../constraints/PrismConstraint'
 import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { PlanarPolygonConstraint } from '../constraints/PlanarFaceConstraint'
 import type { IntersectionTargetRef } from '../geometry/IntersectionPoint3'
+import { Net, type NetSolidType, type NetFaceTransform, type NetMode } from '../geometry/Net'
 
 type SerializedVec3 = { x: number; y: number; z: number }
 
@@ -348,6 +349,30 @@ type SerializedParallelLineConstraint = {
   targetId: string
 }
 
+type SerializedNetFaceTransform = {
+  hingeEdgePointIds: [string, string]
+  rotationAxis: SerializedVec3
+  fullRotationAngle: number
+  parentFaceId: string | null
+}
+
+type SerializedNet = {
+  id: string
+  name: string
+  solidId: string
+  solidType: NetSolidType
+  baseFaceId: string
+  faceIds: string[]
+  faceTransforms: Record<string, SerializedNetFaceTransform>
+  color: number
+  visible: boolean
+  unfoldRatio: number
+  position: SerializedVec3
+  mode: string
+  controlEdgeFaceId: string | null
+  controlEdgePointIds: [string, string] | null
+}
+
 type SerializedConstraint =
   | SerializedCubeConstraint
   | SerializedIntersectionConstraint
@@ -375,6 +400,7 @@ type SceneMetadata = {
   sphereCount: number
   coneCount: number
   cylinderCount: number
+  netCount: number
   constraintCount: number
 }
 
@@ -393,6 +419,7 @@ export type SerializedScene = {
   spheres: SerializedSphere[]
   cones: SerializedCone[]
   cylinders: SerializedCylinder[]
+  nets: SerializedNet[]
   constraints: SerializedConstraint[]
 }
 
@@ -608,6 +635,34 @@ function serializeCylinder(c: Cylinder3): SerializedCylinder {
   }
 }
 
+function serializeNet(n: Net): SerializedNet {
+  const faceTransforms: Record<string, SerializedNetFaceTransform> = {}
+  for (const [faceId, transform] of n.faceTransforms) {
+    faceTransforms[faceId] = {
+      hingeEdgePointIds: [...transform.hingeEdgePointIds] as [string, string],
+      rotationAxis: serializeVec3(transform.rotationAxis),
+      fullRotationAngle: transform.fullRotationAngle,
+      parentFaceId: transform.parentFaceId,
+    }
+  }
+  return {
+    id: n.id,
+    name: n.name,
+    solidId: n.solidId,
+    solidType: n.solidType,
+    baseFaceId: n.baseFaceId,
+    faceIds: [...n.faceIds],
+    faceTransforms,
+    color: n.color,
+    visible: n.visible,
+    unfoldRatio: n.unfoldRatio,
+    position: serializeVec3(n.position),
+    mode: n.mode,
+    controlEdgeFaceId: n.controlEdgeFaceId,
+    controlEdgePointIds: n.controlEdgePointIds ? [...n.controlEdgePointIds] as [string, string] : null,
+  }
+}
+
 function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
   if (c instanceof CubeConstraint) {
     return {
@@ -746,6 +801,7 @@ export function exportScene(scene: Scene): SerializedScene {
   const spheres = [...scene.spheres.values()].map(serializeSphere)
   const cones = [...scene.cones.values()].map(serializeCone)
   const cylinders = [...scene.cylinders.values()].map(serializeCylinder)
+  const nets = [...scene.nets.values()].map(serializeNet)
   const constraints = scene.constraints.map(serializeConstraint).filter((c): c is SerializedConstraint => c !== null)
 
   const now = new Date()
@@ -754,7 +810,7 @@ export function exportScene(scene: Scene): SerializedScene {
 
   const metadata: SceneMetadata = {
     exportedAt,
-    totalElements: points.length + lines.length + straightLines.length + perpendicularLines.length + parallelLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length + cylinders.length,
+    totalElements: points.length + lines.length + straightLines.length + perpendicularLines.length + parallelLines.length + rays.length + vectors.length + circles.length + faces.length + spheres.length + cones.length + cylinders.length + nets.length,
     pointCount: points.length,
     lineCount: lines.length,
     straightLineCount: straightLines.length,
@@ -767,6 +823,7 @@ export function exportScene(scene: Scene): SerializedScene {
     sphereCount: spheres.length,
     coneCount: cones.length,
     cylinderCount: cylinders.length,
+    netCount: nets.length,
     constraintCount: constraints.length,
   }
 
@@ -785,6 +842,7 @@ export function exportScene(scene: Scene): SerializedScene {
     spheres,
     cones,
     cylinders,
+    nets,
     constraints,
   }
 }
@@ -867,6 +925,7 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     'spheres',
     'cones',
     'cylinders',
+    'nets',
     'constraints',
   ]
 
@@ -1366,6 +1425,67 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
     if (typeof c.userLocked !== 'boolean') c.userLocked = false
   }
 
+  const nets = obj.nets as SerializedNet[]
+  const netIdSet = new Set<string>()
+  for (const n of nets) {
+    let err = validateId(n.id, '展开图')
+    if (err) return { valid: false, error: err }
+    err = validateName(n.name, '展开图', n.id)
+    if (err) return { valid: false, error: err }
+    err = validateIdUnique(n.id, netIdSet, '展开图')
+    if (err) return { valid: false, error: err }
+    netIdSet.add(n.id)
+
+    const validSolidTypes: NetSolidType[] = ['hexahedron', 'tetrahedron', 'prism', 'pyramid']
+    if (!validSolidTypes.includes(n.solidType)) {
+      return { valid: false, error: `展开图 "${n.name}" 的 solidType 无效` }
+    }
+
+    if (!Array.isArray(n.faceIds) || n.faceIds.length === 0) {
+      return { valid: false, error: `展开图 "${n.name}" 的 faceIds 无效` }
+    }
+    for (const fid of n.faceIds) {
+      err = validateReference(fid, faceIdSet, `展开图 "${n.name}" 引用了不存在的面`)
+      if (err) return { valid: false, error: err }
+    }
+
+    err = validateReference(n.baseFaceId, faceIdSet, `展开图 "${n.name}" 的 baseFaceId 引用了不存在的面`)
+    if (err) return { valid: false, error: err }
+
+    if (typeof n.faceTransforms !== 'object' || n.faceTransforms === null) {
+      return { valid: false, error: `展开图 "${n.name}" 的 faceTransforms 无效` }
+    }
+    for (const [faceId, transform] of Object.entries(n.faceTransforms)) {
+      if (!faceIdSet.has(faceId)) {
+        return { valid: false, error: `展开图 "${n.name}" 的 faceTransforms 引用了不存在的面: ${faceId}` }
+      }
+      if (!Array.isArray(transform.hingeEdgePointIds) || transform.hingeEdgePointIds.length !== 2) {
+        return { valid: false, error: `展开图 "${n.name}" 的面 "${faceId}" 的 hingeEdgePointIds 无效` }
+      }
+      for (const pid of transform.hingeEdgePointIds) {
+        err = validateReference(pid, pointIdSet, `展开图 "${n.name}" 的面 "${faceId}" 的铰链边引用了不存在的点`)
+        if (err) return { valid: false, error: err }
+      }
+      err = validateVec3(transform.rotationAxis, `展开图 "${n.name}" 的面 "${faceId}" 的 rotationAxis 无效`)
+      if (err) return { valid: false, error: err }
+      if (typeof transform.fullRotationAngle !== 'number' || !Number.isFinite(transform.fullRotationAngle)) {
+        return { valid: false, error: `展开图 "${n.name}" 的面 "${faceId}" 的 fullRotationAngle 无效` }
+      }
+      if (transform.parentFaceId !== null) {
+        err = validateNullableStringId(transform.parentFaceId, `展开图 "${n.name}" 的面 "${faceId}" 的 parentFaceId 无效`)
+        if (err) return { valid: false, error: err }
+      }
+    }
+
+    if (typeof n.color !== 'number' || !Number.isFinite(n.color)) {
+      return { valid: false, error: `展开图 "${n.name}" 的 color 无效` }
+    }
+
+    if (typeof n.visible !== 'boolean') n.visible = true
+    if (typeof n.unfoldRatio !== 'number' || !Number.isFinite(n.unfoldRatio)) n.unfoldRatio = 0
+    n.unfoldRatio = Math.max(0, Math.min(1, n.unfoldRatio))
+  }
+
   const constraints = obj.constraints as SerializedConstraint[]
   const validTypes = new Set(['cube', 'prism', 'pyramid', 'intersection', 'regularPolygon', 'planar', 'cylinder', 'objectConstrainedPoint', 'perpendicularLine', 'parallelLine'])
   const constraintPointIds = new Set<string>()
@@ -1696,6 +1816,7 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.cylinders.clear()
   scene.perpendicularLines.clear()
   scene.parallelLines.clear()
+  scene.nets.clear()
 
   const pointMap = new Map<string, Point3>()
 
@@ -2040,6 +2161,37 @@ export function importScene(scene: Scene, data: SerializedScene): void {
     scene.addParallelLine(l)
   }
 
+  for (const sn of data.nets ?? []) {
+    const faceTransforms = new Map<string, NetFaceTransform>()
+    for (const [faceId, st] of Object.entries(sn.faceTransforms)) {
+      faceTransforms.set(faceId, {
+        hingeEdgePointIds: [...st.hingeEdgePointIds] as [string, string],
+        rotationAxis: new Vec3(st.rotationAxis.x, st.rotationAxis.y, st.rotationAxis.z),
+        fullRotationAngle: st.fullRotationAngle,
+        parentFaceId: st.parentFaceId,
+      })
+    }
+    const net = new Net(
+      sn.id,
+      sn.name,
+      sn.solidId,
+      sn.solidType,
+      sn.baseFaceId,
+      [...sn.faceIds],
+      faceTransforms,
+      sn.color,
+    )
+    net.visible = sn.visible ?? true
+    net.unfoldRatio = sn.unfoldRatio ?? 0
+    if (sn.position) {
+      net.position = new Vec3(sn.position.x, sn.position.y, sn.position.z)
+    }
+    net.mode = (sn.mode === 'free' ? 'free' : 'attached') as NetMode
+    net.controlEdgeFaceId = sn.controlEdgeFaceId ?? null
+    net.controlEdgePointIds = sn.controlEdgePointIds ? [...sn.controlEdgePointIds] as [string, string] : null
+    scene.addNet(net)
+  }
+
   const seenFaceIds = new Set<string>()
   const seenPointIds = new Set<string>()
   const seenCubeIds = new Set<string>()
@@ -2210,6 +2362,7 @@ type SceneElementCounts = {
   spheres: number
   cones: number
   cylinders: number
+  nets: number
 }
 
 function checkSceneEmpty(counts: SceneElementCounts): boolean {
@@ -2225,6 +2378,7 @@ function checkSceneEmpty(counts: SceneElementCounts): boolean {
   if (counts.spheres > 0) return false
   if (counts.cones > 0) return false
   if (counts.cylinders > 0) return false
+  if (counts.nets > 0) return false
   return true
 }
 
@@ -2242,6 +2396,7 @@ export function isSceneEmpty(scene: Scene): boolean {
     spheres: scene.spheres.size,
     cones: scene.cones.size,
     cylinders: scene.cylinders.size,
+    nets: scene.nets.size,
   })
 }
 
@@ -2259,6 +2414,7 @@ export function isSerializedSceneEmpty(data: SerializedScene): boolean {
     spheres: data.spheres.length,
     cones: data.cones.length,
     cylinders: data.cylinders?.length ?? 0,
+    nets: data.nets?.length ?? 0,
   })
 }
 
@@ -2304,6 +2460,7 @@ export function createEmptySerializedScene(): SerializedScene {
     spheres: [],
     cones: [],
     cylinders: [],
+    nets: [],
     constraints: [],
   }
 }

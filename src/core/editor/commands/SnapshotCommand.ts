@@ -13,6 +13,7 @@ import { Cylinder3, type CylinderType } from '../../geometry/Cylinder3'
 import { PerpendicularLine3 } from '../../geometry/PerpendicularLine3'
 import { ParallelLine3 } from '../../geometry/ParallelLine3'
 import { Vec3 } from '../../geometry/Vec3'
+import { Net, type NetSolidType, type NetFaceTransform } from '../../geometry/Net'
 import { CubeConstraint } from '../../constraints/CubeConstraint'
 import { IntersectionPointConstraint } from '../../constraints/IntersectionPointConstraint'
 import { RegularPolygonConstraint } from '../../constraints/RegularPolygonConstraint'
@@ -259,6 +260,26 @@ type ParallelLineSnapshot = {
   targetId: string
 }
 
+type NetFaceTransformSnapshot = {
+  hingeEdgePointIds: [string, string]
+  rotationAxis: Vec3Snapshot
+  fullRotationAngle: number
+  parentFaceId: string | null
+}
+
+type NetSnapshot = {
+  id: string
+  name: string
+  solidId: string
+  solidType: NetSolidType
+  baseFaceId: string
+  faceIds: string[]
+  faceTransforms: Record<string, NetFaceTransformSnapshot>
+  color: number
+  visible: boolean
+  unfoldRatio: number
+}
+
 type ConstraintSnapshot =
   | { type: 'cube'; cubeId: string; solidType: 'hexahedron' | 'tetrahedron'; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; x: number; y: number; z: number }>; faceIds: string[]; sourceLineId: string | null; vAxisHint: Vec3Snapshot; name: string; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
   | { type: 'intersection'; pointId: string; sourceA: IntersectionTargetRef; sourceB: IntersectionTargetRef }
@@ -288,6 +309,7 @@ export type SceneSubgraphSnapshot = {
   cylinders: CylinderSnapshot[]
   perpendicularLines: PerpendicularLineSnapshot[]
   parallelLines: ParallelLineSnapshot[]
+  nets: NetSnapshot[]
   constraints: ConstraintSnapshot[]
 }
 
@@ -453,6 +475,30 @@ function snapParallelLine(l: ParallelLine3): ParallelLineSnapshot {
   }
 }
 
+function snapNet(n: Net): NetSnapshot {
+  const faceTransforms: Record<string, NetFaceTransformSnapshot> = {}
+  for (const [faceId, transform] of n.faceTransforms) {
+    faceTransforms[faceId] = {
+      hingeEdgePointIds: [...transform.hingeEdgePointIds] as [string, string],
+      rotationAxis: snapVec3(transform.rotationAxis),
+      fullRotationAngle: transform.fullRotationAngle,
+      parentFaceId: transform.parentFaceId,
+    }
+  }
+  return {
+    id: n.id,
+    name: n.name,
+    solidId: n.solidId,
+    solidType: n.solidType,
+    baseFaceId: n.baseFaceId,
+    faceIds: [...n.faceIds],
+    faceTransforms,
+    color: n.color,
+    visible: n.visible,
+    unfoldRatio: n.unfoldRatio,
+  }
+}
+
 function snapConstraint(c: SceneConstraint): ConstraintSnapshot | null {
   if (c instanceof CubeConstraint) {
     return {
@@ -535,6 +581,7 @@ export function takeFullSnapshot(scene: Scene): SceneSubgraphSnapshot {
     cylinders: [...scene.cylinders.values()].map(snapCylinder),
     perpendicularLines: [...scene.perpendicularLines.values()].map(snapPerpendicularLine),
     parallelLines: [...scene.parallelLines.values()].map(snapParallelLine),
+    nets: [...scene.nets.values()].map(snapNet),
     constraints: scene.constraints.map(snapConstraint).filter((c): c is ConstraintSnapshot => c !== null),
   }
 }
@@ -993,7 +1040,46 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
     if (!snapshotParallelLineIds.has(id)) scene.removeParallelLine(id)
   }
 
-  // ─── 13. 约束：清空重建（约束不需要保留对象身份） ───
+  // ─── 13. Nets：重建（Net 对象不支持就地更新属性，采用删后重建） ───
+  const snapshotNetIds = new Set<string>()
+  for (const sn of snapshot.nets) {
+    snapshotNetIds.add(sn.id)
+    const faceTransforms = new Map<string, NetFaceTransform>()
+    for (const [faceId, st] of Object.entries(sn.faceTransforms)) {
+      faceTransforms.set(faceId, {
+        hingeEdgePointIds: [...st.hingeEdgePointIds] as [string, string],
+        rotationAxis: new Vec3(st.rotationAxis.x, st.rotationAxis.y, st.rotationAxis.z),
+        fullRotationAngle: st.fullRotationAngle,
+        parentFaceId: st.parentFaceId,
+      })
+    }
+    const existing = scene.nets.get(sn.id)
+    if (existing) {
+      existing.name = sn.name
+      existing.visible = sn.visible
+      existing.unfoldRatio = sn.unfoldRatio
+      existing.color = sn.color
+    } else {
+      const net = new Net(
+        sn.id,
+        sn.name,
+        sn.solidId,
+        sn.solidType,
+        sn.baseFaceId,
+        [...sn.faceIds],
+        faceTransforms,
+        sn.color,
+      )
+      net.visible = sn.visible
+      net.unfoldRatio = sn.unfoldRatio
+      scene.addNet(net)
+    }
+  }
+  for (const id of [...scene.nets.keys()]) {
+    if (!snapshotNetIds.has(id)) scene.removeNet(id)
+  }
+
+  // ─── 14. 约束：清空重建（约束不需要保留对象身份） ───
   scene.clearAllConstraints()
 
   const seenFaceIds = new Set<string>()

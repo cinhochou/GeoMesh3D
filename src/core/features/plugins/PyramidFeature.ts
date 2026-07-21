@@ -169,6 +169,11 @@ export const pyramidFeaturePlugin: FeaturePlugin = {
     const deleteParams = feature.params as unknown as DeletePyramidParams
     const pyramidId = deleteParams.constraint.pyramidId
 
+    const associatedNets = scene.getNetsForSolid(pyramidId)
+    associatedNets.forEach((net) => {
+      scene.removeNet(net.id)
+    })
+
     // 级联：相关垂直线
     deleteParams.relatedPerpendicularLines?.forEach((line) => {
       scene.removePerpendicularLine(line.id)

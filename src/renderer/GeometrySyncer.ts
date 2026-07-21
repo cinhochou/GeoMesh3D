@@ -16,6 +16,8 @@ import type { FacePreviewData } from '../core/editor/Editor'
 import { ARManager } from './ARManager'
 import { AxisGridManager } from './AxisGridManager'
 import { LabelRenderer } from './LabelRenderer'
+import { buildNetFaceMatrices } from './NetMath'
+import type { Net } from '../core/geometry/Net'
 
 type RenderObjectType =
   | 'point'
@@ -27,6 +29,8 @@ type RenderObjectType =
   | 'vector'
   | 'circle'
   | 'face'
+  | 'net'
+  | 'netFace'
   | 'sphere'
   | 'cone'
   | 'coneBase'
@@ -38,6 +42,7 @@ type RenderObjectType =
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
   geoId?: string
+  faceId?: string
   __labelSprite?: THREE.Sprite
   __valueLabelSprite?: THREE.Sprite
   __labelAnchor?: THREE.Vector3
@@ -45,6 +50,47 @@ type RenderObjectUserData = THREE.Object3D['userData'] & {
   __labelOffsetY?: number
   __arrowHead?: THREE.Mesh
   __valueOnlyExtraOffsetX?: number
+  __netRefs?: NetGroupRefs
+}
+
+// 展开图子对象引用，用于复用 netGroup 时高效更新变换/顶点/材质
+type NetCylinderEntry = {
+  cyl: THREE.Mesh
+  edgeIndex: number // 在该 face 边界中的边索引（i → i+1）
+}
+
+type NetFaceEntry = {
+  faceId: string
+  isBase: boolean
+  mesh: THREE.Mesh
+  outline: THREE.LineLoop
+  depthMesh: THREE.Mesh
+  cylinders: NetCylinderEntry[]
+}
+
+type NetHiddenEdgeEntry = {
+  line: THREE.Line
+  faceId: string
+  edgeIndex: number
+}
+
+type NetPointSpriteEntry = {
+  sprite: THREE.Sprite
+  faceId: string
+  pointId: string
+}
+
+type NetGroupRefs = {
+  faceEntries: NetFaceEntry[]
+  hiddenEdges: NetHiddenEdgeEntry[]
+  pointSprites: NetPointSpriteEntry[]
+  structureKey: string
+  lastSelected: boolean
+  lastVisible: boolean
+  lastMode: string
+  lastPositionX: number
+  lastPositionY: number
+  lastPositionZ: number
 }
 
 type LabelSpriteUserData = THREE.Object3D['userData'] & {
@@ -116,6 +162,13 @@ const FACE_FILL_OPACITY = 0.22
 const FACE_SELECTED_OPACITY = 0.3
 const FACE_PREVIEW_COLOR = 0x7fffd4
 const FACE_PREVIEW_OPACITY = 0.16
+const NET_FILL_COLOR = 0x88c4ff
+const NET_FILL_OPACITY = 0.18
+const NET_SELECTED_COLOR = SELECTED_COLOR
+const NET_SELECTED_OPACITY = 0.28
+const NET_EDGE_COLOR = 0x4a9eff
+const NET_EDGE_OPACITY = 0.7
+const NET_CONTROL_EDGE_HIT_WIDTH = 0.18
 const RAY_HEAD_LENGTH = 0.7
 const RAY_HEAD_RADIUS = 0.22
 const LINEAR_ARROW_PHONE_BREAKPOINT = 640
@@ -144,12 +197,16 @@ const HIDDEN_EDGE_OPACITY = 0.45
 const SOLID_EDGE_RENDER_ORDER = 3
 const HIDDEN_EDGE_RENDER_ORDER = 4
 const SURFACE_RENDER_ORDER = 0
+// 展开图面片渲染层级最高到 SOLID_EDGE_RENDER_ORDER + 15，选中元素需要在其之上
+const SELECTED_RENDER_ORDER = 30
+// 点精灵在选中时需要绘制在线段之上，避免线段在端点处穿透点渲染
+const SELECTED_POINT_RENDER_ORDER = SELECTED_RENDER_ORDER + 1
 
 const LINEAR_TYPES = new Set<string>([
   'line', 'straightLine', 'perpendicularLine', 'parallelLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
 ])
 
-const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX: number; labelOffsetY: number; visible?: boolean }>> = {
+const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { labelOffsetX?: number; labelOffsetY?: number; visible?: boolean }>> = {
   point: (s) => s.points,
   line: (s) => s.lines,
   straightLine: (s) => s.straightLines,
@@ -159,6 +216,7 @@ const TYPE_TO_SCENE_MAP: Record<string, (scene: GeoScene) => Map<string, { label
   vector: (s) => s.vectors,
   circle: (s) => s.circles,
   face: (s) => s.faces,
+  net: (s) => s.nets,
   sphere: (s) => s.spheres,
   cone: (s) => s.cones,
   cylinder: (s) => s.cylinders,
@@ -261,13 +319,13 @@ export class GeometrySyncer {
     this.deps = deps
   }
 
-  private createSolidEdgeMaterial(color: number): THREE.LineBasicMaterial {
+  private createSolidEdgeMaterial(color: number, opacity = 0.95): THREE.LineBasicMaterial {
     return new THREE.LineBasicMaterial({
       color,
       depthFunc: this.hiddenEdgeEnabled ? THREE.LessEqualDepth : THREE.AlwaysDepth,
       depthTest: this.hiddenEdgeEnabled,
       transparent: true,
-      opacity: 0.95,
+      opacity,
     })
   }
 
@@ -444,6 +502,7 @@ export class GeometrySyncer {
       this.syncSpheres(geoScene, dirtyState)
       this.syncCones(geoScene, dirtyState)
       this.syncCylinders(geoScene, dirtyState)
+      this.syncNets(geoScene, dirtyState)
       this.syncCubeValueLabels(geoScene)
       this.syncPrismValueLabels(geoScene)
       this.syncPyramidValueLabels(geoScene)
@@ -471,7 +530,7 @@ export class GeometrySyncer {
         material.alphaTest = 0.1
 
         sprite = new THREE.Sprite(material)
-        sprite.renderOrder = 6
+        sprite.renderOrder = SELECTED_POINT_RENDER_ORDER
 
         const scale = this.getPointSpriteScale()
 
@@ -552,6 +611,7 @@ export class GeometrySyncer {
       const baseColor = computePointBaseColor(p, scene)
       const finalColor = isSelected ? SELECTED_COLOR : baseColor
       ;(sprite.material as THREE.SpriteMaterial).color.set(finalColor)
+      sprite.renderOrder = SELECTED_POINT_RENDER_ORDER
       this.pointBaseColor.set(p.id, new THREE.Color(finalColor))
 
       let pointSpriteVisible = p.visible !== false
@@ -785,11 +845,13 @@ export class GeometrySyncer {
       }
       const edgeColor = (isSelected || isFaceHighlight) ? SELECTED_COLOR : LINEAR_COLOR
       ;(line.material as THREE.LineBasicMaterial).color.set(edgeColor)
+      line.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenLine = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenLine) {
         hiddenLine.visible = this.hiddenEdgeEnabled && lineData.visible !== false
         ;(hiddenLine.material as THREE.LineDashedMaterial).color.set(edgeColor)
+        hiddenLine.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       const mid = this._syncTmpA.set((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
@@ -815,10 +877,28 @@ export class GeometrySyncer {
       const p1 = rayData.p1.position
       const end = rayData.getDisplayEndPoint()
 
+      // 线段终点收到箭头底面，避免线穿入箭头内部
+      // 射线的箭头位置在 end 本身，其底面位于 end - direction * headLen / 2
+      const headScale = this.getLinearArrowScale()
+      const headLen = RAY_HEAD_LENGTH * headScale
+      const dx = end.x - p1.x
+      const dy = end.y - p1.y
+      const dz = end.z - p1.z
+      const rayLength = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      let lineEndX = end.x
+      let lineEndY = end.y
+      let lineEndZ = end.z
+      if (rayLength > headLen / 2 && rayLength > 0) {
+        const t = (rayLength - headLen / 2) / rayLength
+        lineEndX = p1.x + dx * t
+        lineEndY = p1.y + dy * t
+        lineEndZ = p1.z + dz * t
+      }
+
       if (!ray) {
         const points = [
           new THREE.Vector3(p1.x, p1.y, p1.z),
-          new THREE.Vector3(end.x, end.y, end.z),
+          new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
         ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
@@ -840,11 +920,14 @@ export class GeometrySyncer {
         const posAttr = ray.geometry.getAttribute('position') as THREE.BufferAttribute | null
         if (posAttr && posAttr.count >= 2) {
           posAttr.setXYZ(0, p1.x, p1.y, p1.z)
-          posAttr.setXYZ(1, end.x, end.y, end.z)
+          posAttr.setXYZ(1, lineEndX, lineEndY, lineEndZ)
           posAttr.needsUpdate = true
           this.updateBounds(ray.geometry)
         } else {
-          ray.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(end.x, end.y, end.z)])
+          ray.geometry.setFromPoints([
+            new THREE.Vector3(p1.x, p1.y, p1.z),
+            new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
+          ])
           this.updateBounds(ray.geometry)
         }
 
@@ -853,10 +936,13 @@ export class GeometrySyncer {
           const hPosAttr = hiddenRay.geometry.getAttribute('position') as THREE.BufferAttribute | null
           if (hPosAttr && hPosAttr.count >= 2) {
             hPosAttr.setXYZ(0, p1.x, p1.y, p1.z)
-            hPosAttr.setXYZ(1, end.x, end.y, end.z)
+            hPosAttr.setXYZ(1, lineEndX, lineEndY, lineEndZ)
             hPosAttr.needsUpdate = true
           } else {
-            hiddenRay.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(end.x, end.y, end.z)])
+            hiddenRay.geometry.setFromPoints([
+              new THREE.Vector3(p1.x, p1.y, p1.z),
+              new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
+            ])
           }
           hiddenRay.computeLineDistances()
         }
@@ -866,15 +952,17 @@ export class GeometrySyncer {
       const isSelected = scene.selection.rays.has(id)
       const rayColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(ray.material as THREE.LineBasicMaterial).color.set(rayColor)
+      ray.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenRayObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenRayObj) {
         hiddenRayObj.visible = this.hiddenEdgeEnabled && rayData.visible
         ;(hiddenRayObj.material as THREE.LineDashedMaterial).color.set(rayColor)
+        hiddenRayObj.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       this.updateRayArrowHead(ray, rayData, isSelected)
-      const mid = this._syncTmpC.set((p1.x + end.x) / 2, (p1.y + end.y) / 2, (p1.z + end.z) / 2)
+      const mid = this._syncTmpC.set((p1.x + lineEndX) / 2, (p1.y + lineEndY) / 2, (p1.z + lineEndZ) / 2)
       const isLabelActive =
         this.activeLabelTarget?.type === 'ray' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -948,11 +1036,13 @@ export class GeometrySyncer {
       const isSelected = scene.selection.straightLines.has(id)
       const slColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(line.material as THREE.LineBasicMaterial).color.set(slColor)
+      line.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenSlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenSlObj) {
         hiddenSlObj.visible = this.hiddenEdgeEnabled && lineData.visible
         ;(hiddenSlObj.material as THREE.LineDashedMaterial).color.set(slColor)
+        hiddenSlObj.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       const mid = this._syncTmpC.set(
@@ -1033,11 +1123,13 @@ export class GeometrySyncer {
       const isSelected = scene.selection.perpendicularLines.has(id)
       const plColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(line.material as THREE.LineBasicMaterial).color.set(plColor)
+      line.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenPlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenPlObj) {
         hiddenPlObj.visible = this.hiddenEdgeEnabled && lineData.visible
         ;(hiddenPlObj.material as THREE.LineDashedMaterial).color.set(plColor)
+        hiddenPlObj.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       let footMarker = this.footMarkerMap.get(id)
@@ -1145,11 +1237,13 @@ export class GeometrySyncer {
       const isSelected = scene.selection.parallelLines.has(id)
       const plColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(line.material as THREE.LineBasicMaterial).color.set(plColor)
+      line.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenPlObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenPlObj) {
         hiddenPlObj.visible = this.hiddenEdgeEnabled && lineData.visible
         ;(hiddenPlObj.material as THREE.LineDashedMaterial).color.set(plColor)
+        hiddenPlObj.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       const mid = this._syncTmpC.set(
@@ -1179,10 +1273,27 @@ export class GeometrySyncer {
       const p1 = vectorData.p1.position
       const p2 = vectorData.p2.position
 
+      // 线段终点收到箭头底面，避免线穿入箭头内部
+      const headScale = this.getLinearArrowScale()
+      const headLen = RAY_HEAD_LENGTH * headScale
+      const dx = p2.x - p1.x
+      const dy = p2.y - p1.y
+      const dz = p2.z - p1.z
+      const vecLength = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      let lineEndX = p2.x
+      let lineEndY = p2.y
+      let lineEndZ = p2.z
+      if (vecLength > headLen && vecLength > 0) {
+        const t = (vecLength - headLen) / vecLength
+        lineEndX = p1.x + dx * t
+        lineEndY = p1.y + dy * t
+        lineEndZ = p1.z + dz * t
+      }
+
       if (!vector) {
         const points = [
           new THREE.Vector3(p1.x, p1.y, p1.z),
-          new THREE.Vector3(p2.x, p2.y, p2.z),
+          new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
         ]
         const geo = new THREE.BufferGeometry().setFromPoints(points)
         const mat = this.createSolidEdgeMaterial(LINEAR_COLOR)
@@ -1204,11 +1315,14 @@ export class GeometrySyncer {
         const posAttr = vector.geometry.getAttribute('position') as THREE.BufferAttribute | null
         if (posAttr && posAttr.count >= 2) {
           posAttr.setXYZ(0, p1.x, p1.y, p1.z)
-          posAttr.setXYZ(1, p2.x, p2.y, p2.z)
+          posAttr.setXYZ(1, lineEndX, lineEndY, lineEndZ)
           posAttr.needsUpdate = true
           this.updateBounds(vector.geometry)
         } else {
-          vector.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+          vector.geometry.setFromPoints([
+            new THREE.Vector3(p1.x, p1.y, p1.z),
+            new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
+          ])
           this.updateBounds(vector.geometry)
         }
 
@@ -1217,10 +1331,13 @@ export class GeometrySyncer {
           const hPosAttr = hiddenVector.geometry.getAttribute('position') as THREE.BufferAttribute | null
           if (hPosAttr && hPosAttr.count >= 2) {
             hPosAttr.setXYZ(0, p1.x, p1.y, p1.z)
-            hPosAttr.setXYZ(1, p2.x, p2.y, p2.z)
+            hPosAttr.setXYZ(1, lineEndX, lineEndY, lineEndZ)
             hPosAttr.needsUpdate = true
           } else {
-            hiddenVector.geometry.setFromPoints([new THREE.Vector3(p1.x, p1.y, p1.z), new THREE.Vector3(p2.x, p2.y, p2.z)])
+            hiddenVector.geometry.setFromPoints([
+              new THREE.Vector3(p1.x, p1.y, p1.z),
+              new THREE.Vector3(lineEndX, lineEndY, lineEndZ),
+            ])
           }
           hiddenVector.computeLineDistances()
         }
@@ -1230,15 +1347,17 @@ export class GeometrySyncer {
       const isSelected = scene.selection.vectors.has(id)
       const vecColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(vector.material as THREE.LineBasicMaterial).color.set(vecColor)
+      vector.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenVecObj = this.hiddenLineMap.get(id) as THREE.Line | undefined
       if (hiddenVecObj) {
         hiddenVecObj.visible = this.hiddenEdgeEnabled && vectorData.visible
         ;(hiddenVecObj.material as THREE.LineDashedMaterial).color.set(vecColor)
+        hiddenVecObj.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       this.updateVectorArrowHead(vector, vectorData, isSelected)
-      const mid = this._syncTmpC.set((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, (p1.z + p2.z) / 2)
+      const mid = this._syncTmpC.set((p1.x + lineEndX) / 2, (p1.y + lineEndY) / 2, (p1.z + lineEndZ) / 2)
       const isLabelActive =
         this.activeLabelTarget?.type === 'vector' && this.activeLabelTarget.geoId === id
       this.syncLinearLabel(
@@ -1408,11 +1527,13 @@ export class GeometrySyncer {
       const isSelected = scene.selection.circles.has(id)
       const circleColor = isSelected ? SELECTED_COLOR : LINEAR_COLOR
       ;(circle.material as THREE.LineBasicMaterial).color.set(circleColor)
+      circle.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
 
       const hiddenCircle = this.hiddenLineMap.get(id) as THREE.LineLoop | undefined
       if (hiddenCircle) {
         hiddenCircle.visible = this.hiddenEdgeEnabled && circleData.visible
         ;(hiddenCircle.material as THREE.LineDashedMaterial).color.set(circleColor)
+        hiddenCircle.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
       const isLabelActive =
         this.activeLabelTarget?.type === 'circle' && this.activeLabelTarget.geoId === id
@@ -1633,10 +1754,12 @@ export class GeometrySyncer {
       const outlineColor = isSelected ? FACE_SELECTED_COLOR : LINEAR_COLOR
       if (outline) {
         ;(outline.material as THREE.LineBasicMaterial).color.set(outlineColor)
+        outline.renderOrder = isSelected ? SELECTED_RENDER_ORDER : SOLID_EDGE_RENDER_ORDER
         ;(outline.material as THREE.LineBasicMaterial).opacity = isSelected ? 1 : 0.95
       }
       if (hiddenOutline) {
         ;(hiddenOutline.material as THREE.LineDashedMaterial).color.set(outlineColor)
+        hiddenOutline.renderOrder = isSelected ? SELECTED_RENDER_ORDER : HIDDEN_EDGE_RENDER_ORDER
       }
 
       const isLabelActive =
@@ -2088,6 +2211,530 @@ export class GeometrySyncer {
     })
   }
 
+  syncNets(scene: GeoScene, dirtyState: SceneRenderSyncState): void {
+    const netIdsToProcess = dirtyState.fullSync
+      ? new Set(scene.nets.keys())
+      : dirtyState.netIds
+
+    // 1. 清理不存在的 net（fullSync 时遍历所有 group，否则只处理 dirty 中已删除的）
+    if (dirtyState.fullSync) {
+      this.groupMap.forEach((obj, id) => {
+        const userData = this.getRenderUserData(obj)
+        if (userData.type === 'net' && !scene.nets.has(id)) {
+          this.disposeNetGroup(obj)
+          this.deps.world.remove(obj)
+          this.groupMap.delete(id)
+        }
+      })
+    } else {
+      netIdsToProcess.forEach((netId) => {
+        if (scene.nets.has(netId)) return
+        const existingGroup = this.groupMap.get(netId)
+        if (existingGroup && this.getRenderUserData(existingGroup).type === 'net') {
+          this.disposeNetGroup(existingGroup)
+          this.deps.world.remove(existingGroup)
+          this.groupMap.delete(netId)
+        }
+      })
+    }
+
+    // 2. 对每个存在的 dirty net，按结构指纹决定复用或重建
+    netIdsToProcess.forEach((netId) => {
+      const netData = scene.nets.get(netId)
+      if (!netData) return
+
+      const existingGroup = this.groupMap.get(netId)
+      const existingUserData = existingGroup
+        ? this.getRenderUserData(existingGroup)
+        : null
+      const structureKey = netData.getStructureKey(scene)
+
+      if (
+        existingGroup &&
+        existingUserData?.type === 'net' &&
+        existingUserData.__netRefs?.structureKey === structureKey
+      ) {
+        // 结构一致 → 复用 netGroup，只更新变换/顶点/材质
+        this.updateNetGroup(existingGroup, netData, scene)
+      } else {
+        // 结构变化或首次创建 → 销毁旧的并重建
+        if (existingGroup) {
+          this.disposeNetGroup(existingGroup)
+          this.deps.world.remove(existingGroup)
+          this.groupMap.delete(netId)
+        }
+        const newGroup = this.createNetGroup(netId, netData, scene, structureKey)
+        this.deps.world.add(newGroup)
+        this.groupMap.set(netId, newGroup)
+      }
+    })
+  }
+
+  private disposeNetGroup(group: THREE.Group): void {
+    group.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (mesh.geometry) mesh.geometry.dispose()
+      const mat = (mesh as THREE.Mesh).material
+      if (Array.isArray(mat)) {
+        mat.forEach((m) => m.dispose())
+      } else if (mat) {
+        ;(mat as THREE.Material).dispose()
+      }
+    })
+    const userData = this.getRenderUserData(group)
+    userData.__netRefs = undefined
+  }
+
+  private createNetGroup(
+    netId: string,
+    netData: Net,
+    scene: GeoScene,
+    structureKey: string,
+  ): THREE.Group {
+    const isSelected = scene.selection.nets.has(netId)
+    const fillColor = isSelected ? NET_SELECTED_COLOR : (netData.color ?? NET_FILL_COLOR)
+    const fillOpacity = isSelected ? NET_SELECTED_OPACITY : NET_FILL_OPACITY
+
+    const netGroup = new THREE.Group()
+    netGroup.userData = { geoId: netId, type: 'net' }
+
+    const faceMatrices = buildNetFaceMatrices(netData, scene)
+    const faceEntries: NetFaceEntry[] = []
+    const hiddenEdges: NetHiddenEdgeEntry[] = []
+    const pointSprites: NetPointSpriteEntry[] = []
+
+    netData.faceIds.forEach((faceId) => {
+      const faceData = scene.faces.get(faceId)
+      if (!faceData) return
+      const isBase = faceId === netData.baseFaceId
+
+      const bps = faceData.getBoundaryPoints(scene.points)
+      const positions = bps.map((p) => new THREE.Vector3(p.position.x, p.position.y, p.position.z))
+
+      const triangulated = triangulateFace(faceData.boundaryPointIds, scene.points)
+      if (!triangulated) return
+      const indices = triangulated.indices
+
+      const geometry = new THREE.BufferGeometry()
+      const material = new THREE.MeshBasicMaterial({
+        color: fillColor,
+        transparent: true,
+        opacity: fillOpacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false,
+      })
+      const faceMesh = new THREE.Mesh(geometry, material)
+      faceMesh.userData = {
+        type: isBase ? 'netFace' : 'netControlFace',
+        geoId: netId,
+        faceId: faceId,
+      }
+      faceMesh.renderOrder = SURFACE_RENDER_ORDER + 10
+      faceMesh.matrixAutoUpdate = false
+
+      geometry.setFromPoints(positions)
+      geometry.setIndex(indices)
+      geometry.computeVertexNormals()
+      this.updateBounds(geometry)
+
+      const outline = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(positions),
+        this.createSolidEdgeMaterial(
+          isSelected ? NET_SELECTED_COLOR : NET_EDGE_COLOR,
+          isSelected ? 1.0 : NET_EDGE_OPACITY,
+        ),
+      )
+      outline.name = 'netFaceOutline'
+      outline.userData = {
+        type: isBase ? 'netFaceEdge' : 'netControlEdge',
+        geoId: netId,
+        faceId: faceId,
+      }
+      outline.renderOrder = SOLID_EDGE_RENDER_ORDER + 10
+
+      faceMesh.add(outline)
+
+      // 展开图面片深度网格：只写深度不画颜色，使 net 边可被"隐藏边虚线"正确遮挡
+      const depthMesh = new THREE.Mesh(
+        geometry.clone(),
+        new THREE.MeshBasicMaterial({
+          colorWrite: false,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+        }),
+      )
+      depthMesh.name = 'netFaceDepthMesh'
+      depthMesh.renderOrder = -1
+      depthMesh.raycast = () => {}
+      faceMesh.add(depthMesh)
+
+      const matrix = faceMatrices.get(faceId) ?? new THREE.Matrix4()
+      faceMesh.matrix.copy(matrix)
+
+      const cylinders: NetCylinderEntry[] = []
+      if (!isBase) {
+        for (let i = 0; i < bps.length; i++) {
+          const pA = positions[i]!
+          const pB = positions[(i + 1) % bps.length]!
+          const pAT = pA.clone().applyMatrix4(matrix)
+          const pBT = pB.clone().applyMatrix4(matrix)
+          const dir = new THREE.Vector3().subVectors(pBT, pAT)
+          const len = dir.length()
+          if (len < 1e-6) continue
+          const cylGeom = new THREE.CylinderGeometry(NET_CONTROL_EDGE_HIT_WIDTH, NET_CONTROL_EDGE_HIT_WIDTH, len, 6, 1, true)
+          const cylMat = new THREE.MeshBasicMaterial({
+            color: NET_EDGE_COLOR,
+            transparent: true,
+            opacity: 0,
+            depthTest: false,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          })
+          const cyl = new THREE.Mesh(cylGeom, cylMat)
+          const mid = new THREE.Vector3().addVectors(pAT, pBT).multiplyScalar(0.5)
+          cyl.position.copy(mid)
+          const up = new THREE.Vector3(0, 1, 0)
+          const dirN = dir.clone().normalize()
+          const q = new THREE.Quaternion().setFromUnitVectors(up, dirN)
+          cyl.quaternion.copy(q)
+          cyl.userData = {
+            type: 'netControlEdge',
+            geoId: netId,
+            faceId,
+            pointIds: [bps[i]!.id, bps[(i + 1) % bps.length]!.id] as [string, string],
+            edgeStart: pAT.clone(),
+            edgeEnd: pBT.clone(),
+          }
+          cyl.renderOrder = SOLID_EDGE_RENDER_ORDER + 12
+          netGroup.add(cyl)
+          cylinders.push({ cyl, edgeIndex: i })
+        }
+      }
+
+      netGroup.add(faceMesh)
+      faceEntries.push({ faceId, isBase, mesh: faceMesh, outline, depthMesh, cylinders })
+    })
+
+    // 为展开图的每条边创建隐藏虚线。按变换后的边中点去重：
+    // 折叠时共享边中点重合→只画一条，避免密度不均；
+    // 展开后共享边处于不同位置→各画一条，避免遗漏。
+    const hiddenEdgeKeys = new Set<string>()
+    netData.faceIds.forEach((faceId) => {
+      const faceData = scene.faces.get(faceId)
+      if (!faceData) return
+      const mat = faceMatrices.get(faceId) ?? new THREE.Matrix4()
+      const bps = faceData.getBoundaryPoints(scene.points)
+      for (let i = 0; i < bps.length; i++) {
+        const p1 = bps[i]!
+        const p2 = bps[(i + 1) % bps.length]!
+        const v1 = new THREE.Vector3(p1.position.x, p1.position.y, p1.position.z).applyMatrix4(mat)
+        const v2 = new THREE.Vector3(p2.position.x, p2.position.y, p2.position.z).applyMatrix4(mat)
+        const mid = v1.clone().add(v2).multiplyScalar(0.5)
+        const edgeKey = `${mid.x.toFixed(4)},${mid.y.toFixed(4)},${mid.z.toFixed(4)}`
+        if (hiddenEdgeKeys.has(edgeKey)) continue
+        hiddenEdgeKeys.add(edgeKey)
+        const hiddenEdge = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([v1, v2]),
+          this.createHiddenEdgeMaterial(isSelected ? NET_SELECTED_COLOR : NET_EDGE_COLOR),
+        )
+        hiddenEdge.name = 'netHiddenEdge'
+        hiddenEdge.renderOrder = HIDDEN_EDGE_RENDER_ORDER + 10
+        hiddenEdge.visible = this.hiddenEdgeEnabled
+        hiddenEdge.computeLineDistances()
+        netGroup.add(hiddenEdge)
+        hiddenEdges.push({ line: hiddenEdge, faceId, edgeIndex: i })
+      }
+    })
+
+    const pointTexture = this.deps.labelRenderer.getPointTexture(NET_EDGE_COLOR, 128)
+    const pointSpriteScale = this.getPointSpriteScale()
+    const selectedPointTexture = this.deps.labelRenderer.getPointTexture(NET_SELECTED_COLOR, 128)
+    netData.faceIds.forEach((faceId) => {
+      const faceData = scene.faces.get(faceId)
+      if (!faceData) return
+      if (faceId === netData.baseFaceId) return
+      const mat = faceMatrices.get(faceId) ?? new THREE.Matrix4()
+      for (const pid of faceData.boundaryPointIds) {
+        const p = scene.points.get(pid)
+        if (!p) continue
+        const spMat = new THREE.SpriteMaterial({
+          color: 0xffffff,
+          depthTest: false,
+          depthWrite: false,
+          sizeAttenuation: false,
+          transparent: true,
+          alphaTest: 0.1,
+          map: isSelected ? selectedPointTexture : pointTexture,
+        })
+        const sp = new THREE.Sprite(spMat)
+        sp.scale.set(pointSpriteScale, pointSpriteScale, 1)
+        const v = new THREE.Vector3(p.position.x, p.position.y, p.position.z).applyMatrix4(mat)
+        sp.position.copy(v)
+        sp.userData = {
+          type: 'netControlVertex',
+          geoId: netId,
+          pointId: pid,
+          faceId,
+        }
+        sp.renderOrder = 15
+        netGroup.add(sp)
+        pointSprites.push({ sprite: sp, faceId, pointId: pid })
+      }
+    })
+
+    netGroup.position.set(
+      netData.mode === 'free' ? netData.position.x : 0,
+      netData.mode === 'free' ? netData.position.y : 0,
+      netData.mode === 'free' ? netData.position.z : 0,
+    )
+    netGroup.visible = netData.visible !== false
+
+    const refs: NetGroupRefs = {
+      faceEntries,
+      hiddenEdges,
+      pointSprites,
+      structureKey,
+      lastSelected: isSelected,
+      lastVisible: netData.visible !== false,
+      lastMode: netData.mode,
+      lastPositionX: netData.mode === 'free' ? netData.position.x : 0,
+      lastPositionY: netData.mode === 'free' ? netData.position.y : 0,
+      lastPositionZ: netData.mode === 'free' ? netData.position.z : 0,
+    }
+    this.getRenderUserData(netGroup).__netRefs = refs
+
+    return netGroup
+  }
+
+  // 复用已有 netGroup：只更新 face 边界点原始位置、faceMesh.matrix、
+  // hiddenEdge/cylinder/sprite 的变换后位置，以及选中态材质属性
+  private updateNetGroup(
+    netGroup: THREE.Group,
+    netData: Net,
+    scene: GeoScene,
+  ): void {
+    const refs = this.getRenderUserData(netGroup).__netRefs
+    if (!refs) return
+
+    const isSelectedNow = scene.selection.nets.has(netGroup.userData.geoId as string)
+    const selectionChanged = refs.lastSelected !== isSelectedNow
+
+    const faceMatrices = buildNetFaceMatrices(netData, scene)
+
+    // 临时向量复用，避免每帧大量分配
+    const tmpV1 = this._syncTmpA
+    const tmpV2 = this._syncTmpB
+    const tmpDir = this._syncTmpC
+    const tmpMid = this._syncTmpD
+    const up = new THREE.Vector3(0, 1, 0)
+    const tmpQuat = new THREE.Quaternion()
+
+    // 缓存每个 face 的边界点，避免同一帧内多次 getBoundaryPoints
+    const faceBoundaryPoints = new Map<string, Point3[]>()
+
+    // 更新每个 faceMesh：几何顶点（原始位置）+ matrix + cylinders（变换后位置）
+    refs.faceEntries.forEach((entry) => {
+      const faceData = scene.faces.get(entry.faceId)
+      if (!faceData) return
+
+      let bps = faceBoundaryPoints.get(entry.faceId)
+      if (!bps) {
+        bps = faceData.getBoundaryPoints(scene.points)
+        faceBoundaryPoints.set(entry.faceId, bps)
+      }
+      // 更新 faceMesh.geometry 顶点（原始位置，未变换）
+      const meshGeo = entry.mesh.geometry
+      const posAttr = meshGeo.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (posAttr && posAttr.count === bps.length) {
+        for (let i = 0; i < bps.length; i++) {
+          posAttr.setXYZ(i, bps[i]!.position.x, bps[i]!.position.y, bps[i]!.position.z)
+        }
+        posAttr.needsUpdate = true
+        // 面片使用 MeshBasicMaterial，法线不参与光照；顶点变化时无需每帧重算法线。
+        // createNetGroup 已初始化法线，拓扑不变时复用即可。
+        this.updateBounds(meshGeo)
+      }
+
+      // 更新 outline.geometry 顶点（原始位置，跟随 faceMesh.matrix）
+      const outlineGeo = entry.outline.geometry
+      const outlinePosAttr = outlineGeo.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (outlinePosAttr && outlinePosAttr.count === bps.length) {
+        for (let i = 0; i < bps.length; i++) {
+          outlinePosAttr.setXYZ(i, bps[i]!.position.x, bps[i]!.position.y, bps[i]!.position.z)
+        }
+        outlinePosAttr.needsUpdate = true
+      }
+
+      // 更新 depthMesh 几何，使其与 faceMesh 同步（只写深度）
+      const depthGeo = entry.depthMesh.geometry as THREE.BufferGeometry
+      const depthPosAttr = depthGeo.getAttribute('position') as THREE.BufferAttribute | undefined
+      const meshIndexAttr = meshGeo.getIndex() as THREE.BufferAttribute | null
+      const meshPosAttr = meshGeo.getAttribute('position') as THREE.BufferAttribute | undefined
+      if (depthPosAttr && depthPosAttr.count === (meshPosAttr?.count ?? 0)) {
+        for (let i = 0; i < depthPosAttr.count; i++) {
+          depthPosAttr.setXYZ(
+            i,
+            meshPosAttr!.getX(i),
+            meshPosAttr!.getY(i),
+            meshPosAttr!.getZ(i),
+          )
+        }
+        depthPosAttr.needsUpdate = true
+      } else if (meshPosAttr && meshIndexAttr) {
+        depthGeo.setFromPoints(
+          Array.from({ length: meshPosAttr.count }, (_, i) =>
+            new THREE.Vector3(meshPosAttr.getX(i), meshPosAttr.getY(i), meshPosAttr.getZ(i)),
+          ),
+        )
+        depthGeo.setIndex(Array.from(meshIndexAttr.array))
+      }
+      this.updateBounds(depthGeo)
+
+      // 更新 faceMesh.matrix
+      const matrix = faceMatrices.get(entry.faceId) ?? new THREE.Matrix4()
+      entry.mesh.matrix.copy(matrix)
+
+      // 更新 cylinders（变换后位置）
+      if (!entry.isBase) {
+        for (const cylEntry of entry.cylinders) {
+          const i = cylEntry.edgeIndex
+          const pA = bps[i]!
+          const pB = bps[(i + 1) % bps.length]!
+          tmpV1.set(pA.position.x, pA.position.y, pA.position.z).applyMatrix4(matrix)
+          tmpV2.set(pB.position.x, pB.position.y, pB.position.z).applyMatrix4(matrix)
+          tmpDir.subVectors(tmpV2, tmpV1)
+          const len = tmpDir.length()
+          if (len < 1e-6) continue
+          tmpMid.addVectors(tmpV1, tmpV2).multiplyScalar(0.5)
+          cylEntry.cyl.position.copy(tmpMid)
+          tmpDir.normalize()
+          tmpQuat.setFromUnitVectors(up, tmpDir)
+          cylEntry.cyl.quaternion.copy(tmpQuat)
+          // 更新 userData 中的端点（用于拾取）
+          cylEntry.cyl.userData.edgeStart = tmpV1.clone()
+          cylEntry.cyl.userData.edgeEnd = tmpV2.clone()
+        }
+      }
+
+      // 选中态变化时更新材质
+      if (selectionChanged) {
+        const fillMat = entry.mesh.material as THREE.MeshBasicMaterial
+        fillMat.color.set(isSelectedNow ? NET_SELECTED_COLOR : (netData.color ?? NET_FILL_COLOR))
+        fillMat.opacity = isSelectedNow ? NET_SELECTED_OPACITY : NET_FILL_OPACITY
+
+        const outlineMat = entry.outline.material as THREE.LineBasicMaterial
+        outlineMat.color.set(isSelectedNow ? NET_SELECTED_COLOR : NET_EDGE_COLOR)
+        outlineMat.opacity = isSelectedNow ? 1.0 : NET_EDGE_OPACITY
+      }
+    })
+
+    // 计算当前需要的唯一隐藏边列表（按变换后中点去重）
+    // 数量与现有 Line 一致则复用更新顶点；否则销毁重建（展开/折叠时共享边会分离）
+    const uniqueHiddenEdges: Array<{ v1: THREE.Vector3; v2: THREE.Vector3 }> = []
+    const seenKeys = new Set<string>()
+    netData.faceIds.forEach((faceId) => {
+      const faceData = scene.faces.get(faceId)
+      if (!faceData) return
+      const mat = faceMatrices.get(faceId) ?? new THREE.Matrix4()
+      let bps = faceBoundaryPoints.get(faceId)
+      if (!bps) {
+        bps = faceData.getBoundaryPoints(scene.points)
+        faceBoundaryPoints.set(faceId, bps)
+      }
+      for (let i = 0; i < bps.length; i++) {
+        const p1 = bps[i]!
+        const p2 = bps[(i + 1) % bps.length]!
+        tmpV1.set(p1.position.x, p1.position.y, p1.position.z).applyMatrix4(mat)
+        tmpV2.set(p2.position.x, p2.position.y, p2.position.z).applyMatrix4(mat)
+        tmpMid.addVectors(tmpV1, tmpV2).multiplyScalar(0.5)
+        const edgeKey = `${tmpMid.x.toFixed(4)},${tmpMid.y.toFixed(4)},${tmpMid.z.toFixed(4)}`
+        if (seenKeys.has(edgeKey)) continue
+        seenKeys.add(edgeKey)
+        uniqueHiddenEdges.push({ v1: tmpV1.clone(), v2: tmpV2.clone() })
+      }
+    })
+
+    if (uniqueHiddenEdges.length === refs.hiddenEdges.length) {
+      // 数量一致，复用 Line 对象更新顶点
+      for (let i = 0; i < uniqueHiddenEdges.length; i++) {
+        const line = refs.hiddenEdges[i]!.line
+        const posAttr = line.geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+        if (posAttr && posAttr.count === 2) {
+          const { v1, v2 } = uniqueHiddenEdges[i]!
+          posAttr.setXYZ(0, v1.x, v1.y, v1.z)
+          posAttr.setXYZ(1, v2.x, v2.y, v2.z)
+          posAttr.needsUpdate = true
+          line.computeLineDistances()
+        }
+        if (selectionChanged) {
+          ;(line.material as THREE.LineDashedMaterial).color.set(
+            isSelectedNow ? NET_SELECTED_COLOR : NET_EDGE_COLOR,
+          )
+        }
+      }
+    } else {
+      // 数量不一致（展开/折叠导致共享边分离或合并），销毁重建 hiddenEdge
+      refs.hiddenEdges.forEach((entry) => {
+        netGroup.remove(entry.line)
+        entry.line.geometry.dispose()
+        ;(entry.line.material as THREE.Material).dispose()
+      })
+      refs.hiddenEdges = []
+      uniqueHiddenEdges.forEach(({ v1, v2 }) => {
+        const hiddenEdge = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([v1, v2]),
+          this.createHiddenEdgeMaterial(isSelectedNow ? NET_SELECTED_COLOR : NET_EDGE_COLOR),
+        )
+        hiddenEdge.name = 'netHiddenEdge'
+        hiddenEdge.renderOrder = HIDDEN_EDGE_RENDER_ORDER + 10
+        hiddenEdge.visible = this.hiddenEdgeEnabled
+        hiddenEdge.computeLineDistances()
+        netGroup.add(hiddenEdge)
+        refs.hiddenEdges.push({ line: hiddenEdge, faceId: '', edgeIndex: 0 })
+      })
+    }
+
+    // 更新 pointSprites（变换后位置）
+    refs.pointSprites.forEach((entry) => {
+      const p = scene.points.get(entry.pointId)
+      if (!p) return
+      const mat = faceMatrices.get(entry.faceId) ?? new THREE.Matrix4()
+      tmpV1.set(p.position.x, p.position.y, p.position.z).applyMatrix4(mat)
+      entry.sprite.position.copy(tmpV1)
+      if (selectionChanged) {
+        const texture = isSelectedNow
+          ? this.deps.labelRenderer.getPointTexture(NET_SELECTED_COLOR, 128)
+          : this.deps.labelRenderer.getPointTexture(NET_EDGE_COLOR, 128)
+        ;(entry.sprite.material as THREE.SpriteMaterial).map = texture
+        ;(entry.sprite.material as THREE.SpriteMaterial).needsUpdate = true
+      }
+    })
+
+    // 更新 netGroup.position 和 visible
+    const targetX = netData.mode === 'free' ? netData.position.x : 0
+    const targetY = netData.mode === 'free' ? netData.position.y : 0
+    const targetZ = netData.mode === 'free' ? netData.position.z : 0
+    if (
+      refs.lastMode !== netData.mode ||
+      refs.lastPositionX !== targetX ||
+      refs.lastPositionY !== targetY ||
+      refs.lastPositionZ !== targetZ
+    ) {
+      netGroup.position.set(targetX, targetY, targetZ)
+      refs.lastMode = netData.mode
+      refs.lastPositionX = targetX
+      refs.lastPositionY = targetY
+      refs.lastPositionZ = targetZ
+    }
+    const targetVisible = netData.visible !== false
+    if (refs.lastVisible !== targetVisible) {
+      netGroup.visible = targetVisible
+      refs.lastVisible = targetVisible
+    }
+    refs.lastSelected = isSelectedNow
+  }
+
   syncCubeValueLabels(scene: GeoScene): void {
     const isDragging = scene.activeDraggedPointIds.size > 0
     const cubes = [...scene.cubeConstraints.values()].filter(
@@ -2484,9 +3131,17 @@ export class GeometrySyncer {
       }
     })
     this.groupMap.forEach((obj, id) => {
-      if (!scene.cones.has(id) && !scene.cylinders.has(id)) {
-        const userData = this.getRenderUserData(obj)
-        this.removeMeshWithLabels(obj, userData, this.groupMap, id)
+      const userData = this.getRenderUserData(obj)
+      const type = userData.type
+      const getCollection = type ? TYPE_TO_SCENE_MAP[type] : undefined
+      if (getCollection) {
+        if (!getCollection(scene).has(id)) {
+          this.removeMeshWithLabels(obj, userData, this.groupMap, id)
+        }
+      } else {
+        if (!scene.cones.has(id) && !scene.cylinders.has(id)) {
+          this.removeMeshWithLabels(obj, userData, this.groupMap, id)
+        }
       }
     })
     const activeCubeIds = new Set(
@@ -2863,6 +3518,17 @@ export class GeometrySyncer {
         if (valueLabel) this.deps.labelRenderer.setAdaptiveSpriteScale(valueLabel, lineLabelScale)
       }
     })
+    this.groupMap.forEach((group) => {
+      if (group.userData?.type !== 'net') return
+      group.traverse((obj) => {
+        if ((obj as THREE.Sprite).isSprite) {
+          const ut = obj.userData?.type
+          if (ut === 'netControlVertex' || ut === 'netVertex') {
+            ;(obj as THREE.Sprite).scale.set(spriteScale, spriteScale, 1)
+          }
+        }
+      })
+    })
     this.deps.labelRenderer.cubeValueLabels.forEach((label) => this.deps.labelRenderer.setAdaptiveSpriteScale(label, lineLabelScale))
     this.deps.axisGridManager.axisLabels.forEach((label) => {
       const axisLabelScale = (AxisGridManager.AXIS_LABEL_PIXEL / h / this.deps.arManager.currentWorldScale) * this.getFovSpriteScale()
@@ -3160,6 +3826,24 @@ export class GeometrySyncer {
         }
       })
     }
+    // 同步展开图隐藏边与实线边的深度设置
+    this.groupMap.forEach((group) => {
+      if (group.userData.type !== 'net') return
+      group.traverse((child) => {
+        if (child.name === 'netHiddenEdge') {
+          child.visible = enabled
+          return
+        }
+        if (child.name === 'netFaceOutline') {
+          const mat = (child as THREE.Line).material as THREE.LineBasicMaterial
+          if (mat) {
+            mat.depthFunc = enabled ? THREE.LessEqualDepth : THREE.AlwaysDepth
+            mat.depthTest = enabled
+            mat.needsUpdate = true
+          }
+        }
+      })
+    })
     const solidDepthFunc = enabled ? THREE.LessEqualDepth : THREE.AlwaysDepth
     const solidDepthTest = enabled
     this.meshMap.forEach((obj) => {

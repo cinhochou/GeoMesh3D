@@ -18,6 +18,8 @@ import { PrismConstraint } from '../constraints/PrismConstraint'
 import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
 import { Vec3 } from '../geometry/Vec3'
+import { Net } from '../geometry/Net'
+import { updateNetTransforms } from '../geometry/NetUtils'
 import { Selection } from './Selection'
 
 export type SceneConstraint = {
@@ -45,9 +47,10 @@ export type SceneRenderSyncState = {
   sphereIds: Set<string>
   coneIds: Set<string>
   cylinderIds: Set<string>
+  netIds: Set<string>
 }
 
-type DirtyKind = 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'parallelLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder'
+type DirtyKind = 'point' | 'line' | 'straightLine' | 'perpendicularLine' | 'parallelLine' | 'ray' | 'vector' | 'circle' | 'face' | 'sphere' | 'cone' | 'cylinder' | 'net'
 
 export class Scene {
   static readonly ORIGIN_ID = 'origin'
@@ -64,6 +67,7 @@ export class Scene {
   spheres = new Map<string, Sphere3>()
   cones = new Map<string, Cone3>()
   cylinders = new Map<string, Cylinder3>()
+  nets = new Map<string, Net>()
   selection = new Selection()
   activeDraggedPointIds = new Set<string>()
   constraints: SceneConstraint[] = []
@@ -78,13 +82,19 @@ export class Scene {
   perpendicularLineConstraints = new Map<string, PerpendicularLineConstraint>()
   parallelLineConstraints = new Map<string, ParallelLineConstraint>()
 
-  private _pointRefIndex: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }> | null = null
+  /**
+   * solidId -> faceId[] 反向索引，用于快速查找属于某个多面体的所有面。
+   * 由 addFace/removeFace 维护，避免 getFacesForSolid 每次遍历全局面。
+   */
+  private solidFaceIndex: Map<string, Set<string>> = new Map()
+
+  private _pointRefIndex: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string>; nets: Set<string> }> | null = null
   private _lineRefIndex: Map<string, Set<string>> | null = null
   private _circleRefIndex: Map<string, { cones: Set<string>; cylinders: Set<string> }> | null = null
 
   private getPointRefIndex() {
     if (this._pointRefIndex) return this._pointRefIndex
-    const idx = new Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }>()
+    const idx = new Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string>; nets: Set<string> }>()
     for (const [id, line] of this.lines) {
       this._addPointRefEntry(idx, line.p1.id, 'lines', id)
       this._addPointRefEntry(idx, line.p2.id, 'lines', id)
@@ -131,19 +141,29 @@ export class Scene {
       this._addPointRefEntry(idx, c.bottomCenterPoint.id, 'cylinders', id)
       this._addPointRefEntry(idx, c.topCenterPoint.id, 'cylinders', id)
     }
+    // 建立 point → net 反向索引：net 通过 face 间接引用 point
+    for (const [id, net] of this.nets) {
+      for (const fid of net.faceIds) {
+        const face = this.faces.get(fid)
+        if (!face) continue
+        for (const pid of face.memberPointIds) {
+          this._addPointRefEntry(idx, pid, 'nets', id)
+        }
+      }
+    }
     this._pointRefIndex = idx
     return idx
   }
 
   private _addPointRefEntry(
-    idx: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string> }>,
+    idx: Map<string, { lines: Set<string>; straightLines: Set<string>; perpendicularLines: Set<string>; parallelLines: Set<string>; rays: Set<string>; vectors: Set<string>; circles: Set<string>; faces: Set<string>; spheres: Set<string>; cones: Set<string>; cylinders: Set<string>; nets: Set<string> }>,
     pointId: string,
-    kind: 'lines' | 'straightLines' | 'perpendicularLines' | 'parallelLines' | 'rays' | 'vectors' | 'circles' | 'faces' | 'spheres' | 'cones' | 'cylinders',
+    kind: 'lines' | 'straightLines' | 'perpendicularLines' | 'parallelLines' | 'rays' | 'vectors' | 'circles' | 'faces' | 'spheres' | 'cones' | 'cylinders' | 'nets',
     geoId: string,
   ) {
     let entry = idx.get(pointId)
     if (!entry) {
-      entry = { lines: new Set(), straightLines: new Set(), perpendicularLines: new Set(), parallelLines: new Set(), rays: new Set(), vectors: new Set(), circles: new Set(), faces: new Set(), spheres: new Set(), cones: new Set(), cylinders: new Set() }
+      entry = { lines: new Set(), straightLines: new Set(), perpendicularLines: new Set(), parallelLines: new Set(), rays: new Set(), vectors: new Set(), circles: new Set(), faces: new Set(), spheres: new Set(), cones: new Set(), cylinders: new Set(), nets: new Set() }
       idx.set(pointId, entry)
     }
     entry[kind].add(geoId)
@@ -155,6 +175,13 @@ export class Scene {
     this._circleRefIndex = null
     this._circleToConesIndex = null
     this._circleToCylindersIndex = null
+  }
+
+  private rebuildSolidFaceIndex() {
+    this.solidFaceIndex.clear()
+    for (const face of this.faces.values()) {
+      this._addFaceToSolidIndex(face)
+    }
   }
 
   private getLineRefIndex() {
@@ -249,6 +276,7 @@ export class Scene {
     sphere: new Set(),
     cone: new Set(),
     cylinder: new Set(),
+    net: new Set(),
   }
   private fullRenderSyncPending = true
   private solverListeners = new Set<() => void>()
@@ -391,11 +419,44 @@ export class Scene {
     this.invalidateRenderSyncCache()
   }
 
+  addNet(net: Net) {
+    this.nets.set(net.id, net)
+    this.dirtyIds.net.add(net.id)
+    this.invalidateRenderSyncCache()
+  }
+
+  removeNet(netId: string) {
+    const net = this.nets.get(netId)
+    if (net) {
+      if (this.selection.nets) {
+        this.selection.nets.delete(netId)
+      }
+    }
+    this.nets.delete(netId)
+    this.dirtyIds.net.add(netId)
+    this.invalidateRenderSyncCache()
+  }
+
+  getNetsForSolid(solidId: string): Net[] {
+    const result: Net[] = []
+    for (const net of this.nets.values()) {
+      if (net.solidId === solidId) {
+        result.push(net)
+      }
+    }
+    return result
+  }
+
+  markNetDirty(netId: string) {
+    this.dirtyIds.net.add(netId)
+  }
+
   addFace(face: PlanarPolygon) {
     face.normalize(this.points)
     this.faces.set(face.id, face)
     this.dirtyIds.face.add(face.id)
     this.invalidateRenderSyncCache()
+    this._addFaceToSolidIndex(face)
     const existing = this.faceConstraints.get(face.id)
     if (existing) {
       if (!this.constraints.includes(existing)) this.constraints.push(existing)
@@ -409,6 +470,8 @@ export class Scene {
   }
 
   removeFace(faceId: string) {
+    const face = this.faces.get(faceId)
+    if (face) this._removeFaceFromSolidIndex(face)
     this.faces.delete(faceId)
     this.selection.faces.delete(faceId)
     this.dirtyIds.face.add(faceId)
@@ -419,6 +482,39 @@ export class Scene {
     if (idx >= 0) this.constraints.splice(idx, 1)
     this.dirtyConstraints.delete(constraint)
     this.faceConstraints.delete(faceId)
+  }
+
+  /** 根据 solidId 快速获取属于该多面体的所有面 */
+  getFacesForSolidId(solidId: string): PlanarPolygon[] {
+    const faceIds = this.solidFaceIndex.get(solidId)
+    if (!faceIds) return []
+    const result: PlanarPolygon[] = []
+    for (const faceId of faceIds) {
+      const face = this.faces.get(faceId)
+      if (face) result.push(face)
+    }
+    return result
+  }
+
+  private _addFaceToSolidIndex(face: PlanarPolygon) {
+    const solidId = face.cubeId ?? face.prismId ?? face.pyramidId
+    if (!solidId) return
+    let set = this.solidFaceIndex.get(solidId)
+    if (!set) {
+      set = new Set()
+      this.solidFaceIndex.set(solidId, set)
+    }
+    set.add(face.id)
+  }
+
+  private _removeFaceFromSolidIndex(face: PlanarPolygon) {
+    const solidId = face.cubeId ?? face.prismId ?? face.pyramidId
+    if (!solidId) return
+    const set = this.solidFaceIndex.get(solidId)
+    if (set) {
+      set.delete(face.id)
+      if (set.size === 0) this.solidFaceIndex.delete(solidId)
+    }
   }
 
   addConstraint(c: SceneConstraint) {
@@ -904,6 +1000,9 @@ export class Scene {
         }
       }
     })
+
+    // net dirty 通过 pointRefIndex 在 consumeRenderSyncState 中传播，
+    // 不再在此处遍历所有 net 并调用 updateNetTransforms（性能优化）
   }
 
   markAllRenderDirty() {
@@ -941,6 +1040,8 @@ export class Scene {
     if (fullSync) {
       this.fullRenderSyncPending = false
       this.clearAllDirtyIds()
+      // fullSync 时统一更新所有 net transforms
+      this.nets.forEach((net) => updateNetTransforms(net, this.faces, this.points))
       return {
         fullSync: true,
         pointIds: new Set(this.points.keys()),
@@ -955,6 +1056,7 @@ export class Scene {
         sphereIds: new Set(this.spheres.keys()),
         coneIds: new Set(this.cones.keys()),
         cylinderIds: new Set(this.cylinders.keys()),
+        netIds: new Set(this.nets.keys()),
       }
     }
 
@@ -970,6 +1072,7 @@ export class Scene {
     const sphereIds = new Set(this.dirtyIds.sphere)
     const coneIds = new Set(this.dirtyIds.cone)
     const cylinderIds = new Set(this.dirtyIds.cylinder)
+    const netIds = new Set(this.dirtyIds.net)
 
     const pointRefIndex = this.getPointRefIndex()
     const lineRefIndex = this.getLineRefIndex()
@@ -989,6 +1092,7 @@ export class Scene {
       refs.spheres.forEach((id) => sphereIds.add(id))
       refs.cones.forEach((id) => coneIds.add(id))
       refs.cylinders.forEach((id) => cylinderIds.add(id))
+      refs.nets.forEach((id) => netIds.add(id))
     })
 
     const propagateLineTypeToCircles = (kind: 'line' | 'straightLine' | 'ray' | 'vector', ids: Set<string>) => {
@@ -1028,8 +1132,16 @@ export class Scene {
       refs.cylinders.forEach((id) => cylinderIds.add(id))
     })
 
-    if ([pointIds, lineIds, straightLineIds, perpendicularLineIds, parallelLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds].every((s) => s.size === 0)) {
+    if ([pointIds, lineIds, straightLineIds, perpendicularLineIds, parallelLineIds, rayIds, vectorIds, circleIds, faceIds, sphereIds, coneIds, cylinderIds, netIds].every((s) => s.size === 0)) {
       return null
+    }
+
+    // 延迟到此处统一更新 net transforms：拖拽多个点时同一 net 只重建一次
+    if (netIds.size > 0) {
+      netIds.forEach((netId) => {
+        const net = this.nets.get(netId)
+        if (net) updateNetTransforms(net, this.faces, this.points)
+      })
     }
 
     return {
@@ -1046,6 +1158,7 @@ export class Scene {
       sphereIds,
       coneIds,
       cylinderIds,
+      netIds,
     }
   }
 

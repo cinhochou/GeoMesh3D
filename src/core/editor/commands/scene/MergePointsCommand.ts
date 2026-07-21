@@ -561,6 +561,51 @@ function executeMergePoints(scene: Scene, keepPoint: Point3, removePoint: Point3
   scene.points.delete(removeId)
   scene.selection.points.delete(removeId)
 
+  // ─── 展开图（Net）──────────────────────────────────
+  // Net 的 faceTransforms.hingeEdgePointIds 与 controlEdgePointIds 直接引用 pointId，
+  // 合并点后需要同步替换；若铰链边两端合并为同一点，则该 faceTransform 退化，
+  // 此时整个 Net 的展开拓扑已破坏，删除整个 Net。
+  for (const net of [...scene.nets.values()]) {
+    let netDirty = false
+    let netDegenerate = false
+
+    for (const transform of net.faceTransforms.values()) {
+      const [a, b] = transform.hingeEdgePointIds
+      const newA = a === removeId ? keepId : a
+      const newB = b === removeId ? keepId : b
+      if (newA === newB) {
+        netDegenerate = true
+        break
+      }
+      if (newA !== a || newB !== b) {
+        transform.hingeEdgePointIds = [newA, newB]
+        netDirty = true
+      }
+    }
+    if (netDegenerate) {
+      scene.removeNet(net.id)
+      continue
+    }
+
+    if (net.controlEdgePointIds) {
+      const [a, b] = net.controlEdgePointIds
+      const newA = a === removeId ? keepId : a
+      const newB = b === removeId ? keepId : b
+      if (newA === newB) {
+        net.controlEdgeFaceId = null
+        net.controlEdgePointIds = null
+        netDirty = true
+      } else if (newA !== a || newB !== b) {
+        net.controlEdgePointIds = [newA, newB]
+        netDirty = true
+      }
+    }
+
+    if (netDirty) {
+      scene.markNetDirty(net.id)
+    }
+  }
+
   // ─── 标记脏点并求解 ────────────────────────────────
   scene.markPointDirty(keepId)
   scene.solveDirtyConstraints()

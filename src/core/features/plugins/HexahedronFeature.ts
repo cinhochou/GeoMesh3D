@@ -82,6 +82,12 @@ export const hexahedronFeaturePlugin: FeaturePlugin = {
   delete(scene: Scene, feature: Feature, geometry: GeneratedGeometry): void {
     void geometry
     const deleteParams = feature.params as unknown as DeleteHexahedronParams
+    const cubeId = deleteParams.constraint.cubeId
+
+    const associatedNets = scene.getNetsForSolid(cubeId)
+    associatedNets.forEach((net) => {
+      scene.removeNet(net.id)
+    })
 
     deleteParams.relatedPerpendicularLines?.forEach((line) => {
       scene.removePerpendicularLine(line.id)
@@ -92,7 +98,7 @@ export const hexahedronFeaturePlugin: FeaturePlugin = {
       scene.selection.parallelLines.delete(line.id)
     })
 
-    scene.removeCubeConstraint(deleteParams.constraint.cubeId)
+    scene.removeCubeConstraint(cubeId)
     deleteParams.faces.forEach((face) => scene.removeFace(face.id))
 
     const allBoundaryLineIds = new Set(deleteParams.faces.flatMap((face) => face.boundaryLineIds))

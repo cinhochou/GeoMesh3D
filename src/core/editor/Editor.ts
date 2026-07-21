@@ -82,6 +82,11 @@ import { createDeletePrismCommand } from './commands/delete/DeletePrismCommand'
 import { createDeletePyramidCommand } from './commands/delete/DeletePyramidCommand'
 import { UpdatePrismCommand } from './commands/update/UpdatePrismCommand'
 import { UpdatePyramidCommand } from './commands/update/UpdatePyramidCommand'
+import { Net, type NetSolidType, type NetMode } from '../geometry/Net'
+import { generateNetTransforms, getNetNextName } from '../geometry/NetUtils'
+import { AddNetCommand } from './commands/add/AddNetCommand'
+import { DeleteNetCommand } from './commands/delete/DeleteNetCommand'
+import { UpdateNetCommand } from './commands/update/UpdateNetCommand'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { PrismConstraint } from '../constraints/PrismConstraint'
 import { PyramidConstraint } from '../constraints/PyramidConstraint'
@@ -123,6 +128,7 @@ export enum EditorMode {
   CreatePyramid,
   CreatePerpendicularLine,
   CreateParallelLine,
+  CreateNet,
 }
 
 export type FacePreviewData = {
@@ -395,6 +401,7 @@ export class Editor {
   isSnappingEnabled: boolean = true
   /** 基于 Feature 的文档 API，供外部程序和脚本调用作图能力 */
   featureDocument: FeatureDocument
+  createNetState: { phase: 'idle' | 'selectSolid' } = { phase: 'idle' }
 
   constructor(scene: Scene) {
     this.scene = scene
@@ -2149,6 +2156,121 @@ export class Editor {
   getCylinderTopCenterPoint(cylinderId: string): Point3 | undefined {
     const cylinder = this.getCylinder(cylinderId)
     return cylinder?.topCenterPoint
+  }
+
+  createNet() {
+    this.cancelCurrentMode()
+    this.mode = EditorMode.CreateNet
+    this.createNetState = { phase: 'selectSolid' }
+    this.scene.selection.clear()
+  }
+
+  cancelCreateNet() {
+    this.createNetState = { phase: 'idle' }
+    this.scene.selection.clear()
+    if (this.mode === EditorMode.CreateNet) {
+      this.mode = EditorMode.Select
+    }
+  }
+
+  cancelCurrentMode() {
+    switch (this.mode) {
+      case EditorMode.CreateNet:
+        this.cancelCreateNet()
+        break
+      default:
+        break
+    }
+    this.selectedPoints = []
+  }
+
+  getModeHint(): string {
+    switch (this.mode) {
+      case EditorMode.CreateNet:
+        return '选择多面体以创建展开图'
+      default:
+        return ''
+    }
+  }
+
+  addNet(solidId: string, solidType: NetSolidType) {
+    const netId = genId('net')
+    const netName = getNetNextName(this.scene)
+    const net = generateNetTransforms(
+      netId,
+      netName,
+      solidId,
+      solidType,
+      this.scene.faces,
+      this.scene.points,
+    )
+    if (!net) {
+      emitToast('无法为该多面体生成展开图')
+      return null
+    }
+    const cmd = new AddNetCommand(this.scene, net)
+    this.executeCommand(cmd)
+    this.scene.selection.clear()
+    this.scene.selection.selectNet(netId)
+    return net
+  }
+
+  deleteNet(netId: string) {
+    const net = this.scene.nets.get(netId)
+    if (!net) return
+    if (this.scene.selection.nets.has(netId)) {
+      this.scene.selection.deselectNet(netId)
+    }
+    const cmd = new DeleteNetCommand(this.scene, netId)
+    this.executeCommand(cmd)
+    this.scene.markAllRenderDirty()
+  }
+
+  updateNet(
+    netId: string,
+    updates: {
+      name?: string
+      visible?: boolean
+      unfoldRatio?: number
+      position?: { x: number; y: number; z: number }
+      mode?: NetMode
+      reset?: boolean
+    },
+  ) {
+    const net = this.scene.nets.get(netId)
+    if (!net) return
+    const cmdUpdates: {
+      name?: string
+      visible?: boolean
+      unfoldRatio?: number
+      position?: Vec3
+      mode?: NetMode
+      reset?: boolean
+    } = {
+      name: updates.name,
+      visible: updates.visible,
+      unfoldRatio: updates.unfoldRatio,
+      mode: updates.mode,
+      reset: updates.reset,
+    }
+    if (updates.position) {
+      cmdUpdates.position = new Vec3(updates.position.x, updates.position.y, updates.position.z)
+    }
+    const cmd = new UpdateNetCommand(this.scene, netId, cmdUpdates)
+    this.executeCommand(cmd)
+    this.scene.markAllRenderDirty()
+  }
+
+  getNet(id: string): Net | null {
+    return this.scene.nets.get(id) ?? null
+  }
+
+  getNets(): Net[] {
+    return [...this.scene.nets.values()]
+  }
+
+  getNetsForSolid(solidId: string): Net[] {
+    return [...this.scene.nets.values()].filter((net) => net.solidId === solidId)
   }
 
   getRegularPolygonConstraint(constraintId: string) {
@@ -8141,5 +8263,16 @@ export class Editor {
    */
   commitCollabTransaction(): void {
     this.commitTransaction()
+  }
+
+  /**
+   * 实时同步某个展开图到协作房间（不记录历史）。
+   * 用于 sidebar 滑块拖拽过程中的实时预览同步。
+   * 此方法会被 EditorView 覆盖以注入协作逻辑；非协作模式下为空操作
+   * （调用方已自行调用 scene.markNetDirty 触发本地渲染）。
+   */
+  syncLiveNet(_netId: string): void {
+    // no-op by default；用 void 引用参数以避免 noUnusedLocals 报错
+    void _netId
   }
 }

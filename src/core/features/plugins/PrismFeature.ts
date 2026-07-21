@@ -180,6 +180,11 @@ export const prismFeaturePlugin: FeaturePlugin = {
     const deleteParams = feature.params as unknown as DeletePrismParams
     const prismId = deleteParams.constraint.prismId
 
+    const associatedNets = scene.getNetsForSolid(prismId)
+    associatedNets.forEach((net) => {
+      scene.removeNet(net.id)
+    })
+
     // 级联：相关垂直线
     deleteParams.relatedPerpendicularLines?.forEach((line) => {
       scene.removePerpendicularLine(line.id)

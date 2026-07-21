@@ -15,6 +15,7 @@ import { Vec3 } from '../core/geometry/Vec3'
 import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
 import { DEFAULT_POINT_COLOR } from './GeometrySyncer'
+import { findBestUnfoldRatioByGradient, selectNetDragPointsByScreenDirection, type NetControlPoint } from './NetMath'
 
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
@@ -104,6 +105,10 @@ export class Interaction {
         e.scene.selection.deselectCylinder(id)
         e.scene.markAllRenderDirty()
       },
+      net: (e, id) => {
+        e.scene.selection.deselectNet(id)
+        e.scene.markAllRenderDirty()
+      },
       face: (e, id) => e.deselectCubeByFaceId(id),
     }
 
@@ -119,6 +124,10 @@ export class Interaction {
     sphere: (e, id) => e.scene.selection.selectSphere(id, true),
     cone: (e, id) => e.scene.selection.selectCone(id, true),
     cylinder: (e, id) => e.scene.selection.selectCylinder(id, true),
+    net: (e, id) => {
+      e.scene.selection.selectNet(id, true)
+      e.scene.markAllRenderDirty()
+    },
     face: (e, id) => e.selectCubeByFaceId(id, true),
   }
 
@@ -134,6 +143,9 @@ export class Interaction {
     sphere: (e, id) => e.deleteSphere(id),
     cone: (e, id) => e.deleteCone(id),
     cylinder: (e, id) => e.deleteCylinder(id),
+    net: (e, id) => e.deleteNet(id),
+    netControlEdge: (e, id) => e.deleteNet(id),
+    netControlVertex: (e, id) => e.deleteNet(id),
     face: (e, id) => e.deleteFace(id),
   }
 
@@ -167,6 +179,16 @@ export class Interaction {
   draggingConeId: string | null = null
   draggingCylinderId: string | null = null
   draggingFaceId: string | null = null
+  draggingNetId: string | null = null
+  draggingNetControlEdgeId: string | null = null
+  private netDragStartRatio: number = 0
+  private netDragStartPosition: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }
+  private netDraggedPoints: NetControlPoint[] = []
+  private netDragCandidatePoints: NetControlPoint[] = []
+  private netActivePoints: NetControlPoint[] = []
+  private netDragStartMouse: THREE.Vector2 = new THREE.Vector2()
+  private netDragDirectionLocked: boolean = false
+
   draggingPerpendicularLineId: string | null = null
   draggingParallelLineId: string | null = null
   private draggingLabelTarget: {
@@ -182,6 +204,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face'
     geoId: string
     startClientX: number
@@ -243,6 +266,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face'
     geoId: string
   } | null = null
@@ -261,6 +285,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face'
     geoId: string
   } | null = null
@@ -822,6 +847,13 @@ export class Interaction {
     this.draggingConeId = null
     this.draggingCylinderId = null
     this.draggingFaceId = null
+    this.draggingNetId = null
+    this.draggingNetControlEdgeId = null
+    this.netDraggedPoints = []
+    this.netDragCandidatePoints = []
+    this.netActivePoints = []
+    this.netDragStartMouse = new THREE.Vector2()
+    this.netDragDirectionLocked = false
     this.draggingPerpendicularLineId = null
     this.draggingParallelLineId = null
     this.draggingLabelTarget = null
@@ -868,6 +900,8 @@ export class Interaction {
 
   getLiveSyncLabelTarget() {
     if (!this.draggingLabelTarget) return null
+    // 展开图标签拖拽不参与实时标签同步，避免对 CollabManager LiveLabelTarget 过度适配
+    if (this.draggingLabelTarget.type === 'net') return null
     return {
       type: this.draggingLabelTarget.type,
       geoId: this.draggingLabelTarget.geoId,
@@ -904,6 +938,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
     geoId: string,
   ) {
@@ -923,6 +958,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
     geoId: string,
   ) {
@@ -942,6 +978,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
     geoId: string,
   ) {
@@ -1248,6 +1285,8 @@ export class Interaction {
       this.draggingSphereId !== null ||
       this.draggingConeId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingNetId !== null ||
+      this.draggingNetControlEdgeId !== null ||
       this.draggingLabelTarget !== null ||
       this.mobileCreatePointerId !== null
     )
@@ -1283,8 +1322,11 @@ export class Interaction {
   }
 
   private finishDragInteraction() {
-    const hadDragPreview = this.dragStartPositions.size > 0
+    const hadDragPreview = this.dragStartPositions.size > 0 ||
+      this.draggingNetId !== null ||
+      this.draggingNetControlEdgeId !== null
     this.commitLabelDrag()
+    this.commitNetDrag()
     this.commitDragHistory()
     this.editor.scene.activeDraggedPointIds.clear()
     this.clearDraggingIds()
@@ -1423,6 +1465,48 @@ export class Interaction {
     if (linearHit) return linearHit.object
 
     return hits[0]!.object
+  }
+
+  /**
+   * 在附着模式下，展开图的基座面与源多面体的对应面重合，
+   * 视觉上需要在最上层（depthTest=false），但交互上应让位于源多面体。
+   * 只跳过基座面（netFace / netFaceEdge），非基座控制面仍保留用于选中展开图。
+   */
+  private isAttachedNetFace(obj: THREE.Object3D): boolean {
+    const type = obj.userData?.type as string | undefined
+    if (type !== 'netFace' && type !== 'netFaceEdge') return false
+    const netId = obj.userData?.geoId as string | undefined
+    if (!netId) return false
+    const net = this.editor.scene.nets.get(netId)
+    return !!net && net.mode === 'attached'
+  }
+
+  /**
+   * 在附着模式下，与基座面共享边/顶点的控制边/控制点也会和源多面体的
+   * 点/线重合，导致拾取时抢占源几何。跳过这些控制元素，让源点/源线可以
+   * 被正常选中。只要控制边的任一端点落在基座面边界上即跳过，因为用户
+   * 点击该端点附近时应当命中源点/源线；完全位于非基座面内部的控制边
+   * 仍保留，用于展开/折叠。
+   */
+  private isAttachedNetBaseControlElement(obj: THREE.Object3D): boolean {
+    const type = obj.userData?.type as string | undefined
+    if (type !== 'netControlEdge' && type !== 'netControlVertex') return false
+    const netId = obj.userData?.geoId as string | undefined
+    if (!netId) return false
+    const net = this.editor.scene.nets.get(netId)
+    if (!net || net.mode !== 'attached') return false
+    const baseFace = this.editor.scene.faces.get(net.baseFaceId)
+    if (!baseFace) return false
+    const basePointIds = new Set(baseFace.boundaryPointIds)
+
+    if (type === 'netControlEdge') {
+      const pointIds = obj.userData?.pointIds as string[] | undefined
+      if (!pointIds || pointIds.length !== 2) return false
+      return basePointIds.has(pointIds[0]!) || basePointIds.has(pointIds[1]!)
+    }
+
+    const pointId = obj.userData?.pointId as string | undefined
+    return pointId ? basePointIds.has(pointId) : false
   }
 
   private pickScreenSpace(clientX?: number, clientY?: number): THREE.Object3D | null {
@@ -1851,6 +1935,66 @@ export class Interaction {
             type,
             geoId,
           })
+        } else if (type === 'netControlVertex') {
+          if (this.isAttachedNetBaseControlElement(resolved)) continue
+          const sp = resolved as THREE.Sprite
+          const screenPos = this.projectObjectToClient(sp, rect)
+          if (screenPos) {
+            const dist = pointer.distanceTo(screenPos)
+            if (dist <= pointHitRadius) {
+              candidates.push({
+                object: resolved,
+                screenDist: dist,
+                depth: hit.distance - 1e-4,
+                type: 'netControlVertex',
+                geoId,
+              })
+            }
+          }
+        } else if (type === 'netControlEdge') {
+          if (this.isAttachedNetBaseControlElement(resolved)) continue
+          const cyl = resolved as THREE.Mesh
+          const faceId = cyl.userData?.faceId as string | undefined
+          const pointIds = cyl.userData?.pointIds as string[] | undefined
+          const edgeStart = cyl.userData?.edgeStart as THREE.Vector3 | undefined
+          const edgeEnd = cyl.userData?.edgeEnd as THREE.Vector3 | undefined
+          if (!edgeStart || !edgeEnd) continue
+          let screenDist = Infinity
+          if (cyl.parent) {
+            const worldP1 = cyl.parent.localToWorld(edgeStart.clone())
+            const worldP2 = cyl.parent.localToWorld(edgeEnd.clone())
+            const p1Screen = this.projectWorldToClient(worldP1, rect)
+            const p2Screen = this.projectWorldToClient(worldP2, rect)
+            if (p1Screen && p2Screen) {
+              screenDist = this.distanceToSegment2D(pointer, p1Screen, p2Screen)
+            }
+          }
+          const existing = candidates.find((c) => c.geoId === geoId && c.type === 'netControlEdge' && c.object.userData?.faceId === faceId && (c.object.userData?.pointIds as string[]|undefined)?.join(',') === pointIds?.join(','))
+          if (!existing && screenDist <= lineHitRadius) {
+            candidates.push({
+              object: resolved,
+              screenDist,
+              depth: hit.distance - 1e-4,
+              type: 'netControlEdge',
+              geoId,
+            })
+          }
+        } else if (type === 'netControlFace' || type === 'netFace' || type === 'netFaceEdge' || type === 'net' || type === 'netVertex') {
+          if (this.isAttachedNetFace(resolved)) continue
+          const resolvedType = 'net'
+          const already = candidates.some((c) => c.geoId === geoId && c.type === resolvedType)
+          if (!already) {
+            // 附着模式下的非基座控制面与源多面体重合时，不应靠深度偏移抢占源几何
+            const net = geoId ? this.editor.scene.nets.get(geoId) : undefined
+            const isAttachedControlFace = type === 'netControlFace' && net?.mode === 'attached'
+            candidates.push({
+              object: resolved,
+              screenDist: 0,
+              depth: isAttachedControlFace ? hit.distance : hit.distance - 1e-4,
+              type: resolvedType,
+              geoId,
+            })
+          }
         } else {
           candidates.push({
             object: resolved,
@@ -2025,6 +2169,97 @@ export class Interaction {
           })
         }
       }
+
+      const netCandidates = [...this.renderer.geometrySyncer.groupMap.values()].filter(
+        (obj) => obj.userData?.type === 'net' && obj.visible,
+      )
+      const netHits = this.raycaster.intersectObjects(netCandidates, true)
+      const NET_TIEBREAK_DEPTH_BIAS = -1e-4
+      const netEdgeKeySet = new Set<string>()
+      const netFaceKeySet = new Set<string>()
+      for (const hit of netHits) {
+        let obj: THREE.Object3D = hit.object
+        while (!obj.userData?.type && obj.parent) obj = obj.parent
+        const type = obj.userData?.type as string | undefined
+        const geoId = obj.userData?.geoId as string | undefined
+        if (!type || !geoId) continue
+        // 附着模式下，net 面片（基座面/控制面）仅作视觉展示，不参与拾取，
+        // 与基座面共享边/顶点的控制边/控制点也跳过，避免抢占源点/源线。
+        // 非基座面的控制边/控制点仍保留用于展开/折叠。
+        if (this.isAttachedNetFace(obj) || this.isAttachedNetBaseControlElement(obj)) continue
+        if (type === 'netControlVertex') {
+          const sp = obj as THREE.Sprite
+          const screenPos = this.projectObjectToClient(sp, rect)
+          if (!screenPos) continue
+          const dist = pointer.distanceTo(screenPos)
+          if (dist > pointHitRadius) continue
+          const worldPos = sp.getWorldPosition(new THREE.Vector3())
+          const depth = cameraPos.distanceTo(this.renderer.toMathWorldPosition(worldPos))
+          candidates.push({
+            object: obj,
+            screenDist: dist,
+            depth: depth + NET_TIEBREAK_DEPTH_BIAS,
+            type: 'netControlVertex',
+            geoId,
+          })
+        } else if (type === 'netControlEdge') {
+          const cyl = obj as THREE.Mesh
+          const faceId = cyl.userData?.faceId as string | undefined
+          const pointIds = cyl.userData?.pointIds as string[] | undefined
+          const edgeStart = cyl.userData?.edgeStart as THREE.Vector3 | undefined
+          const edgeEnd = cyl.userData?.edgeEnd as THREE.Vector3 | undefined
+          if (!edgeStart || !edgeEnd) continue
+          const edgeKey = `${geoId}::${faceId}::${pointIds?.join(',')}`
+          if (netEdgeKeySet.has(edgeKey)) continue
+          let p1Screen: THREE.Vector2 | null = null
+          let p2Screen: THREE.Vector2 | null = null
+          if (cyl.parent) {
+            const worldP1 = cyl.parent.localToWorld(edgeStart.clone())
+            const worldP2 = cyl.parent.localToWorld(edgeEnd.clone())
+            p1Screen = this.projectWorldToClient(worldP1, rect)
+            p2Screen = this.projectWorldToClient(worldP2, rect)
+          }
+          let screenDist = Infinity
+          if (p1Screen && p2Screen) {
+            screenDist = this.distanceToSegment2D(pointer, p1Screen, p2Screen)
+          }
+          if (screenDist > lineHitRadius) continue
+          netEdgeKeySet.add(edgeKey)
+          const midWorld = new THREE.Vector3()
+          cyl.getWorldPosition(midWorld)
+          const depth = cameraPos.distanceTo(this.renderer.toMathWorldPosition(midWorld))
+          candidates.push({
+            object: obj,
+            screenDist,
+            depth: depth + NET_TIEBREAK_DEPTH_BIAS,
+            type: 'netControlEdge',
+            geoId,
+          })
+        } else if (type === 'netControlFace') {
+          const faceKey = `${geoId}::${obj.userData?.faceId ?? 'cf'}`
+          if (netFaceKeySet.has(faceKey)) continue
+          netFaceKeySet.add(faceKey)
+          const net = this.editor.scene.nets.get(geoId)
+          const isAttachedControlFace = net?.mode === 'attached'
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length() + (isAttachedControlFace ? 0 : NET_TIEBREAK_DEPTH_BIAS),
+            type: 'net',
+            geoId,
+          })
+        } else if (type === 'netFace' || type === 'netFaceEdge') {
+          if (netFaceKeySet.has(`${geoId}::base`)) continue
+          netFaceKeySet.add(`${geoId}::base`)
+          candidates.push({
+            object: obj,
+            screenDist: 0,
+            depth: hit.distance + cameraPos.length() + NET_TIEBREAK_DEPTH_BIAS,
+            type: 'net',
+            geoId,
+          })
+        }
+      }
     }
 
     // 屏幕空间检测依赖端点投影；当线段很长且相机距离较远时，端点可能
@@ -2095,7 +2330,7 @@ export class Interaction {
     // 供上层选择逻辑（包括 resolvePreferredTarget 中的距离计算）使用。
     const best = candidates[0]!
     const wrapper = new THREE.Object3D()
-    wrapper.userData = { geoId: best.geoId, type: best.type }
+    wrapper.userData = { geoId: best.geoId, type: best.type, _sourceObject: best.object }
     wrapper.position.copy(best.object.getWorldPosition(new THREE.Vector3()))
     return wrapper
   }
@@ -3724,6 +3959,31 @@ export class Interaction {
         isAltPressed,
       )
     }
+
+    if (this.draggingNetId) {
+      const net = this.editor.scene.nets.get(this.draggingNetId)
+      if (net) {
+        const ref = new Vec3(
+          this.netDragStartPosition.x,
+          this.netDragStartPosition.y,
+          this.netDragStartPosition.z,
+        )
+        this.handleDrag(
+          ref,
+          (delta) => {
+            net.position.x = this.netDragStartPosition.x + delta.x
+            net.position.y = this.netDragStartPosition.y + delta.y
+            net.position.z = this.netDragStartPosition.z + delta.z
+            this.editor.scene.markNetDirty(net.id)
+          },
+          isAltPressed,
+        )
+      }
+    }
+
+    if (this.draggingNetControlEdgeId) {
+      this.handleNetUnfoldDrag()
+    }
   }
 
   onMouseDown = (e: MouseEvent) => {
@@ -3750,6 +4010,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreatePrism ||
         this.editor.mode === EditorMode.CreatePyramid ||
+        this.editor.mode === EditorMode.CreateNet ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -3776,7 +4037,13 @@ export class Interaction {
       const targetObject = this.resolvePreferredTarget(hit, labelHit, e.clientX, e.clientY)
       const isNameLabel = Boolean(targetObject?.userData.isNameLabel)
       const geoId = isNameLabel ? targetObject?.userData.geoId : targetObject?.userData.geoId
-      const type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+      let type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+      const isNetSubElement = type === 'netFace' || type === 'netFaceEdge' || type === 'netVertex' ||
+        type === 'netControlEdge' || type === 'netControlVertex' || type === 'netControlFace'
+      // netControlEdge / netControlVertex 需保留原 type，以进入折叠/展开拖拽分支
+      if (isNetSubElement && type !== 'netControlEdge' && type !== 'netControlVertex') {
+        type = 'net'
+      }
       if (!geoId || !type) return
       if (this.editor.mode === EditorMode.Delete) {
         Interaction.deleteByType[type]?.(this.editor, geoId)
@@ -4034,6 +4301,59 @@ export class Interaction {
               )
             }
           }
+        } else if (type === 'netControlEdge' || type === 'netControlVertex') {
+          this.editor.scene.selection.selectNet(geoId, true)
+          this.editor.scene.markAllRenderDirty()
+          this.draggingNetControlEdgeId = geoId
+          this.netDragStartRatio = this.editor.scene.nets.get(geoId)?.unfoldRatio ?? 0
+          const allPoints: NetControlPoint[] = []
+          const addPointsFromHit = (obj: THREE.Object3D | undefined) => {
+            if (!obj) return
+            const t = obj.userData?.type as string | undefined
+            const faceId = obj.userData?.faceId as string | undefined
+            if (t === 'netControlEdge') {
+              const pids = obj.userData?.pointIds as string[] | undefined
+              if (pids && pids.length === 2 && faceId) {
+                allPoints.push({ faceId, pointId: pids[0]! }, { faceId, pointId: pids[1]! })
+              }
+            } else if (t === 'netControlVertex') {
+              const pid = obj.userData?.pointId as string | undefined
+              if (pid && faceId) allPoints.push({ faceId, pointId: pid })
+            }
+          }
+          const sourceObj = (targetObject?.userData?._sourceObject as THREE.Object3D | undefined) ?? null
+          let netGroup: THREE.Object3D | null = sourceObj
+          while (netGroup && netGroup.userData?.type !== 'net') netGroup = netGroup.parent
+          if (netGroup) {
+            this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+            const netAllHits = this.raycaster.intersectObjects(netGroup.children, true)
+            const seenObjs = new Set<THREE.Object3D>()
+            for (const h of netAllHits) {
+              let o: THREE.Object3D = h.object
+              while (!o.userData?.type && o.parent && o.parent !== netGroup) o = o.parent
+              if (!o.userData?.type) continue
+              if (seenObjs.has(o)) continue
+              if (o.userData.type === 'netControlEdge' || o.userData.type === 'netControlVertex') {
+                seenObjs.add(o)
+                addPointsFromHit(o)
+              }
+            }
+          }
+          if (allPoints.length === 0) {
+            addPointsFromHit(sourceObj ?? undefined)
+          }
+          this.initNetUnfoldDrag(geoId, allPoints)
+        } else if (type === 'net' || type === 'netFace' || type === 'netControlFace' || type === 'netVertex' || type === 'netFaceEdge') {
+          const alreadySelected = this.editor.scene.selection.nets.has(geoId)
+          this.pendingToggleSelection = alreadySelected ? { type: 'net', geoId } : null
+          this.editor.scene.selection.selectNet(geoId, true)
+          this.editor.scene.markAllRenderDirty()
+          const net = this.editor.scene.nets.get(geoId)
+          if (net && net.mode === 'free') {
+            this.draggingNetId = geoId
+            this.netDragStartPosition = { x: net.position.x, y: net.position.y, z: net.position.z }
+            this.startDrag(new Vec3(net.position.x, net.position.y, net.position.z))
+          }
         } else if (type === 'face') {
           const alreadySelected = this.editor.scene.selection.faces.has(geoId)
           this.pendingToggleSelection = alreadySelected ? { type, geoId } : null
@@ -4145,6 +4465,32 @@ export class Interaction {
         this.commitCreatePyramidSelection('face', geoId)
       } else if (this.editor.mode === EditorMode.CreatePyramid && type === 'point') {
         this.commitCreatePyramidSelection('point', geoId)
+      } else if (this.editor.mode === EditorMode.CreateNet && type === 'face') {
+        const face = this.editor.scene.faces.get(geoId)
+        if (face) {
+          let solidId: string | null = null
+          let solidType: 'hexahedron' | 'tetrahedron' | 'prism' | 'pyramid' | null = null
+          if (face.cubeId) {
+            solidId = face.cubeId
+            const constraint = this.editor.getCubeConstraint(face.cubeId)
+            solidType = constraint?.solidType ?? 'hexahedron'
+          } else if (face.prismId) {
+            solidId = face.prismId
+            solidType = 'prism'
+          } else if (face.pyramidId) {
+            solidId = face.pyramidId
+            solidType = 'pyramid'
+          }
+          if (solidId && solidType) {
+            this.editor.addNet(solidId, solidType)
+          } else {
+            window.dispatchEvent(
+              new CustomEvent('toast', {
+                detail: { msg: '请选择多面体的面', scope: 'viewport' },
+              }),
+            )
+          }
+        }
       } else if (this.editor.mode === EditorMode.CreateSphereTwoPoints && type === 'point') {
         if (!this.sphereTwoPointsFirstPointId) {
           this.sphereTwoPointsFirstPointId = geoId
@@ -4334,6 +4680,7 @@ export class Interaction {
         this.editor.mode === EditorMode.CreateTetrahedron ||
         this.editor.mode === EditorMode.CreatePrism ||
         this.editor.mode === EditorMode.CreatePyramid ||
+        this.editor.mode === EditorMode.CreateNet ||
         this.editor.mode === EditorMode.CreateSphereTwoPoints ||
         this.editor.mode === EditorMode.CreateSphereRadius ||
         this.editor.mode === EditorMode.CreateCone ||
@@ -4431,6 +4778,10 @@ export class Interaction {
       this.draggingConeId = null
       this.draggingCylinderId = null
       this.draggingFaceId = null
+      this.draggingNetId = null
+      this.draggingNetControlEdgeId = null
+      this.netDragStartPosition = { x: 0, y: 0, z: 0 }
+      this.netDragStartRatio = 0
       this.draggingPerpendicularLineId = null
       this.draggingParallelLineId = null
       this.pendingToggleSelection = null
@@ -4628,7 +4979,13 @@ export class Interaction {
     const targetObject = this.resolvePreferredTarget(hit, labelHit, e.clientX, e.clientY)
     const isNameLabel = Boolean(targetObject?.userData.isNameLabel)
     const geoId = isNameLabel ? targetObject?.userData.geoId : targetObject?.userData.geoId
-    const type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+    let type = isNameLabel ? targetObject?.userData.geoType : targetObject?.userData.type
+    const isNetSubElement = type === 'netFace' || type === 'netFaceEdge' || type === 'netVertex' ||
+      type === 'netControlEdge' || type === 'netControlVertex' || type === 'netControlFace'
+    // netControlEdge / netControlVertex 需保留原 type，以进入折叠/展开拖拽分支
+    if (isNetSubElement && type !== 'netControlEdge' && type !== 'netControlVertex') {
+      type = 'net'
+    }
     if (!geoId || !type) return
 
     if (this.editor.mode === EditorMode.Delete) {
@@ -4805,6 +5162,38 @@ export class Interaction {
       e.stopPropagation()
       if (type === 'face') this.commitCreatePyramidSelection('face', geoId)
       else if (type === 'point') this.commitCreatePyramidSelection('point', geoId)
+      this.resetMobileInteractionState()
+      return
+    }
+
+    if (this.editor.mode === EditorMode.CreateNet && type === 'face') {
+      e.preventDefault()
+      e.stopPropagation()
+      const face = this.editor.scene.faces.get(geoId)
+      if (face) {
+        let solidId: string | null = null
+        let solidType: 'hexahedron' | 'tetrahedron' | 'prism' | 'pyramid' | null = null
+        if (face.cubeId) {
+          solidId = face.cubeId
+          const constraint = this.editor.getCubeConstraint(face.cubeId)
+          solidType = constraint?.solidType ?? 'hexahedron'
+        } else if (face.prismId) {
+          solidId = face.prismId
+          solidType = 'prism'
+        } else if (face.pyramidId) {
+          solidId = face.pyramidId
+          solidType = 'pyramid'
+        }
+        if (solidId && solidType) {
+          this.editor.addNet(solidId, solidType)
+        } else {
+          window.dispatchEvent(
+            new CustomEvent('toast', {
+              detail: { msg: '请选择多面体的面', scope: 'viewport' },
+            }),
+          )
+        }
+      }
       this.resetMobileInteractionState()
       return
     }
@@ -5353,6 +5742,78 @@ export class Interaction {
           cylinderReferencePos.z,
         ),
       )
+      return
+    }
+
+
+
+    if (type === 'netControlEdge' || type === 'netControlVertex') {
+      this.editor.scene.selection.selectNet(geoId, true)
+      this.editor.scene.markAllRenderDirty()
+      this.draggingNetControlEdgeId = geoId
+      this.netDragStartRatio = this.editor.scene.nets.get(geoId)?.unfoldRatio ?? 0
+      const allPoints: NetControlPoint[] = []
+      const addPointsFromHit = (obj: THREE.Object3D | undefined) => {
+        if (!obj) return
+        const t = obj.userData?.type as string | undefined
+        const faceId = obj.userData?.faceId as string | undefined
+        if (t === 'netControlEdge') {
+          const pids = obj.userData?.pointIds as string[] | undefined
+          if (pids && pids.length === 2 && faceId) {
+            allPoints.push({ faceId, pointId: pids[0]! }, { faceId, pointId: pids[1]! })
+          }
+        } else if (t === 'netControlVertex') {
+          const pid = obj.userData?.pointId as string | undefined
+          if (pid && faceId) allPoints.push({ faceId, pointId: pid })
+        }
+      }
+      const sourceObj = (targetObject?.userData?._sourceObject as THREE.Object3D | undefined) ?? null
+      let netGroup: THREE.Object3D | null = sourceObj
+      while (netGroup && netGroup.userData?.type !== 'net') netGroup = netGroup.parent
+      if (netGroup) {
+        this.raycaster.setFromCamera(this.mouse, this.renderer.getActiveCamera())
+        const netAllHits = this.raycaster.intersectObjects(netGroup.children, true)
+        const seenObjs = new Set<THREE.Object3D>()
+        for (const h of netAllHits) {
+          let o: THREE.Object3D = h.object
+          while (!o.userData?.type && o.parent && o.parent !== netGroup) o = o.parent
+          if (!o.userData?.type) continue
+          if (seenObjs.has(o)) continue
+          if (o.userData.type === 'netControlEdge' || o.userData.type === 'netControlVertex') {
+            seenObjs.add(o)
+            addPointsFromHit(o)
+          }
+        }
+      }
+      if (allPoints.length === 0) {
+        addPointsFromHit(sourceObj ?? undefined)
+      }
+      this.initNetUnfoldDrag(geoId, allPoints)
+      e.preventDefault()
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+      this.renderer.controls.enabled = false
+      return
+    }
+
+    if (type === 'net' || type === 'netFace' || type === 'netControlFace' || type === 'netVertex' || type === 'netFaceEdge') {
+      const alreadySelected = this.editor.scene.selection.nets.has(geoId)
+      this.pendingToggleSelection = alreadySelected ? { type: 'net', geoId } : null
+      this.editor.scene.selection.selectNet(geoId, true)
+      this.editor.scene.markAllRenderDirty()
+      const net = this.editor.scene.nets.get(geoId)
+      if (net && net.mode === 'free') {
+        this.draggingNetId = geoId
+        this.netDragStartPosition = { x: net.position.x, y: net.position.y, z: net.position.z }
+        this.startDrag(new Vec3(net.position.x, net.position.y, net.position.z))
+        e.preventDefault()
+        e.stopPropagation()
+        ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
+        this.renderer.controls.enabled = false
+        return
+      }
+      this.syncControlLockState()
+      this.renderer.renderer.domElement.style.cursor = 'default'
       return
     }
 
@@ -6138,6 +6599,8 @@ export class Interaction {
       this.draggingPerpendicularLineId !== null ||
       this.draggingParallelLineId !== null ||
       this.draggingLabelTarget !== null ||
+      this.draggingNetId !== null ||
+      this.draggingNetControlEdgeId !== null ||
       performance.now() < this.liveSyncUntil
     )
   }
@@ -6186,6 +6649,13 @@ export class Interaction {
     return [...pointIds]
   }
 
+  getLiveSyncNetIds() {
+    const ids: string[] = []
+    if (this.draggingNetId) ids.push(this.draggingNetId)
+    if (this.draggingNetControlEdgeId) ids.push(this.draggingNetControlEdgeId)
+    return ids
+  }
+
   getFacePreviewData(): FacePreviewData | null {
     if (this.editor.mode !== EditorMode.CreatePlane) return null
     return this.editor.getFacePreviewFromSelection()
@@ -6222,6 +6692,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
   ): { x: number; y: number } {
     // The renderer composes the on-screen label offset as
@@ -6485,6 +6956,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
     geoId: string,
   ) {
@@ -6499,6 +6971,7 @@ export class Interaction {
     if (type === 'sphere') return this.editor.scene.spheres.get(geoId) ?? null
     if (type === 'cone') return this.editor.scene.cones.get(geoId) ?? null
     if (type === 'cylinder') return this.editor.scene.cylinders.get(geoId) ?? null
+    if (type === 'net') return null
     return this.editor.scene.faces.get(geoId) ?? null
   }
 
@@ -6515,6 +6988,7 @@ export class Interaction {
       | 'sphere'
       | 'cone'
       | 'cylinder'
+      | 'net'
       | 'face',
     geoId: string,
     clientX: number,
@@ -6583,5 +7057,115 @@ export class Interaction {
       labelOffsetX: nextOffsetX,
       labelOffsetY: nextOffsetY,
     })
+  }
+
+  private initNetUnfoldDrag(netId: string, points: NetControlPoint[]) {
+    const net = this.editor.scene.nets.get(netId)
+    if (!net || points.length === 0) {
+      this.netDraggedPoints = []
+      this.netDragCandidatePoints = []
+      this.netActivePoints = []
+      return
+    }
+    const unique = this.uniqueNetControlPoints(points)
+    this.netDraggedPoints = unique
+    this.netDragCandidatePoints = unique
+    this.netActivePoints = unique.length <= 1 ? [...unique] : []
+    this.netDragStartMouse.copy(this.mouse)
+    this.netDragDirectionLocked = false
+
+    this.dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      this.renderer.getActiveCameraWorldDirection(),
+      new THREE.Vector3(0, 0, 0),
+    )
+  }
+
+  private handleNetUnfoldDrag() {
+    const netId = this.draggingNetControlEdgeId
+    if (!netId) return
+    const net = this.editor.scene.nets.get(netId)
+    if (!net) return
+
+    const camera = this.renderer.getActiveCamera()
+    this.raycaster.setFromCamera(this.mouse, camera)
+    const ray = this.raycaster.ray
+
+    const posOverride = net.mode === 'free'
+      ? new THREE.Vector3(net.position.x, net.position.y, net.position.z)
+      : new THREE.Vector3(0, 0, 0)
+
+    if (!this.netDragDirectionLocked && this.netDragCandidatePoints.length > 1) {
+      const delta = new THREE.Vector2().subVectors(this.mouse, this.netDragStartMouse)
+      const minPixels = 3 / Math.min(window.innerWidth, window.innerHeight) * 2
+      if (delta.length() > minPixels) {
+        const screenDir = delta.clone().normalize()
+        this.netActivePoints = selectNetDragPointsByScreenDirection(
+          net,
+          this.editor.scene,
+          this.netDragCandidatePoints,
+          screenDir,
+          camera,
+          net.unfoldRatio,
+          posOverride,
+        )
+        this.netDragDirectionLocked = true
+      }
+    }
+
+    if (this.netActivePoints.length === 0) return
+
+    const newRatio = findBestUnfoldRatioByGradient(
+      net,
+      this.editor.scene,
+      this.netActivePoints,
+      ray,
+      net.unfoldRatio,
+      posOverride,
+    )
+
+    net.setUnfoldRatio(newRatio)
+    this.editor.scene.markNetDirty(net.id)
+  }
+
+  private uniqueNetControlPoints(points: NetControlPoint[]): NetControlPoint[] {
+    const seen = new Set<string>()
+    const result: NetControlPoint[] = []
+    for (const cp of points) {
+      const key = `${cp.faceId}:${cp.pointId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(cp)
+    }
+    return result
+  }
+
+  private commitNetDrag() {
+    if (this.draggingNetId) {
+      const net = this.editor.scene.nets.get(this.draggingNetId)
+      if (net) {
+        const startPos = this.netDragStartPosition
+        const curPos = { x: net.position.x, y: net.position.y, z: net.position.z }
+        if (
+          Math.abs(curPos.x - startPos.x) > 1e-6 ||
+          Math.abs(curPos.y - startPos.y) > 1e-6 ||
+          Math.abs(curPos.z - startPos.z) > 1e-6
+        ) {
+          net.setPosition(new Vec3(startPos.x, startPos.y, startPos.z))
+          this.editor.updateNet(this.draggingNetId, { position: curPos })
+          return
+        }
+      }
+    }
+    if (this.draggingNetControlEdgeId) {
+      const net = this.editor.scene.nets.get(this.draggingNetControlEdgeId)
+      if (net) {
+        const startRatio = this.netDragStartRatio
+        const curRatio = net.unfoldRatio
+        if (Math.abs(curRatio - startRatio) > 1e-6) {
+          net.setUnfoldRatio(startRatio)
+          this.editor.updateNet(this.draggingNetControlEdgeId, { unfoldRatio: curRatio })
+        }
+      }
+    }
   }
 }

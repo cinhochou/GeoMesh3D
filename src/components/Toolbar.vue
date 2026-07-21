@@ -123,6 +123,12 @@ const alignHintTriggerRef = ref<HTMLElement | null>(null)
 const alignHintPopoverRef = ref<HTMLElement | null>(null)
 const alignHintStyle = ref<Record<string, string>>({})
 let alignHintRafId = 0
+const showNetHint = ref(false)
+const netHintPinned = ref(false)
+const netHintTriggerRef = ref<HTMLElement | null>(null)
+const netHintPopoverRef = ref<HTMLElement | null>(null)
+const netHintStyle = ref<Record<string, string>>({})
+let netHintRafId = 0
 const displayName = computed(() => user.value?.nickname || user.value?.username || '未登录')
 const displayEmail = computed(() => user.value?.username || '请先登录后查看账号信息')
 const userRoleText = computed(() => user.value?.role || 'GUEST')
@@ -326,6 +332,11 @@ const selectCreateRegularPolygonMode = () => {
   setMode(EditorMode.CreateRegularPolygon)
 }
 
+const selectCreateNetMode = () => {
+  uiStore.setToolbarMenuOpen('polygonOpen', false, { exclusive: false })
+  setMode(EditorMode.CreateNet)
+}
+
 const createHexahedron = () => {
   uiStore.setToolbarMenuOpen('solidOpen', false, { exclusive: false })
   emit('mode-change', EditorMode.CreateHexahedron)
@@ -438,12 +449,20 @@ const updateProfileMenuPosition = () => {
 
 const updateAlignHintPosition = () => {
   if (!showAlignHint.value) return
-  const el = alignHintTriggerRef.value
-  if (!el) return
-  const rect = el.getBoundingClientRect()
-  const popEl = alignHintPopoverRef.value
-  const popW = popEl?.offsetWidth || 260
-  const popH = popEl?.offsetHeight || 160
+  alignHintStyle.value = computeHintPosition(alignHintTriggerRef.value, alignHintPopoverRef.value, 260, 160)
+  alignHintRafId = requestAnimationFrame(updateAlignHintPosition)
+}
+
+const computeHintPosition = (
+  trigger: HTMLElement | null,
+  popover: HTMLElement | null,
+  defaultW: number,
+  defaultH: number,
+): Record<string, string> => {
+  if (!trigger) return {}
+  const rect = trigger.getBoundingClientRect()
+  const popW = popover?.offsetWidth || defaultW
+  const popH = popover?.offsetHeight || defaultH
   const gap = 8
   const margin = 8
   const vw = window.innerWidth
@@ -469,12 +488,11 @@ const updateAlignHintPosition = () => {
   }
   if (top < margin) top = margin
 
-  alignHintStyle.value = {
+  return {
     position: 'fixed',
     top: `${top}px`,
     left: `${left}px`,
   }
-  alignHintRafId = requestAnimationFrame(updateAlignHintPosition)
 }
 
 const openAlignHint = (pointerType: string) => {
@@ -499,6 +517,37 @@ watch(showAlignHint, (show) => {
       alignHintRafId = 0
     }
     alignHintPinned.value = false
+  }
+})
+
+const updateNetHintPosition = () => {
+  if (!showNetHint.value) return
+  netHintStyle.value = computeHintPosition(netHintTriggerRef.value, netHintPopoverRef.value, 260, 80)
+  netHintRafId = requestAnimationFrame(updateNetHintPosition)
+}
+
+const openNetHint = (pointerType: string) => {
+  if (pointerType !== 'touch') showNetHint.value = true
+}
+
+const closeNetHint = (pointerType: string) => {
+  if (pointerType !== 'touch' && !netHintPinned.value) showNetHint.value = false
+}
+
+const toggleNetHintPinned = () => {
+  netHintPinned.value = !netHintPinned.value
+  showNetHint.value = netHintPinned.value
+}
+
+watch(showNetHint, (show) => {
+  if (show) {
+    updateNetHintPosition()
+  } else {
+    if (netHintRafId) {
+      cancelAnimationFrame(netHintRafId)
+      netHintRafId = 0
+    }
+    netHintPinned.value = false
   }
 })
 
@@ -625,6 +674,14 @@ const handleClickOutside = (event: MouseEvent) => {
   ) {
     alignHintPinned.value = false
     showAlignHint.value = false
+  }
+  if (
+    netHintPinned.value &&
+    !netHintTriggerRef.value?.contains(target) &&
+    !netHintPopoverRef.value?.contains(target)
+  ) {
+    netHintPinned.value = false
+    showNetHint.value = false
   }
 }
 
@@ -824,7 +881,8 @@ onUnmounted(() => {
           :class="{
             'is-active':
               currentMode === EditorMode.CreatePlane ||
-              currentMode === EditorMode.CreateRegularPolygon,
+              currentMode === EditorMode.CreateRegularPolygon ||
+              currentMode === EditorMode.CreateNet,
             'is-open': isPolygonMenuOpen,
           }"
           @click="togglePolygonMenu"
@@ -1096,6 +1154,21 @@ onUnmounted(() => {
   </Teleport>
 
   <Teleport to="body">
+    <div
+      v-if="showNetHint"
+      ref="netHintPopoverRef"
+      class="align-hint-popover"
+      :style="netHintStyle"
+      @mousedown.stop
+      @touchstart.stop
+    >
+      <div class="align-hint-title">展开图</div>
+      <div class="align-hint-desc">调整到合适的相机视角以更流畅地无极调节展开度。</div>
+      <div class="align-hint-desc">展开图以面向坐标系网格最近的面为基座创建，调整源多面体的姿态可以创建不同的展开图。</div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
     <div v-if="isLineMenuOpen" ref="linePanelRef" class="menu-panel" :style="lineMenuStyle">
       <button
         class="menu-item"
@@ -1319,6 +1392,45 @@ onUnmounted(() => {
         </svg>
         <span>正多边形</span>
       </button>
+      <div class="align-item-layer">
+        <button
+          class="menu-item"
+          :class="{ 'menu-item-active': currentMode === EditorMode.CreateNet }"
+          @click="selectCreateNetMode"
+        >
+          <svg
+            class="menu-item-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.2"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+          >
+            <rect x="7" y="7" width="10" height="10" />
+            <rect x="7" y="1" width="10" height="6" />
+            <rect x="7" y="17" width="10" height="6" />
+            <rect x="1" y="7" width="6" height="10" />
+            <rect x="17" y="7" width="6" height="10" />
+          </svg>
+          <span>展开图</span>
+        </button>
+        <span
+          class="align-hint-wrapper"
+          @pointerenter="(e: PointerEvent) => openNetHint(e.pointerType)"
+          @pointerleave="(e: PointerEvent) => closeNetHint(e.pointerType)"
+          @click.stop="toggleNetHintPinned"
+        >
+          <button
+            ref="netHintTriggerRef"
+            type="button"
+            class="align-hint-trigger"
+            :class="{ active: netHintPinned }"
+          >
+            ?
+          </button>
+        </span>
+      </div>
     </div>
   </Teleport>
 

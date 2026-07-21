@@ -828,6 +828,11 @@ onMounted(() => {
     editor.commitTransaction()
   }
 
+  // sidebar 滑块拖拽过程中的实时同步：不记录历史，仅把 net 状态推送到 Yjs
+  editor.syncLiveNet = (netId: string) => {
+    collabManager.value?.syncLivePreview([], null, [netId])
+  }
+
   const loop = () => {
     const now = performance.now()
     const fpsCap = appSettings.value.fpsCap
@@ -867,6 +872,7 @@ onMounted(() => {
       collabManager.value?.syncLivePreview(
         interaction.getLiveSyncPointIds(),
         interaction.getLiveSyncLabelTarget(),
+        interaction.getLiveSyncNetIds(),
       )
     }
     renderer.sync(
@@ -1201,7 +1207,11 @@ function onModeChange(mode: EditorMode) {
   if (isARMode.value && mode !== EditorMode.Select) return
   interaction.clearPreview()
   interaction.radiusSphereCenterPointId = null
-  editor.setMode(mode)
+  if (mode === EditorMode.CreateNet) {
+    editor.createNet()
+  } else {
+    editor.setMode(mode)
+  }
   sceneStore.setCurrentMode(mode)
   uiStore.closeMergePointDialog()
   uiStore.closeRegularPolygonDialog()

@@ -21,6 +21,7 @@ export function createClearSceneCommand(
     scene.cylinders.clear()
     scene.perpendicularLines.clear()
     scene.parallelLines.clear()
+    scene.nets.clear()
     // 保留原点，删除其他点
     const pointIds = [...scene.points.keys()].filter((id) => id !== Scene.ORIGIN_ID)
     pointIds.forEach((id) => scene.points.delete(id))

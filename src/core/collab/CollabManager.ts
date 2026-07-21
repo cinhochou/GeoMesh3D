@@ -18,6 +18,7 @@ import { Cylinder3, type CylinderType } from '../geometry/Cylinder3'
 import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { ObjectConstrainedPointConstraint, type ParametricData } from '../constraints/ObjectConstrainedPointConstraint'
 import { PlanarPolygon } from '../geometry/PlanarPolygon'
+import { Net, type NetSolidType, type NetFaceTransform, type NetMode } from '../geometry/Net'
 import { Vec3 } from '../geometry/Vec3'
 import { CubeConstraint } from '../constraints/CubeConstraint'
 import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
@@ -83,6 +84,7 @@ type LocalSceneSnapshot = {
   perpendicularLineConstraints: PerpendicularLineConstraint[]
   parallelLineConstraints: ParallelLineConstraint[]
   objectConstrainedPoints: ObjectConstrainedPointConstraint[]
+  nets: Net[]
 }
 
 type PointSharedMap = Y.Map<string | number | boolean>
@@ -106,6 +108,7 @@ type RegularPolygonSharedMap = Y.Map<string | number | boolean>
 type PrismSharedMap = Y.Map<string | number | boolean>
 type PyramidSharedMap = Y.Map<string | number | boolean>
 type WorldTransformSharedMap = Y.Map<string | number | boolean>
+type NetSharedMap = Y.Map<string | number | boolean>
 
 export type SharedWorldRotationState = {
   quaternion: {
@@ -154,6 +157,7 @@ export class CollabManager {
   private yRegularPolygons: Y.Map<RegularPolygonSharedMap>
   private yPrisms: Y.Map<PrismSharedMap>
   private yPyramids: Y.Map<PyramidSharedMap>
+  private yNets: Y.Map<NetSharedMap>
   private yWorldTransform: WorldTransformSharedMap
   private pointsObserver: ((event: Y.YMapEvent<PointSharedMap>) => void) | null = null
   private linesObserver: ((event: Y.YMapEvent<LineSharedMap>) => void) | null = null
@@ -173,6 +177,7 @@ export class CollabManager {
   private regularPolygonsObserver: ((event: Y.YMapEvent<RegularPolygonSharedMap>) => void) | null = null
   private prismsObserver: ((event: Y.YMapEvent<PrismSharedMap>) => void) | null = null
   private pyramidsObserver: ((event: Y.YMapEvent<PyramidSharedMap>) => void) | null = null
+  private netsObserver: ((event: Y.YMapEvent<NetSharedMap>) => void) | null = null
   private worldTransformObserver: ((event: Y.YMapEvent<string | number | boolean>) => void) | null = null
   private readonly pointRecordCleanup = new Map<string, () => void>()
   private readonly lineRecordCleanup = new Map<string, () => void>()
@@ -192,6 +197,7 @@ export class CollabManager {
   private readonly regularPolygonRecordCleanup = new Map<string, () => void>()
   private readonly prismRecordCleanup = new Map<string, () => void>()
   private readonly pyramidRecordCleanup = new Map<string, () => void>()
+  private readonly netRecordCleanup = new Map<string, () => void>()
 
   private roomName: string | null = null
   private connecting = false
@@ -226,6 +232,7 @@ export class CollabManager {
   private readonly dirtyRegularPolygonIds = new Set<string>()
   private readonly dirtyPrismIds = new Set<string>()
   private readonly dirtyPyramidIds = new Set<string>()
+  private readonly dirtyNetIds = new Set<string>()
   private readonly deletedPointIds = new Set<string>()
   private readonly deletedLineIds = new Set<string>()
   private readonly deletedStraightLineIds = new Set<string>()
@@ -244,6 +251,7 @@ export class CollabManager {
   private readonly deletedRegularPolygonIds = new Set<string>()
   private readonly deletedPrismIds = new Set<string>()
   private readonly deletedPyramidIds = new Set<string>()
+  private readonly deletedNetIds = new Set<string>()
 
   public onPeersUpdate: (count: number) => void = () => {}
   public onStatusUpdate: (status: CollabStatus) => void = () => {}
@@ -273,6 +281,7 @@ export class CollabManager {
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
     this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
+    this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
@@ -302,6 +311,7 @@ export class CollabManager {
     this.cleanupRecordObservers(this.regularPolygonRecordCleanup)
     this.cleanupRecordObservers(this.prismRecordCleanup)
     this.cleanupRecordObservers(this.pyramidRecordCleanup)
+    this.cleanupRecordObservers(this.netRecordCleanup)
   }
 
   private readString<T>(record: Y.Map<T>, key: string, fallback: string) {
@@ -677,6 +687,15 @@ export class CollabManager {
     return record
   }
 
+  private ensureNetRecord(id: string) {
+    let record = this.yNets.get(id)
+    if (!record) {
+      record = new Y.Map<string | number | boolean>()
+      this.yNets.set(id, record)
+    }
+    return record
+  }
+
   private ensureObjectConstrainedPointRecord(id: string) {
     let record = this.yObjectConstrainedPoints.get(id)
     if (!record) {
@@ -1009,6 +1028,7 @@ export class CollabManager {
         (constraint): constraint is ObjectConstrainedPointConstraint =>
           constraint instanceof ObjectConstrainedPointConstraint,
       ),
+      nets: [...this.scene.nets.values()].map((n) => n.clone()),
     }
   }
 
@@ -1024,6 +1044,7 @@ export class CollabManager {
     this.scene.cones.clear()
     this.scene.cylinders.clear()
     this.scene.faces.clear()
+    this.scene.nets.clear()
     this.scene.points.forEach((point, id) => {
       if (!point.locked || point.circleRole === 'center' || point.sphereRole === 'center' || point.sphereRole === 'radius' || point.coneRole === 'baseCenter' || point.coneRole === 'apex' || point.cylinderRole === 'bottomCenter' || point.cylinderRole === 'topCenter') this.scene.points.delete(id)
     })
@@ -1053,6 +1074,7 @@ export class CollabManager {
     snapshot.cylinderConstraints.forEach((constraint) => this.scene.addCylinderConstraint(constraint))
     snapshot.perpendicularLineConstraints.forEach((constraint) => this.scene.addPerpendicularLineConstraint(constraint))
     snapshot.parallelLineConstraints.forEach((constraint) => this.scene.addParallelLineConstraint(constraint))
+    snapshot.nets.forEach((net) => this.scene.addNet(net))
   }
 
   private clearDirtyState() {
@@ -1092,6 +1114,8 @@ export class CollabManager {
     this.deletedRegularPolygonIds.clear()
     this.deletedPrismIds.clear()
     this.deletedPyramidIds.clear()
+    this.dirtyNetIds.clear()
+    this.deletedNetIds.clear()
   }
 
   private markPointDirty(id: string) {
@@ -1282,6 +1306,16 @@ export class CollabManager {
     this.deletedPyramidIds.add(id)
   }
 
+  private markNetDirty(id: string) {
+    this.deletedNetIds.delete(id)
+    this.dirtyNetIds.add(id)
+  }
+
+  private markNetDeleted(id: string) {
+    this.dirtyNetIds.delete(id)
+    this.deletedNetIds.add(id)
+  }
+
   private markObjectConstrainedPointDirty(id: string) {
     this.deletedObjectConstrainedPointIds.delete(id)
     this.dirtyObjectConstrainedPointIds.add(id)
@@ -1366,6 +1400,17 @@ export class CollabManager {
     })
     this.scene.faces.forEach((face, id) => {
       if (face.includesPoint(pointId)) this.markFaceDirty(id)
+    })
+    this.scene.nets.forEach((net, id) => {
+      let touched = false
+      for (const fid of net.faceIds) {
+        const face = this.scene.faces.get(fid)
+        if (face && face.includesPoint(pointId)) {
+          touched = true
+          break
+        }
+      }
+      if (touched) this.markNetDirty(id)
     })
   }
 
@@ -1462,6 +1507,7 @@ export class CollabManager {
     this.scene.pyramidConstraints.forEach((constraint, id) => {
       if (constraint instanceof PyramidConstraint) this.markPyramidDirty(id)
     })
+    this.scene.nets.forEach((_, id) => this.markNetDirty(id))
 
     for (const id of [...this.yPoints.keys()]) {
       if (!this.scene.points.has(id) && id !== Scene.ORIGIN_ID) this.markPointDeleted(id)
@@ -1516,6 +1562,9 @@ export class CollabManager {
     }
     for (const id of [...this.yPyramids.keys()]) {
       if (!this.scene.pyramidConstraints.has(id)) this.markPyramidDeleted(id)
+    }
+    for (const id of [...this.yNets.keys()]) {
+      if (!this.scene.nets.has(id)) this.markNetDeleted(id)
     }
   }
 
@@ -1597,7 +1646,8 @@ export class CollabManager {
       this.yObjectConstrainedPoints.size > 0 ||
       this.yFaces.size > 0 ||
       this.yCubes.size > 0 ||
-      this.yRegularPolygons.size > 0
+      this.yRegularPolygons.size > 0 ||
+      this.yNets.size > 0
     )
   }
 
@@ -1622,7 +1672,8 @@ export class CollabManager {
       localSnapshot.cylinderConstraints.length === 0 &&
       localSnapshot.perpendicularLineConstraints.length === 0 &&
       localSnapshot.parallelLineConstraints.length === 0 &&
-      localSnapshot.objectConstrainedPoints.length === 0
+      localSnapshot.objectConstrainedPoints.length === 0 &&
+      localSnapshot.nets.length === 0
     ) {
       return
     }
@@ -1712,6 +1763,7 @@ export class CollabManager {
     if (this.regularPolygonsObserver) this.yRegularPolygons.unobserve(this.regularPolygonsObserver)
     if (this.prismsObserver) this.yPrisms.unobserve(this.prismsObserver)
     if (this.pyramidsObserver) this.yPyramids.unobserve(this.pyramidsObserver)
+    if (this.netsObserver) this.yNets.unobserve(this.netsObserver)
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     if (this.historyObserver) this.yHistory.unobserve(this.historyObserver)
     if (this.historyIndexObserver) this.yHistoryIndex.unobserve(this.historyIndexObserver)
@@ -1738,6 +1790,7 @@ export class CollabManager {
     this.yRegularPolygons = this.ydoc.getMap<RegularPolygonSharedMap>('regularPolygons')
     this.yPrisms = this.ydoc.getMap<PrismSharedMap>('prisms')
     this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
+    this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.setupObservers()
   }
@@ -3642,6 +3695,97 @@ export class CollabManager {
     this.scene.markAllRenderDirty()
   }
 
+  private applyNetRecord(id: string, record: NetSharedMap) {
+    const solidId = this.readString(record, 'solidId', '')
+    const solidTypeValue = this.readString(record, 'solidType', 'hexahedron')
+    const validSolidTypes: NetSolidType[] = ['hexahedron', 'tetrahedron', 'prism', 'pyramid']
+    const solidType: NetSolidType = validSolidTypes.includes(solidTypeValue as NetSolidType)
+      ? (solidTypeValue as NetSolidType)
+      : 'hexahedron'
+    const baseFaceId = this.readString(record, 'baseFaceId', '')
+    const faceIds = this.readJsonStringArray(record, 'faceIds')
+    if (!solidId || !baseFaceId || faceIds.length === 0) return
+    if (!faceIds.every((fid) => this.scene.faces.has(fid))) return
+
+    const faceTransformsJson = this.readString(record, 'faceTransforms', '')
+    const faceTransforms = new Map<string, NetFaceTransform>()
+    try {
+      const parsed = JSON.parse(faceTransformsJson) as Record<string, NetFaceTransform>
+      for (const [fid, t] of Object.entries(parsed)) {
+        if (!t || !Array.isArray(t.hingeEdgePointIds) || t.hingeEdgePointIds.length !== 2) continue
+        faceTransforms.set(fid, {
+          hingeEdgePointIds: [t.hingeEdgePointIds[0]!, t.hingeEdgePointIds[1]!],
+          rotationAxis: new Vec3(t.rotationAxis.x ?? 0, t.rotationAxis.y ?? 0, t.rotationAxis.z ?? 0),
+          fullRotationAngle: t.fullRotationAngle ?? 0,
+          parentFaceId: t.parentFaceId ?? null,
+        })
+      }
+    } catch {
+      // 解析失败则使用空变换，syncNetRecord 会很快补齐
+    }
+
+    const name = this.readString(record, 'name', '展开图1')
+    const color = this.readNumber(record, 'color', 0x4a9eff)
+    const visible = this.readBoolean(record, 'visible', true)
+    const unfoldRatio = this.readNumber(record, 'unfoldRatio', 1)
+    const posX = this.readNumber(record, 'posX', 0)
+    const posY = this.readNumber(record, 'posY', 0)
+    const posZ = this.readNumber(record, 'posZ', 0)
+    const modeValue = this.readString(record, 'mode', 'attached')
+    const mode: NetMode = modeValue === 'free' ? 'free' : 'attached'
+    const controlEdgeFaceId = this.readNullableString(record, 'controlEdgeFaceId')
+    const controlEdgePointIdsJson = this.readString(record, 'controlEdgePointIds', '')
+    let controlEdgePointIds: [string, string] | null = null
+    if (controlEdgePointIdsJson) {
+      try {
+        const arr = JSON.parse(controlEdgePointIdsJson) as string[]
+        if (Array.isArray(arr) && arr.length === 2) {
+          controlEdgePointIds = [arr[0]!, arr[1]!]
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const existing = this.scene.nets.get(id)
+    if (existing) {
+      existing.name = name
+      existing.color = color
+      existing.visible = visible
+      existing.unfoldRatio = unfoldRatio
+      existing.position = new Vec3(posX, posY, posZ)
+      existing.mode = mode
+      existing.controlEdgeFaceId = controlEdgeFaceId
+      existing.controlEdgePointIds = controlEdgePointIds
+      // faceTransforms / faceIds / baseFaceId / solidId / solidType 为构造时只读字段，
+      // 拓扑变化时通过删除+重建处理（syncNetRecord 不主动删，由调用方 markNetDeleted + 重建触发）
+      existing.faceTransforms.clear()
+      faceTransforms.forEach((t, fid) => existing.faceTransforms.set(fid, t))
+      this.scene.markNetDirty(id)
+      this.scene.markAllRenderDirty()
+      return
+    }
+
+    const net = new Net(
+      id,
+      name,
+      solidId,
+      solidType,
+      baseFaceId,
+      [...faceIds],
+      faceTransforms,
+      color,
+    )
+    net.visible = visible
+    net.unfoldRatio = unfoldRatio
+    net.position = new Vec3(posX, posY, posZ)
+    net.mode = mode
+    net.controlEdgeFaceId = controlEdgeFaceId
+    net.controlEdgePointIds = controlEdgePointIds
+    this.scene.addNet(net)
+    this.scene.markAllRenderDirty()
+  }
+
   private observePointRecord(id: string, record: PointSharedMap) {
     this.releaseRecordObserver(id, this.pointRecordCleanup)
     const handler = () => {
@@ -3802,6 +3946,15 @@ export class CollabManager {
     }
     record.observe(handler)
     this.pyramidRecordCleanup.set(id, () => record.unobserve(handler))
+  }
+
+  private observeNetRecord(id: string, record: NetSharedMap) {
+    this.releaseRecordObserver(id, this.netRecordCleanup)
+    const handler = () => {
+      this.applyNetRecord(id, record)
+    }
+    record.observe(handler)
+    this.netRecordCleanup.set(id, () => record.unobserve(handler))
   }
 
   private setupObservers() {
@@ -4192,6 +4345,27 @@ export class CollabManager {
     }
     this.yWorldTransform.observe(this.worldTransformObserver)
     this.emitSharedWorldRotation(this.yWorldTransform)
+
+    this.netsObserver = (event) => {
+      event.changes.keys.forEach((change, id) => {
+        if (change.action === 'delete') {
+          this.releaseRecordObserver(id, this.netRecordCleanup)
+          this.scene.removeNet(id)
+          this.scene.markAllRenderDirty()
+          return
+        }
+
+        const record = this.yNets.get(id)
+        if (!record) return
+        this.observeNetRecord(id, record)
+        this.applyNetRecord(id, record)
+      })
+    }
+    this.yNets.observe(this.netsObserver)
+    this.yNets.forEach((record, id) => {
+      this.observeNetRecord(id, record)
+      this.applyNetRecord(id, record)
+    })
   }
 
   private syncPointRecord(record: PointSharedMap, point: Point3) {
@@ -4497,6 +4671,37 @@ export class CollabManager {
     this.setNullableScalarField(record, 'verticalHeight', constraint.getRawVerticalHeight())
   }
 
+  private syncNetRecord(record: NetSharedMap, net: Net) {
+    this.setScalarField(record, 'solidId', net.solidId)
+    this.setScalarField(record, 'solidType', net.solidType)
+    this.setScalarField(record, 'baseFaceId', net.baseFaceId)
+    this.setScalarField(record, 'faceIds', JSON.stringify([...net.faceIds]))
+    const transformsObj: Record<string, NetFaceTransform> = {}
+    net.faceTransforms.forEach((t, fid) => {
+      transformsObj[fid] = {
+        hingeEdgePointIds: [t.hingeEdgePointIds[0]!, t.hingeEdgePointIds[1]!],
+        rotationAxis: new Vec3(t.rotationAxis.x, t.rotationAxis.y, t.rotationAxis.z),
+        fullRotationAngle: t.fullRotationAngle,
+        parentFaceId: t.parentFaceId,
+      }
+    })
+    this.setScalarField(record, 'faceTransforms', JSON.stringify(transformsObj))
+    this.setScalarField(record, 'name', net.name)
+    this.setScalarField(record, 'color', net.color)
+    this.setScalarField(record, 'visible', net.visible)
+    this.setScalarField(record, 'unfoldRatio', net.unfoldRatio)
+    this.setScalarField(record, 'posX', net.position.x)
+    this.setScalarField(record, 'posY', net.position.y)
+    this.setScalarField(record, 'posZ', net.position.z)
+    this.setScalarField(record, 'mode', net.mode)
+    this.setNullableScalarField(record, 'controlEdgeFaceId', net.controlEdgeFaceId)
+    this.setScalarField(
+      record,
+      'controlEdgePointIds',
+      net.controlEdgePointIds ? JSON.stringify(net.controlEdgePointIds) : '',
+    )
+  }
+
   getSharedWorldRotationState() {
     return this.readSharedWorldRotationState()
   }
@@ -4569,12 +4774,13 @@ export class CollabManager {
     }, 50)
   }
 
-  syncLivePreview(pointIds: Iterable<string>, labelTarget: LiveLabelTarget | null = null) {
+  syncLivePreview(pointIds: Iterable<string>, labelTarget: LiveLabelTarget | null = null, netIds: Iterable<string> = []) {
     if (!this.provider || this.roomName === null) return
     if (this.isApplyingSharedHistory) return
 
     this.markPreviewPointsDirty(pointIds)
     this.markPreviewLabelDirty(labelTarget)
+    for (const id of netIds) this.markNetDirty(id)
     this.liveSyncPending = true
     if (this.liveSyncTimer) return
 
@@ -4613,6 +4819,7 @@ export class CollabManager {
     const regularPolygonIds = [...this.dirtyRegularPolygonIds]
     const prismIds = [...this.dirtyPrismIds]
     const pyramidIds = [...this.dirtyPyramidIds]
+    const netIds = [...this.dirtyNetIds]
     const deletedPointIds = [...this.deletedPointIds]
     const deletedLineIds = [...this.deletedLineIds]
     const deletedStraightLineIds = [...this.deletedStraightLineIds]
@@ -4630,6 +4837,7 @@ export class CollabManager {
     const deletedRegularPolygonIds = [...this.deletedRegularPolygonIds]
     const deletedPrismIds = [...this.deletedPrismIds]
     const deletedPyramidIds = [...this.deletedPyramidIds]
+    const deletedNetIds = [...this.deletedNetIds]
     const objectConstrainedPointIds = [...this.dirtyObjectConstrainedPointIds]
     const deletedObjectConstrainedPointIds = [...this.deletedObjectConstrainedPointIds]
 
@@ -4652,6 +4860,7 @@ export class CollabManager {
       regularPolygonIds.length === 0 &&
       prismIds.length === 0 &&
       pyramidIds.length === 0 &&
+      netIds.length === 0 &&
       deletedPointIds.length === 0 &&
       deletedLineIds.length === 0 &&
       deletedStraightLineIds.length === 0 &&
@@ -4669,7 +4878,8 @@ export class CollabManager {
       deletedCubeIds.length === 0 &&
       deletedRegularPolygonIds.length === 0 &&
       deletedPrismIds.length === 0 &&
-      deletedPyramidIds.length === 0
+      deletedPyramidIds.length === 0 &&
+      deletedNetIds.length === 0
     ) {
       return
     }
@@ -4728,6 +4938,9 @@ export class CollabManager {
       })
       deletedPyramidIds.forEach((id) => {
         this.yPyramids.delete(id)
+      })
+      deletedNetIds.forEach((id) => {
+        this.yNets.delete(id)
       })
 
       pointIds.forEach((id) => {
@@ -4883,6 +5096,15 @@ export class CollabManager {
         this.syncPyramidRecord(this.ensurePyramidRecord(id), constraint)
       })
 
+      netIds.forEach((id) => {
+        const net = this.scene.nets.get(id)
+        if (!net) {
+          this.yNets.delete(id)
+          return
+        }
+        this.syncNetRecord(this.ensureNetRecord(id), net)
+      })
+
       objectConstrainedPointIds.forEach((id) => {
         const constraint = this.scene.objectConstrainedPointConstraints.get(id)
         if (!(constraint instanceof ObjectConstrainedPointConstraint)) {
@@ -4911,6 +5133,7 @@ export class CollabManager {
     regularPolygonIds.forEach((id) => this.dirtyRegularPolygonIds.delete(id))
     prismIds.forEach((id) => this.dirtyPrismIds.delete(id))
     pyramidIds.forEach((id) => this.dirtyPyramidIds.delete(id))
+    netIds.forEach((id) => this.dirtyNetIds.delete(id))
     deletedPointIds.forEach((id) => this.deletedPointIds.delete(id))
     deletedLineIds.forEach((id) => this.deletedLineIds.delete(id))
     deletedStraightLineIds.forEach((id) => this.deletedStraightLineIds.delete(id))
@@ -4929,6 +5152,7 @@ export class CollabManager {
     deletedRegularPolygonIds.forEach((id) => this.deletedRegularPolygonIds.delete(id))
     deletedPrismIds.forEach((id) => this.deletedPrismIds.delete(id))
     deletedPyramidIds.forEach((id) => this.deletedPyramidIds.delete(id))
+    deletedNetIds.forEach((id) => this.deletedNetIds.delete(id))
   }
 
   getIsApplyingSharedHistory(): boolean {
@@ -5135,6 +5359,9 @@ export class CollabManager {
       for (const id of [...this.yPyramids.keys()]) {
         if (!this.scene.pyramidConstraints.has(id)) this.yPyramids.delete(id)
       }
+      for (const id of [...this.yNets.keys()]) {
+        if (!this.scene.nets.has(id)) this.yNets.delete(id)
+      }
 
       this.scene.points.forEach((p, id) => {
         this.syncPointRecord(this.ensurePointRecord(id), p)
@@ -5199,6 +5426,9 @@ export class CollabManager {
         if (c instanceof PyramidConstraint) {
           this.syncPyramidRecord(this.ensurePyramidRecord(id), c)
         }
+      })
+      this.scene.nets.forEach((n, id) => {
+        this.syncNetRecord(this.ensureNetRecord(id), n)
       })
     })
 

@@ -91,6 +91,7 @@ type ContentGroupKey =
   | 'sphere'
   | 'cone'
   | 'cylinder'
+  | 'net'
 
 interface MergePointDialogState {
   visible: boolean
@@ -154,6 +155,7 @@ interface ContentGroupCollapseState {
   sphere: boolean
   cone: boolean
   cylinder: boolean
+  net: boolean
 }
 
 const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
@@ -173,6 +175,7 @@ const createContentGroupsCollapsed = (): ContentGroupCollapseState => ({
   sphere: true,
   cone: true,
   cylinder: true,
+  net: true,
 })
 
 export const useUiStore = defineStore('ui', () => {
@@ -528,6 +531,7 @@ export const useUiStore = defineStore('ui', () => {
       sphere: collapsed,
       cone: collapsed,
       cylinder: collapsed,
+      net: collapsed,
     }
   }
 

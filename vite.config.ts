@@ -6,11 +6,14 @@ import { VitePWA } from 'vite-plugin-pwa'
 //import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     vue(),
     //vueDevTools(),
+    // PWA 仅在 build（生产）时启用；dev 模式下 SW 会拦截带 ?t= 时间戳的源码请求并返回旧 Content-Length，
+    // 触发 416 Requested Range Not Satisfiable，所以开发环境必须禁用。
     VitePWA({
+      disable: command === 'serve',
       registerType: 'autoUpdate',
       manifest: {
         name: 'GeoMesh3D',
@@ -81,4 +84,4 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
   },
-})
+}))

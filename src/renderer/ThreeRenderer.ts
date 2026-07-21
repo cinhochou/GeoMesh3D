@@ -20,6 +20,8 @@ type RenderObjectType =
   | 'vector'
   | 'circle'
   | 'face'
+  | 'net'
+  | 'netFace'
   | 'sphere'
   | 'cone'
   | 'axisLabel'
@@ -27,6 +29,7 @@ type RenderObjectType =
 type RenderObjectUserData = THREE.Object3D['userData'] & {
   type?: RenderObjectType
   geoId?: string
+  faceId?: string
   __labelSprite?: THREE.Sprite
   __valueLabelSprite?: THREE.Sprite
   __labelAnchor?: THREE.Vector3
