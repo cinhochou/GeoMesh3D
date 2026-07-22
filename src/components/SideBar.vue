@@ -50,6 +50,14 @@ const hiddenPointHintStyle = ref<Record<string, string>>({})
 const hiddenLineHintStyle = ref<Record<string, string>>({})
 let hintRafId = 0
 
+// 将名称中最后一个数字序列转换为 Unicode 下角标字符
+const subName = (str: string | null | undefined): string => {
+  if (!str) return ''
+  return str.replace(/(\d+)(?=\D*$)/, (m) =>
+    m.split('').map((d) => '₀₁₂₃₄₅₆₇₈₉'[Number(d)]).join(''),
+  )
+}
+
 const isTriggerVisible = (el: HTMLElement | null): boolean => {
   if (!el) return false
   const container = el.closest('.content-box')
@@ -129,6 +137,9 @@ const toggleAllContentGroups = () => {
 }
 
 const commandRevision = computed(() => props.editor.historyIndex)
+
+/** 显式选中面时的响应式触发器（Selection.explicitFaces 是非响应式 Set）。 */
+const explicitFaceTick = ref(0)
 
 const selectedPoints = computed(() => {
   void commandRevision.value
@@ -347,15 +358,20 @@ const selectedRegularPolygons = computed(() => {
     props.scene.selection.faces.has(constraint.faceId),
   )
 })
-const selectedEditableFaces = computed(() =>
-  selectedFaces.value.filter(
-    (face) =>
+const selectedEditableFaces = computed(() => {
+  void commandRevision.value
+  void explicitFaceTick.value
+  return selectedFaces.value.filter((face) => {
+    if (face.regularPolygonId) return false
+    // 通过 geo-link 按钮显式点击选中的面，始终显示独立卡片
+    if (props.scene.selection.explicitFaces.has(face.id)) return true
+    return (
       (!face.cubeId || !fullySelectedHexahedronIds.value.includes(face.cubeId)) &&
-      !face.regularPolygonId &&
       (!face.prismId || !fullySelectedPrismIds.value.includes(face.prismId)) &&
-      (!face.pyramidId || !fullySelectedPyramidIds.value.includes(face.pyramidId)),
-  ),
-)
+      (!face.pyramidId || !fullySelectedPyramidIds.value.includes(face.pyramidId))
+    )
+  })
+})
 
 const editing = ref<{
   type:
@@ -578,26 +594,56 @@ const DIRECTION_TYPE_LABEL: Record<string, string> = {
   vector: '向量',
 }
 
-const getDirectionLabel = (circle: Circle3): string => {
+/**
+ * 返回法向圆方向来源的可点击按钮 parts：
+ * - cone / cylinder：返回两个点（baseCenter+apex / bottom+top）
+ * - point：返回一个点 + 后缀 " · XOZ平面"
+ * - 其他 directionType：返回一个对象引用
+ * 用于在「法向量」处渲染 geo-link 按钮。
+ */
+type DirectionPart = { ref: ResolvedGeoRef; label: string }
+const getNormalCircleDirectionParts = (
+  circle: Circle3,
+): { parts: DirectionPart[]; suffix: string } => {
   const cone = getConeForNormalCircle(circle)
   if (cone) {
-    return `点${cone.baseCenterPoint.name ?? ''}-点${cone.apexPoint.name ?? ''}`
+    return {
+      parts: [
+        { ref: { type: 'point', id: cone.baseCenterPoint.id }, label: `点${cone.baseCenterPoint.name ?? ''}` },
+        { ref: { type: 'point', id: cone.apexPoint.id }, label: `点${cone.apexPoint.name ?? ''}` },
+      ],
+      suffix: '',
+    }
   }
   const cylinder = getCylinderForNormalCircle(circle)
   if (cylinder) {
-    return `点${cylinder.bottomCenterPoint.name ?? ''}-点${cylinder.topCenterPoint.name ?? ''}`
+    return {
+      parts: [
+        { ref: { type: 'point', id: cylinder.bottomCenterPoint.id }, label: `点${cylinder.bottomCenterPoint.name ?? ''}` },
+        { ref: { type: 'point', id: cylinder.topCenterPoint.id }, label: `点${cylinder.topCenterPoint.name ?? ''}` },
+      ],
+      suffix: '',
+    }
   }
-  if (!circle.directionType) return '未知'
+  if (!circle.directionType) return { parts: [], suffix: '未知' }
   if (circle.directionType === 'point') {
     const pt = circle.directionId ? props.scene.points.get(circle.directionId) : null
-    return `点${pt?.name ?? ''} · XOZ平面`
+    return {
+      parts: pt ? [{ ref: { type: 'point', id: pt.id }, label: `点${pt.name ?? ''}` }] : [],
+      suffix: ' · XOZ平面',
+    }
   }
   const directionId = circle.directionId
   const typeName = DIRECTION_TYPE_LABEL[circle.directionType] ?? ''
   const collection = DIRECTION_TYPE_COLLECTION[circle.directionType]
   const obj = directionId ? collection?.get(directionId) : undefined
   const directionName = (obj as { name?: string } | undefined)?.name ?? ''
-  return `${typeName} ${directionName}`
+  return {
+    parts: directionId
+      ? [{ ref: { type: circle.directionType, id: directionId }, label: `${typeName} ${directionName}`.trim() }]
+      : [],
+    suffix: '',
+  }
 }
 
 const getNormalCircleRadius = (circle: Circle3): number => {
@@ -931,6 +977,7 @@ const contentNetSliderStartRatio = new Map<string, number>()
 const focusedCoord = reactive<Record<string, boolean>>({})
 const coordInputs = new Map<string, HTMLInputElement>()
 const splitPaneRef = ref<HTMLElement | null>(null)
+const selectedBoxRef = ref<HTMLElement | null>(null)
 const splitPaneDividerRef = ref<HTMLElement | null>(null)
 const selectedPaneHeight = ref(240)
 const isDraggingSplitPane = ref(false)
@@ -1134,6 +1181,234 @@ const clearContentSelection = () => {
   editing.value = null
   props.scene.selection.clear()
   props.scene.markAllRenderDirty()
+}
+
+/**
+ * 在选中区中查找指定 type+id 对应的卡片元素。
+ * 通过 v-for 上绑定的 data-card-key 定位。
+ */
+const findSelectedCardEl = (
+  type: string,
+  id: string,
+): HTMLElement | null => {
+  const container = selectedBoxRef.value
+  if (!container) return null
+  return container.querySelector<HTMLElement>(
+    `[data-card-key="${type}-${CSS.escape(id)}"]`,
+  )
+}
+
+/** 正在闪烁中的卡片 key 集合（避免重复触发）。 */
+const flashingCardKeys = new Set<string>()
+
+/**
+ * 让选中区中指定 type+id 的卡片泛起 2 秒黄色亮光。
+ * 如果卡片不在当前视窗，先滚动到可见位置再闪烁。
+ */
+const flashSelectedCard = (type: string, id: string) => {
+  const key = `${type}-${id}`
+  if (flashingCardKeys.has(key)) return
+  const el = findSelectedCardEl(type, id)
+  if (!el) return
+  // 滚动到可见位置
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  flashingCardKeys.add(key)
+  el.classList.add('card-flash')
+  window.setTimeout(() => {
+    el.classList.remove('card-flash')
+    flashingCardKeys.delete(key)
+  }, 2000)
+}
+
+/** 判断某 type+id 的对象是否已在场景选中集合中。 */
+const isObjectSelected = (type: string, id: string): boolean => {
+  const sel = props.scene.selection
+  switch (type) {
+    case 'point':
+      return sel.points.has(id)
+    case 'line':
+      return sel.lines.has(id)
+    case 'straightLine':
+      return sel.straightLines.has(id)
+    case 'perpendicularLine':
+      return sel.perpendicularLines.has(id)
+    case 'parallelLine':
+      return sel.parallelLines.has(id)
+    case 'ray':
+      return sel.rays.has(id)
+    case 'vector':
+      return sel.vectors.has(id)
+    case 'face':
+      return sel.explicitFaces.has(id)
+    case 'circle':
+      return sel.circles.has(id)
+    case 'sphere':
+      return sel.spheres.has(id)
+    case 'cone':
+      return sel.cones.has(id)
+    case 'cylinder':
+      return sel.cylinders.has(id)
+    case 'net':
+      return sel.nets.has(id)
+    case 'hexahedron': {
+      const constraint = props.editor.getCubeConstraint(id)
+      return Boolean(
+        constraint &&
+          constraint.faceIds.length > 0 &&
+          constraint.faceIds.every((fid) => sel.faces.has(fid)),
+      )
+    }
+    case 'prism': {
+      const constraint = props.editor.getPrismConstraint(id)
+      return Boolean(
+        constraint &&
+          [
+            constraint.bottomFaceId,
+            constraint.topFaceId,
+            ...constraint.sideFaceIds,
+          ].every((fid) => sel.faces.has(fid)),
+      )
+    }
+    case 'pyramid': {
+      const constraint = props.editor.getPyramidConstraint(id)
+      return Boolean(
+        constraint &&
+          [constraint.bottomFaceId, ...constraint.sideFaceIds].every((fid) =>
+            sel.faces.has(fid),
+          ),
+      )
+    }
+    default:
+      return false
+  }
+}
+
+/**
+ * 统一的对象选择函数：根据类型在场景中选中并高亮几何对象。
+ * 点击 geo-link 按钮时追加到现有选中（不清空已选），同时高亮该对象。
+ * 如果目标对象已在选中区中，不重复 select，改为滚动定位 + 闪烁提醒。
+ */
+const selectObject = (type: string, id: string) => {
+  if (!id) return
+  editing.value = null
+  // 已在选中区：滚动定位 + 闪烁提醒
+  if (isObjectSelected(type, id)) {
+    flashSelectedCard(type, id)
+    return
+  }
+  switch (type) {
+    case 'point':
+      props.scene.selection.selectPoint(id, true)
+      break
+    case 'line':
+      props.scene.selection.selectLine(id, true)
+      break
+    case 'straightLine':
+      props.scene.selection.selectStraightLine(id, true)
+      break
+    case 'perpendicularLine':
+      props.scene.selection.selectPerpendicularLine(id, true)
+      break
+    case 'parallelLine':
+      props.scene.selection.selectParallelLine(id, true)
+      break
+    case 'ray':
+      props.scene.selection.selectRay(id, true)
+      break
+    case 'vector':
+      props.scene.selection.selectVector(id, true)
+      break
+    case 'face':
+      props.scene.selection.selectFace(id, true)
+      props.scene.selection.markFaceExplicit(id)
+      explicitFaceTick.value++
+      break
+    case 'circle':
+      props.scene.selection.selectCircle(id, true)
+      break
+    case 'sphere':
+      props.scene.selection.selectSphere(id, true)
+      break
+    case 'cone':
+      props.scene.selection.selectCone(id, true)
+      break
+    case 'cylinder':
+      props.scene.selection.selectCylinder(id, true)
+      break
+    case 'net':
+      props.scene.selection.selectNet(id, true)
+      break
+    case 'hexahedron': {
+      const constraint = props.editor.getCubeConstraint(id)
+      const firstFaceId = constraint?.faceIds[0]
+      if (firstFaceId) props.editor.selectCubeByFaceId(firstFaceId, true)
+      break
+    }
+    case 'prism': {
+      const constraint = props.editor.getPrismConstraint(id)
+      const firstFaceId = constraint?.bottomFaceId
+      if (firstFaceId) props.editor.selectPrismByFaceId(firstFaceId, true)
+      break
+    }
+    case 'pyramid': {
+      const constraint = props.editor.getPyramidConstraint(id)
+      const firstFaceId = constraint?.bottomFaceId
+      if (firstFaceId) props.editor.selectPyramidByFaceId(firstFaceId, true)
+      break
+    }
+    default:
+      return
+  }
+  props.scene.markAllRenderDirty()
+}
+
+/**
+ * 解析垂线来源中目标对象（非起点 p1）的类型与 ID。
+ * 返回 null 表示无法解析（例如对象已被删除）。
+ */
+type ResolvedGeoRef = { type: string; id: string } | null
+
+const resolvePerpendicularLineTarget = (line: PerpendicularLine3): ResolvedGeoRef => {
+  const target = line.target
+  if (!target?.id) return null
+  // coneBase / cylinderBottom / cylinderTop 统一映射到 cone / cylinder
+  if (target.type === 'coneBase') return { type: 'cone', id: target.id }
+  if (target.type === 'cylinderBottom' || target.type === 'cylinderTop')
+    return { type: 'cylinder', id: target.id }
+  return { type: target.type, id: target.id }
+}
+
+const resolveParallelLineTarget = (line: ParallelLine3): ResolvedGeoRef => {
+  const target = line.target
+  if (!target?.id) return null
+  return { type: target.type, id: target.id }
+}
+
+const resolveIntersectionTarget = (
+  target: { type: string; id: string } | null | undefined,
+): ResolvedGeoRef => {
+  if (!target?.id) return null
+  return { type: target.type, id: target.id }
+}
+
+/**
+ * 解析展开图的来源多面体。
+ */
+const resolveNetSource = (net: Net): ResolvedGeoRef => {
+  if (!net.solidId) return null
+  if (net.solidType === 'hexahedron' || net.solidType === 'tetrahedron')
+    return { type: 'hexahedron', id: net.solidId }
+  if (net.solidType === 'prism') return { type: 'prism', id: net.solidId }
+  if (net.solidType === 'pyramid') return { type: 'pyramid', id: net.solidId }
+  return null
+}
+
+/**
+ * 通用：根据已解析的对象引用选中场景中对象。
+ */
+const selectResolvedGeoRef = (ref: ResolvedGeoRef) => {
+  if (!ref) return
+  selectObject(ref.type, ref.id)
 }
 
 const getSplitPaneMetrics = () => {
@@ -3766,45 +4041,6 @@ const handleContentNetUnfoldRatioChange = (netId: string, event: Event) => {
   }
 }
 
-const handleNetUnfoldRatioInput = (netId: string, event: Event) => {
-  const net = props.scene.nets.get(netId)
-  if (!net) return
-  const target = event.target as HTMLInputElement
-  const val = parseInt(target.value, 10)
-  editNet.unfoldRatio = isNaN(val) ? 0 : val
-  net.setUnfoldRatio(editNet.unfoldRatio / 100)
-  props.scene.markNetDirty(netId)
-  props.editor.syncLiveNet(netId)
-}
-
-const handleNetUnfoldRatioChange = (netId: string, event: Event) => {
-  const net = props.scene.nets.get(netId)
-  if (!net) return
-  const target = event.target as HTMLInputElement
-  const val = parseInt(target.value, 10)
-  editNet.unfoldRatio = isNaN(val) ? 0 : val
-  const startRatio = netSliderStartRatio.get(netId)
-  const curRatio = editNet.unfoldRatio / 100
-  isDraggingNetSlider.value = false
-  netSliderStartRatio.delete(netId)
-  if (startRatio === undefined || Math.abs(curRatio - startRatio) < 1e-6) {
-    net.setUnfoldRatio(curRatio)
-    props.scene.markNetDirty(netId)
-    return
-  }
-  net.setUnfoldRatio(startRatio)
-  props.editor.beginCollabTransaction('UpdateNetUnfoldRatio')
-  props.editor.updateNet(netId, { unfoldRatio: curRatio })
-  props.editor.commitCollabTransaction()
-}
-
-const toggleNetVisibility = (netId: string) => {
-  const net = props.scene.nets.get(netId)
-  if (!net) return
-  props.editor.updateNet(netId, { visible: !net.visible })
-  props.scene.markAllRenderDirty()
-}
-
 const setNetMode = (netId: string, mode: 'attached' | 'free') => {
   const net = props.scene.nets.get(netId)
   if (!net) return
@@ -3840,7 +4076,8 @@ const resetNet = (netId: string) => {
 const getRayDirection = (ray: Ray3) => ray.getDirectionVector()
 const getRayDisplayEnd = (ray: Ray3) => ray.getDisplayEndPoint()
 const getStraightLineDirection = (line: StraightLine3) => line.getDirectionVector()
-const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
+/** 返回垂线来源的起点引用、目标引用与各自标签，用于渲染可点击按钮。 */
+const getPerpendicularLineSourceParts = (line: PerpendicularLine3) => {
   const p1Name = line.p1.name ?? ''
   const target = line.target
   let targetLabel = ''
@@ -3875,9 +4112,15 @@ const getPerpendicularLineSourceLabel = (line: PerpendicularLine3) => {
     const obj = props.scene.parallelLines.get(target.id)
     targetLabel = obj ? `平行线${obj.name ?? ''}` : '平行线'
   }
-  return `点${p1Name}-${targetLabel}`
+  return {
+    pointRef: { type: 'point', id: line.p1.id } as ResolvedGeoRef,
+    pointLabel: `点${p1Name}`,
+    targetRef: resolvePerpendicularLineTarget(line),
+    targetLabel,
+  }
 }
-const getParallelLineSourceLabel = (line: ParallelLine3) => {
+/** 返回平行线来源的起点引用、目标引用与各自标签，用于渲染可点击按钮。 */
+const getParallelLineSourceParts = (line: ParallelLine3) => {
   const p1Name = line.p1.name ?? ''
   const target = line.target
   let targetLabel = ''
@@ -3900,12 +4143,35 @@ const getParallelLineSourceLabel = (line: ParallelLine3) => {
     const obj = props.scene.parallelLines.get(target.id)
     targetLabel = obj ? `平行线${obj.name ?? ''}` : '平行线'
   }
-  return `点${p1Name}-${targetLabel}`
+  return {
+    pointRef: { type: 'point', id: line.p1.id } as ResolvedGeoRef,
+    pointLabel: `点${p1Name}`,
+    targetRef: resolveParallelLineTarget(line),
+    targetLabel,
+  }
 }
 const getPointIntersectionSummary = (point: Point3 | undefined) =>
   point ? props.editor.getIntersectionSummary(point.id) : null
 const hasPointIntersectionConstraint = (point: Point3 | undefined) =>
   getPointIntersectionSummary(point) !== null
+/**
+ * 返回交点约束的两个来源对象引用 + 标签 + 是否有效。
+ * 用于在「来源」处渲染可点击的文字按钮。
+ */
+const getPointIntersectionSources = (point: Point3 | undefined) => {
+  if (!point) return null
+  const constraint = props.editor.getIntersectionConstraint(point.id)
+  if (!constraint) return null
+  const summary = props.editor.getIntersectionSummary(point.id)
+  if (!summary) return null
+  return {
+    leftRef: resolveIntersectionTarget(constraint.sourceA),
+    leftLabel: summary.left,
+    rightRef: resolveIntersectionTarget(constraint.sourceB),
+    rightLabel: summary.right,
+    valid: summary.valid,
+  }
+}
 const getFaceArea = (face: PlanarPolygon) => face.getArea(props.scene.points)
 const getFaceCentroid = (face: PlanarPolygon) => face.getCentroid(props.scene.points)
 const getFaceBoundaryPoints = (face: PlanarPolygon) => face.getBoundaryPoints(props.scene.points)
@@ -3971,15 +4237,19 @@ const isPrismTopPointAxisEditable = (
   if (dominant === null) return true
   return dominant === axis
 }
-/** 棱柱来源标签：多边形F-点A（底面多边形 + 最高点）。 */
-const getPrismSourceLabel = (prismId: string) => {
+/** 棱柱来源 parts：底面多边形 + 最高点。 */
+const getPrismSourceParts = (prismId: string) => {
   const constraint = props.editor.getPrismConstraint(prismId)
-  if (!constraint) return ''
-  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
-  const topPoint = props.scene.points.get(constraint.ownerPointIds[1])
-  const faceName = bottomFace?.name ?? ''
-  const pointName = topPoint?.name ?? ''
-  return `多边形${faceName}-点${pointName}`
+  const bottomFace = constraint ? props.scene.faces.get(constraint.bottomFaceId) : null
+  const topPoint = constraint ? props.scene.points.get(constraint.ownerPointIds[1]) : null
+  return {
+    faceRef: constraint
+      ? ({ type: 'face', id: constraint.bottomFaceId } as ResolvedGeoRef)
+      : null,
+    faceLabel: `多边形${bottomFace?.name ?? ''}`,
+    pointRef: topPoint ? ({ type: 'point', id: topPoint.id } as ResolvedGeoRef) : null,
+    pointLabel: `点${topPoint?.name ?? ''}`,
+  }
 }
 const getPrismBottomEdgeLabel = (prismId: string, edgeIndex: number) => {
   const constraint = props.editor.getPrismConstraint(prismId)
@@ -3990,7 +4260,7 @@ const getPrismBottomEdgeLabel = (prismId: string, edgeIndex: number) => {
   const current = points[edgeIndex]
   const next = points[(edgeIndex + 1) % points.length]
   if (!current || !next) return `边 ${edgeIndex + 1}`
-  return `${current.name}${next.name}`
+  return `${subName(current.name)}${subName(next.name)}`
 }
 const getPrismHeight = (prismId: string) => {
   const constraint = props.editor.getPrismConstraint(prismId)
@@ -4038,15 +4308,19 @@ const isPyramidApexAxisEditable = (
   if (dominant === null) return true
   return dominant === axis
 }
-/** 棱锥来源标签：多边形F-点A（底面多边形 + 最高点）。 */
-const getPyramidSourceLabel = (pyramidId: string) => {
+/** 棱锥来源 parts：底面多边形 + 顶点。 */
+const getPyramidSourceParts = (pyramidId: string) => {
   const constraint = props.editor.getPyramidConstraint(pyramidId)
-  if (!constraint) return ''
-  const bottomFace = props.scene.faces.get(constraint.bottomFaceId)
-  const apexPoint = props.scene.points.get(constraint.ownerPointIds[1])
-  const faceName = bottomFace?.name ?? ''
-  const pointName = apexPoint?.name ?? ''
-  return `多边形${faceName}-点${pointName}`
+  const bottomFace = constraint ? props.scene.faces.get(constraint.bottomFaceId) : null
+  const apexPoint = constraint ? props.scene.points.get(constraint.ownerPointIds[1]) : null
+  return {
+    faceRef: constraint
+      ? ({ type: 'face', id: constraint.bottomFaceId } as ResolvedGeoRef)
+      : null,
+    faceLabel: `多边形${bottomFace?.name ?? ''}`,
+    pointRef: apexPoint ? ({ type: 'point', id: apexPoint.id } as ResolvedGeoRef) : null,
+    pointLabel: `点${apexPoint?.name ?? ''}`,
+  }
 }
 const getPyramidBottomEdgeLabel = (pyramidId: string, edgeIndex: number) => {
   const constraint = props.editor.getPyramidConstraint(pyramidId)
@@ -4057,7 +4331,7 @@ const getPyramidBottomEdgeLabel = (pyramidId: string, edgeIndex: number) => {
   const current = points[edgeIndex]
   const next = points[(edgeIndex + 1) % points.length]
   if (!current || !next) return `边 ${edgeIndex + 1}`
-  return `${current.name}${next.name}`
+  return `${subName(current.name)}${subName(next.name)}`
 }
 const getPyramidHeight = (pyramidId: string) => {
   const constraint = props.editor.getPyramidConstraint(pyramidId)
@@ -4071,17 +4345,12 @@ const getPyramidSurfaceArea = (pyramidId: string) => {
   const constraint = props.editor.getPyramidConstraint(pyramidId)
   return constraint?.getSurfaceArea() ?? 0
 }
-const getFaceMemberPointNames = (face: PlanarPolygon) =>
-  face
-    .getMemberPoints(props.scene.points)
-    .map((point) => point.name)
-    .join(', ')
 const getFaceEdgeLabel = (face: PlanarPolygon, edgeIndex: number) => {
   const points = getFaceBoundaryPoints(face)
   const current = points[edgeIndex]
   const next = points[(edgeIndex + 1) % points.length]
   if (!current || !next) return `边 ${edgeIndex + 1}`
-  return `${current.name}${next.name}`
+  return `${subName(current.name)}${subName(next.name)}`
 }
 const getFaceEdgeTargets = (faceId: string) => {
   const face = props.scene.faces.get(faceId)
@@ -4733,7 +5002,7 @@ onUnmounted(() => {
       双击标签以编辑几何元素~
     </div>
     <div ref="splitPaneRef" class="split-pane">
-      <div class="box selected-box" :style="selectedPaneStyle">
+      <div class="box selected-box" :style="selectedPaneStyle" ref="selectedBoxRef">
         <div
           v-if="
             selectedPoints.length === 0 &&
@@ -4758,6 +5027,7 @@ onUnmounted(() => {
           v-for="p in selectedPoints"
           :key="p!.id"
           class="selectedPoint-info"
+          :data-card-key="'point-' + p!.id"
           @dblclick="startEditPoint(p)"
         >
           <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
@@ -4930,7 +5200,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="point-summary-line">
-              点{{ p!.name ?? '' }}
+              点{{ subName(p!.name) }}
               <span
                 v-if="isPointCoordinateLocked(p!) && !hasCircleConstraint(p!)"
                 class="lock-badge"
@@ -4991,10 +5261,27 @@ onUnmounted(() => {
               x: {{ p!.position.x.toFixed(2) }}, y: {{ p!.position.y.toFixed(2) }}, z:
               {{ p!.position.z.toFixed(2) }}
             </div>
-            <div v-if="getPointIntersectionSummary(p!)">
-              来源：{{ getPointIntersectionSummary(p!)?.left }} ×
-              {{ getPointIntersectionSummary(p!)?.right }}
-              {{ getPointIntersectionSummary(p!)?.valid ? '' : '（约束失效）' }}
+            <div v-if="getPointIntersectionSources(p!)">
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="
+                  selectResolvedGeoRef(getPointIntersectionSources(p!)?.leftRef ?? null)
+                "
+              >
+                {{ getPointIntersectionSources(p!)?.leftLabel }}
+              </button>
+              ×
+              <button
+                type="button"
+                class="geo-link"
+                @click.stop="
+                  selectResolvedGeoRef(getPointIntersectionSources(p!)?.rightRef ?? null)
+                "
+              >
+                {{ getPointIntersectionSources(p!)?.rightLabel }}
+              </button>
+              {{ getPointIntersectionSources(p!)?.valid ? '' : '（约束失效）' }}
             </div>
           </div>
         </div>
@@ -5003,6 +5290,7 @@ onUnmounted(() => {
           v-for="l in selectedLines"
           :key="l!.id"
           class="selectedLine-info"
+          :data-card-key="'line-' + l!.id"
           @dblclick="startEditLine(l)"
         >
           <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
@@ -5074,14 +5362,14 @@ onUnmounted(() => {
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ l!.p1.name ?? '' }}(x,y,z)
+                  点{{ subName(l!.p1.name) }}(x,y,z)
                 </span>
                 <span v-else class="line-editor-title-short">点A</span>
                 <span v-if="isPointCoordinateLocked(l!.p1)" class="lock-badge">🔒</span>
               </div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ l!.p2.name ?? '' }}(x,y,z)
+                  点{{ subName(l!.p2.name) }}(x,y,z)
                 </span>
                 <span v-else class="line-editor-title-short">点B</span>
                 <span v-if="isPointCoordinateLocked(l!.p2)" class="lock-badge">🔒</span>
@@ -5264,7 +5552,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              线段{{ l!.name ?? '' }}
+              线段{{ subName(l!.name) }}
               <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
               <span v-if="getLineConstraintBadge(l!)" class="constraint-badge">{{
                 getLineConstraintBadge(l!)
@@ -5299,11 +5587,15 @@ onUnmounted(() => {
               <span v-if="l!.lengthLocked" class="constraint-badge">受约束</span>
             </div>
             <div>
-              点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', l!.p1.id)"
+                >点{{ subName(l!.p1.name) }}</button
+              >（{{ l!.p1.position.x.toFixed(2) }},
               {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', l!.p2.id)"
+                >点{{ subName(l!.p2.name) }}</button
+              >（{{ l!.p2.position.x.toFixed(2) }},
               {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
             </div>
           </div>
@@ -5313,6 +5605,7 @@ onUnmounted(() => {
           v-for="sl in selectedStraightLines"
           :key="sl!.id"
           class="selectedStraightLine-info"
+          :data-card-key="'straightLine-' + sl!.id"
           @dblclick="startEditStraightLine(sl)"
         >
           <div v-if="editing?.type === 'straightLine' && editing?.id === sl!.id" class="edit-grid">
@@ -5388,14 +5681,14 @@ onUnmounted(() => {
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ sl!.p1.name ?? '' }}(x,y,z)
+                  点{{ subName(sl!.p1.name) }}(x,y,z)
                 </span>
                 <span v-else class="line-editor-title-short">点A</span>
                 <span v-if="isPointCoordinateLocked(sl!.p1)" class="lock-badge">🔒</span>
               </div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  点{{ sl!.p2.name ?? '' }}(x,y,z)
+                  点{{ subName(sl!.p2.name) }}(x,y,z)
                 </span>
                 <span v-else class="line-editor-title-short">点B</span>
                 <span v-if="isPointCoordinateLocked(sl!.p2)" class="lock-badge">🔒</span>
@@ -5578,7 +5871,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              直线{{ sl!.name ?? '' }}
+              直线{{ subName(sl!.name) }}
               <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
               <span v-if="sl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -5605,11 +5898,15 @@ onUnmounted(() => {
             </div>
             <div>显示长度：{{ sl!.displayLength.toFixed(2) }}</div>
             <div>
-              点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', sl!.p1.id)"
+                >点{{ subName(sl!.p1.name) }}</button
+              >（{{ sl!.p1.position.x.toFixed(2) }},
               {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', sl!.p2.id)"
+                >点{{ subName(sl!.p2.name) }}</button
+              >（{{ sl!.p2.position.x.toFixed(2) }},
               {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
             </div>
             <div>
@@ -5624,6 +5921,7 @@ onUnmounted(() => {
           v-for="pl in selectedPerpendicularLines"
           :key="pl!.id"
           class="selectedPerpendicularLine-info"
+          :data-card-key="'perpendicularLine-' + pl!.id"
           @dblclick="startEditPerpendicularLine(pl)"
         >
           <div
@@ -5704,7 +6002,7 @@ onUnmounted(() => {
               {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
             <div class="coord-row-title">
-              点{{ pl!.p1.name ?? '' }}(x,y,z)
+              点{{ subName(pl!.p1.name) }}(x,y,z)
               <span v-if="isPointCoordinateLocked(pl!.p1)" class="lock-badge">🔒</span>
             </div>
             <div class="coord-row">
@@ -5805,7 +6103,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              垂线{{ pl!.name ?? '' }}
+              垂线{{ subName(pl!.name) }}
               <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
               <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -5834,14 +6132,24 @@ onUnmounted(() => {
             </div>
             <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
             <div>
-              点{{ pl!.p1.name ?? '' }}（{{ pl!.p1.position.x.toFixed(2) }},
+              点{{ subName(pl!.p1.name) }}（{{ pl!.p1.position.x.toFixed(2) }},
               {{ pl!.p1.position.y.toFixed(2) }}, {{ pl!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
               垂足坐标：（{{ pl!.p2.position.x.toFixed(2) }}, {{ pl!.p2.position.y.toFixed(2) }},
               {{ pl!.p2.position.z.toFixed(2) }}）
             </div>
-            <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
+            <div>
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPerpendicularLineSourceParts(pl!).pointRef)"
+              >{{ subName(getPerpendicularLineSourceParts(pl!).pointLabel) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPerpendicularLineSourceParts(pl!).targetRef)"
+              >{{ subName(getPerpendicularLineSourceParts(pl!).targetLabel) }}</button>
+            </div>
           </div>
         </div>
 
@@ -5849,6 +6157,7 @@ onUnmounted(() => {
           v-for="pl in selectedParallelLines"
           :key="pl!.id"
           class="selectedParallelLine-info"
+          :data-card-key="'parallelLine-' + pl!.id"
           @dblclick="startEditParallelLine(pl)"
         >
           <div
@@ -5925,7 +6234,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="coord-row-title">
-              点{{ pl!.p1.name ?? '' }}(x,y,z)
+              点{{ subName(pl!.p1.name) }}(x,y,z)
               <span v-if="isPointCoordinateLocked(pl!.p1)" class="lock-badge">🔒</span>
             </div>
             <div class="coord-row">
@@ -6026,7 +6335,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              平行线{{ pl!.name ?? '' }}
+              平行线{{ subName(pl!.name) }}
               <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
               <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -6055,10 +6364,20 @@ onUnmounted(() => {
             </div>
             <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
             <div>
-              点{{ pl!.p1.name ?? '' }}（{{ pl!.p1.position.x.toFixed(2) }},
+              点{{ subName(pl!.p1.name) }}（{{ pl!.p1.position.x.toFixed(2) }},
               {{ pl!.p1.position.y.toFixed(2) }}, {{ pl!.p1.position.z.toFixed(2) }}）
             </div>
-            <div>来源：{{ getParallelLineSourceLabel(pl!) }}</div>
+            <div>
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getParallelLineSourceParts(pl!).pointRef)"
+              >{{ subName(getParallelLineSourceParts(pl!).pointLabel) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getParallelLineSourceParts(pl!).targetRef)"
+              >{{ subName(getParallelLineSourceParts(pl!).targetLabel) }}</button>
+            </div>
           </div>
         </div>
 
@@ -6066,6 +6385,7 @@ onUnmounted(() => {
           v-for="r in selectedRays"
           :key="r!.id"
           class="selectedRay-info"
+          :data-card-key="'ray-' + r!.id"
           @dblclick="startEditRay(r)"
         >
           <div v-if="editing?.type === 'ray' && editing?.id === r!.id" class="edit-grid">
@@ -6117,16 +6437,16 @@ onUnmounted(() => {
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  起点{{ r!.p1.name ?? '' }}(x,y,z)
+                  起点{{ subName(r!.p1.name) }}(x,y,z)
                 </span>
-                <span v-else class="line-editor-title-short">起点{{ r!.p1.name ?? '' }}</span>
+                <span v-else class="line-editor-title-short">起点{{ subName(r!.p1.name) }}</span>
                 <span v-if="isPointCoordinateLocked(r!.p1)" class="lock-badge">🔒</span>
               </div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  方向点{{ r!.p2.name ?? '' }}(x,y,z)
+                  方向点{{ subName(r!.p2.name) }}(x,y,z)
                 </span>
-                <span v-else class="line-editor-title-short">方向点{{ r!.p2.name ?? '' }}</span>
+                <span v-else class="line-editor-title-short">方向点{{ subName(r!.p2.name) }}</span>
                 <span v-if="isPointCoordinateLocked(r!.p2)" class="lock-badge">🔒</span>
               </div>
 
@@ -6307,7 +6627,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              射线{{ r!.name ?? '' }}
+              射线{{ subName(r!.name) }}
               <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
               <span v-if="r!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -6334,11 +6654,15 @@ onUnmounted(() => {
             </div>
             <div>显示长度：{{ r!.displayLength.toFixed(2) }}</div>
             <div>
-              起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', r!.p1.id)"
+                >起点{{ subName(r!.p1.name) }}</button
+              >（{{ r!.p1.position.x.toFixed(2) }},
               {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', r!.p2.id)"
+                >方向点{{ subName(r!.p2.name) }}</button
+              >（{{ r!.p2.position.x.toFixed(2) }},
               {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
             </div>
             <div>
@@ -6356,6 +6680,7 @@ onUnmounted(() => {
           v-for="v in selectedVectors"
           :key="v!.id"
           class="selectedVector-info"
+          :data-card-key="'vector-' + v!.id"
           @dblclick="startEditVector(v)"
         >
           <div v-if="editing?.type === 'vector' && editing?.id === v!.id" class="edit-grid">
@@ -6407,16 +6732,16 @@ onUnmounted(() => {
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  起点{{ v!.p1.name ?? '' }}(x,y,z)
+                  起点{{ subName(v!.p1.name) }}(x,y,z)
                 </span>
-                <span v-else class="line-editor-title-short">起点{{ v!.p1.name ?? '' }}</span>
+                <span v-else class="line-editor-title-short">起点{{ subName(v!.p1.name) }}</span>
                 <span v-if="isPointCoordinateLocked(v!.p1)" class="lock-badge">🔒</span>
               </div>
               <div class="line-editor-head">
                 <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                  终点{{ v!.p2.name ?? '' }}(x,y,z)
+                  终点{{ subName(v!.p2.name) }}(x,y,z)
                 </span>
-                <span v-else class="line-editor-title-short">终点{{ v!.p2.name ?? '' }}</span>
+                <span v-else class="line-editor-title-short">终点{{ subName(v!.p2.name) }}</span>
                 <span v-if="isPointCoordinateLocked(v!.p2)" class="lock-badge">🔒</span>
               </div>
 
@@ -6597,7 +6922,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              向量{{ v!.name ?? '' }}
+              向量{{ subName(v!.name) }}
               <span v-if="props.editor.isVectorLocked(v!)" class="lock-badge">🔒</span>
               <span v-if="v!.visible === false" class="hidden-badge" title="对象隐藏">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -6626,11 +6951,15 @@ onUnmounted(() => {
             </div>
             <div>长度：{{ v!.getLength().toFixed(2) }}</div>
             <div>
-              起点{{ v!.p1.name ?? '' }}（{{ v!.p1.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', v!.p1.id)"
+                >起点{{ subName(v!.p1.name) }}</button
+              >（{{ v!.p1.position.x.toFixed(2) }},
               {{ v!.p1.position.y.toFixed(2) }}, {{ v!.p1.position.z.toFixed(2) }}）
             </div>
             <div>
-              终点{{ v!.p2.name ?? '' }}（{{ v!.p2.position.x.toFixed(2) }},
+              <button type="button" class="geo-link" @click.stop="selectObject('point', v!.p2.id)"
+                >终点{{ subName(v!.p2.name) }}</button
+              >（{{ v!.p2.position.x.toFixed(2) }},
               {{ v!.p2.position.y.toFixed(2) }}, {{ v!.p2.position.z.toFixed(2) }}）
             </div>
             <div>
@@ -6645,6 +6974,7 @@ onUnmounted(() => {
           v-for="c in selectedCircles"
           :key="c!.id"
           class="selectedCircle-info"
+          :data-card-key="'circle-' + c!.id"
           @dblclick="startEditCircle(c)"
         >
           <div v-if="editing?.type === 'circle' && editing?.id === c!.id" class="edit-grid">
@@ -6682,7 +7012,14 @@ onUnmounted(() => {
             </div>
             <template v-if="c!.isNormalCircle()">
               <div class="normal-circle-direction-row" style="grid-column: 1 / -1">
-                法向量：{{ getDirectionLabel(c!) }}
+                法向量：<template
+                  v-for="(part, idx) in getNormalCircleDirectionParts(c!).parts"
+                  :key="idx"
+                ><span v-if="idx > 0">-</span><button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectResolvedGeoRef(part.ref)"
+                  >{{ subName(part.label) }}</button></template>{{ getNormalCircleDirectionParts(c!).suffix }}
               </div>
               <div class="length-row">
                 <label>半径</label>
@@ -6742,7 +7079,7 @@ onUnmounted(() => {
               <div class="line-editor-grid normal-circle-center-grid">
                 <div class="line-editor-head"></div>
                 <div class="line-editor-head">
-                  <span class="line-editor-title-full">圆心点{{ c!.p1.name ?? 'A' }}(x,y,z)</span>
+                  <span class="line-editor-title-full">圆心点{{ subName(c!.p1.name ?? 'A') }}(x,y,z)</span>
                   <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
                 </div>
                 <div class="line-axis-label">x</div>
@@ -6898,23 +7235,23 @@ onUnmounted(() => {
                 <div class="line-editor-head"></div>
                 <div class="line-editor-head">
                   <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                    点{{ c!.p1.name ?? 'A' }}(x,y,z)
+                    点{{ subName(c!.p1.name ?? 'A') }}(x,y,z)
                   </span>
-                  <span v-else class="line-editor-title-short">点{{ c!.p1.name ?? 'A' }}</span>
+                  <span v-else class="line-editor-title-short">点{{ subName(c!.p1.name ?? 'A') }}</span>
                   <span v-if="isPointCoordinateLocked(c!.p1)" class="lock-badge">🔒</span>
                 </div>
                 <div class="line-editor-head">
                   <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                    点{{ c!.p2.name ?? 'B' }}(x,y,z)
+                    点{{ subName(c!.p2.name ?? 'B') }}(x,y,z)
                   </span>
-                  <span v-else class="line-editor-title-short">点{{ c!.p2.name ?? 'B' }}</span>
+                  <span v-else class="line-editor-title-short">点{{ subName(c!.p2.name ?? 'B') }}</span>
                   <span v-if="isPointCoordinateLocked(c!.p2)" class="lock-badge">🔒</span>
                 </div>
                 <div class="line-editor-head">
                   <span v-if="!isCompactLineEditor" class="line-editor-title-full">
-                    点{{ c!.p3.name ?? 'C' }}(x,y,z)
+                    点{{ subName(c!.p3.name ?? 'C') }}(x,y,z)
                   </span>
-                  <span v-else class="line-editor-title-short">点{{ c!.p3.name ?? 'C' }}</span>
+                  <span v-else class="line-editor-title-short">点{{ subName(c!.p3.name ?? 'C') }}</span>
                   <span v-if="isPointCoordinateLocked(c!.p3)" class="lock-badge">🔒</span>
                 </div>
                 <div class="line-axis-label">x</div>
@@ -7195,7 +7532,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
+              {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ subName(c!.name) }}
               <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
               <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
               <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
@@ -7249,10 +7586,21 @@ onUnmounted(() => {
                 >
               </div>
               <div>
-                圆心{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', c!.p1.id)"
+                  >圆心{{ subName(c!.p1.name) }}</button
+                >（{{ c!.p1.position.x.toFixed(2) }},
                 {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
               </div>
-              <div>法向量：{{ getDirectionLabel(c!) }}</div>
+              <div>
+                法向量：<template
+                  v-for="(part, idx) in getNormalCircleDirectionParts(c!).parts"
+                  :key="idx"
+                ><span v-if="idx > 0">-</span><button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectResolvedGeoRef(part.ref)"
+                  >{{ subName(part.label) }}</button></template>{{ getNormalCircleDirectionParts(c!).suffix }}
+              </div>
             </template>
             <template v-else>
               <div class="face-metric-row">
@@ -7274,24 +7622,34 @@ onUnmounted(() => {
                 >
               </div>
               <div>
-                点{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', c!.p1.id)"
+                  >点{{ subName(c!.p1.name) }}</button
+                >（{{ c!.p1.position.x.toFixed(2) }},
                 {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
               </div>
               <div>
-                点{{ c!.p2.name ?? '' }}（{{ c!.p2.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', c!.p2.id)"
+                  >点{{ subName(c!.p2.name) }}</button
+                >（{{ c!.p2.position.x.toFixed(2) }},
                 {{ c!.p2.position.y.toFixed(2) }}, {{ c!.p2.position.z.toFixed(2) }}）
               </div>
               <div>
-                点{{ c!.p3.name ?? '' }}（{{ c!.p3.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', c!.p3.id)"
+                  >点{{ subName(c!.p3.name) }}</button
+                >（{{ c!.p3.position.x.toFixed(2) }},
                 {{ c!.p3.position.y.toFixed(2) }}, {{ c!.p3.position.z.toFixed(2) }}）
               </div>
               <div v-if="getCircleCenterPoint(c!.id)" class="point-summary-line">
-                <span class="point-summary-text">
-                  点{{ getCircleCenterPoint(c!.id)!.name }}（{{
+                <button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', getCircleCenterPoint(c!.id)!.id)"
+                >
+                  点{{ subName(getCircleCenterPoint(c!.id)!.name) }}（{{
                     getCircleCenterPoint(c!.id)!.position.x.toFixed(2)
                   }}, {{ getCircleCenterPoint(c!.id)!.position.y.toFixed(2) }},
                   {{ getCircleCenterPoint(c!.id)!.position.z.toFixed(2) }}）
-                </span>
+                </button>
                 <span class="constraint-badge">圆心约束</span>
               </div>
             </template>
@@ -7299,9 +7657,156 @@ onUnmounted(() => {
         </div>
 
         <div
+          v-for="face in selectedEditableFaces"
+          :key="face!.id"
+          class="selectedFace-info"
+          :data-card-key="'face-' + face!.id"
+          @dblclick="startEditFace(face)"
+        >
+          <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
+            <div class="name-row">
+              <label>名称</label>
+              <input type="text" v-model="editFace.name" @input="applyEditFace" />
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
+                多边形显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
+                名称显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.valueVisible" @change="applyEditFace" />
+                数值显示
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
+                锁定
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" v-model="editFace.areaLocked" @change="applyEditFace" />
+                面积锁定
+              </label>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
+            </div>
+            <div class="face-edge-grid">
+              <div
+                v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
+                :key="`${face!.id}-edge-${edgeIndex}`"
+                class="face-edge-row length-row axis-field"
+              >
+                <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
+                <div class="coord-input compact-length-input">
+                  <button
+                    type="button"
+                    class="step-btn"
+                    :disabled="editFace.areaLocked"
+                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'down')"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="1"
+                    :value="editFace.edgeLengths[edgeIndex]"
+                    :disabled="editFace.areaLocked"
+                    :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
+                    @input="
+                      editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value
+                    "
+                    @focus="handleFaceEdgeLengthFocus(edgeIndex)"
+                    @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
+                  />
+                  <button
+                    type="button"
+                    class="step-btn"
+                    :disabled="editFace.areaLocked"
+                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'up')"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else>
+            <div class="card-summary-header">
+              {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ subName(face!.name) }}
+              <span v-if="face!.isRegularPolygon" class="constraint-badge"
+                >正{{ face!.regularPolygonVertexCount }}边形</span
+              >
+              <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
+              <span v-if="isCubeFace(face!)" class="constraint-badge">{{
+                getSolidConstraintBadge(face!.cubeId)
+              }}</span>
+              <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
+              <span v-if="isPyramidFace(face!)" class="constraint-badge">棱锥约束</span>
+              <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+              <button
+                class="card-delete-btn"
+                title="删除"
+                @click.stop="
+                  handleDeleteElement(
+                    'face',
+                    face!.id,
+                    (face!.isRegularPolygon ? '正多边形' : '多边形') + (face!.name ?? ''),
+                  )
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="3 6 5 6 21 6" />
+                  <path
+                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                  />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
+              </button>
+            </div>
+            <div class="face-metric-row">
+              <span class="metric-item"
+                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
+              >
+              <span class="metric-sep">/</span>
+              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
+              <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
+            </div>
+            <div>
+              质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
+              {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
+            </div>
+            <div>
+              边界点：<template
+                v-for="(p, idx) in getFaceBoundaryPoints(face!)"
+                :key="p.id"
+              ><span v-if="idx > 0"> - </span><button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', p.id)"
+                >点{{ subName(p.name) }}</button></template>
+            </div>
+          </div>
+        </div>
+
+        <div
           v-for="cube in selectedHexahedrons"
           :key="cube.cubeId"
           class="selectedFace-info"
+          :data-card-key="'cube-' + cube.cubeId"
           @dblclick="startEditHexahedron(cube.cubeId)"
         >
           <div
@@ -7386,10 +7891,10 @@ onUnmounted(() => {
             >
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
-                {{ getHexahedronOwnerPoints(cube.cubeId)[0]?.name ?? 'A' }}(x,y,z)
+                {{ subName(getHexahedronOwnerPoints(cube.cubeId)[0]?.name ?? 'A') }}(x,y,z)
               </div>
               <div class="line-editor-head">
-                {{ getHexahedronOwnerPoints(cube.cubeId)[1]?.name ?? 'B' }}(x,y,z)
+                {{ subName(getHexahedronOwnerPoints(cube.cubeId)[1]?.name ?? 'B') }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
               <div class="coord-input">
@@ -7566,7 +8071,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ cube.name }}
+              {{ subName(cube.name) }}
               <span
                 v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                 class="lock-badge"
@@ -7610,11 +8115,14 @@ onUnmounted(() => {
               >
             </div>
             <div>
-              原始点：{{
-                getHexahedronOwnerPoints(cube.cubeId)
-                  .map((point) => point.name)
-                  .join(' - ')
-              }}
+              原始点：<template
+                v-for="(point, idx) in getHexahedronOwnerPoints(cube.cubeId)"
+                :key="point.id"
+              ><span v-if="idx > 0"> - </span><button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', point.id)"
+                >点{{ subName(point.name) }}</button></template>
             </div>
           </div>
         </div>
@@ -7623,6 +8131,7 @@ onUnmounted(() => {
           v-for="prism in selectedPrisms"
           :key="prism.prismId"
           class="selectedFace-info prism-info"
+          :data-card-key="'prism-' + prism.prismId"
           @dblclick="startEditPrism(prism.prismId)"
         >
           <div
@@ -7699,7 +8208,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="face-metric-row">
-              最高点{{ getPrismOwnerPoints(prism.prismId)[1]?.name ?? '' }}坐标
+              最高点{{ subName(getPrismOwnerPoints(prism.prismId)[1]?.name) }}坐标
             </div>
             <div class="coord-row">
               <div class="axis-field">
@@ -7838,7 +8347,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ prism.name }}
+              {{ subName(prism.name) }}
               <span
                 v-if="props.editor.getPrismFaceIds(prism.prismId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                 class="lock-badge"
@@ -7883,7 +8392,15 @@ onUnmounted(() => {
               >
             </div>
             <div>
-              来源：{{ getPrismSourceLabel(prism.prismId) }}
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPrismSourceParts(prism.prismId).faceRef)"
+              >{{ subName(getPrismSourceParts(prism.prismId).faceLabel) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPrismSourceParts(prism.prismId).pointRef)"
+              >{{ subName(getPrismSourceParts(prism.prismId).pointLabel) }}</button>
             </div>
           </div>
         </div>
@@ -7892,6 +8409,7 @@ onUnmounted(() => {
           v-for="pyramid in selectedPyramids"
           :key="pyramid.pyramidId"
           class="selectedFace-info pyramid-info"
+          :data-card-key="'pyramid-' + pyramid.pyramidId"
           @dblclick="startEditPyramid(pyramid.pyramidId)"
         >
           <div
@@ -7968,7 +8486,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="face-metric-row">
-              最高点{{ getPyramidOwnerPoints(pyramid.pyramidId)[1]?.name ?? '' }}坐标
+              最高点{{ subName(getPyramidOwnerPoints(pyramid.pyramidId)[1]?.name) }}坐标
             </div>
             <div class="coord-row">
               <div class="axis-field">
@@ -8107,7 +8625,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ pyramid.name }}
+              {{ subName(pyramid.name) }}
               <span
                 v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                 class="lock-badge"
@@ -8152,7 +8670,15 @@ onUnmounted(() => {
               >
             </div>
             <div>
-              来源：{{ getPyramidSourceLabel(pyramid.pyramidId) }}
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPyramidSourceParts(pyramid.pyramidId).faceRef)"
+              >{{ subName(getPyramidSourceParts(pyramid.pyramidId).faceLabel) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(getPyramidSourceParts(pyramid.pyramidId).pointRef)"
+              >{{ subName(getPyramidSourceParts(pyramid.pyramidId).pointLabel) }}</button>
             </div>
           </div>
         </div>
@@ -8161,6 +8687,7 @@ onUnmounted(() => {
           v-for="rp in selectedRegularPolygons"
           :key="rp.constraintId"
           class="selectedFace-info"
+          :data-card-key="'regularPolygon-' + rp.constraintId"
           @dblclick="startEditRegularPolygon(rp.constraintId)"
         >
           <div
@@ -8261,12 +8788,12 @@ onUnmounted(() => {
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
                 {{
-                  props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0]?.name ?? 'A'
+                  subName(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[0]?.name ?? 'A')
                 }}(x,y,z)
               </div>
               <div class="line-editor-head">
                 {{
-                  props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1]?.name ?? 'B'
+                  subName(props.editor.getRegularPolygonOwnerPoints(rp.constraintId)[1]?.name ?? 'B')
                 }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
@@ -8516,7 +9043,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ rp.name }}
+              {{ subName(rp.name) }}
               <span v-if="props.scene.faces.get(rp.faceId)?.userLocked" class="lock-badge">🔒</span>
               <span v-if="props.scene.faces.get(rp.faceId)?.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -8548,12 +9075,14 @@ onUnmounted(() => {
               <span class="metric-item">面积：{{ rp.getArea().toFixed(2) }}</span>
             </div>
             <div>
-              原始点：{{
-                props.editor
-                  .getRegularPolygonOwnerPoints(rp.constraintId)
-                  .map((point) => point.name)
-                  .join(' - ')
-              }}
+              原始点：<template
+                v-for="(point, idx) in props.editor.getRegularPolygonOwnerPoints(rp.constraintId)"
+                :key="point.id"
+              ><span v-if="idx > 0"> - </span><button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', point.id)"
+                >点{{ subName(point.name) }}</button></template>
             </div>
           </div>
         </div>
@@ -8562,6 +9091,7 @@ onUnmounted(() => {
           v-for="s in selectedSpheres"
           :key="s!.id"
           class="selectedCircle-info"
+          :data-card-key="'sphere-' + s!.id"
           @dblclick="startEditSphere(s!.id)"
         >
           <div v-if="editing?.type === 'sphere' && editing?.id === s!.id" class="edit-grid">
@@ -8651,7 +9181,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="coord-row-title">
-              球心{{ props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A' }}(x,y,z)
+              球心{{ subName(props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A') }}(x,y,z)
             </div>
             <div class="coord-row">
               <div class="axis-field">
@@ -8750,7 +9280,7 @@ onUnmounted(() => {
             </div>
             <template v-if="props.editor.getSphereRadiusPoint(s!.id)">
               <div class="coord-row-title">
-                半径{{ props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B' }}(x,y,z)
+                半径{{ subName(props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B') }}(x,y,z)
               </div>
               <div class="coord-row">
                 <div class="axis-field">
@@ -8851,7 +9381,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ s!.name ?? '' }}
+              {{ subName(s!.name) }}
               <span v-if="props.editor.isSphereGeometryLocked(s!)" class="lock-badge">🔒</span>
               <span v-if="s!.visible === false" class="hidden-badge" title="对象隐藏">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -8907,6 +9437,7 @@ onUnmounted(() => {
           v-for="c in selectedCones"
           :key="c!.id"
           class="selectedCone-info"
+          :data-card-key="'cone-' + c!.id"
           @dblclick="startEditCone(c!.id)"
         >
           <div v-if="editing?.type === 'cone' && editing?.id === c!.id" class="edit-grid">
@@ -9038,10 +9569,10 @@ onUnmounted(() => {
             >
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
-                底心{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? 'A' }}(x,y,z)
+                底心{{ subName(props.editor.getConeBaseCenterPoint(c!.id)?.name ?? 'A') }}(x,y,z)
               </div>
               <div class="line-editor-head">
-                顶点{{ props.editor.getConeApexPoint(c!.id)?.name ?? 'B' }}(x,y,z)
+                顶点{{ subName(props.editor.getConeApexPoint(c!.id)?.name ?? 'B') }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
               <div class="coord-input">
@@ -9218,7 +9749,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ c!.name ?? '' }}
+              {{ subName(c!.name) }}
               <span v-if="props.editor.isConeGeometryLocked(c!)" class="lock-badge">🔒</span>
               <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               <button
@@ -9284,13 +9815,25 @@ onUnmounted(() => {
               >
             </div>
             <div>
-              来源：点{{ props.editor.getConeBaseCenterPoint(c!.id)?.name ?? '' }}-点{{
-                props.editor.getConeApexPoint(c!.id)?.name ?? ''
-              }}<template v-if="c!.isNormalCircleCone() && c!.normalCircleId"
-                >（法向圆{{ props.scene.circles.get(c!.normalCircleId)?.name ?? '' }}-点{{
-                  props.editor.getConeApexPoint(c!.id)?.name ?? ''
-                }}）</template
-              >
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectObject('point', props.editor.getConeBaseCenterPoint(c!.id)?.id ?? '')"
+              >点{{ subName(props.editor.getConeBaseCenterPoint(c!.id)?.name) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectObject('point', props.editor.getConeApexPoint(c!.id)?.id ?? '')"
+              >点{{ subName(props.editor.getConeApexPoint(c!.id)?.name) }}</button><template
+                v-if="c!.isNormalCircleCone() && c!.normalCircleId"
+              >（<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('circle', c!.normalCircleId)"
+                >法向圆{{ subName(props.scene.circles.get(c!.normalCircleId)?.name) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getConeApexPoint(c!.id)?.id ?? '')"
+                >点{{ subName(props.editor.getConeApexPoint(c!.id)?.name) }}</button>）</template>
             </div>
           </div>
         </div>
@@ -9299,6 +9842,7 @@ onUnmounted(() => {
           v-for="c in selectedCylinders"
           :key="c!.id"
           class="selectedCylinder-info"
+          :data-card-key="'cylinder-' + c!.id"
           @dblclick="startEditCylinder(c!.id)"
         >
           <div v-if="editing?.type === 'cylinder' && editing?.id === c!.id" class="edit-grid">
@@ -9438,10 +9982,10 @@ onUnmounted(() => {
             >
               <div class="line-editor-head"></div>
               <div class="line-editor-head">
-                底心{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? 'A' }}(x,y,z)
+                底心{{ subName(props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? 'A') }}(x,y,z)
               </div>
               <div class="line-editor-head">
-                顶心{{ props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? 'B' }}(x,y,z)
+                顶心{{ subName(props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? 'B') }}(x,y,z)
               </div>
               <div class="line-axis-label">x</div>
               <div class="coord-input">
@@ -9636,7 +10180,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ c!.name ?? '' }}
+              {{ subName(c!.name) }}
               <span v-if="props.editor.isCylinderGeometryLocked(c!)" class="lock-badge">🔒</span>
               <span v-if="c!.visible === false" class="hidden-badge" title="对象隐藏">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -9704,9 +10248,15 @@ onUnmounted(() => {
               >
             </div>
             <div>
-              来源：点{{ props.editor.getCylinderBottomCenterPoint(c!.id)?.name ?? '' }}-点{{
-                props.editor.getCylinderTopCenterPoint(c!.id)?.name ?? ''
-              }}
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectObject('point', props.editor.getCylinderBottomCenterPoint(c!.id)?.id ?? '')"
+              >点{{ subName(props.editor.getCylinderBottomCenterPoint(c!.id)?.name) }}</button>-<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectObject('point', props.editor.getCylinderTopCenterPoint(c!.id)?.id ?? '')"
+              >点{{ subName(props.editor.getCylinderTopCenterPoint(c!.id)?.name) }}</button>
             </div>
           </div>
         </div>
@@ -9715,6 +10265,7 @@ onUnmounted(() => {
           v-for="net in selectedNets"
           :key="net!.id"
           class="selectedNet-info"
+          :data-card-key="'net-' + net!.id"
           @dblclick="startEditNet(net!)"
         >
           <div v-if="editing?.type === 'net' && editing?.id === net!.id" class="edit-grid">
@@ -9777,7 +10328,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ net!.name ?? '' }}
+              {{ subName(net!.name) }}
               <span class="constraint-badge">{{ net!.mode === 'free' ? '自由' : '附着' }}</span>
               <span v-if="net!.visible === false" class="hidden-badge" title="对象隐藏">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -9788,150 +10339,13 @@ onUnmounted(() => {
               <span class="metric-sep">/</span>
               <span class="metric-item">面数：{{ net!.faceIds.length }}</span>
             </div>
-            <div>来源：{{ getNetSourceLabel(net!) }}</div>
-          </div>
-        </div>
-
-        <div
-          v-for="face in selectedEditableFaces"
-          :key="face!.id"
-          class="selectedFace-info"
-          @dblclick="startEditFace(face)"
-        >
-          <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
-            <div class="name-row">
-              <label>名称</label>
-              <input type="text" v-model="editFace.name" @input="applyEditFace" />
-              <label class="toggle-label">
-                <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
-                多边形显示
-              </label>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="editFace.nameVisible" @change="applyEditFace" />
-                名称显示
-              </label>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="editFace.valueVisible" @change="applyEditFace" />
-                数值显示
-              </label>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="editFace.userLocked" @change="applyEditFace" />
-                锁定
-              </label>
-              <label class="toggle-label">
-                <input type="checkbox" v-model="editFace.areaLocked" @change="applyEditFace" />
-                面积锁定
-              </label>
-            </div>
-            <div class="face-metric-row">
-              <span class="metric-item"
-                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
-              >
-              <span class="metric-sep">/</span>
-              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
-            </div>
-            <div class="face-edge-grid">
-              <div
-                v-for="(_, edgeIndex) in getFaceBoundaryPoints(face!)"
-                :key="`${face!.id}-edge-${edgeIndex}`"
-                class="face-edge-row length-row axis-field"
-              >
-                <label>{{ getFaceEdgeLabel(face!, edgeIndex) }}</label>
-                <div class="coord-input compact-length-input">
-                  <button
-                    type="button"
-                    class="step-btn"
-                    :disabled="editFace.areaLocked"
-                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'down')"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    min="0.1"
-                    step="1"
-                    :value="editFace.edgeLengths[edgeIndex]"
-                    :disabled="editFace.areaLocked"
-                    :ref="(el) => setCoordInputRef(`face.edge.${edgeIndex}`, el)"
-                    @input="
-                      editFace.edgeLengths[edgeIndex] = ($event.target as HTMLInputElement).value
-                    "
-                    @focus="handleFaceEdgeLengthFocus(edgeIndex)"
-                    @blur="handleFaceEdgeLengthBlur(face!.id, edgeIndex)"
-                  />
-                  <button
-                    type="button"
-                    class="step-btn"
-                    :disabled="editFace.areaLocked"
-                    @click="nudgeFaceEdgeLength(face!.id, edgeIndex, 'up')"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-else>
-            <div class="card-summary-header">
-              {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
-              <span v-if="face!.isRegularPolygon" class="constraint-badge"
-                >正{{ face!.regularPolygonVertexCount }}边形</span
-              >
-              <span v-if="props.editor.isFaceLocked(face!)" class="lock-badge">🔒</span>
-              <span v-if="isCubeFace(face!)" class="constraint-badge">{{
-                getSolidConstraintBadge(face!.cubeId)
-              }}</span>
-              <span v-if="isPrismFace(face!)" class="constraint-badge">棱柱约束</span>
-              <span v-if="isPyramidFace(face!)" class="constraint-badge">棱锥约束</span>
-              <span v-if="face!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
-              <button
-                class="card-delete-btn"
-                title="删除"
-                @click.stop="
-                  handleDeleteElement(
-                    'face',
-                    face!.id,
-                    (face!.isRegularPolygon ? '正多边形' : '多边形') + (face!.name ?? ''),
-                  )
-                "
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="3 6 5 6 21 6" />
-                  <path
-                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                  />
-                  <line x1="10" y1="11" x2="10" y2="17" />
-                  <line x1="14" y1="11" x2="14" y2="17" />
-                </svg>
-              </button>
-            </div>
-            <div class="face-metric-row">
-              <span class="metric-item"
-                >周长：{{ face!.getPerimeter(props.scene.points).toFixed(2) }}</span
-              >
-              <span class="metric-sep">/</span>
-              <span class="metric-item">面积：{{ getFaceArea(face!).toFixed(2) }}</span>
-              <span v-if="face!.areaLocked" class="lock-badge">🔒</span>
-            </div>
             <div>
-              质心（{{ getFaceCentroid(face!).x.toFixed(2) }},
-              {{ getFaceCentroid(face!).y.toFixed(2) }}, {{ getFaceCentroid(face!).z.toFixed(2) }}）
+              来源：<button
+                type="button"
+                class="geo-link"
+                @click.stop="selectResolvedGeoRef(resolveNetSource(net!))"
+              >{{ subName(getNetSourceLabel(net!)) }}</button>
             </div>
-            <div>
-              边界点：{{
-                getFaceBoundaryPoints(face!)
-                  .map((p) => p.name)
-                  .join(' - ')
-              }}
-            </div>
-            <div>共面点：{{ getFaceMemberPointNames(face!) }}</div>
           </div>
         </div>
       </div>
@@ -10029,7 +10443,7 @@ onUnmounted(() => {
             >
               <div class="point-summary-line">
                 <span class="point-summary-text">
-                  点{{ p!.name ?? '' }}（{{ p!.position.x.toFixed(2) }},
+                  点{{ subName(p!.name) }}（{{ p!.position.x.toFixed(2) }},
                   {{ p!.position.y.toFixed(2) }}, {{ p!.position.z.toFixed(2) }}）
                 </span>
                 <span
@@ -10114,17 +10528,21 @@ onUnmounted(() => {
               @click="selectLineFromContent(l!.id)"
             >
               <div class="card-summary-header">
-                线段{{ l!.name ?? '' }}
+                线段{{ subName(l!.name) }}
                 <span v-if="props.editor.isLineLocked(l!)" class="lock-badge">🔒</span>
                 <span v-if="l!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
                 <div>
-                  点{{ l!.p1.name ?? '' }}（{{ l!.p1.position.x.toFixed(2) }},
+                  <button type="button" class="geo-link" @click.stop="selectObject('point', l!.p1.id)"
+                    >点{{ subName(l!.p1.name) }}</button
+                  >（{{ l!.p1.position.x.toFixed(2) }},
                   {{ l!.p1.position.y.toFixed(2) }}, {{ l!.p1.position.z.toFixed(2) }}）
                 </div>
                 <div>
-                  点{{ l!.p2.name ?? '' }}（{{ l!.p2.position.x.toFixed(2) }},
+                  <button type="button" class="geo-link" @click.stop="selectObject('point', l!.p2.id)"
+                    >点{{ subName(l!.p2.name) }}</button
+                  >（{{ l!.p2.position.x.toFixed(2) }},
                   {{ l!.p2.position.y.toFixed(2) }}, {{ l!.p2.position.z.toFixed(2) }}）
                 </div>
               </div>
@@ -10153,16 +10571,20 @@ onUnmounted(() => {
               @click="selectStraightLineFromContent(sl!.id)"
             >
               <div class="card-summary-header">
-                直线{{ sl!.name ?? '' }}
+                直线{{ subName(sl!.name) }}
                 <span v-if="props.editor.isStraightLineLocked(sl!)" class="lock-badge">🔒</span>
                 <span v-if="sl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
-                点{{ sl!.p1.name ?? '' }}（{{ sl!.p1.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', sl!.p1.id)"
+                  >点{{ subName(sl!.p1.name) }}</button
+                >（{{ sl!.p1.position.x.toFixed(2) }},
                 {{ sl!.p1.position.y.toFixed(2) }}, {{ sl!.p1.position.z.toFixed(2) }}）
               </div>
               <div>
-                点{{ sl!.p2.name ?? '' }}（{{ sl!.p2.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', sl!.p2.id)"
+                  >点{{ subName(sl!.p2.name) }}</button
+                >（{{ sl!.p2.position.x.toFixed(2) }},
                 {{ sl!.p2.position.y.toFixed(2) }}, {{ sl!.p2.position.z.toFixed(2) }}）
               </div>
             </div>
@@ -10190,12 +10612,22 @@ onUnmounted(() => {
               @click="selectPerpendicularLineFromContent(pl!.id)"
             >
               <div class="card-summary-header">
-                垂线{{ pl!.name ?? '' }}
+                垂线{{ subName(pl!.name) }}
                 <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
                 <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>显示长度：{{ pl!.displayLength.toFixed(2) }}</div>
-              <div>来源：{{ getPerpendicularLineSourceLabel(pl!) }}</div>
+              <div>
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPerpendicularLineSourceParts(pl!).pointRef)"
+                >{{ subName(getPerpendicularLineSourceParts(pl!).pointLabel) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPerpendicularLineSourceParts(pl!).targetRef)"
+                >{{ subName(getPerpendicularLineSourceParts(pl!).targetLabel) }}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -10221,13 +10653,23 @@ onUnmounted(() => {
               @click="selectParallelLineFromContent(pl!.id)"
             >
               <div>
-                平行线{{ pl!.name ?? '' }}
+                平行线{{ subName(pl!.name) }}
                 <span v-if="pl!.userLocked" class="lock-badge">🔒</span>
                 <span v-if="pl!.visible === false" class="hidden-badge" title="对象隐藏">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                 </span>
               </div>
-              <div>来源：{{ getParallelLineSourceLabel(pl!) }}</div>
+              <div>
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getParallelLineSourceParts(pl!).pointRef)"
+                >{{ subName(getParallelLineSourceParts(pl!).pointLabel) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getParallelLineSourceParts(pl!).targetRef)"
+                >{{ subName(getParallelLineSourceParts(pl!).targetLabel) }}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -10253,16 +10695,20 @@ onUnmounted(() => {
               @click="selectRayFromContent(r!.id)"
             >
               <div class="card-summary-header">
-                射线{{ r!.name ?? '' }}
+                射线{{ subName(r!.name) }}
                 <span v-if="props.editor.isRayLocked(r!)" class="lock-badge">🔒</span>
                 <span v-if="r!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
-                起点{{ r!.p1.name ?? '' }}（{{ r!.p1.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', r!.p1.id)"
+                  >起点{{ subName(r!.p1.name) }}</button
+                >（{{ r!.p1.position.x.toFixed(2) }},
                 {{ r!.p1.position.y.toFixed(2) }}, {{ r!.p1.position.z.toFixed(2) }}）
               </div>
               <div>
-                方向点{{ r!.p2.name ?? '' }}（{{ r!.p2.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', r!.p2.id)"
+                  >方向点{{ subName(r!.p2.name) }}</button
+                >（{{ r!.p2.position.x.toFixed(2) }},
                 {{ r!.p2.position.y.toFixed(2) }}, {{ r!.p2.position.z.toFixed(2) }}）
               </div>
             </div>
@@ -10290,16 +10736,20 @@ onUnmounted(() => {
               @click="selectVectorFromContent(vec!.id)"
             >
               <div class="card-summary-header">
-                向量{{ vec!.name ?? '' }}
+                向量{{ subName(vec!.name) }}
                 <span v-if="props.editor.isVectorLocked(vec!)" class="lock-badge">🔒</span>
                 <span v-if="vec!.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
               <div>
-                起点{{ vec!.p1.name ?? '' }}（{{ vec!.p1.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', vec!.p1.id)"
+                  >起点{{ subName(vec!.p1.name) }}</button
+                >（{{ vec!.p1.position.x.toFixed(2) }},
                 {{ vec!.p1.position.y.toFixed(2) }}, {{ vec!.p1.position.z.toFixed(2) }}）
               </div>
               <div>
-                终点{{ vec!.p2.name ?? '' }}（{{ vec!.p2.position.x.toFixed(2) }},
+                <button type="button" class="geo-link" @click.stop="selectObject('point', vec!.p2.id)"
+                  >终点{{ subName(vec!.p2.name) }}</button
+                >（{{ vec!.p2.position.x.toFixed(2) }},
                 {{ vec!.p2.position.y.toFixed(2) }}, {{ vec!.p2.position.z.toFixed(2) }}）
               </div>
             </div>
@@ -10327,7 +10777,7 @@ onUnmounted(() => {
               @click="selectCircleFromContent(c!.id)"
             >
               <div>
-                {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ c!.name ?? '' }}
+                {{ c!.isNormalCircle() ? '法向圆' : '三点圆' }}{{ subName(c!.name) }}
                 <span v-if="props.editor.isCircleLocked(c!)" class="lock-badge">🔒</span>
                 <span v-if="getConeForNormalCircle(c!)" class="constraint-badge">圆锥约束</span>
                 <span v-if="getCylinderForNormalCircle(c!)" class="constraint-badge">圆柱约束</span>
@@ -10336,20 +10786,45 @@ onUnmounted(() => {
               <template v-if="c!.isNormalCircle()">
                 <div>半径：{{ getNormalCircleRadius(c!).toFixed(2) }}</div>
                 <div>
-                  圆心：{{ c!.p1.name ?? '' }}（{{ c!.p1.position.x.toFixed(2) }},
+                  <button type="button" class="geo-link" @click.stop="selectObject('point', c!.p1.id)"
+                    >圆心：{{ subName(c!.p1.name) }}</button
+                  >（{{ c!.p1.position.x.toFixed(2) }},
                   {{ c!.p1.position.y.toFixed(2) }}, {{ c!.p1.position.z.toFixed(2) }}）
                 </div>
-                <div>法向量：{{ getDirectionLabel(c!) }}</div>
+                <div>
+                  法向量：<template
+                    v-for="(part, idx) in getNormalCircleDirectionParts(c!).parts"
+                    :key="idx"
+                  ><span v-if="idx > 0">-</span><button
+                      type="button"
+                      class="geo-link"
+                      @click.stop="selectResolvedGeoRef(part.ref)"
+                    >{{ subName(part.label) }}</button></template>{{ getNormalCircleDirectionParts(c!).suffix }}
+                </div>
               </template>
               <template v-else>
                 <div>半径：{{ c!.getRadius().toFixed(2) }}</div>
                 <div>
-                  构造点：{{ c!.p1.name ?? '' }}-{{ c!.p2.name ?? '' }}-{{ c!.p3.name ?? '' }}
+                  构造点：<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', c!.p1.id)"
+                  >点{{ subName(c!.p1.name) }}</button>-<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', c!.p2.id)"
+                  >点{{ subName(c!.p2.name) }}</button>-<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', c!.p3.id)"
+                  >点{{ subName(c!.p3.name) }}</button>
                 </div>
                 <div v-if="getCircleCenterPoint(c!.id)">
-                  <span class="point-summary-text">
-                    圆心：{{ getCircleCenterPoint(c!.id)!.name }}
-                  </span>
+                  <button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', getCircleCenterPoint(c!.id)!.id)"
+                  >圆心：{{ subName(getCircleCenterPoint(c!.id)!.name) }}</button>
                   <span class="constraint-badge">圆心约束</span>
                 </div>
               </template>
@@ -10378,7 +10853,7 @@ onUnmounted(() => {
               @click="selectHexahedronFromContent(cube.cubeId)"
             >
               <div class="card-summary-header">
-                {{ cube.name }}
+                {{ subName(cube.name) }}
                 <span
                   v-if="cube.faceIds.every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                   class="lock-badge"
@@ -10388,11 +10863,14 @@ onUnmounted(() => {
               </div>
               <div>边长：{{ getHexahedronEdgeLength(cube.cubeId).toFixed(2) }}</div>
               <div>
-                原始点：{{
-                  getHexahedronOwnerPoints(cube.cubeId)
-                    .map((point) => point.name)
-                    .join(' - ')
-                }}
+                原始点：<template
+                  v-for="(point, idx) in getHexahedronOwnerPoints(cube.cubeId)"
+                  :key="point.id"
+                ><span v-if="idx > 0"> - </span><button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', point.id)"
+                  >点{{ subName(point.name) }}</button></template>
               </div>
             </div>
           </div>
@@ -10417,10 +10895,9 @@ onUnmounted(() => {
               class="face-info prism-info selectable-geo"
               :class="{ 'is-selected': selectedPrismIds.includes(prism.prismId) }"
               @click="selectPrismFromContent(prism.prismId)"
-              @dblclick="startEditPrism(prism.prismId)"
             >
               <div class="card-summary-header">
-                {{ prism.name }}
+                {{ subName(prism.name) }}
                 <span
                   v-if="props.editor.getPrismFaceIds(prism.prismId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                   class="lock-badge"
@@ -10451,7 +10928,15 @@ onUnmounted(() => {
               </div>
               <div>体积：{{ getPrismVolume(prism.prismId).toFixed(2) }}</div>
               <div>
-                来源：{{ getPrismSourceLabel(prism.prismId) }}
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPrismSourceParts(prism.prismId).faceRef)"
+                >{{ subName(getPrismSourceParts(prism.prismId).faceLabel) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPrismSourceParts(prism.prismId).pointRef)"
+                >{{ subName(getPrismSourceParts(prism.prismId).pointLabel) }}</button>
               </div>
             </div>
           </div>
@@ -10476,10 +10961,9 @@ onUnmounted(() => {
               class="face-info pyramid-info selectable-geo"
               :class="{ 'is-selected': selectedPyramidIds.includes(pyramid.pyramidId) }"
               @click="selectPyramidFromContent(pyramid.pyramidId)"
-              @dblclick="startEditPyramid(pyramid.pyramidId)"
             >
               <div class="card-summary-header">
-                {{ pyramid.name }}
+                {{ subName(pyramid.name) }}
                 <span
                   v-if="props.editor.getPyramidFaceIds(pyramid.pyramidId).every((faceId) => props.scene.faces.get(faceId)?.userLocked)"
                   class="lock-badge"
@@ -10510,7 +10994,15 @@ onUnmounted(() => {
               </div>
               <div>体积：{{ getPyramidVolume(pyramid.pyramidId).toFixed(2) }}</div>
               <div>
-                来源：{{ getPyramidSourceLabel(pyramid.pyramidId) }}
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPyramidSourceParts(pyramid.pyramidId).faceRef)"
+                >{{ subName(getPyramidSourceParts(pyramid.pyramidId).faceLabel) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(getPyramidSourceParts(pyramid.pyramidId).pointRef)"
+                >{{ subName(getPyramidSourceParts(pyramid.pyramidId).pointLabel) }}</button>
               </div>
             </div>
           </div>
@@ -10537,7 +11029,7 @@ onUnmounted(() => {
               @click="selectSphereFromContent(sphere.id)"
             >
               <div class="card-summary-header">
-                {{ sphere.name ?? '' }}
+                {{ subName(sphere.name) }}
                 <span v-if="props.editor.isSphereGeometryLocked(sphere)" class="lock-badge"
                   >🔒</span
                 >
@@ -10545,10 +11037,17 @@ onUnmounted(() => {
               </div>
               <div>半径：{{ props.editor.getSphereRadius(sphere.id).toFixed(2) }}</div>
               <div>
-                球心点：{{ props.editor.getSphereCenterPoint(sphere.id)?.name ?? ''
-                }}<template v-if="props.editor.getSphereRadiusPoint(sphere.id)"
-                  >　半径点：{{ props.editor.getSphereRadiusPoint(sphere.id)!.name }}</template
-                >
+                <button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getSphereCenterPoint(sphere.id)?.id ?? '')"
+                >球心点：{{ subName(props.editor.getSphereCenterPoint(sphere.id)?.name) }}</button><template
+                  v-if="props.editor.getSphereRadiusPoint(sphere.id)"
+                >　<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', props.editor.getSphereRadiusPoint(sphere.id)!.id)"
+                  >半径点：{{ subName(props.editor.getSphereRadiusPoint(sphere.id)!.name) }}</button></template>
               </div>
             </div>
           </div>
@@ -10575,7 +11074,7 @@ onUnmounted(() => {
               @click="selectConeFromContent(cone.id)"
             >
               <div>
-                {{ cone.name ?? '' }}
+                {{ subName(cone.name) }}
                 <span v-if="props.editor.isConeGeometryLocked(cone)" class="lock-badge">🔒</span>
                 <span v-if="cone.visible === false" class="hidden-badge" title="对象隐藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
               </div>
@@ -10589,13 +11088,25 @@ onUnmounted(() => {
                 >
               </div>
               <div>
-                来源：点{{ props.editor.getConeBaseCenterPoint(cone.id)?.name ?? '' }}-点{{
-                  props.editor.getConeApexPoint(cone.id)?.name ?? ''
-                }}<template v-if="cone.isNormalCircleCone() && cone.normalCircleId"
-                  >（法向圆{{ props.scene.circles.get(cone.normalCircleId)?.name ?? '' }}-点{{
-                    props.editor.getConeApexPoint(cone.id)?.name ?? ''
-                  }}）</template
-                >
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getConeBaseCenterPoint(cone.id)?.id ?? '')"
+                >点{{ subName(props.editor.getConeBaseCenterPoint(cone.id)?.name) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getConeApexPoint(cone.id)?.id ?? '')"
+                >点{{ subName(props.editor.getConeApexPoint(cone.id)?.name) }}</button><template
+                  v-if="cone.isNormalCircleCone() && cone.normalCircleId"
+                >（<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('circle', cone.normalCircleId)"
+                  >法向圆{{ subName(props.scene.circles.get(cone.normalCircleId)?.name) }}</button>-<button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', props.editor.getConeApexPoint(cone.id)?.id ?? '')"
+                  >点{{ subName(props.editor.getConeApexPoint(cone.id)?.name) }}</button>）</template>
               </div>
             </div>
           </div>
@@ -10622,7 +11133,7 @@ onUnmounted(() => {
               @click="selectCylinderFromContent(cylinder.id)"
             >
               <div class="card-summary-header">
-                {{ cylinder.name ?? '' }}
+                {{ subName(cylinder.name) }}
                 <span v-if="props.editor.isCylinderGeometryLocked(cylinder)" class="lock-badge"
                   >🔒</span
                 >
@@ -10638,9 +11149,15 @@ onUnmounted(() => {
                 >
               </div>
               <div>
-                来源：点{{
-                  props.editor.getCylinderBottomCenterPoint(cylinder.id)?.name ?? ''
-                }}-点{{ props.editor.getCylinderTopCenterPoint(cylinder.id)?.name ?? '' }}
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getCylinderBottomCenterPoint(cylinder.id)?.id ?? '')"
+                >点{{ subName(props.editor.getCylinderBottomCenterPoint(cylinder.id)?.name) }}</button>-<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getCylinderTopCenterPoint(cylinder.id)?.id ?? '')"
+                >点{{ subName(props.editor.getCylinderTopCenterPoint(cylinder.id)?.name) }}</button>
               </div>
             </div>
           </div>
@@ -10667,7 +11184,7 @@ onUnmounted(() => {
               @click="selectNetFromContent(net.id)"
             >
               <div class="card-summary-header">
-                {{ net.name ?? '' }}
+                {{ subName(net.name) }}
                 <span class="constraint-badge">{{ net.mode === 'free' ? '自由' : '附着' }}</span>
                 <span v-if="net.visible === false" class="hidden-badge" title="对象隐藏">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
@@ -10678,7 +11195,13 @@ onUnmounted(() => {
                 <span class="metric-sep">/</span>
                 <span class="metric-item">面数：{{ net.faceIds.length }}</span>
               </div>
-              <div>来源：{{ getNetSourceLabel(net) }}</div>
+              <div>
+                来源：<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectResolvedGeoRef(resolveNetSource(net))"
+                >{{ subName(getNetSourceLabel(net)) }}</button>
+              </div>
               <div class="net-slider-row">
                 <input
                   type="range"
@@ -10717,7 +11240,7 @@ onUnmounted(() => {
               @click="selectFaceFromContent(face!.id)"
             >
               <div class="card-summary-header">
-                {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ face!.name ?? '' }}
+                {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ subName(face!.name) }}
                 <span v-if="face!.isRegularPolygon" class="constraint-badge"
                   >正{{ face!.regularPolygonVertexCount }}边形</span
                 >
@@ -10732,11 +11255,14 @@ onUnmounted(() => {
                 </span>
               </div>
               <div>
-                边界点：{{
-                  getFaceBoundaryPoints(face!)
-                    .map((p) => p.name)
-                    .join(' - ')
-                }}
+                边界点：<template
+                  v-for="(p, idx) in getFaceBoundaryPoints(face!)"
+                  :key="p.id"
+                ><span v-if="idx > 0"> - </span><button
+                    type="button"
+                    class="geo-link"
+                    @click.stop="selectObject('point', p.id)"
+                  >点{{ subName(p.name) }}</button></template>
               </div>
             </div>
           </div>
@@ -10779,7 +11305,7 @@ onUnmounted(() => {
             <h4 class="delete-confirm-title">确认删除</h4>
           </div>
           <div class="delete-confirm-body">
-            <p class="delete-confirm-message">确定要删除「{{ deleteConfirmTarget?.name }}」吗？</p>
+            <p class="delete-confirm-message">确定要删除「{{ subName(deleteConfirmTarget?.name) }}」吗？</p>
           </div>
           <div class="delete-confirm-footer">
             <button
@@ -11044,6 +11570,62 @@ hr {
   background-color: rgba(67, 242, 96, 0.18);
   border-left-color: #ffffff;
   box-shadow: inset 0 0 0 1px rgba(67, 242, 96, 0.35);
+}
+/* 可点击的几何对象文字按钮：用于在「来源/原始点/法向量/圆心/球心点/半径点/边界点」
+   以及线段/射线/向量等组成点处显示对象名称，点击可在场景中选中并高亮对应对象 */
+.geo-link {
+  display: inline;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0 4px;
+  color: #9fd8ff;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  vertical-align: baseline;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease,
+    box-shadow 0.15s ease;
+}
+.geo-link:hover {
+  background: rgba(159, 216, 255, 0.18);
+  color: #cfeaff;
+  text-decoration: underline;
+  box-shadow: 0 0 0 1px rgba(159, 216, 255, 0.35);
+}
+.geo-link:active {
+  background: rgba(159, 216, 255, 0.32);
+  color: #ffffff;
+  transform: scale(0.97);
+  box-shadow: 0 0 0 1px rgba(159, 216, 255, 0.55);
+}
+.geo-link:focus-visible {
+  outline: 1px solid #9fd8ff;
+  outline-offset: 1px;
+}
+.geo-link.is-active {
+  background: rgba(67, 242, 96, 0.25);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(67, 242, 96, 0.55);
+}
+/* 选中卡片闪烁提醒动画（2 秒黄色亮光） */
+@keyframes card-flash-anim {
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(255, 200, 0, 0);
+  }
+  20% {
+    box-shadow: inset 0 0 16px 4px rgba(255, 200, 0, 0.85);
+  }
+  80% {
+    box-shadow: inset 0 0 16px 4px rgba(255, 200, 0, 0.85);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(255, 200, 0, 0);
+  }
+}
+.card-flash {
+  animation: card-flash-anim 2s ease-in-out;
 }
 .section-divider {
   width: 100%;

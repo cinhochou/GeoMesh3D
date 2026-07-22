@@ -1741,7 +1741,10 @@ export class GeometrySyncer {
           pyramidFaceIds.length > 0 &&
           pyramidFaceIds.every((faceId) => scene.selection.faces.has(faceId)),
       )
-      const shouldHighlightFaceFill = isSelected && !isCubeFullySelected && !isPrismFullySelected && !isPyramidFullySelected
+      const shouldHighlightFaceFill =
+        isSelected &&
+        (scene.selection.explicitFaces.has(id) ||
+          (!isCubeFullySelected && !isPrismFullySelected && !isPyramidFullySelected))
       const baseColor = faceData.fillColor ?? FACE_FILL_COLOR
       const baseOpacity = faceData.fillOpacity ?? FACE_FILL_OPACITY
       ;(faceMesh.material as THREE.MeshBasicMaterial).color.set(

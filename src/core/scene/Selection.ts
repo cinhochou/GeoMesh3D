@@ -14,6 +14,13 @@ export class Selection {
   cylinders = new Set<string>()
   nets = new Set<string>()
 
+  /**
+   * 用户通过 geo-link 按钮显式点击选中的面 id 集合。
+   * 这些面即使属于已完全选中的棱柱/棱锥/六面体，也会在场景中独立高亮、
+   * 并在选中区作为独立面卡片显示（渲染于多面体卡片之前）。
+   */
+  explicitFaces = new Set<string>()
+
   clear() {
     this.points.clear()
     this.lines.clear()
@@ -28,6 +35,7 @@ export class Selection {
     this.cones.clear()
     this.cylinders.clear()
     this.nets.clear()
+    this.explicitFaces.clear()
   }
 
   selectPoint(id: string, additive = false) {
@@ -107,8 +115,14 @@ export class Selection {
     this.faces.add(id)
   }
 
+  /** 将面标记为"显式选中"（通过 geo-link 按钮点击），用于独立高亮与卡片显示。 */
+  markFaceExplicit(id: string) {
+    if (this.faces.has(id)) this.explicitFaces.add(id)
+  }
+
   deselectFace(id: string) {
     this.faces.delete(id)
+    this.explicitFaces.delete(id)
   }
 
   selectSphere(id: string, additive = false) {
