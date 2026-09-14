@@ -2866,16 +2866,20 @@ const applyThreePointCircleRadius = () => {
   if (Math.abs(currentRadius) < 1e-10) return
   const scale = newRadius / currentRadius
   const center = frame.center
-  const points = [circle.p1, circle.p2, circle.p3]
-  for (const p of points) {
+  // 一次命令批量移动三个点：缩放三点圆到目标半径。
+  // 必须单条命令（setPointsPositions → TransformPointsCommand）而非逐个 setPointPosition，
+  // 否则每次输入会生成多条历史条目/多条消息，且产生多余的【移动】消息。
+  const updates: Array<{ id: string; position: Vec3 }> = []
+  for (const p of [circle.p1, circle.p2, circle.p3]) {
     const dx = p.position.x - center.x
     const dy = p.position.y - center.y
     const dz = p.position.z - center.z
-    props.editor.setPointPosition(
-      p.id,
-      new Vec3(center.x + dx * scale, center.y + dy * scale, center.z + dz * scale),
-    )
+    updates.push({
+      id: p.id,
+      position: new Vec3(center.x + dx * scale, center.y + dy * scale, center.z + dz * scale),
+    })
   }
+  props.editor.setPointsPositions(updates)
 }
 const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
   if (guardViewOnly()) return
@@ -7105,7 +7109,7 @@ onUnmounted(() => {
                     type="number"
                     :ref="(el) => setCoordInputRef('circle.lockedRadius', el)"
                     v-model="editCircle.lockedRadius"
-                    @input="applyEditCircle"
+                    @change="applyEditCircle"
                     @focus="focusedCoord['circle.lockedRadius'] = true"
                     @blur="focusedCoord['circle.lockedRadius'] = false"
                     min="0.1"
@@ -7262,7 +7266,7 @@ onUnmounted(() => {
                     type="number"
                     :ref="(el) => setCoordInputRef('circle.threePointRadius', el)"
                     v-model="editCircle.threePointRadius"
-                    @input="applyThreePointCircleRadius"
+                    @change="applyThreePointCircleRadius"
                     @focus="focusedCoord['circle.threePointRadius'] = true"
                     @blur="focusedCoord['circle.threePointRadius'] = false"
                     min="0.1"

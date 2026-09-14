@@ -1,4 +1,5 @@
 // src/core/editor/Editor.ts
+import type { CollabOperationIntent, CollabIntentParam } from '../../types/collabIntent'
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { HistoryManager, type HistoryEntry } from './HistoryManager'
@@ -384,6 +385,63 @@ const chooseFallbackAxisVec3 = (axis: Vec3) => {
   return basis.reduce((best, candidate) =>
     Math.abs(dotVec3(candidate, axis)) < Math.abs(dotVec3(best, axis)) ? candidate : best,
   )
+}
+
+// ===== 协作历史「操作级意图」工具：为更新类命令声明主语与属性变化（零反推） =====
+
+/** 属性键 → 中文标签（只覆盖会随历史消息出现的显式属性） */
+const UPDATE_PARAM_LABELS: Record<string, string> = {
+  name: '名称',
+  nameVisible: '名称显示',
+  valueVisible: '数值显示',
+  visible: '显示',
+  centerVisible: '中心点显示',
+  userLocked: '锁定',
+  radiusValue: '半径',
+  height: '高度',
+  edgeLength: '边长',
+  length: '长度',
+  displayLength: '显示长度',
+  fillColor: '颜色',
+  fillOpacity: '透明度',
+  labelOffsetX: '标签位置X',
+  labelOffsetY: '标签位置Y',
+}
+
+const formatUpdateParamValue = (v: unknown): string => {
+  if (typeof v === 'number') return Number.isFinite(v) ? (Math.round(v * 100) / 100).toFixed(2) : String(v)
+  if (typeof v === 'boolean') return v ? '开' : '关'
+  if (v === null || v === undefined) return '关'
+  return String(v)
+}
+
+/** 计算 before/after 记录对象的属性差异（中文标签 + 格式化展示；以新状态键为准） */
+function buildUpdateParams(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): CollabIntentParam[] {
+  const out: CollabIntentParam[] = []
+  for (const key of Object.keys(after)) {
+    // 锁定由「锁定/解锁」消息单独表达，不并入修改参数（避免误报为修改）
+    if (key === 'userLocked') continue
+    if (key in before && before[key] === after[key]) continue
+    out.push({
+      label: UPDATE_PARAM_LABELS[key] ?? key,
+      before: formatUpdateParamValue(before[key]),
+      after: formatUpdateParamValue(after[key]),
+    })
+  }
+  return out
+}
+
+/** 给更新类命令挂上「修改」意图（主语 + 已声明属性）；无差异时不挂，交给快照兜底 */
+function withUpdateIntent<T extends { intent?: CollabOperationIntent | null }>(
+  cmd: T,
+  targetId: string,
+  params: CollabIntentParam[],
+): T {
+  if (params.length > 0) cmd.intent = { category: 'update', targetId, params }
+  return cmd
 }
 
 export class Editor {
@@ -1540,7 +1598,11 @@ export class Editor {
       visible: patch.visible ?? sphere.visible,
       userLocked: patch.userLocked ?? sphere.userLocked,
     }
-    this.executeCommand(new UpdateSphereCommand(sphere.id, before, after, this.scene))
+    this.executeCommand(withUpdateIntent(
+      new UpdateSphereCommand(sphere.id, before, after, this.scene),
+      sphere.id,
+      buildUpdateParams(before, after),
+    ))
     this.scene.markAllRenderDirty()
   }
 
@@ -1564,7 +1626,11 @@ export class Editor {
       const normalizedRadius = Math.max(0.1, nextRadius)
       const before = { radiusValue: sphere.radiusValue }
       const after = { radiusValue: normalizedRadius }
-      this.executeCommand(new UpdateSphereRadiusCommand(this.scene, sphere.id, before, after))
+      this.executeCommand(withUpdateIntent(
+        new UpdateSphereRadiusCommand(this.scene, sphere.id, before, after),
+        sphere.id,
+        buildUpdateParams(before, after),
+      ))
       this.scene.markAllRenderDirty()
       return
     }
@@ -2727,7 +2793,11 @@ export class Editor {
     if (!otherPoint) return
 
     if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
-      this.setPointsPositions([{ id: pointId, position }])
+      this.setPointsPositions([{ id: pointId, position }], {
+        category: 'update',
+        targetId: constraintId,
+        note: `由${point.name}点坐标修改`,
+      })
       return
     }
 
@@ -2750,16 +2820,19 @@ export class Editor {
       directionLength = 1
     }
 
-    this.setPointsPositions([
-      {
-        id: pointId,
-        position: new Vec3(
-          otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
-          otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
-          otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
-        ),
-      },
-    ])
+    this.setPointsPositions(
+      [
+        {
+          id: pointId,
+          position: new Vec3(
+            otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
+            otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
+            otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
+          ),
+        },
+      ],
+      { category: 'update', targetId: constraintId, note: `由${point.name}点坐标修改` },
+    )
   }
 
   private resolveCubeAxesFromPositions(constraint: CubeConstraint, ownerA: Vec3, ownerB: Vec3) {
@@ -3030,7 +3103,11 @@ export class Editor {
     if (!otherPoint) return
     const snappedPosition = this.snapSolidOwnerPosition(constraint, position, otherPoint)
     if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
-      this.setPointsPositions([{ id: pointId, position: snappedPosition }])
+      this.setPointsPositions([{ id: pointId, position: snappedPosition }], {
+        category: 'update',
+        targetId: cubeId,
+        note: `由${point.name}点坐标修改`,
+      })
       return
     }
 
@@ -3053,16 +3130,19 @@ export class Editor {
       directionLength = 1
     }
 
-    this.setPointsPositions([
-      {
-        id: pointId,
-        position: new Vec3(
-          otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
-          otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
-          otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
-        ),
-      },
-    ])
+    this.setPointsPositions(
+      [
+        {
+          id: pointId,
+          position: new Vec3(
+            otherPoint.position.x + (direction.x / directionLength) * constraint.lockedEdgeLength,
+            otherPoint.position.y + (direction.y / directionLength) * constraint.lockedEdgeLength,
+            otherPoint.position.z + (direction.z / directionLength) * constraint.lockedEdgeLength,
+          ),
+        },
+      ],
+      { category: 'update', targetId: cubeId, note: `由${point.name}点坐标修改` },
+    )
   }
 
   /**
@@ -4717,7 +4797,10 @@ export class Editor {
     this.translatePointGroup([...group], delta)
   }
 
-  setPointsPositions(updates: Array<{ id: string; position: Vec3 }>) {
+  setPointsPositions(
+    updates: Array<{ id: string; position: Vec3 }>,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       updates.map(({ id, position }) => ({ id, position: position.clone() })),
     )
@@ -4738,16 +4821,21 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
+      const cmd = new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+    const cmd = new TransformPointsCommand(transforms, [], this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   applyPointTransformHistory(
     transforms: Array<{ id: string; before: Vec3; after: Vec3 }>,
     axisHintChanges: Array<{ constraintType: 'cube' | 'regularPolygon'; constraintId: string; before: Vec3; after: Vec3 }> = [],
+    draggedPointId: string | null = null,
   ) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       transforms.map(({ id, after }) => ({ id, position: after.clone() })),
@@ -4779,11 +4867,11 @@ export class Editor {
     if (commandTransforms.length === 0 && axisHintChanges.length === 0) return
     if (commandTransforms.length === 1 && axisHintChanges.length === 0) {
       const transform = commandTransforms[0]!
-      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
+      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene, draggedPointId))
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges, this.scene))
+    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges, this.scene, draggedPointId))
   }
 
   updatePoint(
@@ -5490,6 +5578,7 @@ export class Editor {
       this.scene.addPerpendicularLineConstraint(constraint)
       constraint.solve()
     })
+    cmd.intent = { category: 'create', targetId: perpendicularLine.id }
     cmd.executeAndCapture()
     this.executeHistoryEntry(cmd)
 
@@ -5673,6 +5762,7 @@ export class Editor {
       this.scene.addParallelLineConstraint(constraint)
       constraint.solve()
     })
+    cmd.intent = { category: 'create', targetId: parallelLine.id }
     cmd.executeAndCapture()
     this.executeHistoryEntry(cmd)
 

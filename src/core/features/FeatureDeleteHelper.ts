@@ -23,6 +23,9 @@ export function createDeleteFeatureCommand(
   const cmd = new SnapshotCommand(`delete-${featureType}`, scene, () => {
     featureRegistry.delete(scene, feature, geometry)
   })
+  // 记录用户真正删除的目标 id（点视图下同一次删除会连带消失多个对象，快照无法反推）
+  cmd.deleteTargetId = featureId
+  cmd.intent = { category: 'delete', targetId: featureId }
 
   cmd.executeAndCapture()
   return cmd

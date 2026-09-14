@@ -17,6 +17,9 @@ type AxisHintChange = {
 export class TransformCommand extends ConstraintAwareCommand {
   readonly label = 'TransformCommand'
 
+  /** 交互层明确的实际被拖动点 id（多数情况下即 pointId，供协作历史标注「由X点拖动」） */
+  readonly draggedPointId: string
+
   private pointId: string
   private before: Vec3
   private after: Vec3
@@ -30,9 +33,11 @@ export class TransformCommand extends ConstraintAwareCommand {
     after: Vec3,
     axisHintChanges: AxisHintChange[] = [],
     scene: Scene,
+    draggedPointId: string | null = null,
   ) {
     super(scene)
     this.pointId = pointId
+    this.draggedPointId = draggedPointId ?? pointId
     this.before = before
     this.after = after
     this.axisHintChanges = axisHintChanges

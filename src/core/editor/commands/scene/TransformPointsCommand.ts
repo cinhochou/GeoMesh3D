@@ -28,14 +28,20 @@ type ParametricSnapshot = {
  */
 export class TransformPointsCommand extends ConstraintAwareCommand {
   readonly label = 'TransformPointsCommand'
+
+  /** 交互层明确的实际被拖动点 id（如拖动立方体顶点缩放整面时，多点在移动中仍能精确标注源点） */
+  readonly draggedPointId: string | null
+
   private parametricSnapshots: ParametricSnapshot[]
 
   constructor(
     private transforms: PointTransform[],
     private axisHintChanges: AxisHintChange[] = [],
     scene: Scene,
+    draggedPointId: string | null = null,
   ) {
     super(scene)
+    this.draggedPointId = draggedPointId
     this.parametricSnapshots = transforms.map(({ pointId, before }) => {
       const constraint = scene.getObjectConstrainedPointConstraint(pointId)
       if (constraint) {

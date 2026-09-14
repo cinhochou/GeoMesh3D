@@ -25,6 +25,7 @@ import { ObjectConstrainedPointConstraint, type ParametricData } from '../../con
 import { PerpendicularLineConstraint } from '../../constraints/PerpendicularLineConstraint'
 import { ParallelLineConstraint } from '../../constraints/ParallelLineConstraint'
 import type { HistoryEntry } from '../HistoryManager'
+import type { CollabOperationIntent } from '../../../types/collabIntent'
 import type { IntersectionTargetRef } from '../../geometry/IntersectionPoint3'
 
 const genId = (prefix: string) => {
@@ -1166,6 +1167,13 @@ export class SnapshotCommand implements HistoryEntry {
   readonly id = genId('snap')
   readonly label: string
   readonly timestamp = Date.now()
+
+  /** 操作元数据：合并点命令携带保留点 id（协作历史消息精确标注合并目标） */
+  keepPointId: string | null = null
+  /** 操作元数据：删除命令携带用户实际删除的目标对象 id（协作历史消息精确标注谁被删） */
+  deleteTargetId: string | null = null
+  /** 操作级意图：命令声明「用户做了什么」（协作历史消息精确生成，属性/主语零反推） */
+  intent?: CollabOperationIntent | null = null
 
   private beforeSnapshot: SceneSubgraphSnapshot | null = null
   private afterSnapshot: SceneSubgraphSnapshot | null = null

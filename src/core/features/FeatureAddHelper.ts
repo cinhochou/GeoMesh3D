@@ -17,6 +17,7 @@ export function createAddFeatureCommand(
   const cmd = new SnapshotCommand(`add-${type}`, scene, () => {
     featureRegistry.create(scene, { id, type, params, dependencies })
   })
+  cmd.intent = { category: 'create', targetId: id }
 
   cmd.executeAndCapture()
   return cmd

@@ -16,6 +16,7 @@ import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
 import { DEFAULT_POINT_COLOR } from './GeometrySyncer'
 import { findBestUnfoldRatioByGradient, selectNetDragPointsByScreenDirection, type NetControlPoint } from './NetMath'
+import type { DragLockTarget } from '../core/collab/CollabManager'
 
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
@@ -323,6 +324,13 @@ export class Interaction {
   public onARSceneRotateStartRequest: (() => boolean) | null = null
   public onARSceneRotate: ((quaternion: THREE.Quaternion) => void) | null = null
   public onARSceneRotateEnd: (() => void) | null = null
+  /**
+   * 协作拖拽互斥锁回调（由 EditorView 注入 CollabManager 的实现）：
+   * - onDragLockRequest：拖拽开始时请求锁定目标元素，返回 false 表示元素正被他人操作，本次拖拽被取消；
+   * - onDragLockRelease：拖拽结束时释放锁（拖动已触发的元素会随后被清除）。
+   */
+  public onDragLockRequest: ((target: DragLockTarget) => boolean) | null = null
+  public onDragLockRelease: (() => void) | null = null
 
   constructor(
     public editor: Editor,
@@ -6302,6 +6310,16 @@ export class Interaction {
   private startDrag(referencePos: Vec3) {
     // 仅观看模式：不启动拖拽，避免设置拖拽平面
     if (this.viewOnly) return
+
+    // 协作房间内：尝试获取目标元素的拖拽互斥锁；若已被其他用户拖拽，则取消本次拖拽
+    if (this.onDragLockRequest) {
+      const target = this.getActiveDragTarget()
+      if (target && !this.onDragLockRequest(target)) {
+        this.cancelBlockedDragStart()
+        return
+      }
+    }
+
     const cameraDir = this.renderer.getActiveCameraWorldDirection()
     const refMath = new THREE.Vector3(referencePos.x, referencePos.y, referencePos.z)
     const ref = this.renderer.toMathWorldPosition(refMath)
@@ -6461,7 +6479,7 @@ export class Interaction {
           )
         }) ?? []
 
-    this.editor.applyPointTransformHistory(transforms, axisHintChanges)
+    this.editor.applyPointTransformHistory(transforms, axisHintChanges, this.draggingPointId ?? null)
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
     this.dragStartAxisHints = null
@@ -6611,6 +6629,105 @@ export class Interaction {
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
     this.dragStartAxisHints = null
+    // 拖拽结束（含取消/离开/切工具等所有路径）：释放协作拖拽互斥锁
+    this.onDragLockRelease?.()
+  }
+
+  /** 获取当前正在拖拽的几何元素（互斥锁目标）；无有效目标（如纯标签拖拽）返回 null */
+  private getActiveDragTarget(): DragLockTarget | null {
+    const scene = this.editor.scene
+    if (this.draggingPointId) {
+      const point = scene.points.get(this.draggingPointId)
+      return point ? { elementId: point.id, elementType: 'point', elementName: point.name } : null
+    }
+    if (this.draggingLineId) {
+      const line = scene.lines.get(this.draggingLineId)
+      return line ? { elementId: line.id, elementType: 'line', elementName: line.name } : null
+    }
+    if (this.draggingStraightLineId) {
+      const line = scene.straightLines.get(this.draggingStraightLineId)
+      return line ? { elementId: line.id, elementType: 'straightLine', elementName: line.name } : null
+    }
+    if (this.draggingPerpendicularLineId) {
+      const line = scene.perpendicularLines.get(this.draggingPerpendicularLineId)
+      return line
+        ? { elementId: line.id, elementType: 'perpendicularLine', elementName: line.name }
+        : null
+    }
+    if (this.draggingParallelLineId) {
+      const line = scene.parallelLines.get(this.draggingParallelLineId)
+      return line
+        ? { elementId: line.id, elementType: 'parallelLine', elementName: line.name }
+        : null
+    }
+    if (this.draggingRayId) {
+      const ray = scene.rays.get(this.draggingRayId)
+      return ray ? { elementId: ray.id, elementType: 'ray', elementName: ray.name } : null
+    }
+    if (this.draggingVectorId) {
+      const vector = scene.vectors.get(this.draggingVectorId)
+      return vector
+        ? { elementId: vector.id, elementType: 'vector', elementName: vector.name }
+        : null
+    }
+    if (this.draggingCircleId) {
+      const circle = scene.circles.get(this.draggingCircleId)
+      return circle
+        ? { elementId: circle.id, elementType: 'circle', elementName: circle.name }
+        : null
+    }
+    if (this.draggingSphereId) {
+      const sphere = scene.spheres.get(this.draggingSphereId)
+      return sphere
+        ? { elementId: sphere.id, elementType: 'sphere', elementName: sphere.name }
+        : null
+    }
+    if (this.draggingConeId) {
+      const cone = scene.cones.get(this.draggingConeId)
+      return cone ? { elementId: cone.id, elementType: 'cone', elementName: cone.name } : null
+    }
+    if (this.draggingCylinderId) {
+      const cylinder = scene.cylinders.get(this.draggingCylinderId)
+      return cylinder
+        ? { elementId: cylinder.id, elementType: 'cylinder', elementName: cylinder.name }
+        : null
+    }
+    if (this.draggingFaceId) {
+      const face = scene.faces.get(this.draggingFaceId)
+      return face ? { elementId: face.id, elementType: 'face', elementName: face.name } : null
+    }
+    if (this.draggingNetId) {
+      const net = scene.nets.get(this.draggingNetId)
+      return net ? { elementId: net.id, elementType: 'net', elementName: net.name } : null
+    }
+    if (this.draggingNetControlEdgeId) {
+      const net = scene.nets.get(this.draggingNetControlEdgeId)
+      return net
+        ? { elementId: net.id, elementType: 'net', elementName: net.name }
+        : null
+    }
+    return null
+  }
+
+  /** 互斥锁被占用时取消本次拖拽：清除拖拽状态、恢复交互并可给出提示 */
+  private cancelBlockedDragStart() {
+    this.draggingPointId = null
+    // clearDraggingIds 会清空所有拖拽 id 与 pendingToggleSelection
+    this.clearDraggingIds()
+    this.dragPlane = null
+    this.dragLastPos = null
+    this.dragStartPointerPos = null
+    this.dragReferenceStartPos = null
+    this.dragReferenceStartMathPos = null
+    this.dragDepth = null
+    this.syncControlLockState()
+    this.renderer.renderer.domElement.style.cursor = 'default'
+    const toastMsg = '该元素正被其他用户拖拽，暂不可操作'
+    window.dispatchEvent(
+      new CustomEvent('toast', {
+        detail: { msg: toastMsg, scope: 'viewport' },
+      }),
+    )
   }
 
   shouldSyncLiveScene() {

@@ -34,6 +34,9 @@ import {
   type IntersectionTargetRef,
 } from '../geometry/IntersectionPoint3'
 import { importScene, type SerializedScene } from '../editor/SceneSerializer'
+import { buildMessagesFromHistoryEntry, buildUndoRedoMessage } from './historyMessageBuilder'
+import type { CollabHistoryMessage } from '../../types/collabHistory'
+import type { CollabOperationIntent } from '../../types/collabIntent'
 
 export type SharedHistoryEntry = {
   id: string
@@ -44,6 +47,14 @@ export type SharedHistoryEntry = {
   label: string
   before: SerializedScene
   after: SerializedScene
+  /** 交互层明确的实际被拖动点 id（可选，仅用于本次消息生成，不写入 Yjs 持久化字段） */
+  draggedPointId?: string | null
+  /** 合并点操作保留点的 id（可选，用于「合并了点 X」精确标注；随共享历史序列化以便撤销引用也能用） */
+  keepPointId?: string | null
+  /** 删除操作真实被删目标 id（可选，用于「删除了 X」精确标注；随共享历史序列化） */
+  deleteTargetId?: string | null
+  /** 操作级意图（命令声明，消息生成优先采用；随共享历史序列化以便撤销引用也能用） */
+  intent?: CollabOperationIntent | null
 }
 
 export type SharedHistoryState = {
@@ -135,19 +146,52 @@ export type SharedWorldRotationState = {
   isOwnedByLocal: boolean
 }
 
+/**
+ * 协作拖拽感知：某个几何元素被某个用户拖拽时的互斥锁目标。
+ * elementType 对应 Interaction 中的拖拽类型（point/line/circle/...）。
+ */
+export type DragLockTarget = {
+  elementId: string
+  elementType: string
+  elementName: string
+}
+
+/** 房间内所有用户（含自己）当前拖拽状态的信息，用于渲染"xxx正在操作..."气泡 */
+export type RemoteDragState = DragLockTarget & {
+  /** 远端用户的 Yjs clientId（也用作 awareness state 的唯一标识） */
+  clientId: number
+  userName: string | null
+  /** 最近一次心跳时间戳（Date.now()），用于过期释放 */
+  updatedAt: number
+}
+
 export class CollabManager {
   private static readonly LIVE_SYNC_THROTTLE_MS = 33
   private static readonly WORLD_ROTATION_OWNER_TIMEOUT_MS = 1500
   private static readonly WORLD_ROTATION_OWNER_HEARTBEAT_MS = 500
   private static readonly LATENCY_SAMPLE_INTERVAL_MS = 10_000 // 10秒（避免 N 人房间 O(N²) awareness 风暴）
-  // 本地 websocket 服务不可用时，回退到这个公网协作地址。
+  // 拖拽感知：心跳间隔（保持 updatedAt 新鲜）与锁过期时间（拖拽用户掉线/崩溃后自动让出互斥）
+  private static readonly DRAG_LOCK_HEARTBEAT_MS = 8_000
+  private static readonly DRAG_LOCK_STALE_TIMEOUT_MS = 16_000
+  // awareness 中承载拖拽状态的字段名
+  private static readonly DRAG_AWARENESS_FIELD = 'dragInfo'
+  // 共享公网信令实例（公网优先的关键候选；本地信令不可用时也始终保留这个兜底）
   //private static readonly FALLBACK_SERVER_URL = 'wss://kraig-scarabaeiform-zealously.ngrok-free.dev'
   private static readonly FALLBACK_SERVER_URL = 'wss://47.239.188.55/signal'
+
+  // 尝试连接每个候选地址的单次等待上限（公网不可达时快速回退到本地实例）
+  private static readonly SERVER_CONNECT_TIMEOUT_MS = 3_000
+
+  // 协作历史消息：房间内共享文档最多保留条数（超出丢弃最旧）
+  private static readonly MAX_COLLAB_MESSAGES = 200
 
   private ydoc: Y.Doc
   private provider: WebsocketProvider | null = null
   private yHistory: Y.Array<Y.Map<unknown>>
   private yHistoryIndex: Y.Map<number>
+  /** 协作历史消息共享文档数组（Yjs 共享：后加入成员可见此前历史，房间关闭清空） */
+  private yCollabMessages: Y.Array<Y.Map<unknown>>
+  private collabMessageObserver: (() => void) | null = null
   private isApplyingSharedHistory = false
   private localHistorySeq = 0
   private historyObserver: ((event: Y.YArrayEvent<Y.Map<unknown>>) => void) | null = null
@@ -284,11 +328,18 @@ export class CollabManager {
   public onLatencyUpdate: (latencyMs: number | null) => void = () => {}
   public onSharedWorldRotationUpdate: (state: SharedWorldRotationState) => void = () => {}
   public onSharedHistoryUpdate: (state: SharedHistoryState) => void = () => {}
+  /** 房间内所有用户（含自己）当前的拖拽状态变化（用于"xxx正在操作..."气泡与互斥提示） */
+  public onActiveDragsUpdate: (drags: RemoteDragState[]) => void = () => {}
+  /** 协作历史消息变化（含新成员同步到的历史与新增消息） */
+  public onCollabMessagesUpdate: (messages: CollabHistoryMessage[]) => void = () => {}
+
+  private dragLockHeartbeatTimer: number | null = null
 
   constructor(private scene: Scene) {
     this.ydoc = new Y.Doc()
     this.yHistory = this.ydoc.getArray<Y.Map<unknown>>('history')
     this.yHistoryIndex = this.ydoc.getMap<number>('historyIndex')
+    this.yCollabMessages = this.ydoc.getArray<Y.Map<unknown>>('collabMessages')
     this.yPoints = this.ydoc.getMap<PointSharedMap>('points')
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
@@ -741,25 +792,20 @@ export class CollabManager {
   }
 
   private static resolveServerUrls() {
+    // 连接优先级：公网优先，本地兜底。joinRoom 会在每个候选地址上等待
+    // SERVER_CONNECT_TIMEOUT_MS 超时后自动尝试下一个，公网不可达时快速回退本地。
+    // 1. 共享公网信令实例：本地与公网同时打开时优先连接公网；
+    // 2. VITE_COLLAB_WS_URL 显式配置的本地实例（本地开发）；
+    // 3. dev 模式下当前站点主机上的本地/默认 websocket 服务（localhost:1234）。
+    const candidates: string[] = [CollabManager.FALLBACK_SERVER_URL]
     const configuredUrl = import.meta.env.VITE_COLLAB_WS_URL?.trim()
-    // 连接优先级：
-    // 1. 优先使用环境变量里显式配置的地址
-    // 2. 否则使用当前站点主机上的本地/默认 websocket 服务
-    // 3. 最后回退到公网备用地址
-    let candidates: string[]
     if (configuredUrl) {
-      candidates = [configuredUrl]
-    } else if (import.meta.env.MODE === 'production') {
-      // 生产环境直接使用固定公网域名，避免先尝试「站点主机名:1234」
-      // 造成 3 秒超时后才回退。
-      candidates = [CollabManager.FALLBACK_SERVER_URL]
-    } else {
-      candidates = [
+      candidates.push(configuredUrl)
+    } else if (import.meta.env.MODE !== 'production') {
+      candidates.push(
         `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname || 'localhost'}:1234`,
-      ]
+      )
     }
-
-    candidates.push(CollabManager.FALLBACK_SERVER_URL)
     return [...new Set(candidates.map((url) => CollabManager.normalizeServerUrl(url)))]
   }
 
@@ -790,8 +836,9 @@ export class CollabManager {
     this.emitStatus()
 
     // 按顺序尝试每个候选 websocket 地址，只要有一个成功完成同步就停止继续回退。
-    // 后端返回的 wsUrl 优先尝试；无论成功与否，都会继续兜底到本地配置的候选地址列表，
-    // 这样本地测试（localhost:1234）和远端生产（ngrok wss）之间可以自动切换。
+    // 后端返回的 wsUrl（通常是公网实例）优先尝试；随后是 serverUrls 列表
+    // （公网实例 → 本地实例），每个候选限时 SERVER_CONNECT_TIMEOUT_MS，
+    // 公网可达时优先连公网，公网不可达时快速回退本地实例。
     const candidateUrls: string[] = []
     const seen = new Set<string>()
     const pushCandidate = (raw: string) => {
@@ -806,7 +853,7 @@ export class CollabManager {
 
     // y-websocket WebsocketProvider 的 params 选项：附加到 ws URL 的查询参数
     const wsParams = options?.ticket ? { ticket: options.ticket } : undefined
-    const timeoutMs = 3_000
+    const timeoutMs = CollabManager.SERVER_CONNECT_TIMEOUT_MS
     let lastError: unknown = null
 
     for (const serverUrl of candidateUrls) {
@@ -823,6 +870,8 @@ export class CollabManager {
         this.bindProviderStatus(provider)
         await this.waitForInitialRoomState(provider, normalizedRoomName, timeoutMs)
         this.reconcileInitialScene(localSnapshot)
+        // 广播「加入协作」消息（写入共享文档，房间内所有人可见）
+        this.appendRoomMessage('加入了协作')
         return
       } catch (err) {
         lastError = err
@@ -846,10 +895,13 @@ export class CollabManager {
   leaveRoom() {
     if (this.provider && this.roomName !== null) {
       this.releaseSharedWorldRotationOwnership()
+      this.releaseDragLock()
+      this.appendRoomMessage('离开了协作')
     }
     this.clearProviderBindings()
     this.stopWorldRotationOwnerHeartbeat()
     this.stopLatencySampling()
+    this.stopDragLockHeartbeat()
 
     if (this.historyObserver) {
       this.yHistory.unobserve(this.historyObserver)
@@ -859,6 +911,10 @@ export class CollabManager {
       this.yHistoryIndex.unobserve(this.historyIndexObserver)
       this.historyIndexObserver = null
     }
+    if (this.collabMessageObserver) {
+      this.yCollabMessages.unobserve(this.collabMessageObserver)
+      this.collabMessageObserver = null
+    }
 
     if (this.provider) {
       this.provider.disconnect()
@@ -866,6 +922,8 @@ export class CollabManager {
       this.provider = null
       this.onPeersUpdate(1)
     }
+    // 离开房间后清空所有拖拽气泡（provider 已销毁，collectActiveDrags 返回空）
+    this.emitActiveDrags()
 
     if (this.syncTimer) {
       window.clearTimeout(this.syncTimer)
@@ -1041,6 +1099,7 @@ export class CollabManager {
     const handleAwarenessChange = () => {
       this.emitPeerCount(provider)
       this.handleLatencyAwarenessChange(provider)
+      this.emitActiveDrags()
     }
 
     provider.on('status', handleStatus)
@@ -1921,11 +1980,16 @@ export class CollabManager {
     if (this.worldTransformObserver) this.yWorldTransform.unobserve(this.worldTransformObserver)
     if (this.historyObserver) this.yHistory.unobserve(this.historyObserver)
     if (this.historyIndexObserver) this.yHistoryIndex.unobserve(this.historyIndexObserver)
+    if (this.collabMessageObserver) {
+      this.yCollabMessages.unobserve(this.collabMessageObserver)
+      this.collabMessageObserver = null
+    }
     this.cleanupAllRecordObservers()
 
     this.ydoc = new Y.Doc()
     this.yHistory = this.ydoc.getArray<Y.Map<unknown>>('history')
     this.yHistoryIndex = this.ydoc.getMap<number>('historyIndex')
+    this.yCollabMessages = this.ydoc.getArray<Y.Map<unknown>>('collabMessages')
     this.yPoints = this.ydoc.getMap<PointSharedMap>('points')
     this.yLines = this.ydoc.getMap<LineSharedMap>('lines')
     this.yStraightLines = this.ydoc.getMap<StraightLineSharedMap>('straightLines')
@@ -5006,6 +5070,132 @@ export class CollabManager {
     this.emitSharedWorldRotation(record)
   }
 
+  // ===== 协作拖拽感知（drag awareness，经由 Yjs awareness 广播给所有在线协作者） =====
+
+  private readAwarenessDragState(value: unknown): Omit<RemoteDragState, 'clientId'> | null {
+    if (!value || typeof value !== 'object') return null
+    const v = value as Record<string, unknown>
+    if (typeof v.elementId !== 'string' || typeof v.elementType !== 'string') return null
+    return {
+      elementId: v.elementId,
+      elementType: v.elementType,
+      elementName: typeof v.elementName === 'string' ? v.elementName : '',
+      userName: typeof v.userName === 'string' ? v.userName : null,
+      updatedAt: typeof v.updatedAt === 'number' ? v.updatedAt : Date.now(),
+    }
+  }
+
+  private collectActiveDrags(): RemoteDragState[] {
+    if (!this.provider || this.roomName === null) return []
+    const now = Date.now()
+    const result: RemoteDragState[] = []
+    // 包含本地用户自己的拖拽：拖拽者也要看到自己名字的气泡
+    this.provider.awareness.getStates().forEach((state, clientId) => {
+      const drag = this.readAwarenessDragState(
+        (state as Record<string, unknown>)[CollabManager.DRAG_AWARENESS_FIELD],
+      )
+      if (!drag) return
+      // 超过过期时间（拖拽者掉线/崩溃后心跳停止）的拖拽不再展示，避免幽灵气泡
+      if (now - drag.updatedAt > CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS) return
+      result.push({ ...drag, clientId })
+    })
+    return result
+  }
+
+  private emitActiveDrags() {
+    this.onActiveDragsUpdate(this.collectActiveDrags())
+  }
+
+  /**
+   * 当前是否有其他用户正在拖拽该元素（互斥检查）。
+   * 返回 true 表示可以拖拽；未被拖拽 / 占用已过期 / 不在协作房间时返回 true。
+   */
+  canDragElement(elementId: string): boolean {
+    if (!this.provider || this.roomName === null) return true
+    const localClientId = this.getLocalClientId()
+    const now = Date.now()
+    let lockedByOther = false
+    this.provider.awareness.getStates().forEach((state, clientId) => {
+      if (clientId === localClientId || lockedByOther) return
+      const drag = this.readAwarenessDragState(
+        (state as Record<string, unknown>)[CollabManager.DRAG_AWARENESS_FIELD],
+      )
+      if (!drag || drag.elementId !== elementId) return
+      if (now - drag.updatedAt <= CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS) {
+        lockedByOther = true
+      }
+    })
+    return !lockedByOther
+  }
+
+  /**
+   * 尝试获取某几何元素的拖拽互斥锁：
+   * - 不在协作房间时直接放行（本地编辑不受影响）；
+   * - 该元素正被其他用户拖拽（且未过期）时返回 false；
+   * - 获取成功后立即写入 awareness 广播给房间内所有人，并启动心跳续约。
+   */
+  tryAcquireDragLock(target: DragLockTarget): boolean {
+    if (!this.provider || this.roomName === null) return true
+    if (!this.canDragElement(target.elementId)) return false
+    this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, {
+      elementId: target.elementId,
+      elementType: target.elementType,
+      elementName: target.elementName,
+      userName: this.localUserLabel,
+      updatedAt: Date.now(),
+    })
+    this.ensureDragLockHeartbeat()
+    this.emitActiveDrags()
+    return true
+  }
+
+  /** 拖拽进行中的心跳：刷新 updatedAt，防止拖拽时间过长导致锁被他人接管 */
+  refreshDragLock() {
+    if (!this.provider || this.roomName === null) return
+    const localState = this.provider.awareness.getLocalState() as Record<string, unknown> | null
+    const current = localState ? localState[CollabManager.DRAG_AWARENESS_FIELD] : undefined
+    const drag = this.readAwarenessDragState(current)
+    if (!drag) return
+    this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, {
+      ...drag,
+      updatedAt: Date.now(),
+    })
+  }
+
+  /** 释放当前用户持有的拖拽锁（拖拽结束 / 离开房间 / 断开连接时调用） */
+  releaseDragLock() {
+    if (!this.provider || this.roomName === null) return
+    this.stopDragLockHeartbeat()
+    const localState = this.provider.awareness.getLocalState() as Record<string, unknown> | null
+    if (localState && this.readAwarenessDragState(localState[CollabManager.DRAG_AWARENESS_FIELD])) {
+      this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, null)
+    }
+    this.emitActiveDrags()
+  }
+
+  /** 查询房间内所有用户（含自己）当前的拖拽状态（供编辑器渲染"xxx正在操作..."气泡使用） */
+  getActiveDrags(): RemoteDragState[] {
+    return this.collectActiveDrags()
+  }
+
+  private ensureDragLockHeartbeat() {
+    if (this.dragLockHeartbeatTimer !== null) return
+    this.dragLockHeartbeatTimer = window.setInterval(() => {
+      if (!this.provider || this.roomName === null) {
+        this.stopDragLockHeartbeat()
+        return
+      }
+      this.refreshDragLock()
+    }, CollabManager.DRAG_LOCK_HEARTBEAT_MS)
+  }
+
+  private stopDragLockHeartbeat() {
+    if (this.dragLockHeartbeatTimer !== null) {
+      window.clearInterval(this.dragLockHeartbeatTimer)
+      this.dragLockHeartbeatTimer = null
+    }
+  }
+
   syncAction() {
     if (!this.provider || this.roomName === null) return
     if (this.isApplyingSharedHistory) return
@@ -5470,6 +5660,24 @@ export class CollabManager {
     })
 
     this.emitSharedHistoryState()
+
+    // 依据本次对象级 before/after 差异生成协作历史消息并广播。
+    // 关键例外：'InitialScene' 是首位加入者把“加入房间前已有的整份场景”写成的基线条目
+    // （before=空、after=全场景），其全部几何对象都是已存在对象，绝不能产生任何“创建”消息。
+    if (entry.label === 'InitialScene') return
+    const messages = buildMessagesFromHistoryEntry({
+      actorClientId: entry.actorClientId,
+      actorName: entry.actorName,
+      createdAt: entry.createdAt,
+      label: entry.label,
+      before: entry.before,
+      after: entry.after,
+      draggedPointId: entry.draggedPointId ?? null,
+      keepPointId: entry.keepPointId ?? null,
+      deleteTargetId: entry.deleteTargetId ?? null,
+      intent: entry.intent ?? null,
+    })
+    if (messages.length > 0) this.appendCollabMessages(messages)
   }
 
   /**
@@ -5538,6 +5746,21 @@ export class CollabManager {
     this.yHistoryIndex.set('value', currentIndex - 1)
     this.syncFullScene()
     this.emitSharedHistoryState()
+    // 广播「撤销」消息，引用被撤销的操作
+    this.appendCollabMessages([
+      buildUndoRedoMessage(
+        {
+          before: entry.before,
+          after: entry.after,
+          label: entry.label,
+          keepPointId: entry.keepPointId ?? null,
+          deleteTargetId: entry.deleteTargetId ?? null,
+          intent: entry.intent ?? null,
+        },
+        { clientId: this.getProviderClientId(), userName: this.localUserLabel, createdAt: Date.now() },
+        'undo',
+      ),
+    ])
   }
 
   sharedRedo(): void {
@@ -5560,6 +5783,21 @@ export class CollabManager {
     this.yHistoryIndex.set('value', currentIndex + 1)
     this.syncFullScene()
     this.emitSharedHistoryState()
+    // 广播「重做」消息，引用被重做的操作
+    this.appendCollabMessages([
+      buildUndoRedoMessage(
+        {
+          before: entry.before,
+          after: entry.after,
+          label: entry.label,
+          keepPointId: entry.keepPointId ?? null,
+          deleteTargetId: entry.deleteTargetId ?? null,
+          intent: entry.intent ?? null,
+        },
+        { clientId: this.getProviderClientId(), userName: this.localUserLabel, createdAt: Date.now() },
+        'redo',
+      ),
+    ])
   }
 
   private syncFullScene(): void {
@@ -5709,6 +5947,9 @@ export class CollabManager {
     map.set('label', entry.label)
     map.set('before', JSON.stringify(entry.before))
     map.set('after', JSON.stringify(entry.after))
+    map.set('keepPointId', entry.keepPointId ?? '')
+    map.set('deleteTargetId', entry.deleteTargetId ?? '')
+    map.set('intent', entry.intent ? JSON.stringify(entry.intent) : '')
     return map
   }
 
@@ -5722,6 +5963,9 @@ export class CollabManager {
       const label = map.get('label')
       const beforeRaw = map.get('before')
       const afterRaw = map.get('after')
+      const keepPointId = map.get('keepPointId')
+      const deleteTargetId = map.get('deleteTargetId')
+      const intentRaw = map.get('intent')
 
       if (
         typeof id !== 'string' ||
@@ -5747,6 +5991,9 @@ export class CollabManager {
         label,
         before,
         after,
+        keepPointId: typeof keepPointId === 'string' && keepPointId !== '' ? keepPointId : null,
+        deleteTargetId: typeof deleteTargetId === 'string' && deleteTargetId !== '' ? deleteTargetId : null,
+        intent: typeof intentRaw === 'string' && intentRaw !== '' ? (JSON.parse(intentRaw) as CollabOperationIntent) : null,
       }
     } catch {
       return null
@@ -5771,6 +6018,137 @@ export class CollabManager {
 
   private emitSharedHistoryState(): void {
     this.onSharedHistoryUpdate(this.getSharedHistoryState())
+  }
+
+  // ===== 协作历史消息（共享文档数组，最多保留 MAX_COLLAB_MESSAGES 条） =====
+
+  private serializeCollabMessage(message: CollabHistoryMessage): Y.Map<unknown> {
+    const map = new Y.Map<unknown>()
+    map.set('id', message.id)
+    map.set('clientId', message.clientId)
+    map.set('userName', message.userName ?? '')
+    map.set('category', message.category)
+    map.set('action', message.action)
+    map.set('targetType', message.targetType ?? '')
+    map.set('targetName', message.targetName ?? '')
+    map.set('params', JSON.stringify(message.params))
+    map.set('quote', message.quote ?? '')
+    map.set('note', message.note ?? '')
+    map.set('createdAt', message.createdAt)
+    return map
+  }
+
+  private deserializeCollabMessage(map: Y.Map<unknown>): CollabHistoryMessage | null {
+    try {
+      const id = map.get('id')
+      const clientId = map.get('clientId')
+      const userName = map.get('userName')
+      const category = map.get('category')
+      const action = map.get('action')
+      const targetType = map.get('targetType')
+      const targetName = map.get('targetName')
+      const paramsRaw = map.get('params')
+      const quote = map.get('quote')
+      const note = map.get('note')
+      const createdAt = map.get('createdAt')
+
+      const validCategories = new Set<CollabHistoryMessage['category']>([
+        'create', 'delete', 'update', 'move', 'lock', 'unlock', 'merge', 'clear', 'room', 'undo', 'redo',
+      ])
+      if (
+        typeof id !== 'string' ||
+        typeof clientId !== 'number' ||
+        typeof category !== 'string' ||
+        !validCategories.has(category as CollabHistoryMessage['category']) ||
+        typeof action !== 'string' ||
+        typeof paramsRaw !== 'string' ||
+        typeof createdAt !== 'number'
+      ) {
+        return null
+      }
+      const params = JSON.parse(paramsRaw) as CollabHistoryMessage['params']
+      return {
+        id,
+        clientId,
+        userName: typeof userName === 'string' && userName !== '' ? userName : null,
+        category: category as CollabHistoryMessage['category'],
+        action,
+        targetType: typeof targetType === 'string' && targetType !== '' ? targetType : null,
+        targetName: typeof targetName === 'string' && targetName !== '' ? targetName : null,
+        params: Array.isArray(params) ? params : [],
+        quote: typeof quote === 'string' && quote !== '' ? quote : null,
+        note: typeof note === 'string' && note !== '' ? note : null,
+        createdAt,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private readCollabMessages(): CollabHistoryMessage[] {
+    const messages: CollabHistoryMessage[] = []
+    for (let i = 0; i < this.yCollabMessages.length; i++) {
+      const message = this.deserializeCollabMessage(this.yCollabMessages.get(i))
+      if (message) messages.push(message)
+    }
+    return messages
+  }
+
+  private emitCollabMessages(): void {
+    this.onCollabMessagesUpdate(this.readCollabMessages())
+  }
+
+  /** 把消息写入共享文档并同步给所有协作者（超出上限丢弃最旧） */
+  appendCollabMessages(messages: CollabHistoryMessage[]): void {
+    if (!this.provider || this.roomName === null) return
+    if (messages.length === 0) return
+
+    this.ydoc.transact(() => {
+      for (const message of messages) {
+        this.yCollabMessages.push([this.serializeCollabMessage(message)])
+      }
+      // 容量上限：超出 200 条时丢弃最旧
+      if (this.yCollabMessages.length > CollabManager.MAX_COLLAB_MESSAGES) {
+        const overflow = this.yCollabMessages.length - CollabManager.MAX_COLLAB_MESSAGES
+        this.yCollabMessages.delete(0, overflow)
+      }
+    })
+
+    this.emitCollabMessages()
+  }
+
+  /** 加入/离开协作房间消息 */
+  appendRoomMessage(action: '加入了协作' | '离开了协作'): void {
+    if (!this.provider || this.roomName === null) return
+    this.appendCollabMessages([
+      {
+        id: crypto.randomUUID(),
+        clientId: this.getProviderClientId(),
+        userName: this.localUserLabel,
+        category: 'room',
+        action,
+        targetType: null,
+        targetName: null,
+        params: [],
+        quote: null,
+        createdAt: Date.now(),
+      },
+    ])
+  }
+
+  /** 查询当前共享文档中的协作历史消息 */
+  getCollabMessages(): CollabHistoryMessage[] {
+    return this.readCollabMessages()
+  }
+
+  /** 监听共享消息数组变化（由 EditorView 在 join 成功后调用），并立即同步一次当前历史 */
+  setupCollabMessageObserver(): void {
+    if (this.collabMessageObserver) return
+    this.collabMessageObserver = () => {
+      this.emitCollabMessages()
+    }
+    this.yCollabMessages.observe(this.collabMessageObserver)
+    this.emitCollabMessages()
   }
 
   setupHistoryObservers(): void {

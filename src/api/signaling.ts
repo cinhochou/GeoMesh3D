@@ -28,38 +28,54 @@ const readJoinedWsUrl = (): string | null => {
 }
 
 /**
- * 获取信令服务器的 HTTP 基础地址
- * 优先使用实际加入房间时后端返回的 wsUrl（与 WebSocket 连接一致）；
- * 其次从 VITE_COLLAB_WS_URL 环境变量推导（ws→http, wss→https）；
- * 否则统一使用共享的公网信令实例。
+ * 生成有序的信令服务器 HTTP 基础地址候选列表：公网优先，本地兜底。
  *
- * 注意：在线人数查询必须命中「所有真实用户都连接的那个实例」。
- * 本地开发时的 localhost:1234 是独立空实例，本机用户查它永远是 0，
- * 因此不能作为回退地址，统一回退到公网实例。
+ * 顺序：
+ * 1. 本次/上次加入房间时后端返回的 wsUrl（localStorage collab:join:*，通常是公网实例）；
+ * 2. 共享公网信令实例（固定公网地址，公网优先的关键兜底）；
+ * 3. VITE_COLLAB_WS_URL 显式配置的本地实例（本地开发兜底）；
+ * 4. dev 模式下当前站点主机上的本地 1234 服务。
+ *
+ * 每个候选限时 3 秒，公网不可达时快速回退本地实例，保证协作功能本地照常可用。
  */
-// 共享信令服务的固定公网地址（ngrok 固定域名，对外为 https/wss）
-//const PROD_SIGNALING_HTTP_URL = 'https://kraig-scarabaeiform-zealously.ngrok-free.dev'
 const PROD_SIGNALING_HTTP_URL = 'https://47.239.188.55/signal'
 
-const getSignalingHttpBaseUrl = (): string => {
-  // 1. 实际连接使用的 wsUrl（来自后端 join 返回，最可靠）
-  const joinedWsUrl = readJoinedWsUrl()
-  if (joinedWsUrl) {
-    return joinedWsUrl
+const SIGNALING_FETCH_TIMEOUT_MS = 3_000
+
+const getSignalingHttpBaseUrls = (): string[] => {
+  const urls: string[] = []
+  const push = (raw: string | undefined) => {
+    if (!raw?.trim()) return
+    const http = raw
+      .trim()
       .replace(/^wss:\/\//i, 'https://')
       .replace(/^ws:\/\//i, 'http://')
       .replace(/\/+$/, '')
+    if (http && !urls.includes(http)) urls.push(http)
   }
-  // 2. 环境变量显式配置
-  const configuredWsUrl = import.meta.env.VITE_COLLAB_WS_URL?.trim()
-  if (configuredWsUrl) {
-    return configuredWsUrl
-      .replace(/^wss:\/\//i, 'https://')
-      .replace(/^ws:\/\//i, 'http://')
-      .replace(/\/+$/, '')
+  // 1. 实际加入房间的后端返回 wsUrl（与 WebSocket 连接一致，通常是公网实例）
+  push(readJoinedWsUrl() ?? undefined)
+  // 2. 共享公网信令实例（公网优先的关键候选）
+  push(PROD_SIGNALING_HTTP_URL)
+  // 3. VITE_COLLAB_WS_URL 显式配置的本地实例（本地开发兜底）
+  push(import.meta.env.VITE_COLLAB_WS_URL)
+  // 4. dev 模式下站点主机上的本地 1234 服务
+  if (import.meta.env.MODE !== 'production') {
+    push(
+      `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname || 'localhost'}:1234`,
+    )
   }
-  // 3. 统一回退到共享公网实例（所有真实用户都连接这里）
-  return PROD_SIGNALING_HTTP_URL
+  return urls
+}
+
+const fetchWithTimeout = async (url: string, init?: RequestInit): Promise<Response> => {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), SIGNALING_FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export interface RoomPeerInfo {
@@ -70,37 +86,45 @@ export interface RoomPeerInfo {
 
 export const signalingApi = {
   /**
-   * 查询指定房间的实时在线人数
+   * 查询指定房间的实时在线人数（公网优先，不可达时依次回退本地实例）
    */
   async getRoomPeers(roomId: string): Promise<RoomPeerInfo> {
-    const url = `${getSignalingHttpBaseUrl()}/room/${encodeURIComponent(roomId)}/peers`
-    const response = await fetch(url, { method: 'GET' })
-    if (!response.ok) {
-      throw new Error(`signaling API error: ${response.status}`)
+    let lastError: unknown = null
+    for (const baseUrl of getSignalingHttpBaseUrls()) {
+      try {
+        const url = `${baseUrl}/room/${encodeURIComponent(roomId)}/peers`
+        const response = await fetchWithTimeout(url, { method: 'GET' })
+        if (!response.ok) throw new Error(`signaling API error: ${response.status}`)
+        return response.json()
+      } catch (err) {
+        lastError = err
+      }
     }
-    return response.json()
+    throw lastError instanceof Error ? lastError : new Error('all signaling servers failed')
   },
 
   /**
    * 批量查询多个房间的实时在线人数
-   * 返回 { [roomId]: onlineCount } 映射
+   * 返回 { [roomId]: onlineCount } 映射（公网优先，失败依次回退本地实例；
+   * 全部不可用时返回空映射，调用方使用后端的 memberCount 兜底）
    */
   async batchGetRoomPeers(roomIds: string[]): Promise<Record<string, number>> {
     if (roomIds.length === 0) return {}
-    const url = `${getSignalingHttpBaseUrl()}/rooms/peers`
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomIds }),
-      })
-      if (!response.ok) {
-        throw new Error(`signaling API error: ${response.status}`)
+    for (const baseUrl of getSignalingHttpBaseUrls()) {
+      try {
+        const url = `${baseUrl}/rooms/peers`
+        const response = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomIds }),
+        })
+        if (!response.ok) throw new Error(`signaling API error: ${response.status}`)
+        return response.json()
+      } catch {
+        // 公网不可达时尝试下一个候选（本地实例）
       }
-      return response.json()
-    } catch {
-      // 信令服务器不可用时返回空映射，调用方使用后端的 memberCount 兜底
-      return {}
     }
+    // 全部信令服务器不可用时返回空映射，调用方使用后端的 memberCount 兜底
+    return {}
   },
 }

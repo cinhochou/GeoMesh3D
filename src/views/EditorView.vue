@@ -12,6 +12,9 @@ import InputDialog from '../components/InputDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import NewProjectDialog from '../components/NewProjectDialog.vue'
 import EditProjectDialog from '../components/EditProjectDialog.vue'
+import CollabHistoryBox from '../components/CollabHistoryBox.vue'
+import type { CollabHistoryMessage } from '@/types/collabHistory'
+import type { CollabOperationIntent } from '@/types/collabIntent'
 
 import { EditorMode } from '../core/editor/Editor'
 import type { Command } from '../core/editor/Command'
@@ -34,7 +37,7 @@ import {
 import { Scene } from '../core/scene/Scene'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
-import { CollabManager } from '../core/collab/CollabManager'
+import { CollabManager, type DragLockTarget, type RemoteDragState } from '../core/collab/CollabManager'
 import SolverSchedulerWorker from '../core/perf/solverScheduler.worker?worker'
 import { useUiStore, type AppSettings } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
@@ -210,6 +213,15 @@ let viewportResizeObserver: ResizeObserver | null = null
 // 提示框相关的响应式变量
 let toastTimer: number | null = null
 const sharedRotationOwnerNotice = ref('')
+
+// 协作拖拽感知：房间内所有用户（含自己）正在拖拽的几何元素（用于渲染"xxx正在操作..."气泡）
+const dragAwarenessLayerRef = ref<HTMLElement | null>(null)
+const activeDrags = ref<RemoteDragState[]>([])
+// 气泡位于元素屏幕坐标右侧的间距（px）
+const DRAG_BUBBLE_GAP_PX = 18
+
+// 协作历史消息（UI 骨架阶段为空数组；消息机制后续讨论后落实）
+const collabHistoryMessages = ref<CollabHistoryMessage[]>([])
 
 const newProjectDialogVisible = ref(false)
 const currentProjectId = ref<string | null>(null)
@@ -792,6 +804,20 @@ onMounted(() => {
     sharedHistoryState.value = state
   }
 
+  // 协作拖拽感知：监听房间内所有用户（含自己）的拖拽状态，渲染"xxx正在操作..."气泡
+  collabManager.value.onActiveDragsUpdate = (drags) => {
+    activeDrags.value = drags
+  }
+  // 协作历史消息：从 Yjs 共享文档同步，渲染到左上角消息框
+  collabManager.value.onCollabMessagesUpdate = (messages) => {
+    collabHistoryMessages.value = messages
+  }
+  interaction.onDragLockRequest = (target: DragLockTarget) =>
+    collabManager.value?.tryAcquireDragLock(target) ?? true
+  interaction.onDragLockRelease = () => {
+    collabManager.value?.releaseDragLock()
+  }
+
   interaction.onARSceneRotateStartRequest = () =>
     isARMode.value &&
     (collabManager.value?.getStatus().room
@@ -837,6 +863,20 @@ onMounted(() => {
         cm!.syncAction()
         const clientId = cm!.getProviderClientId()
         const label = cmd.constructor.name
+        // 操作级意图：命令声明「用户做了什么」；旧命令按散装字段兜底推导
+        const declaredIntent = (cmd as { intent?: CollabOperationIntent | null }).intent ?? null
+        const draggedPointId = (cmd as { draggedPointId?: string | null }).draggedPointId ?? null
+        const keepPointId = (cmd as { keepPointId?: string | null }).keepPointId ?? null
+        const deleteTargetId = (cmd as { deleteTargetId?: string | null }).deleteTargetId ?? null
+        const intent: CollabOperationIntent | null =
+          declaredIntent ??
+          (deleteTargetId
+            ? { category: 'delete', targetId: deleteTargetId }
+            : keepPointId
+              ? { category: 'merge', targetId: keepPointId, keepPointId }
+              : draggedPointId
+                ? { category: 'move', targetId: null, draggedPointId }
+                : null)
         cm!.appendHistoryEntry({
           id: crypto.randomUUID(),
           actorClientId: clientId,
@@ -845,6 +885,10 @@ onMounted(() => {
           label,
           before,
           after,
+          intent,
+          draggedPointId,
+          keepPointId,
+          deleteTargetId,
         })
       }
     } else if (!inRoom) {
@@ -877,6 +921,21 @@ onMounted(() => {
 
         cm!.syncAction()
         const clientId = cm!.getProviderClientId()
+        // 操作级意图：命令声明「用户做了什么」（主语/属性/标注零反推，消息生成优先采用）
+        const declaredIntent = (entry as { intent?: CollabOperationIntent | null }).intent ?? null
+        // 兼容旧命令：未声明 intent 时由既有散装字段兜底推导
+        const draggedPointId = (entry as { draggedPointId?: string | null }).draggedPointId ?? null
+        const keepPointId = (entry as { keepPointId?: string | null }).keepPointId ?? null
+        const deleteTargetId = (entry as { deleteTargetId?: string | null }).deleteTargetId ?? null
+        const intent: CollabOperationIntent | null =
+          declaredIntent ??
+          (deleteTargetId
+            ? { category: 'delete', targetId: deleteTargetId }
+            : keepPointId
+              ? { category: 'merge', targetId: keepPointId, keepPointId }
+              : draggedPointId
+                ? { category: 'move', targetId: null, draggedPointId }
+                : null)
         cm!.appendHistoryEntry({
           id: crypto.randomUUID(),
           actorClientId: clientId,
@@ -885,6 +944,10 @@ onMounted(() => {
           label: entry.label,
           before,
           after,
+          intent,
+          draggedPointId,
+          keepPointId,
+          deleteTargetId,
         })
       }
     } else if (!inRoom) {
@@ -974,6 +1037,117 @@ onMounted(() => {
     collabManager.value?.syncLivePreview([], null, [netId])
   }
 
+  // 解析远程拖拽元素的 3D 锚点（数学空间坐标），气泡将通过该点投影到屏幕上并指向元素
+  const resolveDragAnchor = (drag: RemoteDragState): THREE.Vector3 | null => {
+    const s = scene
+    const toVec = (p?: { position: { x: number; y: number; z: number } } | null) =>
+      p ? new THREE.Vector3(p.position.x, p.position.y, p.position.z) : null
+    const mid = (a: THREE.Vector3 | null, b: THREE.Vector3 | null) =>
+      a && b ? a.clone().add(b).multiplyScalar(0.5) : (a ?? b)
+    switch (drag.elementType) {
+      case 'point': {
+        const p = s.points.get(drag.elementId)
+        return p ? toVec(p) : null
+      }
+      case 'line': {
+        const l = s.lines.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'straightLine': {
+        const l = s.straightLines.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'perpendicularLine': {
+        const l = s.perpendicularLines.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'parallelLine': {
+        const l = s.parallelLines.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'ray': {
+        const l = s.rays.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'vector': {
+        const l = s.vectors.get(drag.elementId)
+        return l ? mid(toVec(l.p1), toVec(l.p2)) : null
+      }
+      case 'circle': {
+        const c = s.circles.get(drag.elementId)
+        if (!c) return null
+        const a = toVec(c.p1)
+        const b = toVec(c.p2)
+        const d = toVec(c.p3)
+        if (a && b && d) return a.clone().add(b).add(d).multiplyScalar(1 / 3)
+        return (a ?? b ?? d)
+      }
+      case 'sphere': {
+        const sp = s.spheres.get(drag.elementId)
+        return sp ? toVec(sp.centerPoint) : null
+      }
+      case 'cone': {
+        const cn = s.cones.get(drag.elementId)
+        return cn ? mid(toVec(cn.baseCenterPoint), toVec(cn.apexPoint)) : null
+      }
+      case 'cylinder': {
+        const cy = s.cylinders.get(drag.elementId)
+        return cy ? mid(toVec(cy.bottomCenterPoint), toVec(cy.topCenterPoint)) : null
+      }
+      case 'face': {
+        const f = s.faces.get(drag.elementId)
+        if (!f || f.boundaryPointIds.length === 0) return null
+        const pts: THREE.Vector3[] = []
+        for (const id of f.boundaryPointIds) {
+          const p = s.points.get(id)
+          if (p) pts.push(new THREE.Vector3(p.position.x, p.position.y, p.position.z))
+        }
+        if (pts.length === 0) return null
+        const sum = pts.reduce((acc, p) => acc.add(p), new THREE.Vector3())
+        return sum.multiplyScalar(1 / pts.length)
+      }
+      case 'net': {
+        const n = s.nets.get(drag.elementId)
+        return n ? new THREE.Vector3(n.position.x, n.position.y, n.position.z) : null
+      }
+      default:
+        return null
+    }
+  }
+
+  // 每帧将气泡投影到元素屏幕坐标的右侧（跟随拖动中的元素移动）
+  const updateDragAwarenessBubbles = () => {
+    const layer = dragAwarenessLayerRef.value
+    if (!layer) return
+    const drags = activeDrags.value
+    if (drags.length === 0) return
+    const w = Math.max(layer.clientWidth, 1)
+    const h = Math.max(layer.clientHeight, 1)
+    for (const drag of drags) {
+      const node = layer.querySelector<HTMLElement>(
+        `.drag-awareness-bubble[data-client-id="${drag.clientId}"]`,
+      )
+      if (!node) continue
+      const anchor = resolveDragAnchor(drag)
+      if (!anchor) {
+        node.style.visibility = 'hidden'
+        continue
+      }
+      const worldPos = renderer.toMathWorldPosition(anchor)
+      const projected = worldPos.clone().project(renderer.getActiveCamera())
+      // 位于相机后方时隐藏气泡
+      if (projected.z < -1 || projected.z > 1) {
+        node.style.visibility = 'hidden'
+        continue
+      }
+      const x = (projected.x + 1) * 0.5 * w
+      const y = (1 - projected.y) * 0.5 * h
+      node.style.visibility = 'visible'
+      node.style.left = `${Math.round(x + DRAG_BUBBLE_GAP_PX)}px`
+      node.style.top = `${Math.round(y)}px`
+    }
+  }
+
   const loop = () => {
     const now = performance.now()
     const fpsCap = appSettings.value.fpsCap
@@ -1024,6 +1198,8 @@ onMounted(() => {
       interaction.getActivePointValueTarget(),
     )
     renderer.render()
+    // 协作拖拽气泡跟随元素：渲染完成后按最新相机投影更新位置
+    updateDragAwarenessBubbles()
     animationFrameId = requestAnimationFrame(loop)
   }
   loop()
@@ -2235,6 +2411,7 @@ const handleCollabJoin = async ({
     editor.historyManager.pause()
     editor.historyVersion++
     collabManager.value?.setupHistoryObservers()
+    collabManager.value?.setupCollabMessageObserver()
     collabManager.value?.syncLocalHistorySeqFromYjs()
 
     // ---- 加载关联项目 ----
@@ -2419,6 +2596,8 @@ const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = '
   cm?.leaveRoom()
   // 清空本地编辑器场景（不影响协作房间项目内容，因为已断开同步）
   clearLocalSceneOnly()
+  // 房间关闭后清空协作历史消息，等待下次加入重置
+  collabHistoryMessages.value = []
   // 退出关联项目：清理项目状态、URL query、浏览器标签标题
   currentProjectId.value = null
   currentProjectName.value = ''
@@ -3121,6 +3300,24 @@ const handleSaveScene = async () => {
             {{ sharedRotationOwnerNotice }}
           </div>
         </Transition>
+        <!-- 协作历史消息框：房间关闭前始终维持，关闭后清空重置 -->
+        <CollabHistoryBox v-if="collabStore.isConnected" :messages="collabHistoryMessages" />
+        <!-- 协作拖拽感知气泡层：跟随被拖拽的几何元素（含自己），显示"xxx正在操作..." -->
+        <div
+          v-if="activeDrags.length > 0"
+          ref="dragAwarenessLayerRef"
+          class="drag-awareness-layer"
+        >
+          <div
+            v-for="drag in activeDrags"
+            :key="drag.clientId"
+            class="drag-awareness-bubble"
+            :data-client-id="drag.clientId"
+          >
+            <span class="drag-awareness-bubble-text">{{ drag.userName || '其他用户' }}正在操作...</span>
+            <span class="drag-awareness-bubble-tail" aria-hidden="true"></span>
+          </div>
+        </div>
         <div class="performance-indicators">
           <div class="fps-indicator">FPS: {{ fps }}</div>
           <div v-if="collabStatus.connected && collabLatencyMs !== null" class="latency-indicator">
@@ -3343,6 +3540,49 @@ const handleSaveScene = async () => {
   line-height: 1.4;
   pointer-events: none;
   backdrop-filter: blur(6px);
+}
+
+/* 协作拖拽感知气泡层：覆盖在 canvas 之上、控件之下，不拦截任何指针事件 */
+.drag-awareness-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* "xxx正在操作..."消息气泡：白色背景、黑色字体，位于元素右侧并指向元素 */
+.drag-awareness-bubble {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  transform: translateY(-50%);
+  padding: 6px 12px 6px 16px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #000000;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  will-change: left, top;
+}
+
+.drag-awareness-bubble-text {
+  pointer-events: none;
+}
+
+/* 指向左侧元素的三角尾巴：右缘略微探入气泡内部，与气泡白色背景无缝衔接（无边框痕迹） */
+.drag-awareness-bubble-tail {
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  margin-top: -5px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-right: 8px solid #ffffff;
 }
 
 /* 仅观看模式顶部居中提示 */

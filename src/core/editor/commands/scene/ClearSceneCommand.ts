@@ -28,6 +28,7 @@ export function createClearSceneCommand(
     scene.clearAllConstraints()
     scene.selection.clear()
   })
+  cmd.intent = { category: 'clear', targetId: null }
 
   cmd.executeAndCapture()
   return cmd

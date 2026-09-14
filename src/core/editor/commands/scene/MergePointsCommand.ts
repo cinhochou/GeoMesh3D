@@ -643,6 +643,13 @@ export function createMergePointsCommand(
   const cmd = new SnapshotCommand('MergePointsCommand', scene, () => {
     executeMergePoints(scene, keepPoint, removePoint)
   })
+  cmd.keepPointId = keepPoint.id
+  cmd.intent = {
+    category: 'merge',
+    targetId: keepPoint.id,
+    keepPointId: keepPoint.id,
+    removedPointIds: [removePoint.id],
+  }
 
   cmd.executeAndCapture()
   return cmd

@@ -1,6 +1,7 @@
 // src/core/editor/commands/ConstraintAwareCommand.ts
 import type { Scene } from '../../scene/Scene'
 import type { HistoryEntry } from '../HistoryManager'
+import type { CollabOperationIntent } from '../../../types/collabIntent'
 
 const genId = (prefix: string) => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -25,6 +26,9 @@ export abstract class ConstraintAwareCommand implements HistoryEntry {
 
   /** 受影响的点 ID 集合，undo/redo 后会自动标记为脏 */
   private affectedPointIds: Set<string> = new Set()
+
+  /** 操作级意图：命令声明「用户做了什么」（协作历史消息精确生成） */
+  intent?: CollabOperationIntent | null = null
 
   constructor(protected scene: Scene) {}
 

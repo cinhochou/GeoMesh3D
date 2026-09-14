@@ -7,12 +7,58 @@ import { featureRegistry } from './FeatureRegistry'
 import { SnapshotCommand } from '../editor/commands/SnapshotCommand'
 import type { Scene } from '../scene/Scene'
 import type { HistoryEntry } from '../editor/HistoryManager'
+import type { CollabOperationIntent, CollabIntentParam } from '../../types/collabIntent'
+import { colorTextOf } from '../../types/collabIntent'
 
 const genId = (prefix: string) => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}_${crypto.randomUUID()}`
   }
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** 属性键 → 中文名（意图参数声明用） */
+const PARAM_LABELS: Record<string, string> = {
+  name: '名称',
+  nameVisible: '名称显示',
+  valueVisible: '数值显示',
+  visible: '显示',
+  centerVisible: '中心点显示',
+  userLocked: '锁定',
+  radiusValue: '半径',
+  radius: '半径',
+  height: '高度',
+  edgeLength: '边长',
+  length: '长度',
+  displayLength: '显示长度',
+  fillColor: '颜色',
+  fillOpacity: '透明度',
+  labelOffsetX: '标签位置X',
+  labelOffsetY: '标签位置Y',
+}
+
+const fmtIntentValue = (key: string, v: unknown): string => {
+  if (key === 'fillColor') return colorTextOf(v)
+  if (typeof v === 'number') return Number.isFinite(v) ? (Math.round(v * 100) / 100).toFixed(2) : String(v)
+  if (typeof v === 'boolean') return v ? '开' : '关'
+  if (v === null || v === undefined) return '关'
+  return String(v)
+}
+
+/** 计算 before/after 参数差异（key → 中文标签 + 格式化展示；以新状态键为准，避免部分更新的误报） */
+function diffIntentParams(before: Record<string, unknown>, after: Record<string, unknown>): CollabIntentParam[] {
+  const out: CollabIntentParam[] = []
+  for (const key of Object.keys(after)) {
+    // 锁定由「锁定/解锁」消息单独表达，不并入修改参数
+    if (key === 'userLocked') continue
+    if (key in before && before[key] === after[key]) continue
+    out.push({
+      label: PARAM_LABELS[key] ?? key,
+      before: fmtIntentValue(key, before[key]),
+      after: fmtIntentValue(key, after[key]),
+    })
+  }
+  return out
 }
 
 export interface CreateOperation {
@@ -93,6 +139,7 @@ export class FeatureDocument {
     const cmd = new SnapshotCommand(`create-${feature.type}`, this.scene, () => {
       geometry = featureRegistry.create(this.scene, feature)
     })
+    cmd.intent = { category: 'create', targetId: feature.id }
     cmd.executeAndCapture()
 
     if (!geometry) {
@@ -121,6 +168,8 @@ export class FeatureDocument {
       featureRegistry.delete(this.scene, feature, entry.geometry)
       this.entries.delete(feature.id)
     })
+    cmd.deleteTargetId = feature.id
+    cmd.intent = { category: 'delete', targetId: feature.id }
     cmd.executeAndCapture()
 
     if (this.pushHistory) {
@@ -145,6 +194,13 @@ export class FeatureDocument {
       const updated = featureRegistry.update(this.scene, feature, entry.geometry, operation.params)
       this.entries.set(feature.id, { feature, geometry: updated })
     })
+    // 修改意图：主语 + 直接声明的属性变化（before=更新前 feature 参数，after=操作参数）
+    const diffParams = diffIntentParams(entry.feature.params, operation.params)
+    cmd.intent = {
+      category: 'update',
+      targetId: feature.id,
+      params: diffParams.length > 0 ? diffParams : undefined,
+    }
     cmd.executeAndCapture()
 
     if (this.pushHistory) {
