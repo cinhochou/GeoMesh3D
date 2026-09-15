@@ -37,6 +37,9 @@ const messageQueryAwareness = 3
 const HEARTBEAT_INTERVAL_MS = Number.parseInt(process.env.HEARTBEAT_INTERVAL_MS ?? '10000', 10)
 // 客户端 45 秒内未发任何消息则视为死连接，主动关闭以触发客户端重连
 const CLIENT_DEAD_TIMEOUT_MS = Number.parseInt(process.env.CLIENT_DEAD_TIMEOUT_MS ?? '45000', 10)
+// 房间 Yjs 文档持久化：每 3 秒把有变更的房间文档快照写入后端数据库，
+// 使协作历史在成员全部离开/信令服务器重启后仍可恢复；仅在房间被关闭时清空。
+const DOC_PERSIST_INTERVAL_MS = Number.parseInt(process.env.DOC_PERSIST_INTERVAL_MS ?? '3000', 10)
 
 /**
  * @typedef {import('ws').WebSocket & { clientIds: Set<number>; userId?: string; username?: string; role?: string; lastMessageAt: number }} RoomClient
@@ -55,6 +58,12 @@ const CLIENT_DEAD_TIMEOUT_MS = Number.parseInt(process.env.CLIENT_DEAD_TIMEOUT_M
 
 /** @type {Map<string, RoomState>} */
 const rooms = new Map()
+
+/** @type {Set<string>} 有未落盘变更的房间 */
+const dirtyRooms = new Set()
+
+/** @type {Map<string, Promise<RoomState>>} 正在从后端恢复文档的房间（防止并发重复加载） */
+const pendingRoomLoads = new Map()
 
 const startTime = Date.now()
 
@@ -79,51 +88,191 @@ const encodeMessage = (messageType, writePayload) => {
   return encoding.toUint8Array(encoder)
 }
 
-const closeRoom = (room) => {
+// ---- 房间文档持久化（经 service-collab 内部接口存 MySQL）----
+// 历史随房间存续：成员全部离开、空闲超时释放内存、进程重启都不清空；
+// 只有 /room/:id/close（后端关房通知）才删除。
+
+const loadPersistedDoc = async (roomId) => {
+  try {
+    const response = await fetch(
+      `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(roomId)}/doc`,
+      { signal: AbortSignal.timeout(10_000) },
+    )
+    if (response.status === 404) return null
+    if (!response.ok) {
+      console.warn(`[y-websocket] load doc state HTTP ${response.status} for room "${roomId}"`)
+      return null
+    }
+    const buffer = new Uint8Array(await response.arrayBuffer())
+    return buffer.byteLength > 0 ? buffer : null
+  } catch (err) {
+    console.warn(`[y-websocket] load doc state failed for room "${roomId}":`, err?.message ?? err)
+    return null
+  }
+}
+
+// 每个房间的保存操作经 promise 链串行化，避免定时落盘与空房落盘并发
+// 产生乱序覆盖（旧状态后完成会覆盖新状态）
+const doSaveRoomDoc = async (room) => {
+  if (room.closed) return false
+  room.saving = true
+  room.dirtyDuringSave = false
+  try {
+    const state = Y.encodeStateAsUpdate(room.doc)
+    const response = await fetch(
+      `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(room.name)}/doc`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: Buffer.from(state),
+        signal: AbortSignal.timeout(10_000),
+      },
+    )
+    if (!response.ok) {
+      console.warn(`[y-websocket] save doc state HTTP ${response.status} for room "${room.name}"`)
+      return false
+    }
+    // 落盘期间若有新变更，保留 dirtyRooms 中的标记（update 处理器已重新添加），下一轮继续保存
+    if (!room.dirtyDuringSave) dirtyRooms.delete(room.name)
+    return true
+  } catch (err) {
+    console.warn(`[y-websocket] save doc state failed for room "${room.name}":`, err?.message ?? err)
+    return false
+  } finally {
+    room.saving = false
+  }
+}
+
+const saveRoomDoc = (room) => {
+  if (room.closed) return Promise.resolve(false)
+  const chain = (room.saveChain ?? Promise.resolve()).then(() => doSaveRoomDoc(room))
+  room.saveChain = chain.catch(() => false)
+  return chain
+}
+
+const deletePersistedDoc = async (roomId) => {
+  try {
+    await fetch(
+      `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(roomId)}/doc`,
+      { method: 'DELETE', signal: AbortSignal.timeout(10_000) },
+    )
+  } catch (err) {
+    console.warn(`[y-websocket] delete doc state failed for room "${roomId}":`, err?.message ?? err)
+  }
+}
+
+// 定期落盘有变更的房间
+setInterval(() => {
+  for (const roomName of dirtyRooms) {
+    const room = rooms.get(roomName)
+    if (room && !room.closed) saveRoomDoc(room)
+    else dirtyRooms.delete(roomName)
+  }
+}, DOC_PERSIST_INTERVAL_MS)
+
+/**
+ * 销毁房间。clearPersisted=true 时同时删除数据库中的文档快照（房间被关闭，历史清空）；
+ * 否则仅释放内存，持久化状态保留，下次有人加入时自动恢复。
+ */
+const closeRoom = (room, clearPersisted = false) => {
   if (room.closed) return
   room.closed = true
   if (room.idleTimer) clearTimeout(room.idleTimer)
   rooms.delete(room.name)
+  dirtyRooms.delete(room.name)
   room.awareness.destroy()
   room.doc.destroy()
+
+  if (clearPersisted) {
+    deletePersistedDoc(room.name)
+  }
 }
 
+// 空闲超时只是释放内存资源，不是"关闭房间"，持久化历史保留
 const scheduleIdleClose = (room) => {
   if (ROOM_IDLE_TIMEOUT <= 0) return
   if (room.idleTimer) clearTimeout(room.idleTimer)
   room.idleTimer = setTimeout(() => {
     if (room.clients.size === 0) {
-      console.log(`[y-websocket] room "${room.name}" idle timeout, closing`)
-      closeRoom(room)
+      console.log(`[y-websocket] room "${room.name}" idle timeout, releasing memory (history kept)`)
+      drainRoom(room)
     }
   }, ROOM_IDLE_TIMEOUT)
 }
 
-const getRoom = (roomName) => {
+/**
+ * 房间内已无成员：先把最终状态落盘，再释放内存。
+ * 若落盘期间有新成员加入（getRoom 仍能取到该房间），则保留房间继续服务；
+ * 若落盘失败（后端暂不可用），保留房间稍后重试，避免丢失最后一段历史。
+ */
+const drainRoom = async (room) => {
+  const saved = await saveRoomDoc(room)
+  if (room.clients.size > 0 || rooms.get(room.name) !== room || room.closed) return
+
+  // 落盘失败或落盘期间又有新变更：保留房间稍后重试，确保最终状态完整落盘后再释放内存
+  if (!saved || room.dirtyDuringSave) {
+    dirtyRooms.add(room.name)
+    setTimeout(() => drainRoom(room), DOC_PERSIST_INTERVAL_MS)
+    return
+  }
+
+  if (room.idleTimer) clearTimeout(room.idleTimer)
+  room.closed = true
+  rooms.delete(room.name)
+  dirtyRooms.delete(room.name)
+  room.awareness.destroy()
+  room.doc.destroy()
+}
+
+/**
+ * 获取（或创建）房间。首次创建时从后端恢复持久化的文档快照，保证后加入的成员
+ * 能看到完整的历史消息链，即使此前房间内没有任何人在线或信令服务器重启过。
+ */
+const getRoom = async (roomName) => {
   const existing = rooms.get(roomName)
   if (existing) return existing
 
-  const doc = new Y.Doc()
-  const awareness = new awarenessProtocol.Awareness(doc)
-  awareness.setLocalState(null)
+  const loading = pendingRoomLoads.get(roomName)
+  if (loading) return loading
 
-  const room = {
-    name: roomName,
-    doc,
-    awareness,
-    clients: new Set(),
-    closed: false,
-  }
+  const promise = (async () => {
+    const doc = new Y.Doc()
 
-  doc.on('update', (update, origin) => {
-    const payload = encodeMessage(messageSync, (encoder) => {
-      syncProtocol.writeUpdate(encoder, update)
+    // 先恢复持久化状态，再注册 update 监听，避免恢复过程触发广播和多余的落盘
+    const persisted = await loadPersistedDoc(roomName)
+    if (persisted) {
+      Y.applyUpdate(doc, persisted)
+      console.log(`[y-websocket] restored ${persisted.byteLength} bytes of doc state for room "${roomName}"`)
+    }
+
+    const awareness = new awarenessProtocol.Awareness(doc)
+    awareness.setLocalState(null)
+
+    const room = {
+      name: roomName,
+      doc,
+      awareness,
+      clients: new Set(),
+      closed: false,
+    }
+
+    doc.on('update', (update, origin) => {
+      dirtyRooms.add(room.name)
+      if (room.saving) room.dirtyDuringSave = true
+      const payload = encodeMessage(messageSync, (encoder) => {
+        syncProtocol.writeUpdate(encoder, update)
+      })
+      broadcast(room, payload, origin)
     })
-    broadcast(room, payload, origin)
+
+    rooms.set(roomName, room)
+    return room
+  })().finally(() => {
+    pendingRoomLoads.delete(roomName)
   })
 
-  rooms.set(roomName, room)
-  return room
+  pendingRoomLoads.set(roomName, promise)
+  return promise
 }
 
 // ---- 票据验证 ----
@@ -204,6 +353,9 @@ const sendSyncStep2 = (room, client) => {
 
 const cleanupClient = (room, client) => {
   room.clients.delete(client)
+
+  // 房间已销毁（关房/落盘完成）：不再触碰其 awareness/doc，直接返回
+  if (room.closed) return
 
   if (client.clientIds.size > 0) {
     const removedClients = Array.from(client.clientIds)
@@ -340,6 +492,31 @@ const handleHealthCheck = (req, res) => {
     return true
   }
 
+  // Close a room (called by backend closeRoom/deleteRoom/purgeRoom):
+  // disconnect all clients, destroy in-memory state, and delete the persisted
+  // doc snapshot so the shared collaboration history is cleared for good.
+  const closeMatch = url.pathname.match(/^\/room\/([^/]+)\/close$/)
+  if (closeMatch && req.method === 'POST') {
+    const roomId = decodeURIComponent(closeMatch[1])
+    const room = rooms.get(roomId)
+    if (room) {
+      for (const client of Array.from(room.clients)) {
+        try {
+          client.close(4009, 'room closed')
+        } catch {
+          // The close event still performs cleanup if the socket is closing.
+        }
+      }
+      closeRoom(room, true)
+    } else {
+      // Room not in memory (already drained): still clear the persisted history.
+      deletePersistedDoc(roomId)
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders })
+    res.end(JSON.stringify({ roomId, closed: true }))
+    return true
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json', ...corsHeaders })
   res.end(JSON.stringify({ error: 'not found' }))
   return false
@@ -389,7 +566,13 @@ wsServer.on('connection', async (socket, request) => {
     role: result.role,
     lastMessageAt: Date.now(),
   })
-  const room = getRoom(roomName)
+  const room = await getRoom(roomName)
+  // 防止 await 期间房间被并发关闭（如后端 /close）：房间已销毁则直接断开，
+  // 避免在已销毁的 doc/awareness 上继续 add client / 发同步消息
+  if (room.closed) {
+    try { socket.close(4009, 'room closed') } catch { /* ignore */ }
+    return
+  }
   // 取消空闲关闭定时器（有新成员加入）
   if (room.idleTimer) {
     clearTimeout(room.idleTimer)
@@ -408,6 +591,8 @@ wsServer.on('connection', async (socket, request) => {
   sendCurrentAwareness(room, client)
 
   client.on('message', (data) => {
+    // 房间已销毁（如收到关房通知）后，关闭握手期间仍可能送达已缓冲的消息，直接忽略
+    if (room.closed) return
     client.lastMessageAt = Date.now()
     const payload = toUint8Array(data)
     const decoder = decoding.createDecoder(payload)
@@ -508,11 +693,14 @@ httpServer.listen(port, host, () => {
   }
 })
 
-const shutdown = () => {
+const shutdown = async () => {
   console.log('[y-websocket] shutting down...')
+  // 先断开所有客户端（此后不再有新变更），再把各房间最终状态落盘；历史保留，不清空
   wsServer.clients.forEach((client) => {
     client.close(1001, 'server shutting down')
   })
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  await Promise.allSettled(Array.from(rooms.values()).map((room) => saveRoomDoc(room)))
   httpServer.close(() => {
     rooms.forEach((room) => {
       closeRoom(room)

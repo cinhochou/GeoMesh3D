@@ -182,9 +182,6 @@ export class CollabManager {
   // 尝试连接每个候选地址的单次等待上限（公网不可达时快速回退到本地实例）
   private static readonly SERVER_CONNECT_TIMEOUT_MS = 3_000
 
-  // 协作历史消息：房间内共享文档最多保留条数（超出丢弃最旧）
-  private static readonly MAX_COLLAB_MESSAGES = 200
-
   private ydoc: Y.Doc
   private provider: WebsocketProvider | null = null
   private yHistory: Y.Array<Y.Map<unknown>>
@@ -6020,7 +6017,7 @@ export class CollabManager {
     this.onSharedHistoryUpdate(this.getSharedHistoryState())
   }
 
-  // ===== 协作历史消息（共享文档数组，最多保留 MAX_COLLAB_MESSAGES 条） =====
+  // ===== 协作历史消息（共享文档数组，不设条数上限，随房间持久化） =====
 
   private serializeCollabMessage(message: CollabHistoryMessage): Y.Map<unknown> {
     const map = new Y.Map<unknown>()
@@ -6098,7 +6095,7 @@ export class CollabManager {
     this.onCollabMessagesUpdate(this.readCollabMessages())
   }
 
-  /** 把消息写入共享文档并同步给所有协作者（超出上限丢弃最旧） */
+  /** 把消息写入共享文档并同步给所有协作者（不设上限，历史由信令服务器持久化，房间关闭时清空） */
   appendCollabMessages(messages: CollabHistoryMessage[]): void {
     if (!this.provider || this.roomName === null) return
     if (messages.length === 0) return
@@ -6106,11 +6103,6 @@ export class CollabManager {
     this.ydoc.transact(() => {
       for (const message of messages) {
         this.yCollabMessages.push([this.serializeCollabMessage(message)])
-      }
-      // 容量上限：超出 200 条时丢弃最旧
-      if (this.yCollabMessages.length > CollabManager.MAX_COLLAB_MESSAGES) {
-        const overflow = this.yCollabMessages.length - CollabManager.MAX_COLLAB_MESSAGES
-        this.yCollabMessages.delete(0, overflow)
       }
     })
 
