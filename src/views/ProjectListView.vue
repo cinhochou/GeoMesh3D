@@ -9,6 +9,7 @@ import { useSessionGuard } from '@/composables/useSessionGuard'
 import ProxiedImage from '@/components/ProxiedImage.vue'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 import { mergeArrayById } from '@/utils/reactiveMerge'
+import { withThumbnailVersion } from '@/utils/imageCache'
 
 const route = useRoute()
 const router = useRouter()
@@ -628,7 +629,7 @@ const handleRecycleBin = () => {
               </div>
               <ProxiedImage
                 v-else
-                :src="project.thumbnailUrl || ''"
+                :src="withThumbnailVersion(project.thumbnailUrl || '', project.updatedAt)"
                 alt="thumbnail"
                 class="pl-thumb-image"
               />

@@ -120,3 +120,15 @@ export const resolveImageUrl = (src: string, baseUrl: string): string =>
   src.startsWith('http') || src.startsWith('data:') || src.startsWith('//')
     ? src
     : baseUrl + src
+
+/**
+ * 为缩略图 URL 追加缓存版本参数。
+ * 项目缩略图按 projectId 复用固定文件名（如 /thumbnails/{projectId}.jpg），URL 恒定不变，
+ * 导致浏览器 / ProxiedImage 的持久化缓存以该稳定 URL 为 key，即使后端已覆盖新图、页面仍显示旧图。
+ * 传入"内容版本"（项目 updatedAt，每次保存缩略图都会变化），使 URL 随内容变化 → 突破所有缓存层，
+ * 并触发 Vue 对 :src 的响应式重渲染，实现"保存后立即可见新缩略图"。
+ */
+export const withThumbnailVersion = (url: string, version?: string | null): string => {
+  if (!url || !version) return url
+  return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(version)}`
+}

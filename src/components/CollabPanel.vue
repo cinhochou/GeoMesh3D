@@ -1273,11 +1273,18 @@ const changeMemberRole = async (member: RoomMember, newRole: RoomRole) => {
   member.role = newRole
   try {
     await roomApi.updateMemberRole(currentRoom.value.id, member.userId, newRole)
-    // 通知编辑器 Tab 即时刷新目标用户的操作权限
+    // 通知编辑器 Tab 即时刷新目标用户的操作权限（本浏览器内跨 Tab 可用）
     collabRoomEvents.emit({
       type: 'role_change',
       roomId: currentRoom.value.id,
       timestamp: Date.now(),
+      targetUserId: member.userId,
+      role: newRole,
+    })
+    // 经 Yjs awareness 广播给房间内所有协作者（含不同设备/浏览器的目标成员），
+    // 使其本地 myRole 立即更新、权限即时生效，无需等待下一次轮询。
+    collabStore.activeManager?.broadcastRoleChange({
+      roomId: currentRoom.value.id,
       targetUserId: member.userId,
       role: newRole,
     })

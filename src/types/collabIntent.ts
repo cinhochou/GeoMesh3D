@@ -36,6 +36,12 @@ export interface CollabOperationIntent {
   params?: CollabIntentParam[]
   /** 补充标注，如「由N点拖动」 */
   note?: string | null
+  /** 操作来源位置：场景交互（scene）/ 侧边栏面板编辑（panel）。
+   *  用于历史消息准确表达「操作位置」，与「操作对象/部位」组合出过程与结果的一致描述 */
+  origin?: 'scene' | 'panel' | null
+  /** 操作部位（操作对象中被直接操作的部分）：如 球体/球心点/半径点/圆心/圆…
+   *  缺省时按被拖动点的角色（sphereRole/circleRole/…）或点名推断 */
+  subject?: string | null
   /** 拖拽类：实际被拖动的点 id */
   draggedPointId?: string | null
   /** 合并类：保留点 id 与吸收点 id 清单 */

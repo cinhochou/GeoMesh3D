@@ -35,8 +35,9 @@ const unreadCount = ref(0)
 let lastSeenCount = -1
 /**
  * 已见消息 id 集合：精确统计未读新消息。
- * 不能用「数组长度差」判断新增——消息达到 200 条上限后每次新增都会裁剪最旧的，
- * 长度恒为 200，长度差语义完全失效（未读角标与自动跟随会永久失效）。
+ * 不能用「数组长度差」判断新增——消息数无上限（协作历史不裁剪，
+ * 但存在等量重推/头部位移等重排场景），长度差语义不可靠，未读角标与
+ * 自动跟随须基于 id 集合判断。
  */
 const seenMsgIds = new Set<string>()
 
@@ -150,28 +151,28 @@ const fitWidth = () => {
   let scrollbar = scroller.offsetWidth - scroller.clientWidth
   let applied = -1
   for (let round = 0; round < 4; round++) {
-    // 1. 采集每条消息的片段宽度（nowrap 片段宽度与框宽无关，测量稳定）
-    //    主干片段与从属片段（含缩进偏移）组成连续的“前缀和”序列
-    const fragmentWidths: number[][] = []
-    for (const msg of Array.from(scroller.querySelectorAll<HTMLElement>('.collab-history-msg'))) {
-      const msgLeft = msg.getBoundingClientRect().left
-      const widths: number[] = []
-      for (const span of Array.from(msg.querySelectorAll<HTMLElement>(':scope > .collab-history-main > span'))) {
-        widths.push(span.getBoundingClientRect().width)
+      // 1. 采集每条消息的片段宽度（nowrap 片段宽度与框宽无关，测量稳定）
+      //    主干片段与从属片段（含缩进偏移）组成连续的“前缀和”序列
+      const fragmentWidths: number[][] = []
+      for (const msg of Array.from(scroller.querySelectorAll<HTMLElement>('.collab-history-msg'))) {
+        const msgLeft = msg.getBoundingClientRect().left
+        const widths: number[] = []
+        for (const span of Array.from(msg.querySelectorAll<HTMLElement>(':scope > .collab-history-main > span'))) {
+          widths.push(span.getBoundingClientRect().width)
+        }
+        const detail = msg.querySelector<HTMLElement>(':scope > .collab-history-detail')
+        if (detail) {
+          const offset = detail.getBoundingClientRect().left - msgLeft
+          const spans = Array.from(detail.querySelectorAll<HTMLElement>(':scope > span'))
+          spans.forEach((span, i) => {
+            // 从属的尾注（级联删除/由X拖动）与引用（撤销/重做）内部允许换行，
+            // 不参与“恰好填满”宽度候选（避免长文本把消息框撑到和文本一样宽而失去折行）
+            if (span.classList.contains('collab-history-note') || span.classList.contains('collab-history-quote')) return
+            widths.push(span.getBoundingClientRect().width + (i === 0 ? offset : 0))
+          })
+        }
+        if (widths.length > 0) fragmentWidths.push(widths)
       }
-      const detail = msg.querySelector<HTMLElement>(':scope > .collab-history-detail')
-      if (detail) {
-        const offset = detail.getBoundingClientRect().left - msgLeft
-        const spans = Array.from(detail.querySelectorAll<HTMLElement>(':scope > span'))
-        spans.forEach((span, i) => {
-          // 从属的尾注（级联删除/由X拖动）与引用（撤销/重做）内部允许换行，
-          // 不参与“恰好填满”宽度候选（避免长文本把消息框撑到和文本一样宽而失去折行）
-          if (span.classList.contains('collab-history-note') || span.classList.contains('collab-history-quote')) return
-          widths.push(span.getBoundingClientRect().width + (i === 0 ? offset : 0))
-        })
-      }
-      if (widths.length > 0) fragmentWidths.push(widths)
-    }
     if (fragmentWidths.length === 0) {
       // 无可测内容（空态）：还原自然宽度
       if (box.style.width !== '') box.style.width = ''
@@ -200,6 +201,24 @@ const fitWidth = () => {
   }
 }
 
+/**
+ * fitWidth 的 rAF 节流：合并同一帧内的多次调用（消息高频变更时避免每帧多次
+ * getBoundingClientRect 强制布局阻塞主线程），并支持在贴合完成后执行依赖
+ * 新布局的回调（如滚动到底）。
+ */
+let fitWidthRafId = 0
+const pendingAfterFit: Array<() => void> = []
+const scheduleFitWidth = (afterFit?: () => void) => {
+  if (afterFit) pendingAfterFit.push(afterFit)
+  if (fitWidthRafId !== 0) return
+  fitWidthRafId = requestAnimationFrame(() => {
+    fitWidthRafId = 0
+    const afters = pendingAfterFit.splice(0, pendingAfterFit.length)
+    fitWidth()
+    for (const fn of afters) fn()
+  })
+}
+
 const toggleExpanded = () => {
   expanded.value = !expanded.value
   if (expanded.value) {
@@ -208,32 +227,39 @@ const toggleExpanded = () => {
     })
   }
   // 展开/收起改变可见高度，滚动条可能出现/消失（占位宽度变化），需要重新贴合宽度
-  nextTick(fitWidth)
+  scheduleFitWidth()
 }
 
 // 容器尺寸变化（上限为容器宽的 1/3）时重新贴合
 let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
-  fitWidth()
-  resizeObserver = new ResizeObserver(() => fitWidth())
+  scheduleFitWidth()
+  resizeObserver = new ResizeObserver(() => scheduleFitWidth())
   if (rootRef.value?.parentElement) resizeObserver.observe(rootRef.value.parentElement)
 })
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
+  if (fitWidthRafId !== 0) {
+    cancelAnimationFrame(fitWidthRafId)
+    fitWidthRafId = 0
+    pendingAfterFit.length = 0
+  }
 })
 
 // 消息变更处理：
 // - 清空（房间关闭重置）：滚动/未读/锚定/已见状态一并重置
 // - 初次到位（加入房间同步历史）：全部视为已见，直接滚到最新，不产生未读
 // - 新增消息：锚定在底部则自动跟随滚动到底；否则未读数按「不在已见集合中的消息」精确统计
-//   （基于消息 id，不受 200 条上限裁剪影响，长度恒为 200 时跟随/未读依旧有效）
+//   （基于消息 id 判断，不受历史重排/等量重推影响，跟随与未读依旧有效）
 watch(
   () => props.messages,
   (messages) => {
     // 是否跟随新消息：先于 fitWidth 记录锚定状态（避免宽度重排影响判定）
     const shouldFollow = messages.length > 0 && pinnedToBottom
-    fitWidth()
+    // fitWidth 走 rAF 节流：消息变更时的同步强制布局测量（getBoundingClientRect）
+    // 会阻塞松手瞬间的主线程，rAF 合并后挪到下一帧执行；依赖新布局的滚动操作
+    // 通过 afterFit 回调在贴合完成后执行，保持原有顺序语义
     if (messages.length === 0) {
       lastSeenCount = 0
       unreadCount.value = 0
@@ -241,7 +267,7 @@ watch(
       pinnedToBottom = true
       expanded.value = true
       seenMsgIds.clear()
-      nextTick(() => {
+      scheduleFitWidth(() => {
         if (scrollRef.value) scrollRef.value.scrollTop = 0
       })
       return
@@ -252,21 +278,24 @@ watch(
       unreadCount.value = 0
       pinnedToBottom = true
       markAllSeen()
-      scrollToBottom()
+      scheduleFitWidth(scrollToBottom)
       return
     }
-    // 未读统计：不在已见集合中的消息条数（基于 id 判断，200 条上限裁剪不影响精确性）
+    // 未读统计：不在已见集合中的消息条数（基于 id 判断，不受历史重排影响）
     const unseen = messages.filter((m) => !seenMsgIds.has(m.id))
     if (shouldFollow) {
-      // 锚定底部：新增消息（含上限裁剪下“等量位移”的末尾新增）一律视为已见并跟随滚到底
+      // 锚定底部：有新增消息一律视为已见并跟随滚到底
       if (unseen.length > 0) lastSeenCount = messages.length
       markAllSeen()
       unreadCount.value = 0
-      scrollToBottom()
+      scheduleFitWidth(scrollToBottom)
     } else if (unseen.length > 0) {
       unreadCount.value = unseen.length
+      scheduleFitWidth()
+    } else {
+      // 无新增消息（等量重推/头部位移等重新构建）：保持现状，仍需重新贴合宽度
+      scheduleFitWidth()
     }
-    // 无新增消息（头部裁剪/等量重推等）：保持现状
   },
   { flush: 'post' },
 )
@@ -332,7 +361,7 @@ watch(
         </div>
         <!-- 从属信息：参数变化 / 撤销引用 / 拖拽标注 / 级联删除，换行时缩进体现分级 -->
         <div
-          v-if="msg.params.length > 0 || msg.quote || msg.note"
+          v-if="msg.params.length > 0 || msg.quote || msg.note || msg.createdFrom"
           class="collab-history-detail"
         >
           <template v-if="msg.params.length > 0">
@@ -347,6 +376,8 @@ watch(
             </span>
           </template>
           <span v-if="msg.quote" class="collab-history-quote">「{{ msg.quote }}」</span>
+          <!-- 创建类来源标注：由线段L1、点P2 创建（弱化展示，区别于删除的级联红字） -->
+          <span v-if="msg.createdFrom && msg.category === 'create'" class="collab-history-source">由 {{ msg.createdFrom }} 创建</span>
           <!-- 删除的级联标注：红系 + 箭头，区别于修改的「由X点拖动」（斜体弱化） -->
           <span v-if="msg.note && msg.category === 'delete'" class="collab-history-note collab-history-note-delete">→ {{ msg.note }}</span>
           <span v-if="msg.note && msg.category !== 'delete'" class="collab-history-note collab-history-note-update">{{ msg.note }}</span>
@@ -554,6 +585,13 @@ watch(
 /* 修改类标注：斜体弱化 */
 .collab-history-note-update {
   font-style: italic;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* 创建类来源标注（由线段L1、点P2 创建）：弱化展示，构成不可拆分的整体 */
+.collab-history-source {
+  flex-shrink: 0;
+  white-space: nowrap;
   color: rgba(255, 255, 255, 0.5);
 }
 

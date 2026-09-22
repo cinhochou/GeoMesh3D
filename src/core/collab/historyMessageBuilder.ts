@@ -168,13 +168,21 @@ type SPt = {
   position: SVec
   userLocked: boolean
   cubeId: string | null
+  cubeRole?: 'owner' | 'dependent' | null
   prismId: string | null
+  prismRole?: 'owner' | 'dependent' | null
   pyramidId: string | null
+  pyramidRole?: 'owner' | 'dependent' | null
   regularPolygonId: string | null
+  regularPolygonRole?: 'owner' | 'dependent' | null
   sphereId: string | null
+  sphereRole?: 'center' | 'radius' | null
   coneId: string | null
+  coneRole?: 'baseCenter' | 'apex' | null
   cylinderId: string | null
+  cylinderRole?: 'bottomCenter' | 'topCenter' | null
   circleId: string | null
+  circleRole?: 'center' | null
 }
 type SLine = { id: string; name: string; userLocked: boolean; lengthLocked: boolean; lockedLength: number; p1Id: string; p2Id: string }
 type SLinear = { id: string; name: string; userLocked: boolean; p1Id: string; p2Id: string; displayLength?: number }
@@ -225,6 +233,62 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 type AnyObj = Record<string, unknown> & { name?: unknown }
+
+/**
+ * objectConstrainedPoint 从属点 → 所属对象 id。
+ * 立体（正六面体/棱柱/棱锥/正多边形/球/圆柱/圆锥/圆/线段等）变化时，约束在它上面的
+ * 从属点会随动（如拖动正六面体顶点缩放立体，面上点跟着移动），该随动由所属对象的
+ * 消息吸收，避免多出一条「移动了 点X」。面目标归并到其所属立体，独立面归其自身。
+ */
+function buildDependentPointParentMap(scene: SerializedScene): Map<string, string> {
+  const faceOwner = new Map<string, string>()
+  for (const c of scene.constraints) {
+    const o = c as unknown as AnyObj
+    if (o.type === 'cube') {
+      for (const fid of (o.faceIds as string[]) ?? []) faceOwner.set(fid, o.cubeId as string)
+    } else if (o.type === 'prism') {
+      faceOwner.set(o.bottomFaceId as string, o.prismId as string)
+      faceOwner.set(o.topFaceId as string, o.prismId as string)
+      for (const fid of (o.sideFaceIds as string[]) ?? []) faceOwner.set(fid, o.prismId as string)
+    } else if (o.type === 'pyramid') {
+      faceOwner.set(o.bottomFaceId as string, o.pyramidId as string)
+      for (const fid of (o.sideFaceIds as string[]) ?? []) faceOwner.set(fid, o.pyramidId as string)
+    } else if (o.type === 'regularPolygon') {
+      faceOwner.set(o.faceId as string, o.constraintId as string)
+    }
+  }
+  const map = new Map<string, string>()
+  for (const c of scene.constraints) {
+    const o = c as unknown as AnyObj
+    if (o.type !== 'objectConstrainedPoint') continue
+    const { pointId, targetType, targetId } = o as unknown as {
+      pointId: string
+      targetType: string
+      targetId: string
+    }
+    if (targetType === 'face') {
+      map.set(pointId, faceOwner.get(targetId) ?? targetId)
+    } else if (
+      targetType === 'sphere' ||
+      targetType === 'cone' ||
+      targetType === 'coneBase' ||
+      targetType === 'cylinder' ||
+      targetType === 'cylinderBottom' ||
+      targetType === 'cylinderTop' ||
+      targetType === 'circle' ||
+      targetType === 'line' ||
+      targetType === 'straightLine' ||
+      targetType === 'ray' ||
+      targetType === 'vector' ||
+      targetType === 'perpendicularLine' ||
+      targetType === 'parallelLine'
+    ) {
+      map.set(pointId, targetId)
+    }
+    // 坐标轴（xAxis/yAxis/zAxis）永不移动，无所属对象
+  }
+  return map
+}
 
 /** 快照上的一类对象视图 */
 type SnapshotView = {
@@ -319,7 +383,11 @@ function circumRadius(c: SCircle, pos: Map<string, SVec>): number {
 
 // ===== 构建「几何对象视图」列表（views 顺序即判定优先级） =====
 
-function buildViews(before: SerializedScene, after: SerializedScene): SnapshotView[] {
+function buildViews(
+  before: SerializedScene,
+  after: SerializedScene,
+  dependentParent: Map<string, string>,
+): SnapshotView[] {
   const cubeFrom = (list: unknown[]): AnyObj[] =>
     (list as Array<Record<string, unknown>>)
       .filter((c) => c.type === 'cube')
@@ -788,7 +856,9 @@ function buildViews(before: SerializedScene, after: SerializedScene): SnapshotVi
         p.sphereId ??
         p.coneId ??
         p.cylinderId ??
-        p.circleId
+        p.circleId ??
+        dependentParent.get(p.id) ??
+        null
       )
     },
     getParams: (b, a) => {
@@ -818,6 +888,7 @@ function makeMessage(
   targetName: string | null,
   params: CollabHistoryParam[],
   quote: string | null,
+  createdFrom?: string | null,
 ): CollabHistoryMessage {
   return {
     id: crypto.randomUUID(),
@@ -830,12 +901,68 @@ function makeMessage(
     params,
     quote,
     createdAt: actor.createdAt,
+    ...(createdFrom ? { createdFrom } : {}),
   }
 }
 
 /** 意图参数（可缺省 before/after）→ 历史消息参数（必填字符串） */
 const toHistoryParams = (params: CollabIntentParam[]): CollabHistoryParam[] =>
   params.map((p) => ({ label: p.label, before: p.before ?? '', after: p.after ?? '' }))
+
+
+/**
+ * 把新创建对象的引用点 id 反解析为「由哪些几何对象创建」的来源清单（去重）。
+ * 规则：每个引用点优先解析为其所属的非点几何对象（线段/直线/圆/面/立体等）；
+ * 无所属几何对象（独立点）时解析为点本身。返回「类型+名称」文本数组，无可识别来源返回空数组。
+ */
+function resolveCreateSources(
+  views: SnapshotView[],
+  pointNames: Map<string, string>,
+  createdView: SnapshotView,
+  createdObj: AnyObj,
+): string[] {
+  const createdId = createdView.getId(createdObj)
+  const createdRefs = createdView.getRefPointIds(createdObj).filter((rid) => !!rid && rid !== createdId)
+  if (createdRefs.length === 0) return []
+  const refSet = new Set(createdRefs)
+
+  // 引用点 id → 首个接管它的非点几何对象 id，及该对象「类型+名称」文本（首命中的高优先级对象优先）
+  const pointOwner = new Map<string, string>()
+  const ownerLabel = new Map<string, string>()
+  for (const v of views) {
+    if (v.key === 'point') continue
+    for (const o of v.listBefore) {
+      const oid = v.getId(o)
+      if (oid === 'origin' || oid === createdId) continue
+      const refs = v.getRefPointIds(o)
+      let hit = false
+      for (const rid of refs) {
+        if (refSet.has(rid) && !pointOwner.has(rid)) {
+          pointOwner.set(rid, oid)
+          hit = true
+        }
+      }
+      if (hit && !ownerLabel.has(oid)) {
+        ownerLabel.set(oid, [resolveKindLabel(v, o, v.getName(o)), v.getName(o)].filter(Boolean).join(''))
+      }
+    }
+  }
+
+  const sources: string[] = []
+  const add = (text: string) => {
+    if (text && !sources.includes(text)) sources.push(text)
+  }
+  for (const rid of createdRefs) {
+    const ownerId = pointOwner.get(rid)
+    if (ownerId && ownerLabel.get(ownerId)) {
+      add(ownerLabel.get(ownerId)!)
+    } else {
+      const name = pointNames.get(rid)
+      if (name) add(name.startsWith('点') ? name : `点${name}`)
+    }
+  }
+  return sources
+}
 
 export interface HistoryEntryLike {
   actorClientId: number
@@ -932,6 +1059,80 @@ function buildMergeMessages(entry: HistoryEntryLike): CollabHistoryMessage[] {
   return [makeMessage('merge', '合并了点', actor, kind, targetName, params, null)]
 }
 
+/** 点角色 → 操作部位中文名（用于「准确表达」标注被直接操作的点部位） */
+const pointRoleLabel = (p: SPt): string | null => {
+  if (p.sphereRole === 'center') return '球心点'
+  if (p.sphereRole === 'radius') return '半径点'
+  if (p.circleRole === 'center') return '圆心'
+  if (p.coneRole === 'baseCenter') return '底面中心'
+  if (p.coneRole === 'apex') return '顶点'
+  if (p.cylinderRole === 'bottomCenter') return '底面圆心'
+  if (p.cylinderRole === 'topCenter') return '顶面圆心'
+  return null
+}
+
+/** 点角色词表：命中则以「拖拽」措辞（点部位），对象本体（球体/圆/线段…）用「拖动」 */
+const POINT_ROLE_WORDS = new Set([
+  '球心点', '半径点', '圆心', '底面中心', '顶点', '底面圆心', '顶面圆心',
+])
+
+/** subject 是否为点部位（角色词或其+点名形式，如 球心点/球心点J） */
+const isPointRoleSubject = (subject: string): boolean => {
+  for (const r of POINT_ROLE_WORDS) {
+    if (subject === r || subject.startsWith(r)) return true
+  }
+  return false
+}
+
+/** 由点 id 推导「被直接操作部位」显示词：角色+点名（球心点J/圆心A），无角色点为点A */
+const subjectForPoint = (
+  pid: string | null | undefined,
+  pointById: Map<string, SPt>,
+  pointNames: Map<string, string>,
+): string | null => {
+  if (!pid) return null
+  const p = pointById.get(pid)
+  const name = pointNames.get(pid)
+  if (p) {
+    const role = pointRoleLabel(p)
+    if (role) return name ? `${role}${name}` : role
+  }
+  return name ? `点${name}` : null
+}
+
+/**
+ * 「准确表达」核心：按操作位置（场景/侧边栏）与被操作部位生成来源标注。
+ * - 场景拖动本体：场景拖动球体/圆/线段…
+ * - 场景拖拽点：场景拖拽球心点/圆心/点A
+ * - 侧边栏修改坐标：侧边栏修改球心点坐标/点A坐标
+ * 意图未声明（origin 为 null）时返回 null，由调用方保留旧启发式。
+ */
+const buildOriginNote = (o: {
+  origin: 'scene' | 'panel' | null
+  subject: string | null
+  draggedPointId: string | null
+  movedPointIds: string[]
+  pointById: Map<string, SPt>
+  pointNames: Map<string, string>
+}): string | null => {
+  const { origin, subject, draggedPointId, movedPointIds, pointById, pointNames } = o
+  if (origin === 'scene') {
+    if (subject) {
+      const verb = isPointRoleSubject(subject) ? '拖拽' : '拖动'
+      return `场景${verb}${subject}`
+    }
+    const pid = draggedPointId ?? movedPointIds[0] ?? null
+    const subj = subjectForPoint(pid, pointById, pointNames)
+    return subj ? `场景拖拽${subj}` : null
+  }
+  if (origin === 'panel') {
+    if (subject) return `侧边栏修改${subject}坐标`
+    const subj = subjectForPoint(movedPointIds[0] ?? null, pointById, pointNames)
+    return subj ? `侧边栏修改${subj}坐标` : '侧边栏修改'
+  }
+  return null
+}
+
 /**
  * 对象级 diff：按优先级吸收构成点/子对象，保证每个「几何对象」只产生一条消息。
  */
@@ -948,11 +1149,27 @@ function buildGeometryMessages(
   const posAfter = pointPositions(after)
   const pointNames = new Map<string, string>()
   for (const p of before.points) pointNames.set(p.id, p.name)
+  /** after 点按 id 索引（含角色字段），供「准确表达」按被操作点部位生成来源标注 */
+  const afterPointById = new Map<string, SPt>()
+  for (const p of after.points) afterPointById.set(p.id, p)
   const messages: CollabHistoryMessage[] = []
   const covered = new Set<string>()
   const judgedParentIds = new Set<string>()
+  /** 引用点 → 吸收它的根对象 id（用于把随动的独立派生物级联到根对象消息） */
+  const refOwner = new Map<string, string>()
+  /** 已生成消息的主对象 id → 消息（级联标注挂载目标） */
+  const msgByTargetId = new Map<string, CollabHistoryMessage>()
+  /** 根对象 id → 级联结果清单（如「级联移动 垂线N」） */
+  const cascadeByRoot = new Map<string, Array<{ action: string; text: string }>>()
 
-  const views = buildViews(before, after)
+  // 从属点归属：after 映射为当前归属；仅 before 有（本条目中被删除的点）用 before 兜底
+  const afterPointIdSet = new Set(after.points.map((p) => p.id))
+  const dependentParent = buildDependentPointParentMap(after)
+  for (const [pid, owner] of buildDependentPointParentMap(before)) {
+    if (!afterPointIdSet.has(pid)) dependentParent.set(pid, owner)
+  }
+
+  const views = buildViews(before, after, dependentParent)
 
   // 被删除的点集（before 存在、after 消失）：用于识别「引用该点的对象被级联删除」
   const afterPointIds = new Set(after.points.map((p) => p.id))
@@ -965,8 +1182,31 @@ function buildGeometryMessages(
 
   // ---- 根因点判定：同一次操作中，多个构成点随同一父对象（立方体/球体等）消失时，
   // 只把其中一个作为被删「根因点」生成主消息，其余点并入级联标注，避免删一个点刷出 N 条 ----
-  const pointParentId = (p: { cubeId?: string | null; prismId?: string | null; pyramidId?: string | null; regularPolygonId?: string | null; sphereId?: string | null; coneId?: string | null; cylinderId?: string | null; circleId?: string | null }) =>
-    p.cubeId ?? p.prismId ?? p.pyramidId ?? p.regularPolygonId ?? p.sphereId ?? p.coneId ?? p.cylinderId ?? p.circleId ?? null
+  const pointParentId = (p: { cubeId?: string | null; prismId?: string | null; pyramidId?: string | null; regularPolygonId?: string | null; sphereId?: string | null; coneId?: string | null; cylinderId?: string | null; circleId?: string | null } & { id: string }) =>
+    p.cubeId ?? p.prismId ?? p.pyramidId ?? p.regularPolygonId ?? p.sphereId ?? p.coneId ?? p.cylinderId ?? p.circleId ?? dependentParent.get(p.id) ?? null
+  // 父对象 → 集结在其下的点（立体移动/修改时这些从属点随动，应吸收不单独上报）
+  const pointsByParent = new Map<string, Set<string>>()
+  for (const p of after.points) {
+    const owner = pointParentId(p)
+    if (!owner) continue
+    let set = pointsByParent.get(owner)
+    if (!set) {
+      set = new Set()
+      pointsByParent.set(owner, set)
+    }
+    set.add(p.id)
+  }
+  /** 吸收根对象的构成点（含从属点）为已上报，避免「移动了 正六面体6」之外又冒出「移动了 点F1」 */
+  const absorbRefs = (rids: string[], ownerId: string) => {
+    for (const rid of rids) {
+      covered.add(rid)
+      refOwner.set(rid, ownerId)
+    }
+    for (const cid of pointsByParent.get(ownerId) ?? []) {
+      covered.add(cid)
+      refOwner.set(cid, ownerId)
+    }
+  }
   const constraintObjectId = (c: AnyObj): string | null => {
     if (typeof c !== 'object' || c === null) return null
     const id =
@@ -1166,8 +1406,9 @@ function buildGeometryMessages(
       const o = v.listAfter.find((item) => v.getId(item) === intent.targetId)
       if (!o) continue
       const name = v.getName(o)
-      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(v, o, name), name, [], null))
-      v.getRefPointIds(o).forEach((rid) => covered.add(rid))
+      const createdFrom = resolveCreateSources(views, pointNames, v, o).join('、') || null
+      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(v, o, name), name, [], null, createdFrom))
+      absorbRefs(v.getRefPointIds(o), intent.targetId)
       judgedParentIds.add(intent.targetId)
       intentCreateId = intent.targetId
       break
@@ -1210,8 +1451,9 @@ for (const view of views) {
       if (refs.length > 0 && refs.every((rid) => covered.has(rid))) continue
 
       const name = view.getName(o)
-      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(view, o, name), name, [], null))
-      refs.forEach((rid) => covered.add(rid))
+      const createdFrom = resolveCreateSources(views, pointNames, view, o).join('、') || null
+      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(view, o, name), name, [], null, createdFrom))
+      absorbRefs(refs, id)
       judgedParentIds.add(id)
     }
 
@@ -1275,7 +1517,7 @@ for (const view of views) {
       const message = makeMessage('delete', '删除了', actor, resolveKindLabel(view, o, name), name, [], null)
       messages.push(message)
       deleteMsgByTarget.set(id, message)
-      refs.forEach((rid) => covered.add(rid))
+      absorbRefs(refs, id)
       judgedParentIds.add(id)
     }
 
@@ -1311,36 +1553,77 @@ for (const view of views) {
       }
       const parentId = view.getParentId(o)
       if (parentId && judgedParentIds.has(parentId)) continue
-      // 构成点已被更高级对象（如同属立方体/面）吸收 → 不单独上报子元素的变化
-      if (refs.length > 0 && refs.every((rid) => covered.has(rid))) continue
-
       const name = view.getName(o)
+      // 级联归属：对象的所有构成点是否都被「同一根对象」吸收（随根对象变化而联动）
+      let ownerRoot: string | null = null
+      let ownedByRoot = refs.length > 0
+      for (const rid of refs) {
+        const owner = refOwner.get(rid)
+        if (!owner) {
+          ownedByRoot = false
+          break
+        }
+        if (ownerRoot === null) ownerRoot = owner
+        else if (owner !== ownerRoot) {
+          ownedByRoot = false
+          break
+        }
+      }
+      if (ownedByRoot && ownerRoot) {
+        // 点/归属某父对象的子元素是主体的构成部分 → 吸收，不单独上报（避免拖动立体刷屏）
+        if (view.key === 'point' || parentId != null) continue
+        // 独立派生对象（垂线/平行线等随基点移动而重绘）→ 作为主对象的「级联…」结果标注，
+        // 清晰表达「操作了什么 → 导致什么结果」，不再静默丢弃
+        const cascadeAction = moved ? '移动' : effectiveParams.length > 0 ? '修改' : ''
+        if (cascadeAction) {
+          const text = [resolveKindLabel(view, o, name), name].filter(Boolean).join('')
+          const list = cascadeByRoot.get(ownerRoot) ?? []
+          if (!list.some((i) => i.text === text)) list.push({ action: `级联${cascadeAction}`, text })
+          cascadeByRoot.set(ownerRoot, list)
+          // 已并入级联的构成点继续往上归属，使更深层随动对象也归到同一根
+          refs.forEach((rid) => refOwner.set(rid, ownerRoot))
+        }
+        judgedParentIds.add(id)
+        continue
+      }
       // 操作级意图：目标对象按命令声明的分类/属性生成消息（主语/属性/标注零反推）
       if (intent && intent.targetId && id === intent.targetId && intent.category) {
         const cat = intent.category
+        const movedPointIds = refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid)))
+        const originNote = buildOriginNote({
+          origin: intent.origin ?? null,
+          subject: intent.subject ?? null,
+          draggedPointId,
+          movedPointIds,
+          pointById: afterPointById,
+          pointNames,
+        })
+        let message: CollabHistoryMessage | null = null
         if (cat === 'update') {
           const kind = renamed ? null : resolveKindLabel(view, o, name)
           const updateParams = intent.params ? toHistoryParams(intent.params) : effectiveParams
-          messages.push(makeMessage('update', '修改了', actor, kind, name, updateParams, intent.note ?? null))
+          message = makeMessage('update', '修改了', actor, kind, name, updateParams, intent.note ?? originNote)
         } else if (cat === 'move') {
-          messages.push(makeMessage('move', '移动了', actor, resolveKindLabel(view, o, name), name, [], intent.note ?? null))
+          message = makeMessage('move', '移动了', actor, resolveKindLabel(view, o, name), name, [], intent.note ?? originNote)
         } else if (cat === 'lock' || cat === 'unlock') {
           const lockParams = intent.params
             ? toHistoryParams(intent.params)
             : locks.map((l) => ({ label: l.label, before: '', after: '' }))
-          messages.push(
-            makeMessage(
-              cat,
-              cat === 'lock' ? '锁定了' : '解锁了',
-              actor,
-              resolveKindLabel(view, o, name),
-              name,
-              lockParams,
-              intent.note ?? null,
-            ),
+          message = makeMessage(
+            cat,
+            cat === 'lock' ? '锁定了' : '解锁了',
+            actor,
+            resolveKindLabel(view, o, name),
+            name,
+            lockParams,
+            intent.note ?? null,
           )
         }
-        refs.forEach((rid) => covered.add(rid))
+        if (message) {
+          messages.push(message)
+          msgByTargetId.set(id, message)
+        }
+        absorbRefs(refs, id)
         judgedParentIds.add(id)
         continue
       }
@@ -1348,57 +1631,83 @@ for (const view of views) {
         // 该锁定归属于其所属多面体（同 op 内 ≥2 成员同时锁）→ 跳过成员细节，主消息在循环后统一输出
         const parentCube = view.key === 'cube' ? null : view.getParentId(o) ?? null
         if (parentCube && (lockGroupByCube.get(parentCube)?.count ?? 0) >= 2) {
-          refs.forEach((rid) => covered.add(rid))
+          absorbRefs(refs, parentCube)
           judgedParentIds.add(id)
           continue
         }
         const toLocked = locks.some((l) => l.toLocked)
-        messages.push(
-          makeMessage(
-            toLocked ? 'lock' : 'unlock',
-            toLocked ? '锁定了' : '解锁了',
-            actor,
-            resolveKindLabel(view, o, name),
-            name,
-            locks.map((l) => ({ label: l.label, before: '', after: '' })),
-            null,
-          ),
+        const lockMsg = makeMessage(
+          toLocked ? 'lock' : 'unlock',
+          toLocked ? '锁定了' : '解锁了',
+          actor,
+          resolveKindLabel(view, o, name),
+          name,
+          locks.map((l) => ({ label: l.label, before: '', after: '' })),
+          null,
         )
+        messages.push(lockMsg)
+        msgByTargetId.set(id, lockMsg)
       } else if (effectiveParams.length > 0) {
         // 改名时省略种类前缀（与立体「修改了 正六面体2：名称 …」格式一致），
         // 名称参数已用对象新名标识对象本身；其余显示/数值修改才带种类
         const kind = renamed ? null : resolveKindLabel(view, o, name)
         const message = makeMessage('update', '修改了', actor, kind, name, effectiveParams, null)
-        // 通过拖动某点达到的修改：标注被移动的点（如拖动半径点改半径 → 由X点拖动）
+        // 通过某点移动导致的修改：区分来源
+        // - 操作级意图（origin/subject 明确）→「场景拖动X/场景拖拽X/侧边栏修改X坐标」
+        // - 旧命令兜底：场景拖动（draggedPointId 明确）→「由X点拖动」；侧边栏坐标编辑→「由X点坐标修改」
         if (refsMoved) {
-          // 交互层明确了实际被拖动的点（如拖动立方体顶点导致整面缩放、所有顶点同步位移）
-          // → 只标注该点；否则退回“最多 2 个不同点”的快照启发式
-          const draggedName = draggedPointId ? pointNames.get(draggedPointId) : null
-          if (draggedName && draggedPointId && refs.includes(draggedPointId)) {
-            message.note = `由${draggedName}点拖动`
+          const originNote = buildOriginNote({
+            origin: intent?.origin ?? null,
+            subject: intent?.subject ?? null,
+            draggedPointId,
+            movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
+            pointById: afterPointById,
+            pointNames,
+          })
+          if (originNote) {
+            message.note = originNote
           } else {
-            const seen = new Set<string>()
-            const movedNames: string[] = []
-            for (const rid of refs) {
-              if (rid && !eqVec(posBefore.get(rid), posAfter.get(rid))) {
-                const pointName = pointNames.get(rid)
-                if (pointName && !seen.has(pointName)) {
-                  seen.add(pointName)
-                  movedNames.push(pointName)
+            const draggedName = draggedPointId ? pointNames.get(draggedPointId) : null
+            if (draggedName && draggedPointId && refs.includes(draggedPointId)) {
+              message.note = `由${draggedName}点拖动`
+            } else {
+              const seen = new Set<string>()
+              const movedNames: string[] = []
+              for (const rid of refs) {
+                if (rid && !eqVec(posBefore.get(rid), posAfter.get(rid))) {
+                  const pointName = pointNames.get(rid)
+                  if (pointName && !seen.has(pointName)) {
+                    seen.add(pointName)
+                    movedNames.push(pointName)
+                  }
                 }
               }
-            }
-            if (movedNames.length > 0 && movedNames.length <= 2) {
-              message.note = `由${movedNames.join('、')}点拖动`
+              if (movedNames.length > 0 && movedNames.length <= 2) {
+                // 明确了拖动点（场景拖动）→ 标注「拖动」；否则为坐标修改（侧边栏）
+                message.note = draggedPointId
+                  ? `由${movedNames.join('、')}点拖动`
+                  : `由${movedNames.join('、')}点坐标修改`
+              }
             }
           }
         }
         messages.push(message)
+        msgByTargetId.set(id, message)
       } else if (moved) {
-        messages.push(makeMessage('move', '移动了', actor, resolveKindLabel(view, o, name), name, [], null))
+        const originNote = buildOriginNote({
+          origin: intent?.origin ?? null,
+          subject: intent?.subject ?? null,
+          draggedPointId,
+          movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
+          pointById: afterPointById,
+          pointNames,
+        })
+        const moveMsg = makeMessage('move', '移动了', actor, resolveKindLabel(view, o, name), name, [], originNote)
+        messages.push(moveMsg)
+        msgByTargetId.set(id, moveMsg)
       }
 
-      refs.forEach((rid) => covered.add(rid))
+      absorbRefs(refs, id)
       judgedParentIds.add(id)
     }
   }
@@ -1427,7 +1736,14 @@ for (const view of views) {
   for (const [pointId, texts] of cascadeByPoint) {
     if (texts.length === 0) continue
     const msg = deleteMsgByTarget.get(pointId)
-    if (msg) msg.note = `级联删除 ${texts.join('、')}`
+    if (msg) msg.cascade = `级联删除 ${texts.join('、')}`
+  }
+
+  // 将随动派生物的级联结果挂到主对象消息（如「移动了 点B」→ 「级联移动 垂线N」）
+  for (const [rootId, items] of cascadeByRoot) {
+    if (items.length === 0) continue
+    const msg = msgByTargetId.get(rootId)
+    if (msg) msg.cascade = items.map((i) => `${i.action} ${i.text}`).join('、')
   }
 
   return messages

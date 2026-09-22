@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import { projectApi } from './project'
+import { withThumbnailVersion } from '@/utils/imageCache'
 import { signalingApi } from './signaling'
 import type {
   Room,
@@ -244,33 +245,39 @@ const toBackendRole = (role: RoomRole): string => {
   }
 }
 
-// ---- 项目信息补全：后端已通过 Feign 填充 projectThumbnailUrl/projectName，
-//      此处仅作为兜底（后端项目服务不可用时逐个查询公开项目详情）----
+// ---- 项目信息补全 / 实时对账 ----
+// 后端已通过 Feign 填充 projectThumbnailUrl/projectName，但项目内容(场景)修改后
+// 后端房间表不会自动刷新缩略图与修改时间。这里每次读取时都拿关联项目的最新数据
+// 与房间对账：用实时项目缩略图覆盖（"改动即更新"），并让房间修改时间取 项目更新时间
+// 与 房间时间 的较大者，使协作房间的项目信息/缩略图/修改时间始终与项目列表保持一致。
 const enrichRoomThumbnails = async (rooms: Room[]): Promise<Room[]> => {
-  const missing = rooms.filter((r) => r.projectId && !r.projectThumbnailUrl && !r.projectName)
-  if (missing.length === 0) return rooms
+  const linked = rooms.filter((r) => r.projectId)
+  if (linked.length === 0) return rooms
   const coverMap = new Map<string, string>()
   const nameMap = new Map<string, string>()
+  const updatedMap = new Map<string, string>()
   // 1) 批量拿"我的项目"构建映射
   try {
     const myProjects = await projectApi.getMyProjects()
     for (const p of myProjects) {
       nameMap.set(p.id, p.name)
       if (p.thumbnailUrl) coverMap.set(p.id, p.thumbnailUrl)
+      if (p.updatedAt) updatedMap.set(p.id, p.updatedAt)
     }
   } catch {
     // 忽略，下面逐个兜底
   }
-  // 2) 仍缺失的逐个查公开项目详情
-  const stillMissing = missing.filter((r) => !coverMap.has(r.projectId))
+  // 2) 仍未匹配到的逐个查项目详情（可能属于他人公开项目）
+  const stillMissing = linked.filter((r) => !nameMap.has(r.projectId))
   await Promise.all(
     stillMissing.map(async (r) => {
       try {
         const detail = await projectApi.getProject(r.projectId)
         nameMap.set(r.projectId, detail.name)
         if (detail.thumbnailUrl) coverMap.set(r.projectId, detail.thumbnailUrl)
+        if (detail.updatedAt) updatedMap.set(r.projectId, detail.updatedAt)
       } catch {
-        // 项目可能已删除或无权限，保留空值
+        // 项目可能已删除或无权限，保留后端已有值
       }
     }),
   )
@@ -278,11 +285,16 @@ const enrichRoomThumbnails = async (rooms: Room[]): Promise<Room[]> => {
     if (!r.projectId) return r
     const cover = coverMap.get(r.projectId)
     const name = nameMap.get(r.projectId)
-    if (!cover && !name) return r
+    const updated = updatedMap.get(r.projectId)
+    if (!cover && !name && !updated) return r
     return {
       ...r,
-      projectThumbnailUrl: cover || r.projectThumbnailUrl,
+      // 缩略图 URL 追加版本参数（项目 updatedAt），使 URL 随内容变化以突破持久化缓存并触发重渲染
+      projectThumbnailUrl: cover ? withThumbnailVersion(cover, updated) : r.projectThumbnailUrl,
       projectName: name || r.projectName,
+      // ISO 字符串可逐字符比较：房间修改时间取 项目修改时间 与 原房间时间 的较大者
+      updatedAt:
+        updated && (!r.updatedAt || updated > r.updatedAt) ? updated : r.updatedAt,
     }
   })
 }
@@ -493,7 +505,7 @@ export const roomApi = {
       `/collab/room/hall?${params.toString()}`,
     )
     const rooms = dtos.map(mapRoom)
-    return enrichRoomPeerCounts(rooms)
+    return enrichRoomPeerCounts(await enrichRoomThumbnails(rooms))
   },
 
   // ---- 回收站 ----

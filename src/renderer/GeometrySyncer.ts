@@ -610,9 +610,16 @@ export class GeometrySyncer {
       const isSelected = scene.selection.points.has(p.id)
       const baseColor = computePointBaseColor(p, scene)
       const finalColor = isSelected ? SELECTED_COLOR : baseColor
-      ;(sprite.material as THREE.SpriteMaterial).color.set(finalColor)
+      // 拖拽中不重置非选中点的颜色：深度遮挡的暗化亮度在拖拽期间应保持冻结
+      // （updateDepthOcclusion 拖拽时跳过射线检测与亮度插值）。若此处照常重置为
+      // 满亮度，被拖拽点关联的其它点会全部亮起（深度遮挡失效的旧问题）。
+      // 选中（被拖拽）点仍更新为选中色；位置/标签等其余更新照常进行。
+      const isDragActive = scene.activeDraggedPointIds.size > 0
+      if (!isDragActive || isSelected) {
+        ;(sprite.material as THREE.SpriteMaterial).color.set(finalColor)
+        this.pointBaseColor.set(p.id, new THREE.Color(finalColor))
+      }
       sprite.renderOrder = SELECTED_POINT_RENDER_ORDER
-      this.pointBaseColor.set(p.id, new THREE.Color(finalColor))
 
       let pointSpriteVisible = p.visible !== false
       const isCircleCenterPoint = p.circleRole === 'center'
@@ -3868,6 +3875,9 @@ export class GeometrySyncer {
     if (!this.depthOcclusionEnabled) return
     const isDragging = (this.currentSceneRef?.activeDraggedPointIds.size ?? 0) > 0
     if (isDragging) {
+      // 拖拽中不做新的遮挡射线检测（代价高、目标位置持续变化），亮度插值也一并跳过，
+      // 避免每帧对全部点做 O(N) 插值拖垮帧率。配合 syncPoints 在拖拽中不重置点色，
+      // 深度遮挡的暗化亮度在拖拽期间保持冻结，松手后射线检测与插值恢复。
       this.occlusionFrameCounter = 0
       return
     }

@@ -7,13 +7,20 @@ import { ApiError } from '@/api/client'
 import type { Room, RoomMember, RoomRole, RoomCategory, UpdateRoomRequest, RoomApplication, ApprovalBadge, ApplicationFilter, ApplicationRole } from '@/types/room'
 import { useSessionGuard } from '@/composables/useSessionGuard'
 import ProxiedImage from '@/components/ProxiedImage.vue'
+import { useCollabStore } from '@/store/collabStore'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 import { collabRoomEvents, type CollabRoomEvent } from '@/utils/collabRoomEvents'
 import { mergeArrayById } from '@/utils/reactiveMerge'
+import {
+  readActiveRoomIds,
+  removeActiveRoom,
+  activeRoomStorageKeys,
+} from '@/utils/activeRoomRegistry'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const collabStore = useCollabStore()
 const rlBodyRef = ref<HTMLElement | null>(null)
 
 useSessionGuard({
@@ -31,32 +38,31 @@ const deleteConfirmId = ref<string | null>(null)
 const leaveConfirmId = ref<string | null>(null)
 
 // ---- 当前正在协作的房间（跨 Tab 共享，用于判定 加入/离开 按钮状态）----
-// 编辑器 Tab 加入房间后写入 collab:active-room（含时间戳），每轮轮询刷新时间戳；
-// 此处读取时校验时间戳新鲜度（20s 内视为有效），避免编辑器 Tab 被直接关闭后标记残留。
-// 心跳每 10s 刷新时间戳，20s TTL 允许 1 次心跳丢失；pagehide 会立即清除标记。
-const ACTIVE_ROOM_KEY = 'collab:active-room'
-const ACTIVE_ROOM_TTL_MS = 20_000
-const activeRoomId = ref<string | null>(null)
+// 采用多条目注册表（roomId → 心跳时间戳）：每个编辑器 Tab 只登记/刷新/注销
+// 自己的房间，多 Tab 同时加入不同房间时互不覆盖；读取时校验 TTL 新鲜度，
+// 避免编辑器 Tab 被直接关闭后标记残留。
+// 心跳每 10s 刷新时间戳，20s TTL 允许 1 次心跳丢失；pagehide 会立即注销。
+const activeRoomIds = ref<Set<string>>(new Set())
 
-const readActiveRoomId = (): string | null => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_ROOM_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { roomId?: string; ts?: number }
-    if (!parsed.roomId) return null
-    const ts = typeof parsed.ts === 'number' ? parsed.ts : 0
-    if (Date.now() - ts > ACTIVE_ROOM_TTL_MS) return null
-    return parsed.roomId
-  } catch {
-    return null
+const refreshActiveRoom = () => {
+  const ids = readActiveRoomIds()
+  activeRoomIds.value = ids
+  // 注册表是「是否正在该房间协作」的唯一事实来源：从大厅/编辑器等其他入口加入时，
+  // 列表页未参与加入流程，本地 hasLeft 可能仍是旧值，此处按注册表纠正，
+  // 保证「加入/离开」按钮与卡片状态始终一致
+  if (ids.size > 0) {
+    let changed = false
+    for (const room of allRooms.value) {
+      if (ids.has(room.id) && room.hasLeft) {
+        room.hasLeft = false
+        changed = true
+      }
+    }
+    if (changed) saveRoomHistory(allRooms.value)
   }
 }
 
-const refreshActiveRoom = () => {
-  activeRoomId.value = readActiveRoomId()
-}
-
-const isActiveRoom = (room: Room): boolean => activeRoomId.value === room.id
+const isActiveRoom = (room: Room): boolean => activeRoomIds.value.has(room.id)
 
 // ---- 房间历史记录本地持久化 ----
 // 房间列表页用作历史记录，即使用户离开房间后也能从记录列表中再次加入。
@@ -234,12 +240,27 @@ const fetchRooms = async (silent = false) => {
     const historyMap = new Map(loadRoomHistory().map((r) => [r.id, r]))
     const nextRooms = merged.map((r) => {
       const hist = historyMap.get(r.id)
+      let room = r
       if (hist && hist.hasLeft && r.myRole !== 'creator') {
         // 本地标记为已离开，且服务器仍返回该房间（说明后端未移除成员记录）
         // 优先使用服务器的最新数据，但保留 hasLeft 状态
-        return { ...r, hasLeft: hist.hasLeft }
+        room = { ...r, hasLeft: hist.hasLeft }
       }
-      return r
+      // 关闭/打开防回跳：本地操作已成功（或刚收到跨 Tab 事件）时，
+      // 不允许在途的陈旧服务器快照把 isOpen 覆盖回旧值；服务器收敛后解除保护。
+      // 本 Tab 有在途的打开/关闭请求时保护不得提前解除：请求提交前的旧快照
+      // 可能与本地未预改的值相同，解除后同一窗口内的新快照会造成状态跳变。
+      if (isRoomOpenPending(room.id)) {
+        const local = allRooms.value.find((item) => item.id === room.id)
+        if (local) {
+          if (local.isOpen === room.isOpen && !isTogglingRoom(local)) {
+            clearRoomOpenPending(room.id)
+          } else {
+            room = { ...room, isOpen: local.isOpen }
+          }
+        }
+      }
+      return room
     })
     // 局部动态刷新：按 id 合并，保留未变化房间的对象引用，避免列表重渲染/滚动重置
     allRooms.value = mergeArrayById(allRooms.value, nextRooms)
@@ -260,25 +281,69 @@ const handleCrossTabLogin = (event: CrossTabLoginEvent) => {
 
 let roomPollingTimer: ReturnType<typeof setInterval> | null = null
 
+// ---- 关闭/打开状态防回跳保护 ----
+// 关闭/打开采用「乐观更新 + 失败回滚」：API 成功后本地即最新，但 15s 轮询的
+// 服务器快照可能取自提交之前，若直接覆盖会让状态跳回旧值，出现两个状态
+// 来回抖动。为此在本地操作/跨 Tab 事件生效后开启短保护窗口，窗口内轮询
+// 不得覆盖 isOpen；服务器值收敛后提前解除保护。
+const ROOM_OPEN_GUARD_MS = 15_000
+const roomOpenPendingUntil = ref<Record<string, number>>({})
+
+const markRoomOpenPending = (roomId: string) => {
+  roomOpenPendingUntil.value = {
+    ...roomOpenPendingUntil.value,
+    [roomId]: Date.now() + ROOM_OPEN_GUARD_MS,
+  }
+}
+const clearRoomOpenPending = (roomId: string) => {
+  if (!(roomId in roomOpenPendingUntil.value)) return
+  const next = { ...roomOpenPendingUntil.value }
+  delete next[roomId]
+  roomOpenPendingUntil.value = next
+}
+const isRoomOpenPending = (roomId: string): boolean =>
+  (roomOpenPendingUntil.value[roomId] ?? 0) > Date.now()
+
+// 本 Tab 刚发出的事件签名：emit 会同步派发给本 Tab 监听器，若不识别会导致
+// join/leave 的 onlineCount 被本地逻辑与事件监听重复增减（状态不正确）。
+let selfEventSignature: string | null = null
+const emitRoomEvent = (event: CollabRoomEvent) => {
+  selfEventSignature = `${event.type}:${event.roomId}:${event.timestamp}`
+  collabRoomEvents.emit(event)
+}
+
 // 跨 Tab 协作事件处理：其他 Tab 中加入/离开/关闭/打开房间时，同步更新本地列表状态
 const handleCollabRoomEvent = (event: CollabRoomEvent) => {
-  // join/leave 事件会改变 active-room 标记，立即刷新
+  // join/leave 事件会改变 active-room 注册表，立即刷新
   if (event.type === 'join' || event.type === 'leave') {
     refreshActiveRoom()
+  }
+  // 本 Tab 自己发出的事件：调用方已就地更新过状态，跳过以免重复应用
+  if (selfEventSignature === `${event.type}:${event.roomId}:${event.timestamp}`) {
+    return
   }
   const room = allRooms.value.find((r) => r.id === event.roomId)
   if (!room) return
   if (event.type === 'leave') {
-    room.hasLeft = true
-    room.onlineCount = Math.max(0, room.onlineCount - 1)
+    // 幂等：房间列表离开时会发 leave，编辑器 Tab 退出协作时会再发一条，
+    // 已处于离开状态时不再重复扣减在线人数
+    if (!room.hasLeft) {
+      room.hasLeft = true
+      room.onlineCount = Math.max(0, room.onlineCount - 1)
+    }
   } else if (event.type === 'join') {
-    room.hasLeft = false
-    room.onlineCount += 1
+    if (room.hasLeft) {
+      room.hasLeft = false
+      room.onlineCount += 1
+    }
   } else if (event.type === 'close') {
     room.isOpen = false
     room.onlineCount = 0
+    // 事件代表服务端已提交的新状态，开启防回跳保护抵御在途的陈旧轮询快照
+    markRoomOpenPending(room.id)
   } else if (event.type === 'reopen') {
     room.isOpen = true
+    markRoomOpenPending(room.id)
   } else if (event.type === 'permission_change' && event.permission && event.value !== undefined) {
     // 实时同步权限变更（如 approvalRequired 开关）
     const field = event.permission as keyof Room
@@ -288,9 +353,9 @@ const handleCollabRoomEvent = (event: CollabRoomEvent) => {
   saveRoomHistory(allRooms.value)
 }
 
-// 监听 localStorage 跨 Tab 变化（active-room 标记更新时立即同步按钮状态）
+// 监听 localStorage 跨 Tab 变化（active-room 注册表更新时立即同步按钮状态）
 const handleStorageEvent = (e: StorageEvent) => {
-  if (e.key === ACTIVE_ROOM_KEY) {
+  if (e.key && activeRoomStorageKeys.includes(e.key)) {
     refreshActiveRoom()
   }
 }
@@ -325,6 +390,10 @@ onBeforeUnmount(() => {
   if (roomPollingTimer) {
     clearInterval(roomPollingTimer)
     roomPollingTimer = null
+  }
+  if (joinConfirmTimer) {
+    clearTimeout(joinConfirmTimer)
+    joinConfirmTimer = null
   }
   stopBadgePolling()
 })
@@ -547,6 +616,14 @@ const openProject = (projectId: string) => {
 }
 
 // ---- 离开 / 加入 ----
+// 进行中的房间 id：同一时刻每个按钮只允许一个在途请求，防止连击导致
+// 重复调用 API、重复打开编辑器 Tab、在线人数重复增减
+const joiningRoomId = ref<string | null>(null)
+const leavingRoomId = ref<string | null>(null)
+// 加入成功后等待编辑器 Tab 登记 active-room 的最长时间（超时则恢复按钮）
+const JOIN_CONFIRM_TIMEOUT_MS = 10_000
+let joinConfirmTimer: ReturnType<typeof setTimeout> | null = null
+
 const requestLeave = (id: string) => {
   leaveConfirmId.value = id
 }
@@ -554,21 +631,27 @@ const cancelLeave = () => {
   leaveConfirmId.value = null
 }
 const confirmLeave = async (room: Room) => {
+  if (leavingRoomId.value) return
+  leavingRoomId.value = room.id
   try {
     await roomApi.leaveRoom(room.id)
     room.hasLeft = true
     room.onlineCount = Math.max(0, room.onlineCount - 1)
     leaveConfirmId.value = null
+    // 立即注销本房间的 active-room 注册项并刷新：按钮从「离开」即时翻转为
+    // 「加入」，不再等待编辑器 Tab 响应跨 Tab 事件或 20s TTL 过期
+    if (isActiveRoom(room)) {
+      removeActiveRoom(room.id)
+    }
+    refreshActiveRoom()
     // 持久化到本地历史记录
     saveRoomHistory(allRooms.value)
     // 跨 Tab 通知编辑器页同步退出协作
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'leave',
       roomId: room.id,
       timestamp: Date.now(),
     })
-    // 立即刷新 active-room 标记（编辑器 Tab 退出后会清除，此处兜底）
-    refreshActiveRoom()
     window.dispatchEvent(
       new CustomEvent('toast', { detail: { msg: '已离开房间', scope: 'global' } }),
     )
@@ -576,13 +659,25 @@ const confirmLeave = async (room: Room) => {
     const msg = err instanceof ApiError ? err.message : '离开房间失败'
     window.dispatchEvent(new CustomEvent('toast', { detail: { msg, scope: 'global' } }))
     leaveConfirmId.value = null
+  } finally {
+    leavingRoomId.value = null
   }
 }
 const joinRoom = async (room: Room) => {
+  if (joiningRoomId.value) return
   if (!room.isOpen) {
     window.dispatchEvent(
       new CustomEvent('toast', {
         detail: { msg: '房间已关闭，无法加入', scope: 'global' },
+      }),
+    )
+    return
+  }
+  // 已在本机协作中（可能是刚加入、编辑器 Tab 尚未登记完成）：不重复打开编辑器
+  if (isActiveRoom(room)) {
+    window.dispatchEvent(
+      new CustomEvent('toast', {
+        detail: { msg: '你已在该房间中协作，无需重复加入', scope: 'global' },
       }),
     )
     return
@@ -595,6 +690,7 @@ const joinRoom = async (room: Room) => {
       }),
     )
   }
+  joiningRoomId.value = room.id
   try {
     // joinRoom 返回 wsUrl+ticket，用于跳转编辑器后建立 WebSocket 协作连接
     const joinResult = await roomApi.joinRoom(room.id)
@@ -606,7 +702,7 @@ const joinRoom = async (room: Room) => {
     // 持久化到本地历史记录
     saveRoomHistory(allRooms.value)
     // 跨 Tab 通知编辑器页加入协作
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'join',
       roomId: room.id,
       timestamp: Date.now(),
@@ -627,34 +723,74 @@ const joinRoom = async (room: Room) => {
     // 跳转到编辑器页面并带上 roomId
     const resolved = router.resolve({ name: 'editor', query: { roomId: room.id } })
     window.open(resolved.href, '_blank')
+    // 保持「加入中」直到编辑器 Tab 登记 active-room（或超时），
+    // 避免窗口期内重复点击打开多个编辑器 Tab
+    if (joinConfirmTimer) clearTimeout(joinConfirmTimer)
+    joinConfirmTimer = setTimeout(() => {
+      joiningRoomId.value = null
+      joinConfirmTimer = null
+    }, JOIN_CONFIRM_TIMEOUT_MS)
   } catch (err) {
     const msg = err instanceof ApiError ? err.message : '加入房间失败'
     window.dispatchEvent(new CustomEvent('toast', { detail: { msg, scope: 'global' } }))
+    joiningRoomId.value = null
   }
 }
 
+// 编辑器 Tab 完成登记（或标记过期）后解除「加入中」状态
+watch(activeRoomIds, (ids) => {
+  if (joiningRoomId.value && ids.has(joiningRoomId.value)) {
+    if (joinConfirmTimer) {
+      clearTimeout(joinConfirmTimer)
+      joinConfirmTimer = null
+    }
+    joiningRoomId.value = null
+  }
+})
+
 // ---- 打开 / 关闭房间（仅创建者）----
+// 进行中的打开/关闭操作：同时记录房间 id 与操作意图。
+// 等待期间不预改 room.isOpen（与 joinRoom 的 joiningRoomId 模式一致）：
+//  1. 避免「加入」按钮在房间真正打开前就出现；
+//  2. 按钮文案由意图决定，杜绝打开中显示成「关闭中...」。
+const roomToggleState = ref<{ roomId: string; action: 'open' | 'close' } | null>(null)
+const isTogglingRoom = (room: Room): boolean => roomToggleState.value?.roomId === room.id
+// 按钮图标/标题应展示的「关闭态」：进行中关闭操作、或房间已处于打开状态
+const showsCloseAction = (room: Room): boolean => {
+  if (roomToggleState.value?.roomId === room.id) {
+    return roomToggleState.value.action === 'close'
+  }
+  return room.isOpen
+}
+
 const toggleRoomOpen = async (room: Room) => {
   // 仅"打开"直接执行；"关闭"走二次确认流程（见 requestClose / confirmClose）
-  if (!room.isOpen) {
-    const oldOpen = room.isOpen
+  if (room.isOpen) return
+  if (roomToggleState.value) return
+  // 先进入「打开中...」禁用态，再发请求：等待期间 isOpen 保持 false
+  roomToggleState.value = { roomId: room.id, action: 'open' }
+  // 入口即开启防回跳保护：轮询快照可能取自提交前，不得在等待期覆盖本地状态
+  markRoomOpenPending(room.id)
+  try {
+    await roomApi.openRoom(room.id)
+    // API 成功后才落地新状态：刷新防回跳窗口，并跨 Tab 通知房间已重新开放
     room.isOpen = true
-    try {
-      await roomApi.openRoom(room.id)
-      // 跨 Tab 通知房间已重新开放
-      collabRoomEvents.emit({
-        type: 'reopen',
-        roomId: room.id,
-        timestamp: Date.now(),
-      })
-      window.dispatchEvent(
-        new CustomEvent('toast', { detail: { msg: '房间已打开', scope: 'global' } }),
-      )
-    } catch (err) {
-      room.isOpen = oldOpen
-      const msg = err instanceof ApiError ? err.message : '更新失败'
-      window.dispatchEvent(new CustomEvent('toast', { detail: { msg, scope: 'global' } }))
-    }
+    markRoomOpenPending(room.id)
+    emitRoomEvent({
+      type: 'reopen',
+      roomId: room.id,
+      timestamp: Date.now(),
+    })
+    window.dispatchEvent(
+      new CustomEvent('toast', { detail: { msg: '房间已打开', scope: 'global' } }),
+    )
+  } catch (err) {
+    // 失败：本地从未预改 isOpen，无需回滚；解除防回跳保护
+    clearRoomOpenPending(room.id)
+    const msg = err instanceof ApiError ? err.message : '更新失败'
+    window.dispatchEvent(new CustomEvent('toast', { detail: { msg, scope: 'global' } }))
+  } finally {
+    roomToggleState.value = null
   }
 }
 
@@ -667,13 +803,24 @@ const cancelClose = () => {
   closeConfirmId.value = null
 }
 const confirmClose = async (room: Room) => {
-  const oldOpen = room.isOpen
-  room.isOpen = false
+  if (roomToggleState.value) return
+  // 确认等待期间房间可能已被其他成员关闭：无需重复请求
+  if (!room.isOpen) {
+    closeConfirmId.value = null
+    return
+  }
+  // 立即收起确认弹窗：等待期间主按钮显示「关闭中...」禁用态，
+  // 避免界面卡在确认/取消上且没有任何进行中反馈
+  closeConfirmId.value = null
+  roomToggleState.value = { roomId: room.id, action: 'close' }
+  // 入口即开启防回跳保护：轮询快照可能取自提交前，不得在等待期覆盖本地状态
+  markRoomOpenPending(room.id)
   try {
     await roomApi.closeRoom(room.id)
-    closeConfirmId.value = null
-    // 跨 Tab 通知所有协作用户房间已关闭
-    collabRoomEvents.emit({
+    // API 成功后才落地新状态：刷新防回跳窗口，并跨 Tab 通知房间已关闭
+    room.isOpen = false
+    markRoomOpenPending(room.id)
+    emitRoomEvent({
       type: 'close',
       roomId: room.id,
       timestamp: Date.now(),
@@ -682,9 +829,12 @@ const confirmClose = async (room: Room) => {
       new CustomEvent('toast', { detail: { msg: '房间已关闭', scope: 'global' } }),
     )
   } catch (err) {
-    room.isOpen = oldOpen
+    // 失败：本地从未预改 isOpen，无需回滚；解除防回跳保护
+    clearRoomOpenPending(room.id)
     const msg = err instanceof ApiError ? err.message : '关闭失败'
     window.dispatchEvent(new CustomEvent('toast', { detail: { msg, scope: 'global' } }))
+  } finally {
+    roomToggleState.value = null
   }
 }
 
@@ -696,7 +846,7 @@ const togglePublic = async (room: Room) => {
     await roomApi.updateRoom(room.id, { isPublic: room.isPublic })
     // 不更新 updatedAt：避免切换公开后列表项跳到顶部
     // 通知编辑器 Tab 即时刷新房间可见性标签
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'visibility_change',
       roomId: room.id,
       timestamp: Date.now(),
@@ -836,7 +986,7 @@ const updateRoomPerm = async (
   room[field] = value as never
   try {
     await roomApi.updateRoom(room.id, { [field]: value } as UpdateRoomRequest)
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'permission_change',
       roomId: room.id,
       timestamp: Date.now(),
@@ -887,10 +1037,17 @@ const changeMemberRole = async (roomId: string, member: RoomMember, newRole: Roo
   try {
     await roomApi.updateMemberRole(roomId, member.userId, newRole)
     // 通知编辑器 Tab 即时刷新目标用户的操作权限
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'role_change',
       roomId,
       timestamp: Date.now(),
+      targetUserId: member.userId,
+      role: newRole,
+    })
+    // 经 Yjs awareness 广播给房间内所有协作者（含不同设备/浏览器的目标成员），
+    // 使其本地 myRole 立即更新、权限即时生效，无需等待下一次轮询。
+    collabStore.activeManager?.broadcastRoleChange({
+      roomId,
       targetUserId: member.userId,
       role: newRole,
     })
@@ -919,7 +1076,7 @@ const confirmRemoveMember = async (roomId: string, userId: string) => {
       room.memberCount = Math.max(0, room.memberCount - 1)
     }
     // 通知编辑器 Tab 被踢用户应退出协作
-    collabRoomEvents.emit({
+    emitRoomEvent({
       type: 'kick',
       roomId,
       timestamp: Date.now(),
@@ -1839,11 +1996,13 @@ const formatDateTime = (dateStr: string | null) => {
               </div>
 
               <div class="rl-card-actions">
-                <!-- 离开 / 加入：根据当前用户真实协作状态显示，仅在房间打开时可用 -->
+                <!-- 离开 / 加入：根据当前用户真实协作状态显示，仅在房间打开时可用；
+                     打开/关闭进行中时一律禁用，防止在等待房间真正开关期间误操作 -->
                 <template v-if="leaveConfirmId !== room.id">
                   <button
                     v-if="isActiveRoom(room) && room.isOpen"
                     class="rl-action-btn rl-leave-btn"
+                    :disabled="leavingRoomId === room.id || isTogglingRoom(room)"
                     @click="requestLeave(room.id)"
                     title="离开房间"
                   >
@@ -1860,11 +2019,12 @@ const formatDateTime = (dateStr: string | null) => {
                       <polyline points="16 17 21 12 16 7" />
                       <line x1="21" y1="12" x2="9" y2="12" />
                     </svg>
-                    <span>离开</span>
+                    <span>{{ leavingRoomId === room.id ? '离开中...' : '离开' }}</span>
                   </button>
                   <button
                     v-else-if="!isActiveRoom(room) && room.isOpen"
                     class="rl-action-btn rl-join-btn"
+                    :disabled="joiningRoomId === room.id || isTogglingRoom(room)"
                     @click="joinRoom(room)"
                     title="加入房间"
                   >
@@ -1881,12 +2041,18 @@ const formatDateTime = (dateStr: string | null) => {
                       <polyline points="10 17 15 12 10 7" />
                       <line x1="15" y1="12" x2="3" y2="12" />
                     </svg>
-                    <span>加入</span>
+                    <span>{{ joiningRoomId === room.id ? '加入中...' : '加入' }}</span>
                   </button>
                 </template>
                 <div v-else class="rl-confirm-inline">
                   <span class="rl-confirm-text">确认离开？</span>
-                  <button class="rl-confirm-yes" @click="confirmLeave(room)">确认</button>
+                  <button
+                    class="rl-confirm-yes"
+                    :disabled="leavingRoomId === room.id"
+                    @click="confirmLeave(room)"
+                  >
+                    确认
+                  </button>
                   <button class="rl-confirm-no" @click="cancelLeave">取消</button>
                 </div>
 
@@ -1895,11 +2061,12 @@ const formatDateTime = (dateStr: string | null) => {
                   <button
                     class="rl-action-btn rl-open-btn"
                     :class="{ 'is-open': room.isOpen, 'is-closed': !room.isOpen }"
+                    :disabled="isTogglingRoom(room)"
                     @click="room.isOpen ? requestClose(room.id) : toggleRoomOpen(room)"
                     :title="room.isOpen ? '关闭房间' : '打开房间'"
                   >
                     <svg
-                      v-if="room.isOpen"
+                      v-if="showsCloseAction(room)"
                       class="rl-action-icon"
                       viewBox="0 0 24 24"
                       fill="none"
@@ -1924,7 +2091,11 @@ const formatDateTime = (dateStr: string | null) => {
                       <circle cx="12" cy="12" r="10" />
                       <circle cx="12" cy="12" r="4" />
                     </svg>
-                    <span>{{ room.isOpen ? '关闭' : '打开' }}</span>
+                    <span>{{
+                      roomToggleState?.roomId === room.id
+                        ? (roomToggleState.action === 'open' ? '打开中...' : '关闭中...')
+                        : (room.isOpen ? '关闭' : '打开')
+                    }}</span>
                   </button>
                 </template>
                 <div
@@ -1932,7 +2103,13 @@ const formatDateTime = (dateStr: string | null) => {
                   class="rl-confirm-inline"
                 >
                   <span class="rl-confirm-text">确认关闭？</span>
-                  <button class="rl-confirm-yes" @click="confirmClose(room)">确认</button>
+                  <button
+                    class="rl-confirm-yes"
+                    :disabled="isTogglingRoom(room)"
+                    @click="confirmClose(room)"
+                  >
+                    确认
+                  </button>
                   <button class="rl-confirm-no" @click="cancelClose">取消</button>
                 </div>
 
@@ -3654,6 +3831,20 @@ const formatDateTime = (dateStr: string | null) => {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
+}
+
+/* 进行中的按钮（加入中/离开中/打开中/关闭中）：禁用交互并降低透明度，
+   避免连击重复触发请求导致状态错乱 */
+.rl-action-btn:disabled,
+.rl-confirm-inline button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.rl-action-btn:disabled:hover,
+.rl-confirm-inline button:disabled:hover {
+  background: #252525;
+  border-color: #3d3d3d;
 }
 
 .rl-leave-btn {

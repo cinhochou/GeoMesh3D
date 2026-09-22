@@ -17,10 +17,13 @@ import { ThreeRenderer } from './ThreeRenderer'
 import { DEFAULT_POINT_COLOR } from './GeometrySyncer'
 import { findBestUnfoldRatioByGradient, selectNetDragPointsByScreenDirection, type NetControlPoint } from './NetMath'
 import type { DragLockTarget } from '../core/collab/CollabManager'
+import type { CollabOperationIntent } from '@/types/collabIntent'
 
 export class Interaction {
   private static readonly MOBILE_TAP_MOVE_THRESHOLD = 8
   private static readonly COLLAB_SETTLE_SYNC_MS = 250
+  /** getLiveSyncPointIds 缓存窗口：与 CollabManager.LIVE_SYNC_THROTTLE_MS(33ms) 对齐 */
+  private static readonly LIVE_SYNC_CACHE_MS = 33
   private static readonly TOUCH_MOUSE_GUARD_MS = 500
   private static readonly AR_WHEEL_ZOOM_STEP = 0.0015
   private static readonly CREATE_POINT_DEPTH_WHEEL_STEP = 0.005
@@ -176,6 +179,7 @@ export class Interaction {
     this.viewOnly = value
     // 切换为仅观看时立即终止任何进行中的拖拽
     if (value) {
+      this.dragSubject = null
       this.draggingPointId = null
       this.draggingLineId = null
       this.draggingStraightLineId = null
@@ -192,6 +196,9 @@ export class Interaction {
     }
   }
   draggingPointId: string | null = null
+  /** 本次拖拽中被直接操作的对象部位（如 球体/球心点/圆心），用于协作历史「准确表达」操作来源。
+   *  null 时由 commitDragHistory 按当前 dragging*Id 推断（线段/圆/圆柱…本体） */
+  private dragSubject: string | null = null
   draggingLineId: string | null = null
   draggingStraightLineId: string | null = null
   draggingRayId: string | null = null
@@ -315,6 +322,10 @@ export class Interaction {
   private globalPointValueMode = false
   private lastTouchEventAt = 0
   private liveSyncUntil = 0
+  // getLiveSyncPointIds 结果缓存：展开计算是 O(约束数量×关联点)，而消费它的
+  // syncLivePreview 是 33ms 节流。若每帧重算会在拖拽时白耗 CPU，按节流窗口缓存。
+  private liveSyncPointIdsCache: string[] | null = null
+  private liveSyncPointIdsCacheTime = 0
   private arMouseRotationCandidate = false
   private arMouseRotationCandidateStartClient = new THREE.Vector2()
   private arSceneRotating = false
@@ -1308,11 +1319,14 @@ export class Interaction {
       this.draggingPointId !== null ||
       this.draggingLineId !== null ||
       this.draggingStraightLineId !== null ||
+      this.draggingPerpendicularLineId !== null ||
+      this.draggingParallelLineId !== null ||
       this.draggingRayId !== null ||
       this.draggingVectorId !== null ||
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
       this.draggingConeId !== null ||
+      this.draggingCylinderId !== null ||
       this.draggingFaceId !== null ||
       this.draggingNetId !== null ||
       this.draggingNetControlEdgeId !== null ||
@@ -4103,6 +4117,7 @@ export class Interaction {
             if (p.circleRole === 'center' && p.circleId) {
               const circle = this.editor.scene.circles.get(p.circleId)
               if (circle && !this.editor.isCircleGeometryLocked(circle)) {
+                this.dragSubject = `圆心${p.name}`
                 this.draggingCircleId = p.circleId
                 this.startDrag(this.getCircleDragReferencePoint(circle))
               } else {
@@ -4111,6 +4126,7 @@ export class Interaction {
             } else if (p.sphereRole === 'center' && p.sphereId) {
               const sphere = this.editor.scene.spheres.get(p.sphereId)
               if (sphere && !this.editor.isSphereGeometryLocked(sphere)) {
+                this.dragSubject = `球心点${p.name}`
                 this.draggingSphereId = p.sphereId
                 this.startDrag(
                   new THREE.Vector3(
@@ -5401,6 +5417,7 @@ export class Interaction {
       if (point.circleRole === 'center' && point.circleId) {
         const circle = this.editor.scene.circles.get(point.circleId)
         if (circle && !this.editor.isCircleGeometryLocked(circle)) {
+          this.dragSubject = `圆心${point.name}`
           this.draggingCircleId = point.circleId
           this.startDrag(this.getCircleDragReferencePoint(circle))
         } else {
@@ -5410,6 +5427,7 @@ export class Interaction {
       } else if (point.sphereRole === 'center' && point.sphereId) {
         const sphere = this.editor.scene.spheres.get(point.sphereId)
         if (sphere && !this.editor.isSphereGeometryLocked(sphere)) {
+          this.dragSubject = `球心点${point.name}`
           this.draggingSphereId = point.sphereId
           this.startDrag(
             new THREE.Vector3(
@@ -5978,7 +5996,12 @@ export class Interaction {
       !this.draggingCircleId &&
       !this.draggingSphereId &&
       !this.draggingConeId &&
+      !this.draggingCylinderId &&
       !this.draggingFaceId &&
+      !this.draggingNetId &&
+      !this.draggingNetControlEdgeId &&
+      !this.draggingPerpendicularLineId &&
+      !this.draggingParallelLineId &&
       !this.draggingLabelTarget
     )
       return
@@ -6051,7 +6074,10 @@ export class Interaction {
       this.draggingCircleId !== null ||
       this.draggingSphereId !== null ||
       this.draggingConeId !== null ||
+      this.draggingCylinderId !== null ||
       this.draggingFaceId !== null ||
+      this.draggingNetId !== null ||
+      this.draggingNetControlEdgeId !== null ||
       this.draggingPerpendicularLineId !== null ||
       this.draggingParallelLineId !== null ||
       this.draggingLabelTarget !== null
@@ -6479,10 +6505,46 @@ export class Interaction {
           )
         }) ?? []
 
-    this.editor.applyPointTransformHistory(transforms, axisHintChanges, this.draggingPointId ?? null)
+    // 场景拖拽：统一声明操作位置 origin=scene + 被操作部位 subject（category 由历史构建器按 diff 判定移动/修改）
+    const sceneIntent: CollabOperationIntent | null = {
+      origin: 'scene',
+      subject: this.resolveSceneDragSubject(),
+      targetId: this.draggingPointId ?? null,
+    }
+    this.editor.applyPointTransformHistory(transforms, axisHintChanges, this.draggingPointId ?? null, sceneIntent)
     this.dragStartPositions.clear()
     this.dragSceneStartPositions = null
     this.dragStartAxisHints = null
+  }
+
+  /** 解析本次场景拖拽被直接操作的对象部位（球心点/圆心由拖拽起始分支显式声明，其余按对象本体推断） */
+  private resolveSceneDragSubject(): string | null {
+    if (this.dragSubject) return this.dragSubject
+    if (this.draggingSphereId) return '球体'
+    if (this.draggingCircleId) return '圆'
+    if (this.draggingConeId) return '圆锥'
+    if (this.draggingCylinderId) return '圆柱'
+    if (this.draggingLineId) return '线段'
+    if (this.draggingStraightLineId) return '直线'
+    if (this.draggingRayId) return '射线'
+    if (this.draggingVectorId) return '向量'
+    if (this.draggingPerpendicularLineId) return '垂线'
+    if (this.draggingParallelLineId) return '平行线'
+    if (this.draggingFaceId) {
+      // 面属于立体时，拖动整面即拖动整个立体（正六面体/正四面体/棱柱/棱锥），
+      // 精确标注被拖动的立体而非笼统的「面」
+      const face = this.editor.scene.faces.get(this.draggingFaceId)
+      if (face) {
+        if (face.cubeId) {
+          const constraint = this.editor.getCubeConstraint(face.cubeId)
+          return constraint?.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+        }
+        if (face.prismId) return '棱柱'
+        if (face.pyramidId) return '棱锥'
+      }
+      return '面'
+    }
+    return null
   }
 
   resetNormalCircleCreation() {
@@ -6625,8 +6687,12 @@ export class Interaction {
     this.dragReferenceStartMathPos = null
     this.dragDepth = null
     this.draggingLabelTarget = null
+    this.dragSubject = null
     this.editor.scene.activeDraggedPointIds.clear()
     this.dragStartPositions.clear()
+    // 拖拽结束（含取消/离开/切工具等所有路径）：失效 getLiveSyncPointIds 缓存，
+    // 避免下一次拖拽前 33ms 用到上一次拖拽的陈旧点集
+    this.liveSyncPointIdsCache = null
     this.dragSceneStartPositions = null
     this.dragStartAxisHints = null
     // 拖拽结束（含取消/离开/切工具等所有路径）：释放协作拖拽互斥锁
@@ -6714,6 +6780,7 @@ export class Interaction {
     this.draggingPointId = null
     // clearDraggingIds 会清空所有拖拽 id 与 pendingToggleSelection
     this.clearDraggingIds()
+    this.dragSubject = null
     this.dragPlane = null
     this.dragLastPos = null
     this.dragStartPointerPos = null
@@ -6752,6 +6819,10 @@ export class Interaction {
   }
 
   getLiveSyncPointIds() {
+    const now = performance.now()
+    if (this.liveSyncPointIdsCache && now - this.liveSyncPointIdsCacheTime < Interaction.LIVE_SYNC_CACHE_MS) {
+      return this.liveSyncPointIdsCache
+    }
     const pointIds = new Set(this.dragStartPositions.keys())
     if (pointIds.size === 0) return []
 
@@ -6792,7 +6863,10 @@ export class Interaction {
       })
     }
 
-    return [...pointIds]
+    const result = [...pointIds]
+    this.liveSyncPointIdsCache = result
+    this.liveSyncPointIdsCacheTime = performance.now()
+    return result
   }
 
   getLiveSyncNetIds() {

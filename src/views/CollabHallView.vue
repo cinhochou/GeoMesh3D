@@ -9,6 +9,7 @@ import { ApiError } from '@/api/client'
 import type { Room, HallSort, RoomApplication } from '@/types/room'
 import ProxiedImage from '@/components/ProxiedImage.vue'
 import { collabRoomEvents, type CollabRoomEvent } from '@/utils/collabRoomEvents'
+import { readActiveRoomIds, activeRoomStorageKeys } from '@/utils/activeRoomRegistry'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -21,31 +22,16 @@ useSessionGuard({
 })
 
 // ---- 当前正在协作的房间检测（跨 Tab 共享，参考房间列表页）----
-// 编辑器 Tab 加入房间后写入 collab:active-room（含时间戳），每轮轮询刷新时间戳；
-// 此处读取时校验时间戳新鲜度（20s 内视为有效），避免编辑器 Tab 被直接关闭后标记残留。
-const ACTIVE_ROOM_KEY = 'collab:active-room'
-const ACTIVE_ROOM_TTL_MS = 20_000
-const activeRoomId = ref<string | null>(null)
-
-const readActiveRoomId = (): string | null => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_ROOM_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { roomId?: string; ts?: number }
-    if (!parsed.roomId) return null
-    const ts = typeof parsed.ts === 'number' ? parsed.ts : 0
-    if (Date.now() - ts > ACTIVE_ROOM_TTL_MS) return null
-    return parsed.roomId
-  } catch {
-    return null
-  }
-}
+// 采用多条目注册表（roomId → 心跳时间戳）：每个编辑器 Tab 只登记/刷新/注销
+// 自己的房间，多 Tab 同时加入不同房间时互不覆盖；读取时校验 TTL 新鲜度，
+// 避免编辑器 Tab 被直接关闭后标记残留。
+const activeRoomIds = ref<Set<string>>(new Set())
 
 const refreshActiveRoom = () => {
-  activeRoomId.value = readActiveRoomId()
+  activeRoomIds.value = readActiveRoomIds()
 }
 
-const isActiveRoom = (room: Room): boolean => activeRoomId.value === room.id
+const isActiveRoom = (room: Room): boolean => activeRoomIds.value.has(room.id)
 
 const allRooms = ref<Room[]>([])
 const isLoading = ref(false)
@@ -250,7 +236,7 @@ const handleCollabRoomEvent = (event: CollabRoomEvent) => {
 }
 
 const handleStorageEvent = (e: StorageEvent) => {
-  if (e.key === ACTIVE_ROOM_KEY) {
+  if (e.key && activeRoomStorageKeys.includes(e.key)) {
     refreshActiveRoom()
   }
 }

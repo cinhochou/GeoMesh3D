@@ -50,6 +50,12 @@ import { useOrientationLock } from '@/composables/useOrientationLock'
 import { useSessionGuard } from '@/composables/useSessionGuard'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 import { collabRoomEvents, type CollabRoomEvent } from '@/utils/collabRoomEvents'
+import {
+  setActiveRoom as registerActiveRoom,
+  removeActiveRoom as unregisterActiveRoom,
+  touchActiveRoom as touchActiveRoomRegistry,
+  getFreshestActiveRoomId,
+} from '@/utils/activeRoomRegistry'
 import type { Room } from '@/types/room'
 import { roomApi } from '@/api/room'
 
@@ -474,6 +480,12 @@ const autoSave = async () => {
         sceneData: JSON.stringify(sceneData),
         thumbnailUrl,
       })
+      // 若当前处于协作房间且房间关联的就是本项目，把新缩略图/修改时间同步到房间，
+      // 使房间(大厅/列表)实时反映项目内容改动（改动即更新）
+      if (thumbnailUrl && collabStore.currentRoom?.projectId === currentProjectId.value) {
+        collabStore.currentRoom.projectThumbnailUrl = thumbnailUrl
+        collabStore.currentRoom.updatedAt = new Date().toISOString()
+      }
       lastSavedSceneJson.value = compareJson
     } catch {
       // 自动保存失败时静默处理，不打扰用户
@@ -555,9 +567,10 @@ const handleBeforeUnload = (e: BeforeUnloadEvent) => {
 const handlePageHide = () => {
   // 页面异常关闭/浏览器崩溃不能伪装成用户主动离开：保留服务端成员关系，
   // 连接恢复后由 onStatusUpdate 直接执行退出协作流程，清理本地残留。
+  // 但仍需立即注销本 Tab 的 active-room 注册项，避免房间列表页按钮状态残留。
   const roomId = collabStore.currentRoom?.id || collabManager.value?.getStatus().room || ''
   if (roomId) {
-    setActiveRoom(null)
+    clearActiveRoom(roomId)
   }
   // 协作模式下不保存草稿：场景内容已在服务端，避免同步序列化阻塞页面关闭
   const inCollab = !!collabStore.currentRoom
@@ -811,6 +824,17 @@ onMounted(() => {
   // 协作历史消息：从 Yjs 共享文档同步，渲染到左上角消息框
   collabManager.value.onCollabMessagesUpdate = (messages) => {
     collabHistoryMessages.value = messages
+  }
+  // 创建者广播的成员角色变更：命中当前用户时即时更新本地 myRole，不等下一轮轮询，
+  // 使 viewer⇄editor 权限变化立即反映到 isViewOnlyCollab → Interaction.setViewOnly（如禁拖拽）。
+  collabManager.value.onRoleChange = ({ roomId, targetUserId, role }) => {
+    const current = collabStore.currentRoom
+    if (!current || current.id !== roomId) return
+    if (!user.value?.id || targetUserId !== user.value.id) return
+    if (current.myRole === role) return
+    // 仅接受合法的 RoomRole 值（避免被误构造的 awareness 数据破坏角色）
+    if (role !== 'creator' && role !== 'editor' && role !== 'viewer') return
+    current.myRole = role as Room['myRole']
   }
   interaction.onDragLockRequest = (target: DragLockTarget) =>
     collabManager.value?.tryAcquireDragLock(target) ?? true
@@ -1348,7 +1372,7 @@ const updateSharedHistoryUI = () => {
   if (!state) return
   sceneStore.setHistoryState({
     canUndo: state.historyIndex >= 0,
-    canRedo: state.historyIndex < state.entries.length - 1,
+    canRedo: state.historyIndex < state.entryCount - 1,
   })
 }
 
@@ -2228,46 +2252,29 @@ let roomStatusTimer: ReturnType<typeof setInterval> | null = null
 const ROOM_STATUS_POLL_INTERVAL = 10_000 // 10秒轮询一次
 
 // 当前正在协作的房间 ID（跨 Tab 共享，供房间列表页判断按钮状态）
-// 带 时间戳：编辑器每轮轮询会刷新时间戳；房间列表页据此判定标记是否新鲜，
+// 采用多条目注册表（roomId → 心跳时间戳）：本 Tab 只登记/刷新/注销自己的房间，
+// 多 Tab 同时加入不同房间时互不覆盖，离开一个房间也不会误清除其他 Tab 的状态。
+// 编辑器每轮轮询会刷新自己的时间戳；房间列表页据此判定标记是否新鲜，
 // 避免编辑器 Tab 被直接关闭后标记长期残留。
-const ACTIVE_ROOM_KEY = 'collab:active-room'
 const setActiveRoom = (roomId: string | null) => {
-  try {
-    if (roomId) {
-      localStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify({ roomId, ts: Date.now() }))
-    } else {
-      localStorage.removeItem(ACTIVE_ROOM_KEY)
-    }
-  } catch {
-    // ignore storage errors
+  if (roomId) {
+    registerActiveRoom(roomId)
   }
 }
-// 刷新 active-room 时间戳（保持标记新鲜，证明编辑器 Tab 仍存活）
-const touchActiveRoom = () => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_ROOM_KEY)
-    if (!raw) return
-    const parsed = JSON.parse(raw) as { roomId?: string; ts?: number }
-    if (parsed.roomId) {
-      localStorage.setItem(
-        ACTIVE_ROOM_KEY,
-        JSON.stringify({ roomId: parsed.roomId, ts: Date.now() }),
-      )
-    }
-  } catch {
-    // ignore
+// 注销本 Tab 正在协作的房间标记（离开房间 / 页面隐藏时调用）
+const clearActiveRoom = (roomId: string) => {
+  if (roomId) {
+    unregisterActiveRoom(roomId)
   }
+}
+// 刷新 active-room 时间戳（保持标记新鲜，证明编辑器 Tab 仍存活）；
+// 仅刷新本 Tab 已登记的房间，未登记（已离开）时不创建，避免迟到回调复活陈旧状态
+const touchActiveRoom = (roomId: string) => {
+  touchActiveRoomRegistry(roomId)
 }
 // 读取上次协作的 roomId（异常退出时 handleCollabLeave 未被调用，标记仍然存在）
 const getActiveRoomId = (): string | null => {
-  try {
-    const raw = localStorage.getItem(ACTIVE_ROOM_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { roomId?: string; ts?: number }
-    return parsed.roomId ?? null
-  } catch {
-    return null
-  }
+  return getFreshestActiveRoomId()
 }
 
 // 协作会话内标记（sessionStorage：按 Tab 隔离，刷新 / HMR 重载时保留，关闭 Tab 时清除）。
@@ -2315,6 +2322,10 @@ const startRoomStatusPolling = (roomId: string) => {
     try {
       // 协作轮询：跳过信令服务器 peerCount 查询，避免 N 人时请求放大
       const room = await roomApi.getRoom(roomId, false)
+      // 请求在途期间可能已通过跨 Tab 事件 / 页面隐藏离开房间：
+      // 迟到的回调不能再心跳或刷新注册项，否则会复活已注销的 active-room 状态
+      // （表现为房间列表「加入/离开」按钮状态错误复位）
+      if (collabStore.currentRoom?.id !== roomId) return
       if (!room.isOpen) {
         // 房间已被关闭，中断协作并提示用户
         stopRoomStatusPolling()
@@ -2354,8 +2365,8 @@ const startRoomStatusPolling = (roomId: string) => {
       } catch {
         // 心跳失败不中断协作，下一轮继续尝试
       }
-      // 刷新 active-room 时间戳，保持标记新鲜
-      touchActiveRoom()
+      // 刷新 active-room 时间戳，保持标记新鲜（仅刷新本 Tab 已登记的房间）
+      touchActiveRoom(roomId)
     } catch {
       // 房间可能已删除或无权限访问，中断协作
       stopRoomStatusPolling()
@@ -2569,13 +2580,14 @@ const executeAbnormalExitHandling = () => {
 const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = 'leave') => {
   // 停止房间状态轮询
   stopRoomStatusPolling()
-  // 清除当前正在协作的房间标记
-  setActiveRoom(null)
+  // 注销当前正在协作的房间标记（只注销本 Tab 的房间，不影响其他 Tab）
+  const leftRoomId = collabStore.currentRoom?.id || collabManager.value?.getStatus().room || ''
+  if (leftRoomId) {
+    clearActiveRoom(leftRoomId)
+  }
   // 清除协作会话内标记（用户主动离开 / 服务器断开等已知退出，不再视为异常退出）
   clearCollabInSession()
   const cm = collabManager.value
-  // 在断开前记录 roomId（leaveRoom 后 roomName 会被清空）
-  const leftRoomId = collabStore.currentRoom?.id || cm?.getStatus().room || ''
   // 退出协作模式：将共享历史保留到本地 HistoryManager
   if (cm) {
     const sharedState = cm.getSharedHistoryState()
@@ -2795,6 +2807,11 @@ const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
         sceneData: JSON.stringify(sceneData),
         thumbnailUrl,
       })
+      // 若存在关联的协作房间，把新缩略图/修改时间同步到房间（改动即更新）
+      if (thumbnailUrl && collabStore.currentRoom?.projectId === projectId) {
+        collabStore.currentRoom.projectThumbnailUrl = thumbnailUrl
+        collabStore.currentRoom.updatedAt = new Date().toISOString()
+      }
       saved = true
     } catch (err) {
       console.error('退出前保存失败:', err)
@@ -2985,6 +3002,11 @@ const handleSaveScene = async () => {
       sceneData: sceneJson,
       thumbnailUrl,
     })
+    // 若当前处于协作房间且房间关联的就是本项目，把新缩略图/修改时间同步到房间（改动即更新）
+    if (thumbnailUrl && collabStore.currentRoom?.projectId === currentProjectId.value) {
+      collabStore.currentRoom.projectThumbnailUrl = thumbnailUrl
+      collabStore.currentRoom.updatedAt = new Date().toISOString()
+    }
     lastSavedSceneJson.value = compareJson
     showToast('保存成功', 'global')
   } catch (err) {

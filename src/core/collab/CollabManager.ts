@@ -60,6 +60,8 @@ export type SharedHistoryEntry = {
 export type SharedHistoryState = {
   entries: SharedHistoryEntry[]
   historyIndex: number
+  /** 共享历史条目总数。轻量 emit 时 entries 为空数组，UI 仅用此字段 + historyIndex 计算 undo/redo 状态 */
+  entryCount: number
 }
 
 export type CollabStatus = {
@@ -166,6 +168,8 @@ export type RemoteDragState = DragLockTarget & {
 }
 
 export class CollabManager {
+  /** 拖拽直播同步节流：本地渲染不受影响（60fps），仅降低 Yjs 写入/WS 广播频率。
+   *  保持 33ms（~30Hz）以保证其他协作用户的拖拽观感流畅。 */
   private static readonly LIVE_SYNC_THROTTLE_MS = 33
   private static readonly WORLD_ROTATION_OWNER_TIMEOUT_MS = 1500
   private static readonly WORLD_ROTATION_OWNER_HEARTBEAT_MS = 500
@@ -175,6 +179,9 @@ export class CollabManager {
   private static readonly DRAG_LOCK_STALE_TIMEOUT_MS = 16_000
   // awareness 中承载拖拽状态的字段名
   private static readonly DRAG_AWARENESS_FIELD = 'dragInfo'
+  // awareness 中承载"成员角色变更广播"的字段名：创建者改某成员角色后写入，
+  // 经 WebSocket/信令实时同步给房间内所有协作者，使目标成员无需等待轮询即时生效。
+  private static readonly ROLE_CHANGE_AWARENESS_FIELD = 'roleChangeInfo'
   // 共享公网信令实例（公网优先的关键候选；本地信令不可用时也始终保留这个兜底）
   //private static readonly FALLBACK_SERVER_URL = 'wss://kraig-scarabaeiform-zealously.ngrok-free.dev'
   private static readonly FALLBACK_SERVER_URL = 'wss://47.239.188.55/signal'
@@ -268,6 +275,12 @@ export class CollabManager {
   private syncPending = false
   private liveSyncTimer: number | null = null
   private liveSyncPending = false
+  // 拖拽直播同步的累积缓冲：markPreviewPointsDirty 内部的 markLinkedGeometryDirtyForPoint
+  // 是 O(场景几何总数) 的全遍历，若每帧执行会拖垮拖拽帧率。改为在 33ms 节流窗口内
+  // 累积点/标签/net，仅在真正要 syncDirtyNow 前一次性遍历标记，频率从每帧降到 ~30Hz。
+  private pendingLivePointIds = new Set<string>()
+  private pendingLiveLabelTarget: LiveLabelTarget | null = null
+  private pendingLiveNetIds = new Set<string>()
   private latencyTimer: number | null = null
   // 节流 markAllRenderDirty：批量处理远端 record 变更，避免每条都触发全量重渲
   private renderDirtyTimer: number | null = null
@@ -329,6 +342,15 @@ export class CollabManager {
   public onActiveDragsUpdate: (drags: RemoteDragState[]) => void = () => {}
   /** 协作历史消息变化（含新成员同步到的历史与新增消息） */
   public onCollabMessagesUpdate: (messages: CollabHistoryMessage[]) => void = () => {}
+  /** 收到来自创建者广播的"成员角色变更"（经 awareness 实时同步，不等轮询）。 */
+  public onRoleChange: (info: {
+    roomId: string
+    targetUserId: string
+    role: string
+    ts: number
+  }) => void = () => {}
+  /** 用于去重：记录每台远端 clientId 已处理的最新 roleChange ts，避免重复触发回调 */
+  private readonly roleChangeSeenMap = new Map<number, number>()
 
   private dragLockHeartbeatTimer: number | null = null
 
@@ -360,6 +382,19 @@ export class CollabManager {
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
+    // 关闭浏览器页面（非主动离开房间）时尽力把「离开了协作」广播在连接关闭前送达服务器
+    window.addEventListener('pagehide', this.handlePageHide)
+  }
+
+  /** 页面关闭/隐藏前同步广播离开消息（尽力而为：y-websocket 在 transact 内同步 ws.send） */
+  private handlePageHide = (): void => {
+    if (this.provider && this.roomName !== null) {
+      try {
+        this.appendRoomMessage('离开了协作')
+      } catch {
+        // 页面关闭阶段不做额外处理
+      }
+    }
   }
 
   private cleanupRecordObservers(cleanups: Map<string, () => void>) {
@@ -556,6 +591,51 @@ export class CollabManager {
     if (this.provider) {
       this.provider.awareness.setLocalStateField('userLabel', nextLabel)
     }
+  }
+
+  /**
+   * 广播"某成员角色变更"给房间内所有协作者。
+   * - 由创建者在改角色成功后调用；
+   * - 写入本地 awareness 状态，WebSocket/信令实时同步给所有远端成员；
+   * - 远端成员在 awareness change 中读到该信息，命中自己时即时更新 myRole，无需等轮询。
+   */
+  broadcastRoleChange(payload: { roomId: string; targetUserId: string; role: string }) {
+    if (!this.provider || this.roomName === null) return
+    this.provider.awareness.setLocalStateField(CollabManager.ROLE_CHANGE_AWARENESS_FIELD, {
+      ...payload,
+      ts: Date.now(),
+    })
+  }
+
+  /** 从某远端 awareness 状态中解析角色变更信息（兼做结构校验） */
+  private readAwarenessRoleChange(
+    raw: unknown,
+  ): { roomId: string; targetUserId: string; role: string; ts: number } | null {
+    if (!raw || typeof raw !== 'object') return null
+    const o = raw as Record<string, unknown>
+    if (typeof o.roomId !== 'string') return null
+    if (typeof o.targetUserId !== 'string') return null
+    if (typeof o.role !== 'string') return null
+    if (typeof o.ts !== 'number') return null
+    return { roomId: o.roomId, targetUserId: o.targetUserId, role: o.role, ts: o.ts }
+  }
+
+  /** awareness change：扫描所有远端 client 的角色变更广播并去重派发 */
+  private handleRoleChangeAwareness() {
+    if (!this.provider) return
+    const localClientId = this.getLocalClientId()
+    this.provider.awareness.getStates().forEach((state, clientId) => {
+      if (clientId === localClientId) return
+      const info = this.readAwarenessRoleChange(
+        (state as Record<string, unknown>)[CollabManager.ROLE_CHANGE_AWARENESS_FIELD],
+      )
+      if (!info) return
+      // 去重：仅当该远端 client 的 ts 比上次处理过的更新时才回调
+      const last = this.roleChangeSeenMap.get(clientId) ?? -1
+      if (info.ts <= last) return
+      this.roleChangeSeenMap.set(clientId, info.ts)
+      this.onRoleChange(info)
+    })
   }
 
   private stopWorldRotationOwnerHeartbeat() {
@@ -914,9 +994,18 @@ export class CollabManager {
     }
 
     if (this.provider) {
-      this.provider.disconnect()
-      this.provider.destroy()
+      const leavingProvider = this.provider
       this.provider = null
+      // 离开房间前，给 y-websocket 一个完整的宏任务周期，把已排队的本地更新
+      // （含「离开了协作」广播）flush 到服务器；随后才断开/销毁连接。
+      // 避免与消息写入同一同步调用栈内销毁，掐掉尚未到达服务器的待发更新
+      // （否则该成员再次加入时看不到上次的离开消息）。
+      // 延迟关闭不会把本地场景泄露回房间：this.roomName 已在下方清空，
+      // 之后触发的场景命令都走非协作路径，不会再同步到云端。
+      window.setTimeout(() => {
+        leavingProvider.disconnect()
+        leavingProvider.destroy()
+      }, 0)
       this.onPeersUpdate(1)
     }
     // 离开房间后清空所有拖拽气泡（provider 已销毁，collectActiveDrags 返回空）
@@ -932,6 +1021,9 @@ export class CollabManager {
     }
     this.syncPending = false
     this.liveSyncPending = false
+    this.pendingLivePointIds.clear()
+    this.pendingLiveLabelTarget = null
+    this.pendingLiveNetIds.clear()
     this.clearDirtyState()
 
     if (this.renderDirtyTimer !== null) {
@@ -1097,6 +1189,7 @@ export class CollabManager {
       this.emitPeerCount(provider)
       this.handleLatencyAwarenessChange(provider)
       this.emitActiveDrags()
+      this.handleRoleChangeAwareness()
     }
 
     provider.on('status', handleStatus)
@@ -1519,62 +1612,26 @@ export class CollabManager {
         }
       }
     })
-    this.scene.lines.forEach((line, id) => {
-      if (line.p1.id === pointId || line.p2.id === pointId) this.markLineDirty(id)
+
+    // 关联几何（线/射线/向量/圆/球/锥/柱/面/net 等）用 Scene 的点引用索引 O(1) 查找，
+    // 替代原来的 O(场景) 全遍历——拖拽直播同步每 33ms 调用一次，全遍历在大场景下是拖拽卡顿主因。
+    const refs = this.scene.getPointRefsForPoint(pointId)
+    if (!refs) return
+    refs.lines.forEach((id) => this.markLineDirty(id))
+    refs.rays.forEach((id) => this.markRayDirty(id))
+    refs.vectors.forEach((id) => this.markVectorDirty(id))
+    refs.circles.forEach((id) => {
+      this.markCircleDirty(id)
+      this.markCircleCenterPointDirty(id)
     })
-    this.scene.rays.forEach((ray, id) => {
-      if (ray.p1.id === pointId || ray.p2.id === pointId) this.markRayDirty(id)
-    })
-    this.scene.vectors.forEach((vector, id) => {
-      if (vector.p1.id === pointId || vector.p2.id === pointId) this.markVectorDirty(id)
-    })
-    this.scene.circles.forEach((circle, id) => {
-      if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId) {
-        this.markCircleDirty(id)
-        this.markCircleCenterPointDirty(id)
-      }
-    })
-    this.scene.spheres.forEach((sphere, id) => {
-      if (
-        sphere.centerPoint.id === pointId ||
-        (sphere.radiusPoint && sphere.radiusPoint.id === pointId)
-      ) {
-        this.markSphereDirty(id)
-      }
-    })
-    this.scene.cones.forEach((cone, id) => {
-      if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
-        this.markConeDirty(id)
-      }
-    })
-    this.scene.cylinders.forEach((cylinder, id) => {
-      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
-        this.markCylinderDirty(id)
-      }
-    })
-    this.scene.straightLines.forEach((line, id) => {
-      if (line.p1.id === pointId || line.p2.id === pointId) this.markStraightLineDirty(id)
-    })
-    this.scene.perpendicularLines.forEach((line, id) => {
-      if (line.p1.id === pointId || line.p2.id === pointId) this.markPerpendicularLineDirty(id)
-    })
-    this.scene.parallelLines.forEach((line, id) => {
-      if (line.p1.id === pointId || line.p2.id === pointId) this.markParallelLineDirty(id)
-    })
-    this.scene.faces.forEach((face, id) => {
-      if (face.includesPoint(pointId)) this.markFaceDirty(id)
-    })
-    this.scene.nets.forEach((net, id) => {
-      let touched = false
-      for (const fid of net.faceIds) {
-        const face = this.scene.faces.get(fid)
-        if (face && face.includesPoint(pointId)) {
-          touched = true
-          break
-        }
-      }
-      if (touched) this.markNetDirty(id)
-    })
+    refs.spheres.forEach((id) => this.markSphereDirty(id))
+    refs.cones.forEach((id) => this.markConeDirty(id))
+    refs.cylinders.forEach((id) => this.markCylinderDirty(id))
+    refs.straightLines.forEach((id) => this.markStraightLineDirty(id))
+    refs.perpendicularLines.forEach((id) => this.markPerpendicularLineDirty(id))
+    refs.parallelLines.forEach((id) => this.markParallelLineDirty(id))
+    refs.faces.forEach((id) => this.markFaceDirty(id))
+    refs.nets.forEach((id) => this.markNetDirty(id))
   }
 
   private findCircleCenterPoint(circleId: string) {
@@ -2018,6 +2075,91 @@ export class CollabManager {
     cleanups.delete(id)
   }
 
+  /**
+   * 订阅某个共享记录（Y.Map）的字段变更，并跳过「本地写入的回环」。
+   * 本地场景是 Yjs 写入的来源：本地 syncXxxRecord 写入后，Yjs 观察者会同步触发，
+   * 若再次 applyXxxRecord 会把整条记录读回场景并触发 scheduleRenderDirty →
+   * markAllRenderDirty（全量重渲）。拖拽场景下每 33ms 一次全量重渲是协作模式
+   * 帧率骤降的主因。remote 变更（local=false）仍照常应用。
+   */
+  private observeRecordWithLocalGuard<T>(record: Y.Map<T>, apply: () => void, deep = false): () => void {
+    if (deep) {
+      // observeDeep 回调签名是 (events: YEvent[], transaction)，事务信息在第二个参数。
+      // Yjs 自身将事件数组类型定为 YEvent<any>[]（约束 AbstractType<any>），无法静态收窄。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const handler = (events: Y.YEvent<any>[], transaction: Y.Transaction) => {
+        if (transaction.local) return
+        apply()
+      }
+      record.observeDeep(handler)
+      return () => record.unobserveDeep(handler)
+    }
+    const handler = (event: Y.YMapEvent<T>) => {
+      if (event.transaction.local) return
+      apply()
+    }
+    record.observe(handler)
+    return () => record.unobserve(handler)
+  }
+
+  /**
+   * 顶层 map 观察者（pointsObserver 等）在「本地写入」时仅需挂载/释放记录级观察者：
+   * - add：挂载记录观察者，以便将来接收远端对该记录的字段更新
+   * - delete：释放记录观察者（本地场景已删除该对象，无需回读）
+   * 本地写入绝不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+   * markAllRenderDirty 全量重渲。拖拽直播同步每 33ms 写入一次，若每次回读将每 33ms
+   * 全场景重渲一次，是协作模式拖拽帧率骤降的主因（非协作模式无此路径，故无此问题）。
+   */
+  // Yjs 顶层 map 的 observe 回调统一以 YMapEvent<any> 上报（值类型各不相同且无法静态收敛），
+  // 这里仅用 event.target 做分发，分发到具体 observeXxxRecord 后值类型即收窄。
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private observeRecordForTopLevel(event: Y.YMapEvent<any>, id: string, record: Y.Map<any>): void {
+    const target = event.target
+    if (target === this.yPoints) this.observePointRecord(id, record as PointSharedMap)
+    else if (target === this.yLines) this.observeLineRecord(id, record as LineSharedMap)
+    else if (target === this.yStraightLines) this.observeStraightLineRecord(id, record as StraightLineSharedMap)
+    else if (target === this.yPerpendicularLines) this.observePerpendicularLineRecord(id, record as PerpendicularLineSharedMap)
+    else if (target === this.yParallelLines) this.observeParallelLineRecord(id, record as ParallelLineSharedMap)
+    else if (target === this.yRays) this.observeRayRecord(id, record as RaySharedMap)
+    else if (target === this.yVectors) this.observeVectorRecord(id, record as VectorSharedMap)
+    else if (target === this.yCircles) this.observeCircleRecord(id, record as CircleSharedMap)
+    else if (target === this.ySpheres) this.observeSphereRecord(id, record as SphereSharedMap)
+    else if (target === this.yCones) this.observeConeRecord(id, record as ConeSharedMap)
+    else if (target === this.yCylinders) this.observeCylinderRecord(id, record as CylinderSharedMap)
+    else if (target === this.yIntersections) this.observeIntersectionRecord(id, record as IntersectionSharedMap)
+    else if (target === this.yObjectConstrainedPoints) this.observeObjectConstrainedPointRecord(id, record as ObjectConstrainedPointSharedMap)
+    else if (target === this.yFaces) this.observeFaceRecord(id, record as FaceSharedMap)
+    else if (target === this.yCubes) this.observeCubeRecord(id, record as CubeSharedMap)
+    else if (target === this.yRegularPolygons) this.observeRegularPolygonRecord(id, record as RegularPolygonSharedMap)
+    else if (target === this.yPrisms) this.observePrismRecord(id, record as PrismSharedMap)
+    else if (target === this.yPyramids) this.observePyramidRecord(id, record as PyramidSharedMap)
+    else if (target === this.yNets) this.observeNetRecord(id, record as NetSharedMap)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private releaseRecordObserverForTopLevel(event: Y.YMapEvent<any>, id: string): void {
+    const target = event.target
+    if (target === this.yPoints) this.releaseRecordObserver(id, this.pointRecordCleanup)
+    else if (target === this.yLines) this.releaseRecordObserver(id, this.lineRecordCleanup)
+    else if (target === this.yStraightLines) this.releaseRecordObserver(id, this.straightLineRecordCleanup)
+    else if (target === this.yPerpendicularLines) this.releaseRecordObserver(id, this.perpendicularLineRecordCleanup)
+    else if (target === this.yParallelLines) this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
+    else if (target === this.yRays) this.releaseRecordObserver(id, this.rayRecordCleanup)
+    else if (target === this.yVectors) this.releaseRecordObserver(id, this.vectorRecordCleanup)
+    else if (target === this.yCircles) this.releaseRecordObserver(id, this.circleRecordCleanup)
+    else if (target === this.ySpheres) this.releaseRecordObserver(id, this.sphereRecordCleanup)
+    else if (target === this.yCones) this.releaseRecordObserver(id, this.coneRecordCleanup)
+    else if (target === this.yCylinders) this.releaseRecordObserver(id, this.cylinderRecordCleanup)
+    else if (target === this.yIntersections) this.releaseRecordObserver(id, this.intersectionRecordCleanup)
+    else if (target === this.yObjectConstrainedPoints) this.releaseRecordObserver(id, this.objectConstrainedPointRecordCleanup)
+    else if (target === this.yFaces) this.releaseRecordObserver(id, this.faceRecordCleanup)
+    else if (target === this.yCubes) this.releaseRecordObserver(id, this.cubeRecordCleanup)
+    else if (target === this.yRegularPolygons) this.releaseRecordObserver(id, this.regularPolygonRecordCleanup)
+    else if (target === this.yPrisms) this.releaseRecordObserver(id, this.prismRecordCleanup)
+    else if (target === this.yPyramids) this.releaseRecordObserver(id, this.pyramidRecordCleanup)
+    else if (target === this.yNets) this.releaseRecordObserver(id, this.netRecordCleanup)
+  }
+
   private removePointFromScene(id: string) {
     if (id === Scene.ORIGIN_ID) return
     const point = this.scene.points.get(id)
@@ -2457,6 +2599,8 @@ export class CollabManager {
         : null
 
     if (point) {
+      const positionChanged =
+        point.position.x !== x || point.position.y !== y || point.position.z !== z
       point.name = name
       point.nameVisible = nameVisible
       point.valueVisible = valueVisible
@@ -2499,7 +2643,14 @@ export class CollabManager {
           constraint.computeParametricDataFromPosition(projected)
         }
       }
-      this.scheduleRenderDirty()
+      if (positionChanged) {
+        // 纯位置更新：point.setPosition 已通过 onPositionChanged → scene.markPointDirty
+        // 触发脏传播（consumeRenderSyncState 用点引用索引 O(1) 扩展到关联几何），
+        // 无需全量重渲。避免远端观看方每 33ms 全场景重渲一次（同机多标签页协作测试时尤其明显）。
+        this.scene.markPointDirty(id)
+      } else {
+        this.scheduleRenderDirty()
+      }
       return
     }
 
@@ -4077,177 +4228,172 @@ export class CollabManager {
 
   private observePointRecord(id: string, record: PointSharedMap) {
     this.releaseRecordObserver(id, this.pointRecordCleanup)
-    const handler = () => {
-      this.applyPointRecord(id, record)
-    }
-    record.observe(handler)
-    this.pointRecordCleanup.set(id, () => record.unobserve(handler))
+    this.pointRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyPointRecord(id, record)),
+    )
   }
 
   private observeLineRecord(id: string, record: LineSharedMap) {
     this.releaseRecordObserver(id, this.lineRecordCleanup)
-    const handler = () => {
-      this.applyLineRecord(id, record)
-    }
-    record.observe(handler)
-    this.lineRecordCleanup.set(id, () => record.unobserve(handler))
+    this.lineRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyLineRecord(id, record)),
+    )
   }
 
   private observeStraightLineRecord(id: string, record: StraightLineSharedMap) {
     this.releaseRecordObserver(id, this.straightLineRecordCleanup)
-    const handler = () => {
-      this.applyStraightLineRecord(id, record)
-    }
-    record.observe(handler)
-    this.straightLineRecordCleanup.set(id, () => record.unobserve(handler))
+    this.straightLineRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyStraightLineRecord(id, record)),
+    )
   }
 
   private observePerpendicularLineRecord(id: string, record: PerpendicularLineSharedMap) {
     this.releaseRecordObserver(id, this.perpendicularLineRecordCleanup)
-    const handler = () => {
-      this.applyPerpendicularLineRecord(id, record)
-    }
-    record.observe(handler)
-    this.perpendicularLineRecordCleanup.set(id, () => record.unobserve(handler))
+    this.perpendicularLineRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyPerpendicularLineRecord(id, record)),
+    )
   }
 
   private observeParallelLineRecord(id: string, record: ParallelLineSharedMap) {
     this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
-    const handler = () => {
-      this.applyParallelLineRecord(id, record)
-    }
-    record.observe(handler)
-    this.parallelLineRecordCleanup.set(id, () => record.unobserve(handler))
+    this.parallelLineRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyParallelLineRecord(id, record)),
+    )
   }
 
   private observeRayRecord(id: string, record: RaySharedMap) {
     this.releaseRecordObserver(id, this.rayRecordCleanup)
-    const handler = () => {
-      this.applyRayRecord(id, record)
-    }
-    record.observe(handler)
-    this.rayRecordCleanup.set(id, () => record.unobserve(handler))
+    this.rayRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyRayRecord(id, record)),
+    )
   }
 
   private observeVectorRecord(id: string, record: VectorSharedMap) {
     this.releaseRecordObserver(id, this.vectorRecordCleanup)
-    const handler = () => {
-      this.applyVectorRecord(id, record)
-    }
-    record.observe(handler)
-    this.vectorRecordCleanup.set(id, () => record.unobserve(handler))
+    this.vectorRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyVectorRecord(id, record)),
+    )
   }
 
   private observeCircleRecord(id: string, record: CircleSharedMap) {
     this.releaseRecordObserver(id, this.circleRecordCleanup)
-    const handler = () => {
-      this.applyCircleRecord(id, record)
-    }
-    record.observe(handler)
-    this.circleRecordCleanup.set(id, () => record.unobserve(handler))
+    this.circleRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyCircleRecord(id, record)),
+    )
   }
 
   private observeSphereRecord(id: string, record: SphereSharedMap) {
     this.releaseRecordObserver(id, this.sphereRecordCleanup)
-    const handler = () => {
-      this.applySphereRecord(id, record)
-    }
-    record.observe(handler)
-    this.sphereRecordCleanup.set(id, () => record.unobserve(handler))
+    this.sphereRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applySphereRecord(id, record)),
+    )
   }
 
   private observeConeRecord(id: string, record: ConeSharedMap) {
     this.releaseRecordObserver(id, this.coneRecordCleanup)
-    const handler = () => {
-      this.applyConeRecord(id, record)
-    }
-    record.observe(handler)
-    this.coneRecordCleanup.set(id, () => record.unobserve(handler))
+    this.coneRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyConeRecord(id, record)),
+    )
   }
 
   private observeCylinderRecord(id: string, record: CylinderSharedMap) {
     this.releaseRecordObserver(id, this.cylinderRecordCleanup)
-    const handler = () => {
-      this.applyCylinderRecord(id, record)
-    }
-    record.observe(handler)
-    this.cylinderRecordCleanup.set(id, () => record.unobserve(handler))
+    this.cylinderRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyCylinderRecord(id, record)),
+    )
   }
 
   private observeIntersectionRecord(id: string, record: IntersectionSharedMap) {
     this.releaseRecordObserver(id, this.intersectionRecordCleanup)
-    const handler = () => {
-      this.applyIntersectionRecord(id, record)
-    }
-    record.observe(handler)
-    this.intersectionRecordCleanup.set(id, () => record.unobserve(handler))
+    this.intersectionRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyIntersectionRecord(id, record)),
+    )
   }
 
   private observeObjectConstrainedPointRecord(id: string, record: ObjectConstrainedPointSharedMap) {
     this.releaseRecordObserver(id, this.objectConstrainedPointRecordCleanup)
-    const handler = () => {
-      this.applyObjectConstrainedPointRecord(id, record)
-    }
-    record.observe(handler)
-    this.objectConstrainedPointRecordCleanup.set(id, () => record.unobserve(handler))
+    this.objectConstrainedPointRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyObjectConstrainedPointRecord(id, record)),
+    )
   }
 
   private observeFaceRecord(id: string, record: FaceSharedMap) {
     this.releaseRecordObserver(id, this.faceRecordCleanup)
-    const handler = () => {
-      this.applyFaceRecord(id, record)
-    }
-    record.observeDeep(handler)
-    this.faceRecordCleanup.set(id, () => record.unobserveDeep(handler))
+    this.faceRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyFaceRecord(id, record), true),
+    )
   }
 
   private observeCubeRecord(id: string, record: CubeSharedMap) {
     this.releaseRecordObserver(id, this.cubeRecordCleanup)
-    const handler = () => {
-      this.applyCubeRecord(id, record)
-    }
-    record.observe(handler)
-    this.cubeRecordCleanup.set(id, () => record.unobserve(handler))
+    this.cubeRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyCubeRecord(id, record)),
+    )
   }
 
   private observeRegularPolygonRecord(id: string, record: RegularPolygonSharedMap) {
     this.releaseRecordObserver(id, this.regularPolygonRecordCleanup)
-    const handler = () => {
-      this.applyRegularPolygonRecord(id, record)
-    }
-    record.observe(handler)
-    this.regularPolygonRecordCleanup.set(id, () => record.unobserve(handler))
+    this.regularPolygonRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyRegularPolygonRecord(id, record)),
+    )
   }
 
   private observePrismRecord(id: string, record: PrismSharedMap) {
     this.releaseRecordObserver(id, this.prismRecordCleanup)
-    const handler = () => {
-      this.applyPrismRecord(id, record)
-    }
-    record.observe(handler)
-    this.prismRecordCleanup.set(id, () => record.unobserve(handler))
+    this.prismRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyPrismRecord(id, record)),
+    )
   }
 
   private observePyramidRecord(id: string, record: PyramidSharedMap) {
     this.releaseRecordObserver(id, this.pyramidRecordCleanup)
-    const handler = () => {
-      this.applyPyramidRecord(id, record)
-    }
-    record.observe(handler)
-    this.pyramidRecordCleanup.set(id, () => record.unobserve(handler))
+    this.pyramidRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyPyramidRecord(id, record)),
+    )
   }
 
   private observeNetRecord(id: string, record: NetSharedMap) {
     this.releaseRecordObserver(id, this.netRecordCleanup)
-    const handler = () => {
-      this.applyNetRecord(id, record)
-    }
-    record.observe(handler)
-    this.netRecordCleanup.set(id, () => record.unobserve(handler))
+    this.netRecordCleanup.set(
+      id,
+      this.observeRecordWithLocalGuard(record, () => this.applyNetRecord(id, record)),
+    )
   }
 
   private setupObservers() {
     this.pointsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.pointRecordCleanup)
@@ -4268,6 +4414,20 @@ export class CollabManager {
     })
 
     this.linesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.lineRecordCleanup)
@@ -4289,6 +4449,20 @@ export class CollabManager {
     })
 
     this.straightLinesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.straightLineRecordCleanup)
@@ -4310,6 +4484,20 @@ export class CollabManager {
     })
 
     this.perpendicularLinesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.perpendicularLineRecordCleanup)
@@ -4331,6 +4519,20 @@ export class CollabManager {
     })
 
     this.parallelLinesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.parallelLineRecordCleanup)
@@ -4352,6 +4554,20 @@ export class CollabManager {
     })
 
     this.raysObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.rayRecordCleanup)
@@ -4373,6 +4589,20 @@ export class CollabManager {
     })
 
     this.vectorsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.vectorRecordCleanup)
@@ -4394,6 +4624,20 @@ export class CollabManager {
     })
 
     this.circlesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.circleRecordCleanup)
@@ -4414,6 +4658,20 @@ export class CollabManager {
     })
 
     this.spheresObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.sphereRecordCleanup)
@@ -4434,6 +4692,20 @@ export class CollabManager {
     })
 
     this.conesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.coneRecordCleanup)
@@ -4454,6 +4726,20 @@ export class CollabManager {
     })
 
     this.cylindersObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.cylinderRecordCleanup)
@@ -4474,6 +4760,20 @@ export class CollabManager {
     })
 
     this.intersectionsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.intersectionRecordCleanup)
@@ -4495,6 +4795,20 @@ export class CollabManager {
     })
 
     this.objectConstrainedPointsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.objectConstrainedPointRecordCleanup)
@@ -4516,6 +4830,20 @@ export class CollabManager {
     })
 
     this.facesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.faceRecordCleanup)
@@ -4546,6 +4874,20 @@ export class CollabManager {
     })
 
     this.cubesObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.cubeRecordCleanup)
@@ -4567,6 +4909,20 @@ export class CollabManager {
     })
 
     this.regularPolygonsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.regularPolygonRecordCleanup)
@@ -4588,6 +4944,20 @@ export class CollabManager {
     })
 
     this.prismsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.prismRecordCleanup)
@@ -4609,6 +4979,20 @@ export class CollabManager {
     })
 
     this.pyramidsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.pyramidRecordCleanup)
@@ -4629,13 +5013,28 @@ export class CollabManager {
       this.applyPyramidRecord(id, record)
     })
 
-    this.worldTransformObserver = () => {
+    this.worldTransformObserver = (event) => {
+      if (event.transaction.local) return
       this.emitSharedWorldRotation(this.yWorldTransform)
     }
     this.yWorldTransform.observe(this.worldTransformObserver)
     this.emitSharedWorldRotation(this.yWorldTransform)
 
     this.netsObserver = (event) => {
+      if (event.transaction.local) {
+        // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
+        // 不 apply 回读——本地场景是写入源头，apply 只会触发 scheduleRenderDirty →
+        // markAllRenderDirty 全量重渲，拖垮拖拽帧率（详见 observeRecordForTopLevel 注释）。
+        event.changes.keys.forEach((change, id) => {
+          if (change.action === 'add') {
+            const record = event.target.get(id)
+            if (record) this.observeRecordForTopLevel(event, id, record)
+          } else if (change.action === 'delete') {
+            this.releaseRecordObserverForTopLevel(event, id)
+          }
+        })
+        return
+      }
       event.changes.keys.forEach((change, id) => {
         if (change.action === 'delete') {
           this.releaseRecordObserver(id, this.netRecordCleanup)
@@ -5217,9 +5616,10 @@ export class CollabManager {
     if (!this.provider || this.roomName === null) return
     if (this.isApplyingSharedHistory) return
 
-    this.markPreviewPointsDirty(pointIds)
-    this.markPreviewLabelDirty(labelTarget)
-    for (const id of netIds) this.markNetDirty(id)
+    // 累积到拖拽节流窗口，避免每帧执行 markLinkedGeometryDirtyForPoint 的 O(场景) 全遍历。
+    for (const id of pointIds) this.pendingLivePointIds.add(id)
+    if (labelTarget) this.pendingLiveLabelTarget = labelTarget
+    for (const id of netIds) this.pendingLiveNetIds.add(id)
     this.liveSyncPending = true
     if (this.liveSyncTimer) return
 
@@ -5227,6 +5627,14 @@ export class CollabManager {
       this.liveSyncTimer = null
       if (!this.liveSyncPending) return
       this.liveSyncPending = false
+
+      this.markPreviewPointsDirty(this.pendingLivePointIds)
+      this.pendingLivePointIds.clear()
+      this.markPreviewLabelDirty(this.pendingLiveLabelTarget)
+      this.pendingLiveLabelTarget = null
+      for (const id of this.pendingLiveNetIds) this.markNetDirty(id)
+      this.pendingLiveNetIds.clear()
+
       this.syncDirtyNow()
     }, CollabManager.LIVE_SYNC_THROTTLE_MS)
   }
@@ -5621,7 +6029,7 @@ export class CollabManager {
   getSharedHistoryState(): SharedHistoryState {
     const entries = this.readSharedHistoryEntries()
     const historyIndex = this.yHistoryIndex.get('value') ?? -1
-    return { entries, historyIndex }
+    return { entries, historyIndex, entryCount: entries.length }
   }
 
   getSharedHistoryCanUndo(): boolean {
@@ -5662,7 +6070,10 @@ export class CollabManager {
     // 关键例外：'InitialScene' 是首位加入者把“加入房间前已有的整份场景”写成的基线条目
     // （before=空、after=全场景），其全部几何对象都是已存在对象，绝不能产生任何“创建”消息。
     if (entry.label === 'InitialScene') return
-    const messages = buildMessagesFromHistoryEntry({
+    // 延迟到下一宏任务构建/广播：此处调用链已包含 exportScene×2 + JSON.stringify×2 + Yjs 写入，
+    // 消息构建是 O(scene) 的 diff 计算，同步执行会把松手瞬间的主线程阻塞时间翻倍、拖垮帧率。
+    // 延迟后消息按入队顺序（FIFO）逐个构建广播，不影响协作历史与消息顺序的正确性。
+    const messageInput = {
       actorClientId: entry.actorClientId,
       actorName: entry.actorName,
       createdAt: entry.createdAt,
@@ -5673,8 +6084,11 @@ export class CollabManager {
       keepPointId: entry.keepPointId ?? null,
       deleteTargetId: entry.deleteTargetId ?? null,
       intent: entry.intent ?? null,
-    })
-    if (messages.length > 0) this.appendCollabMessages(messages)
+    }
+    window.setTimeout(() => {
+      const messages = buildMessagesFromHistoryEntry(messageInput)
+      if (messages.length > 0) this.appendCollabMessages(messages)
+    }, 0)
   }
 
   /**
@@ -6014,7 +6428,15 @@ export class CollabManager {
   }
 
   private emitSharedHistoryState(): void {
-    this.onSharedHistoryUpdate(this.getSharedHistoryState())
+    // 轻量化 emit：仅广播 historyIndex 与条目总数，避免每次操作对全部历史条目做
+    // JSON.parse ×2 的反序列化（历史越长越卡）。需要完整条目（加入/离开房间快照）时
+    // 走 getSharedHistoryState() 全量解析。
+    const historyIndex = this.yHistoryIndex.get('value') ?? -1
+    this.onSharedHistoryUpdate({
+      entries: [],
+      historyIndex,
+      entryCount: this.yHistory.length,
+    })
   }
 
   // ===== 协作历史消息（共享文档数组，不设条数上限，随房间持久化） =====
@@ -6031,6 +6453,7 @@ export class CollabManager {
     map.set('params', JSON.stringify(message.params))
     map.set('quote', message.quote ?? '')
     map.set('note', message.note ?? '')
+    map.set('createdFrom', message.createdFrom ?? '')
     map.set('createdAt', message.createdAt)
     return map
   }
@@ -6047,6 +6470,7 @@ export class CollabManager {
       const paramsRaw = map.get('params')
       const quote = map.get('quote')
       const note = map.get('note')
+      const createdFrom = map.get('createdFrom')
       const createdAt = map.get('createdAt')
 
       const validCategories = new Set<CollabHistoryMessage['category']>([
@@ -6075,6 +6499,7 @@ export class CollabManager {
         params: Array.isArray(params) ? params : [],
         quote: typeof quote === 'string' && quote !== '' ? quote : null,
         note: typeof note === 'string' && note !== '' ? note : null,
+        createdFrom: typeof createdFrom === 'string' && createdFrom !== '' ? createdFrom : null,
         createdAt,
       }
     } catch {

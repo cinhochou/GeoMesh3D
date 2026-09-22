@@ -169,6 +169,28 @@ export class Scene {
     entry[kind].add(geoId)
   }
 
+  /**
+   * 查询某个点被哪些几何对象引用（点 → 关联几何的反向索引，O(1) 访问）。
+   * 结构未变化时索引缓存有效；几何增删会经 invalidateRenderSyncCache 重建。
+   * 供 CollabManager 拖拽直播同步使用，替代 O(场景) 全遍历。
+   */
+  getPointRefsForPoint(pointId: string): {
+    lines: Set<string>
+    straightLines: Set<string>
+    perpendicularLines: Set<string>
+    parallelLines: Set<string>
+    rays: Set<string>
+    vectors: Set<string>
+    circles: Set<string>
+    faces: Set<string>
+    spheres: Set<string>
+    cones: Set<string>
+    cylinders: Set<string>
+    nets: Set<string>
+  } | null {
+    return this.getPointRefIndex().get(pointId) ?? null
+  }
+
   invalidateRenderSyncCache() {
     this._pointRefIndex = null
     this._lineRefIndex = null
@@ -871,53 +893,53 @@ export class Scene {
 
   markPointDirty(pointId: string) {
     this.dirtyIds.point.add(pointId)
-    this.circles.forEach((circle) => {
-      if (circle.p1.id === pointId || circle.p2.id === pointId || circle.p3.id === pointId) {
-        this.dirtyIds.circle.add(circle.id)
+
+    // 用 Scene 的点引用索引（O(引用数)）替代原来的 O(场景) 全遍历：
+    // 拖拽时每帧/每个点都触发本方法（本地拖动 + 远端 33ms 直播同步的 setPosition 都会走到），
+    // 场景对象越多收益越大。语义与原实现完全一致——仅对真正引用该点的几何做脏标记。
+    // 线条/面/net 不在此处理：它们由 consumeRenderSyncState 经同一索引传播。
+    const refs = this.getPointRefsForPoint(pointId)
+    if (refs) {
+      refs.circles.forEach((circleId) => {
+        this.dirtyIds.circle.add(circleId)
         const centerPoint = [...this.points.values()].find(
-          (p) => p.circleId === circle.id && p.circleRole === 'center',
+          (p) => p.circleId === circleId && p.circleRole === 'center',
         )
         if (centerPoint) this.dirtyIds.point.add(centerPoint.id)
-      }
-    })
-    this.spheres.forEach((sphere) => {
-      if (sphere.centerPoint.id === pointId || (sphere.radiusPoint && sphere.radiusPoint.id === pointId)) {
-        this.dirtyIds.sphere.add(sphere.id)
-      }
-    })
-    this.cones.forEach((cone) => {
-      if (cone.baseCenterPoint.id === pointId || cone.apexPoint.id === pointId) {
-        this.dirtyIds.cone.add(cone.id)
-      }
-    })
-    this.cylinders.forEach((cylinder) => {
-      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
-        this.dirtyIds.cylinder.add(cylinder.id)
-      }
-    })
-    this.cylinderConstraints.forEach((constraint, cylinderId) => {
-      const cylinder = this.cylinders.get(cylinderId)
-      if (cylinder && (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId)) {
-        this.markConstraintDirty(constraint)
-      }
-    })
-    this.cylinders.forEach((cylinder) => {
-      if (cylinder.bottomCenterPoint.id === pointId || cylinder.topCenterPoint.id === pointId) {
+      })
+      refs.spheres.forEach((id) => this.dirtyIds.sphere.add(id))
+      refs.cones.forEach((id) => this.dirtyIds.cone.add(id))
+      refs.cylinders.forEach((cylinderId) => {
+        this.dirtyIds.cylinder.add(cylinderId)
+        const cylinder = this.cylinders.get(cylinderId)
+        if (!cylinder) return
         if (cylinder.normalCircleId) {
           this.dirtyIds.circle.add(cylinder.normalCircleId)
         }
         if (cylinder.topNormalCircleId) {
           this.dirtyIds.circle.add(cylinder.topNormalCircleId)
         }
-      }
-    })
-    this.perpendicularLines.forEach((perpendicularLine) => {
-      if (perpendicularLine.p1.id === pointId) {
-        this.dirtyIds.perpendicularLine.add(perpendicularLine.id)
-        const constraint = this.perpendicularLineConstraints.get(perpendicularLine.id)
+        const constraint = this.cylinderConstraints.get(cylinderId)
         if (constraint) this.markConstraintDirty(constraint)
-      }
-    })
+      })
+      refs.perpendicularLines.forEach((id) => {
+        const perpendicularLine = this.perpendicularLines.get(id)
+        if (perpendicularLine && perpendicularLine.p1.id === pointId) {
+          this.dirtyIds.perpendicularLine.add(id)
+          const constraint = this.perpendicularLineConstraints.get(id)
+          if (constraint) this.markConstraintDirty(constraint)
+        }
+      })
+      refs.parallelLines.forEach((id) => {
+        const parallelLine = this.parallelLines.get(id)
+        if (parallelLine && parallelLine.p1.id === pointId) {
+          this.dirtyIds.parallelLine.add(id)
+          const constraint = this.parallelLineConstraints.get(id)
+          if (constraint) this.markConstraintDirty(constraint)
+        }
+      })
+    }
+
     this.perpendicularLineConstraints.forEach((constraint) => {
       let found = false
       if (constraint.target.type === 'line') {
@@ -951,13 +973,6 @@ export class Scene {
       if (found) {
         this.dirtyIds.perpendicularLine.add(constraint.perpendicularLineId)
         this.markConstraintDirty(constraint)
-      }
-    })
-    this.parallelLines.forEach((parallelLine) => {
-      if (parallelLine.p1.id === pointId) {
-        this.dirtyIds.parallelLine.add(parallelLine.id)
-        const constraint = this.parallelLineConstraints.get(parallelLine.id)
-        if (constraint) this.markConstraintDirty(constraint)
       }
     })
     this.parallelLineConstraints.forEach((constraint) => {

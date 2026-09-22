@@ -49,6 +49,10 @@ export interface CollabHistoryMessage {
   quote: string | null
   /** 补充标注：如修改类消息是通过拖动某点达成的，标注「通过移动A点」 */
   note?: string | null
+  /** 级联结果：本次操作的直接对象外，随其改动的独立派生对象（如随基点移动而重绘的垂线），渲染为「→ 级联移动 垂线N、…」 */
+  cascade?: string | null
+  /** 创建类消息的来源对象清单（如「线段L1、点P2」），渲染为「，由 线段L1、点P2 创建」；无来源时省略 */
+  createdFrom?: string | null
   /** 时间戳（展示为「2026-09-08 14:30:05」） */
   createdAt: number
 }
@@ -105,6 +109,14 @@ export function renderCollabHistoryMessage(message: CollabHistoryMessage): strin
 
   if (message.note) {
     parts.push(message.category === 'delete' ? `→ ${message.note}` : message.note)
+  }
+
+  if (message.cascade) {
+    parts.push(`→ ${message.cascade}`)
+  }
+
+  if (message.createdFrom) {
+    parts.push(`，由 ${message.createdFrom} 创建`)
   }
 
   return parts.join(' ')

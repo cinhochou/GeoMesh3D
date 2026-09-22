@@ -2419,7 +2419,7 @@ const applyPointPosition = (id: string, xStr: string, yStr: string, zStr: string
     toFixed2(point.position.y) === yStr &&
     toFixed2(point.position.z) === zStr
   ) return
-  props.editor.setPointPosition(id, new Vec3(x, y, z))
+  props.editor.setPointPosition(id, new Vec3(x, y, z), { origin: 'panel', targetId: id })
   props.scene.solveDirtyConstraints()
   props.scene.markAllRenderDirty()
 }
@@ -2527,9 +2527,9 @@ const applyEditLine = () => {
     Math.abs(deltaP1.z - deltaP2.z) <= 1e-6
 
   if (hasDeltaP1 && (!hasDeltaP2 || sameDelta)) {
-    props.editor.setPointPosition(updatedLine.p1.id, new Vec3(p1x, p1y, p1z))
+    props.editor.setPointPosition(updatedLine.p1.id, new Vec3(p1x, p1y, p1z), { origin: 'panel', targetId: updatedLine.p1.id })
   } else if (hasDeltaP2) {
-    props.editor.setPointPosition(updatedLine.p2.id, new Vec3(p2x, p2y, p2z))
+    props.editor.setPointPosition(updatedLine.p2.id, new Vec3(p2x, p2y, p2z), { origin: 'panel', targetId: updatedLine.p2.id })
   }
   props.editor.commitCollabTransaction()
 }
@@ -2596,7 +2596,7 @@ const applyEditVector = () => {
         updatedVector.p1.position.z +
           (updatedVector.p2.position.z - updatedVector.p1.position.z) * scale,
       )
-      props.editor.setPointPosition(updatedVector.p2.id, newP2)
+      props.editor.setPointPosition(updatedVector.p2.id, newP2, { origin: 'panel', targetId: updatedVector.p2.id })
     } else if (parsedLength > 1e-6) {
       const dir = updatedVector.getNormalizedDirectionVector()
       const newP2 = new Vec3(
@@ -2604,7 +2604,7 @@ const applyEditVector = () => {
         updatedVector.p1.position.y + dir.y * parsedLength,
         updatedVector.p1.position.z + dir.z * parsedLength,
       )
-      props.editor.setPointPosition(updatedVector.p2.id, newP2)
+      props.editor.setPointPosition(updatedVector.p2.id, newP2, { origin: 'panel', targetId: updatedVector.p2.id })
     } else {
       props.editor.setPointPosition(
         updatedVector.p2.id,
@@ -2613,6 +2613,7 @@ const applyEditVector = () => {
           updatedVector.p1.position.y,
           updatedVector.p1.position.z,
         ),
+        { origin: 'panel', targetId: updatedVector.p2.id },
       )
     }
     props.editor.commitCollabTransaction()
@@ -2816,7 +2817,7 @@ const applyCirclePointCoord = (pointKey: 'p1' | 'p2' | 'p3') => {
   )
     return
   if (isPointCoordinateLocked(point)) return
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 const nudgeCirclePointCoord = (
   pointKey: 'p1' | 'p2' | 'p3',
@@ -2879,7 +2880,7 @@ const applyThreePointCircleRadius = () => {
       position: new Vec3(center.x + dx * scale, center.y + dy * scale, center.z + dz * scale),
     })
   }
-  props.editor.setPointsPositions(updates)
+  props.editor.setPointsPositions(updates, { origin: 'panel', category: 'update', targetId: editing.value?.id ?? null })
 }
 const nudgeThreePointCircleRadius = (direction: 'up' | 'down') => {
   if (guardViewOnly()) return
@@ -2955,7 +2956,7 @@ const applyHexahedronOwnerPoint = (pointKey: 'p1' | 'p2') => {
   ) {
     return
   }
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 
 const getEditingPrismState = () => {
@@ -3032,7 +3033,7 @@ const applyPrismTopPoint = () => {
     }
   }
 
-  props.editor.setPointPosition(topPoint.id, targetPosition)
+  props.editor.setPointPosition(topPoint.id, targetPosition, { origin: 'panel', targetId: topPoint.id })
   const axes = state.constraint.getResolvedAxes()
   if (axes) editPrism.height = toFixed2(axes.height)
 }
@@ -3095,7 +3096,7 @@ const applyPrismHeight = () => {
     baseRefVertex.position.y + direction.y * nextHeight,
     baseRefVertex.position.z + direction.z * nextHeight,
   )
-  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition)
+  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition, { origin: 'panel', targetId: state.ownerPoints[1]!.id })
   editPrism.topPoint.x = toFixed2(newPosition.x)
   editPrism.topPoint.y = toFixed2(newPosition.y)
   editPrism.topPoint.z = toFixed2(newPosition.z)
@@ -3255,7 +3256,7 @@ const applyPyramidApexPoint = () => {
     }
   }
 
-  props.editor.setPointPosition(apexPoint.id, targetPosition)
+  props.editor.setPointPosition(apexPoint.id, targetPosition, { origin: 'panel', targetId: apexPoint.id })
   const axes = state.constraint.getResolvedAxes()
   if (axes) editPyramid.height = toFixed2(axes.height)
 }
@@ -3315,7 +3316,7 @@ const applyPyramidHeight = () => {
     axes.origin.y + direction.y * nextHeight,
     axes.origin.z + direction.z * nextHeight,
   )
-  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition)
+  props.editor.setPointPosition(state.ownerPoints[1]!.id, newPosition, { origin: 'panel', targetId: state.ownerPoints[1]!.id })
   editPyramid.apexPoint.x = toFixed2(newPosition.x)
   editPyramid.apexPoint.y = toFixed2(newPosition.y)
   editPyramid.apexPoint.z = toFixed2(newPosition.z)
@@ -3454,7 +3455,7 @@ const applyRegularPolygonOwnerPoint = (pointKey: 'p1' | 'p2') => {
   ) {
     return
   }
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 
 const nudgeRegularPolygonEdgeLength = (direction: 'up' | 'down') => {
@@ -3586,7 +3587,15 @@ const applySpherePointCoord = (pointKey: 'centerPoint' | 'radiusPoint') => {
   )
     return
   if (isPointCoordinateLocked(point)) return
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  if (pointKey === 'centerPoint') {
+    props.editor.setSphereCenterPointPosition(
+      state.sphereId,
+      new Vec3(nextPosition.x, nextPosition.y, nextPosition.z),
+      { origin: 'panel', targetId: state.sphereId },
+    )
+    return
+  }
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 
 const handleSphereRadiusFocus = () => {
@@ -3723,7 +3732,7 @@ const applyConePointCoord = (pointKey: 'baseCenterPoint' | 'apexPoint') => {
   )
     return
   if (isPointCoordinateLocked(point)) return
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 
 const handleConeRadiusFocus = () => {
@@ -3888,7 +3897,7 @@ const applyCylinderPointCoord = (pointKey: 'bottomCenterPoint' | 'topCenterPoint
   )
     return
   if (isPointCoordinateLocked(point)) return
-  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z))
+  props.editor.setPointPosition(point.id, new Vec3(nextPosition.x, nextPosition.y, nextPosition.z), { origin: 'panel', targetId: point.id })
 }
 
 const handleCylinderRadiusFocus = () => {
@@ -9252,7 +9261,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="coord-row-title">
-              球心{{ subName(props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A') }}(x,y,z)
+              球心点{{ subName(props.editor.getSphereCenterPoint(s!.id)?.name ?? 'A') }}(x,y,z)
             </div>
             <div class="coord-row">
               <div class="axis-field">
@@ -9351,7 +9360,7 @@ onUnmounted(() => {
             </div>
             <template v-if="props.editor.getSphereRadiusPoint(s!.id)">
               <div class="coord-row-title">
-                半径{{ subName(props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B') }}(x,y,z)
+                半径点{{ subName(props.editor.getSphereRadiusPoint(s!.id)?.name ?? 'B') }}(x,y,z)
               </div>
               <div class="coord-row">
                 <div class="axis-field">
@@ -9500,6 +9509,19 @@ onUnmounted(() => {
                     : s!.getVolume().toFixed(2)
                 }}</span
               >
+            </div>
+            <div>
+              <button
+                type="button"
+                class="geo-link"
+                @click.stop="selectObject('point', props.editor.getSphereCenterPoint(s!.id)?.id ?? '')"
+              >球心点：{{ subName(props.editor.getSphereCenterPoint(s!.id)?.name) }}</button><template
+                v-if="props.editor.getSphereRadiusPoint(s!.id)"
+              >　<button
+                  type="button"
+                  class="geo-link"
+                  @click.stop="selectObject('point', props.editor.getSphereRadiusPoint(s!.id)!.id)"
+                >半径点：{{ subName(props.editor.getSphereRadiusPoint(s!.id)!.name) }}</button></template>
             </div>
           </div>
         </div>

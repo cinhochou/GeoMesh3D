@@ -138,6 +138,7 @@ export const useCollabStore = defineStore('collab', () => {
     setJoinDialogMessage,
     resetCollabState,
     setManager,
+    activeManager,
     leave,
   }
 })

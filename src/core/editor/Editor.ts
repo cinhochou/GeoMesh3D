@@ -1,5 +1,5 @@
 // src/core/editor/Editor.ts
-import type { CollabOperationIntent, CollabIntentParam } from '../../types/collabIntent'
+import { numParam, type CollabOperationIntent, type CollabIntentParam } from '../../types/collabIntent'
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { HistoryManager, type HistoryEntry } from './HistoryManager'
@@ -434,13 +434,14 @@ function buildUpdateParams(
   return out
 }
 
-/** 给更新类命令挂上「修改」意图（主语 + 已声明属性）；无差异时不挂，交给快照兜底 */
+/** 给更新类命令挂上「修改」意图（主语 + 已声明属性）；无差异时不挂，交给快照兜底。
+ *  更新类属性编辑入口位于侧边栏，统一声明 origin: 'panel'（场景中无对应操作） */
 function withUpdateIntent<T extends { intent?: CollabOperationIntent | null }>(
   cmd: T,
   targetId: string,
   params: CollabIntentParam[],
 ): T {
-  if (params.length > 0) cmd.intent = { category: 'update', targetId, params }
+  if (params.length > 0) cmd.intent = { category: 'update', targetId, params, origin: 'panel' }
   return cmd
 }
 
@@ -1647,7 +1648,46 @@ export class Editor {
       center.y + (direction.y / directionLength) * normalizedRadius,
       center.z + (direction.z / directionLength) * normalizedRadius,
     )
-    this.setPointsPositions([{ id: sphere.radiusPoint!.id, position: newPosition }])
+    // 面板编辑半径最终也是移动半径点，需声明「修改」意图，
+    // 否则历史消息会按拖动启发式误标「由I点拖动」
+    const radiusParam = numParam('半径', currentRadius, normalizedRadius)
+    this.setPointsPositions(
+      [{ id: sphere.radiusPoint!.id, position: newPosition }],
+      radiusParam
+        ? { category: 'update', targetId: sphere.id, params: [radiusParam], origin: 'panel', note: '侧边栏修改半径' }
+        : null,
+    )
+  }
+
+  setSphereCenterPointPosition(
+    sphereId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
+    const sphere = this.getSphere(sphereId)
+    if (!sphere) return
+    if (this.isPointCoordinateLocked(sphere.centerPoint)) return
+    if (!sphere.radiusPoint) {
+      this.setPointPosition(sphere.centerPoint.id, position, intent)
+      return
+    }
+    // 两点球：球心平移时半径点跟随平移，保持半径不变（与拖拽球心行为一致）
+    const center = sphere.centerPoint.position
+    const delta = new Vec3(position.x - center.x, position.y - center.y, position.z - center.z)
+    this.setPointsPositions(
+      [
+        { id: sphere.centerPoint.id, position: position.clone() },
+        {
+          id: sphere.radiusPoint.id,
+          position: new Vec3(
+            sphere.radiusPoint.position.x + delta.x,
+            sphere.radiusPoint.position.y + delta.y,
+            sphere.radiusPoint.position.z + delta.z,
+          ),
+        },
+      ],
+      intent,
+    )
   }
 
   deleteSphere(sphereId: string) {
@@ -2586,7 +2626,12 @@ export class Editor {
     return nextPosition
   }
 
-  private rotateCubeByDependentPoint(cubeId: string, pointId: string, position: Vec3) {
+  private rotateCubeByDependentPoint(
+    cubeId: string,
+    pointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return
     const layout = constraint.dependentLayouts.find((item) => item.pointId === pointId)
@@ -2668,18 +2713,21 @@ export class Editor {
     ]
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(
-        new TransformCommand(transform.pointId, transform.before, transform.after, axisHintChanges, this.scene),
-      )
+      const cmd = new TransformCommand(transform.pointId, transform.before, transform.after, axisHintChanges, this.scene)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges, this.scene))
+    const cmd = new TransformPointsCommand(transforms, axisHintChanges, this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   private rotateRegularPolygonByDependentPoint(
     constraintId: string,
     pointId: string,
     position: Vec3,
+    intent: CollabOperationIntent | null = null,
   ) {
     const constraint = this.getRegularPolygonConstraint(constraintId)
     if (!constraint) return
@@ -2762,24 +2810,27 @@ export class Editor {
       },
     ]
     if (transforms.length === 1) {
-      this.executeCommand(
-        new TransformCommand(
-          transforms[0]!.pointId,
-          transforms[0]!.before,
-          transforms[0]!.after,
-          axisHintChanges,
-          this.scene,
-        ),
+      const cmd = new TransformCommand(
+        transforms[0]!.pointId,
+        transforms[0]!.before,
+        transforms[0]!.after,
+        axisHintChanges,
+        this.scene,
       )
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, axisHintChanges, this.scene))
+    const cmd = new TransformPointsCommand(transforms, axisHintChanges, this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   private setRegularPolygonOwnerPointPosition(
     constraintId: string,
     pointId: string,
     position: Vec3,
+    intent: CollabOperationIntent | null = null,
   ) {
     const constraint = this.getRegularPolygonConstraint(constraintId)
     if (!constraint) return
@@ -2793,11 +2844,10 @@ export class Editor {
     if (!otherPoint) return
 
     if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
-      this.setPointsPositions([{ id: pointId, position }], {
-        category: 'update',
-        targetId: constraintId,
-        note: `由${point.name}点坐标修改`,
-      })
+      this.setPointsPositions(
+        [{ id: pointId, position }],
+        intent ?? { category: 'update', targetId: constraintId, note: `由${point.name}点坐标修改` },
+      )
       return
     }
 
@@ -2831,7 +2881,7 @@ export class Editor {
           ),
         },
       ],
-      { category: 'update', targetId: constraintId, note: `由${point.name}点坐标修改` },
+      intent ?? { category: 'update', targetId: constraintId, note: `由${point.name}点坐标修改` },
     )
   }
 
@@ -3090,7 +3140,12 @@ export class Editor {
     )
   }
 
-  setCubeOwnerPointPosition(cubeId: string, pointId: string, position: Vec3) {
+  setCubeOwnerPointPosition(
+    cubeId: string,
+    pointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getCubeConstraint(cubeId)
     if (!constraint) return
     const point = this.scene.points.get(pointId)
@@ -3103,7 +3158,7 @@ export class Editor {
     if (!otherPoint) return
     const snappedPosition = this.snapSolidOwnerPosition(constraint, position, otherPoint)
     if (!constraint.edgeLengthLocked || !constraint.lockedEdgeLength) {
-      this.setPointsPositions([{ id: pointId, position: snappedPosition }], {
+      this.setPointsPositions([{ id: pointId, position: snappedPosition }], intent ?? {
         category: 'update',
         targetId: cubeId,
         note: `由${point.name}点坐标修改`,
@@ -3141,14 +3196,19 @@ export class Editor {
           ),
         },
       ],
-      { category: 'update', targetId: cubeId, note: `由${point.name}点坐标修改` },
+      intent ?? { category: 'update', targetId: cubeId, note: `由${point.name}点坐标修改` },
     )
   }
 
   /**
    * 拖动棱柱 dependent 点：平移整个棱柱（owner + 所有 dependent 点同步移动 delta）。
    */
-  private translatePrism(prismId: string, draggedPointId: string, position: Vec3) {
+  private translatePrism(
+    prismId: string,
+    draggedPointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getPrismConstraint(prismId)
     if (!constraint) return
     const dragged = this.scene.points.get(draggedPointId)
@@ -3184,17 +3244,26 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const t = transforms[0]!
-      this.executeCommand(new TransformCommand(t.pointId, t.before, t.after, [], this.scene))
+      const cmd = new TransformCommand(t.pointId, t.before, t.after, [], this.scene)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+    const cmd = new TransformPointsCommand(transforms, [], this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   /**
    * 拖动棱柱 owner 点（最高点或底面参考顶点）：
    * 移动该点，并重新求解所有 dependent 点位置。
    */
-  private setPrismOwnerPointPosition(prismId: string, pointId: string, position: Vec3) {
+  private setPrismOwnerPointPosition(
+    prismId: string,
+    pointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getPrismConstraint(prismId)
     if (!constraint) return
     const point = this.scene.points.get(pointId)
@@ -3216,8 +3285,7 @@ export class Editor {
       afterVerticalHeight = constraint.computeVerticalHeightForPosition(position)
     }
 
-    this.executeCommand(
-      new TransformPrismOwnerPointCommand(
+    const prismCmd = new TransformPrismOwnerPointCommand(
         this.scene,
         constraint,
         pointId,
@@ -3225,15 +3293,21 @@ export class Editor {
         position.clone(),
         beforeVerticalHeight,
         afterVerticalHeight,
-      ),
-    )
+      )
+      if (intent) prismCmd.intent = intent
+      this.executeCommand(prismCmd)
   }
 
   /**
    * 拖动棱锥 owner 点（apex 或底面顶点）：平移整个棱锥（所有 owner 点同步移动 delta）。
    * 棱锥无 dependent 顶点，所有底面顶点与 apex 均为 owner，拖拽任一底面顶点应平移整个棱锥。
    */
-  private translatePyramid(pyramidId: string, draggedPointId: string, position: Vec3) {
+  private translatePyramid(
+    pyramidId: string,
+    draggedPointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getPyramidConstraint(pyramidId)
     if (!constraint) return
     const dragged = this.scene.points.get(draggedPointId)
@@ -3270,16 +3344,25 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const t = transforms[0]!
-      this.executeCommand(new TransformCommand(t.pointId, t.before, t.after, [], this.scene))
+      const cmd = new TransformCommand(t.pointId, t.before, t.after, [], this.scene)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
-    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+    const cmd = new TransformPointsCommand(transforms, [], this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   /**
    * 拖动棱锥 apex（最高点）：移动该点，垂直保持模式下约束到底面法线方向。
    */
-  private setPyramidApexPosition(pyramidId: string, pointId: string, position: Vec3) {
+  private setPyramidApexPosition(
+    pyramidId: string,
+    pointId: string,
+    position: Vec3,
+    intent: CollabOperationIntent | null = null,
+  ) {
     const constraint = this.getPyramidConstraint(pyramidId)
     if (!constraint) return
     const point = this.scene.points.get(pointId)
@@ -3301,8 +3384,7 @@ export class Editor {
       afterVerticalHeight = constraint.computeVerticalHeightForPosition(position)
     }
 
-    this.executeCommand(
-      new TransformPyramidOwnerPointCommand(
+    const pyramidCmd = new TransformPyramidOwnerPointCommand(
         this.scene,
         constraint,
         pointId,
@@ -3310,8 +3392,9 @@ export class Editor {
         position.clone(),
         beforeVerticalHeight,
         afterVerticalHeight,
-      ),
-    )
+      )
+      if (intent) pyramidCmd.intent = intent
+      this.executeCommand(pyramidCmd)
   }
 
   isPointCoordinateLocked(point: Point3 | null | undefined) {
@@ -4732,27 +4815,27 @@ export class Editor {
     this.setPointPosition(pointId, point.position.add(delta))
   }
 
-  setPointPosition(pointId: string, position: Vec3) {
+  setPointPosition(pointId: string, position: Vec3, intent: CollabOperationIntent | null = null) {
     const point = this.scene.points.get(pointId)
     if (!point || this.isPointCoordinateLocked(point)) return
 
     const cubeConstraint = this.getCubeConstraintByPointId(pointId)
     if (cubeConstraint && point.cubeRole === 'dependent') {
-      this.rotateCubeByDependentPoint(cubeConstraint.cubeId, pointId, position)
+      this.rotateCubeByDependentPoint(cubeConstraint.cubeId, pointId, position, intent)
       return
     }
     if (cubeConstraint && point.cubeRole === 'owner') {
-      this.setCubeOwnerPointPosition(cubeConstraint.cubeId, pointId, position)
+      this.setCubeOwnerPointPosition(cubeConstraint.cubeId, pointId, position, intent)
       return
     }
 
     const rpConstraint = this.getRegularPolygonConstraintByPointId(pointId)
     if (rpConstraint && point.regularPolygonRole === 'dependent') {
-      this.rotateRegularPolygonByDependentPoint(rpConstraint.constraintId, pointId, position)
+      this.rotateRegularPolygonByDependentPoint(rpConstraint.constraintId, pointId, position, intent)
       return
     }
     if (rpConstraint && point.regularPolygonRole === 'owner') {
-      this.setRegularPolygonOwnerPointPosition(rpConstraint.constraintId, pointId, position)
+      this.setRegularPolygonOwnerPointPosition(rpConstraint.constraintId, pointId, position, intent)
       return
     }
 
@@ -4760,12 +4843,12 @@ export class Editor {
     if (prismConstraint) {
       if (point.prismRole === 'dependent') {
         // 拖动 dependent 点：平移整个棱柱（owner + 所有 dependent 点）
-        this.translatePrism(prismConstraint.prismId, pointId, position)
+        this.translatePrism(prismConstraint.prismId, pointId, position, intent)
         return
       }
       if (point.prismRole === 'owner') {
         // 拖动 owner 点（最高点或底面参考顶点）：移动该点并重新求解 dependent 点
-        this.setPrismOwnerPointPosition(prismConstraint.prismId, pointId, position)
+        this.setPrismOwnerPointPosition(prismConstraint.prismId, pointId, position, intent)
         return
       }
     }
@@ -4774,11 +4857,11 @@ export class Editor {
     if (pyramidConstraint) {
       if (pointId === pyramidConstraint.ownerPointIds[1]) {
         // 拖动 apex：移动该点，垂直保持模式下约束到底面法线方向
-        this.setPyramidApexPosition(pyramidConstraint.pyramidId, pointId, position)
+        this.setPyramidApexPosition(pyramidConstraint.pyramidId, pointId, position, intent)
         return
       }
       // 拖动底面顶点：平移整个棱锥（所有 owner 点同步移动 delta）
-      this.translatePyramid(pyramidConstraint.pyramidId, pointId, position)
+      this.translatePyramid(pyramidConstraint.pyramidId, pointId, position, intent)
       return
     }
 
@@ -4794,7 +4877,7 @@ export class Editor {
       nextPosition.z - before.z,
     )
     const group = this.getLockedTranslationGroup([pointId])
-    this.translatePointGroup([...group], delta)
+    this.translatePointGroup([...group], delta, intent)
   }
 
   setPointsPositions(
@@ -4836,6 +4919,7 @@ export class Editor {
     transforms: Array<{ id: string; before: Vec3; after: Vec3 }>,
     axisHintChanges: Array<{ constraintType: 'cube' | 'regularPolygon'; constraintId: string; before: Vec3; after: Vec3 }> = [],
     draggedPointId: string | null = null,
+    intent: CollabOperationIntent | null = null,
   ) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       transforms.map(({ id, after }) => ({ id, position: after.clone() })),
@@ -4867,11 +4951,15 @@ export class Editor {
     if (commandTransforms.length === 0 && axisHintChanges.length === 0) return
     if (commandTransforms.length === 1 && axisHintChanges.length === 0) {
       const transform = commandTransforms[0]!
-      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene, draggedPointId))
+      const cmd = new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene, draggedPointId)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(commandTransforms, axisHintChanges, this.scene, draggedPointId))
+    const cmd = new TransformPointsCommand(commandTransforms, axisHintChanges, this.scene, draggedPointId)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   updatePoint(
@@ -7702,7 +7790,7 @@ export class Editor {
     return group
   }
 
-  translatePointGroup(pointIds: string[], delta: Vec3) {
+  translatePointGroup(pointIds: string[], delta: Vec3, intent: CollabOperationIntent | null = null) {
     const resolvedPositions = this.resolveConstrainedPointPositions(
       pointIds.map((id) => {
         const point = this.scene.points.get(id)
@@ -7730,11 +7818,15 @@ export class Editor {
     if (transforms.length === 0) return
     if (transforms.length === 1) {
       const transform = transforms[0]!
-      this.executeCommand(new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene))
+      const cmd = new TransformCommand(transform.pointId, transform.before, transform.after, [], this.scene)
+      if (intent) cmd.intent = intent
+      this.executeCommand(cmd)
       return
     }
 
-    this.executeCommand(new TransformPointsCommand(transforms, [], this.scene))
+    const cmd = new TransformPointsCommand(transforms, [], this.scene)
+    if (intent) cmd.intent = intent
+    this.executeCommand(cmd)
   }
 
   resolveConstrainedPointPositions(updates: Array<{ id: string; position: Vec3 }>) {
