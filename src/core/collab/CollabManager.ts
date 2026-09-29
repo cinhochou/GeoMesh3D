@@ -34,7 +34,13 @@ import {
   type IntersectionTargetRef,
 } from '../geometry/IntersectionPoint3'
 import { importScene, type SerializedScene } from '../editor/SceneSerializer'
-import { buildMessagesFromHistoryEntry, buildUndoRedoMessage } from './historyMessageBuilder'
+import {
+  buildMessagesFromHistoryEntry,
+  buildUndoRedoMessage,
+  buildProjectImportMessage,
+  buildSceneFileImportMessage,
+  buildSceneFileExportMessage,
+} from './historyMessageBuilder'
 import type { CollabHistoryMessage } from '../../types/collabHistory'
 import type { CollabOperationIntent } from '../../types/collabIntent'
 
@@ -55,6 +61,18 @@ export type SharedHistoryEntry = {
   deleteTargetId?: string | null
   /** 操作级意图（命令声明，消息生成优先采用；随共享历史序列化以便撤销引用也能用） */
   intent?: CollabOperationIntent | null
+  /**
+   * 初始基线条目（首位成员进入房间时加载关联项目所写入）。
+   * 保留完整 before/after 作为「基线」（后续 diff、协作恢复、以及撤销第一个真实操作时
+   * 回到项目场景而不是空场景），但**不作为一步可撤销操作**：撤销不能越过它。
+   */
+  isBase?: boolean
+  /**
+   * 房间内导入场景文件时携带的文件名（含后缀）。
+   * 有值时该条目**只产生一条**「导入了场景文件 xxx.json」消息，不做 diff 展开
+   * （导入会整体替换场景，展开会刷出几十条「创建了/删除了…」）。
+   */
+  sceneFileName?: string | null
 }
 
 export type SharedHistoryState = {
@@ -62,6 +80,12 @@ export type SharedHistoryState = {
   historyIndex: number
   /** 共享历史条目总数。轻量 emit 时 entries 为空数组，UI 仅用此字段 + historyIndex 计算 undo/redo 状态 */
   entryCount: number
+  /** 是否可撤销（已扣除不可撤销的初始基线） */
+  canUndo: boolean
+  /** 是否可重做 */
+  canRedo: boolean
+  /** 初始基线条目（项目导入）索引，-1 表示无基线 */
+  baseIndex: number
 }
 
 export type CollabStatus = {
@@ -3872,6 +3896,8 @@ export class CollabManager {
       existing.lockedEdgeLength = lockedEdgeLength
       existing.nameVisible = nameVisible
       existing.valueVisible = valueVisible
+      // 面是渲染层读取的显示投影：约束写入后立即镜像，避免面记录（可能滞后）导致分叉
+      this.scene.alignRegularPolygonFaceState()
       this.scene.requestConstraintSolve(this.scene.regularPolygonConstraints.get(id))
       this.scheduleRenderDirty()
       return
@@ -3893,6 +3919,8 @@ export class CollabManager {
         valueVisible,
       ),
     )
+    // 新建约束后同样立即镜像到面（与已有约束分支保持一致）
+    this.scene.alignRegularPolygonFaceState()
     this.scene.requestConstraintSolve(this.scene.regularPolygonConstraints.get(id))
     this.scheduleRenderDirty()
   }
@@ -6029,12 +6057,33 @@ export class CollabManager {
   getSharedHistoryState(): SharedHistoryState {
     const entries = this.readSharedHistoryEntries()
     const historyIndex = this.yHistoryIndex.get('value') ?? -1
-    return { entries, historyIndex, entryCount: entries.length }
+    return {
+      entries,
+      historyIndex,
+      entryCount: entries.length,
+      canUndo: this.getSharedHistoryCanUndo(),
+      canRedo: this.getSharedHistoryCanRedo(),
+      baseIndex: this.getSharedBaseIndex(),
+    }
+  }
+
+  /**
+   * 初始基线条目（项目导入）的索引；房间没有基线时返回 -1。
+   * 基线只可能出现在索引 0（仅在共享历史为空时写入），这里直接读该条目的标记位，
+   * 不做整条快照的反序列化，保证可以高频调用。
+   */
+  private getSharedBaseIndex(): number {
+    if (this.yHistory.length === 0) return -1
+    const first = this.yHistory.get(0)
+    if (!first) return -1
+    // isBase：新写入的基线标记；label==='InitialScene'：旧房间遗留的同义基线条目
+    return first.get('isBase') === true || first.get('label') === 'InitialScene' ? 0 : -1
   }
 
   getSharedHistoryCanUndo(): boolean {
     const idx = this.yHistoryIndex.get('value') ?? -1
-    return idx >= 0
+    // 撤销不能越过初始基线（项目导入本身不是一步用户操作）
+    return idx > this.getSharedBaseIndex()
   }
 
   getSharedHistoryCanRedo(): boolean {
@@ -6066,10 +6115,25 @@ export class CollabManager {
 
     this.emitSharedHistoryState()
 
-    // 依据本次对象级 before/after 差异生成协作历史消息并广播。
-    // 关键例外：'InitialScene' 是首位加入者把“加入房间前已有的整份场景”写成的基线条目
-    // （before=空、after=全场景），其全部几何对象都是已存在对象，绝不能产生任何“创建”消息。
+    // 初始基线条目（首位加入者导入关联项目）：系统消息、固定文案，不做任何 diff 展开
+    // （该条目 before=空场景、after=整份项目场景，展开会伪造成「创建了 N 个对象」）
+    if (entry.isBase) {
+      this.appendCollabMessages([buildProjectImportMessage(entry.createdAt)])
+      return
+    }
+    // 兼容旧房间中已存在但未带 isBase 标记的 'InitialScene' 基线条目（同样保持静默）
     if (entry.label === 'InitialScene') return
+    // 房间内导入场景文件：只写一条带文件名的消息，不做 diff 展开
+    if (entry.sceneFileName) {
+      this.appendCollabMessages([
+        buildSceneFileImportMessage(entry.sceneFileName, {
+          clientId: entry.actorClientId,
+          userName: entry.actorName,
+          createdAt: entry.createdAt,
+        }),
+      ])
+      return
+    }
     // 延迟到下一宏任务构建/广播：此处调用链已包含 exportScene×2 + JSON.stringify×2 + Yjs 写入，
     // 消息构建是 O(scene) 的 diff 计算，同步执行会把松手瞬间的主线程阻塞时间翻倍、拖垮帧率。
     // 延迟后消息按入队顺序（FIFO）逐个构建广播，不影响协作历史与消息顺序的正确性。
@@ -6140,7 +6204,8 @@ export class CollabManager {
   sharedUndo(): void {
     if (!this.provider || this.roomName === null) return
     const currentIndex = this.yHistoryIndex.get('value') ?? -1
-    if (currentIndex < 0) return
+    // 撤销不能越过初始基线（项目导入不是一步用户操作）
+    if (currentIndex <= this.getSharedBaseIndex()) return
 
     const entry = this.readSharedHistoryEntryAt(currentIndex)
     if (!entry) return
@@ -6167,6 +6232,8 @@ export class CollabManager {
           keepPointId: entry.keepPointId ?? null,
           deleteTargetId: entry.deleteTargetId ?? null,
           intent: entry.intent ?? null,
+          isBase: entry.isBase === true,
+          sceneFileName: entry.sceneFileName ?? null,
         },
         { clientId: this.getProviderClientId(), userName: this.localUserLabel, createdAt: Date.now() },
         'undo',
@@ -6204,6 +6271,8 @@ export class CollabManager {
           keepPointId: entry.keepPointId ?? null,
           deleteTargetId: entry.deleteTargetId ?? null,
           intent: entry.intent ?? null,
+          isBase: entry.isBase === true,
+          sceneFileName: entry.sceneFileName ?? null,
         },
         { clientId: this.getProviderClientId(), userName: this.localUserLabel, createdAt: Date.now() },
         'redo',
@@ -6361,6 +6430,8 @@ export class CollabManager {
     map.set('keepPointId', entry.keepPointId ?? '')
     map.set('deleteTargetId', entry.deleteTargetId ?? '')
     map.set('intent', entry.intent ? JSON.stringify(entry.intent) : '')
+    if (entry.isBase) map.set('isBase', true)
+    if (entry.sceneFileName) map.set('sceneFileName', entry.sceneFileName)
     return map
   }
 
@@ -6377,6 +6448,8 @@ export class CollabManager {
       const keepPointId = map.get('keepPointId')
       const deleteTargetId = map.get('deleteTargetId')
       const intentRaw = map.get('intent')
+      const isBaseRaw = map.get('isBase')
+      const sceneFileNameRaw = map.get('sceneFileName')
 
       if (
         typeof id !== 'string' ||
@@ -6405,6 +6478,9 @@ export class CollabManager {
         keepPointId: typeof keepPointId === 'string' && keepPointId !== '' ? keepPointId : null,
         deleteTargetId: typeof deleteTargetId === 'string' && deleteTargetId !== '' ? deleteTargetId : null,
         intent: typeof intentRaw === 'string' && intentRaw !== '' ? (JSON.parse(intentRaw) as CollabOperationIntent) : null,
+        isBase: isBaseRaw === true,
+        sceneFileName:
+          typeof sceneFileNameRaw === 'string' && sceneFileNameRaw !== '' ? sceneFileNameRaw : null,
       }
     } catch {
       return null
@@ -6436,6 +6512,9 @@ export class CollabManager {
       entries: [],
       historyIndex,
       entryCount: this.yHistory.length,
+      canUndo: this.getSharedHistoryCanUndo(),
+      canRedo: this.getSharedHistoryCanRedo(),
+      baseIndex: this.getSharedBaseIndex(),
     })
   }
 
@@ -6454,6 +6533,11 @@ export class CollabManager {
     map.set('quote', message.quote ?? '')
     map.set('note', message.note ?? '')
     map.set('createdFrom', message.createdFrom ?? '')
+    // 级联影响范围（级联删除/级联移动…）：必须随消息同步，
+    // 否则协作者(以及本地经 Yjs 往返读取的消息)永远看不到「实际删除/影响的对象范围」
+    map.set('cascade', message.cascade ?? '')
+    // 系统消息标记（项目导入）：随消息同步，保证协作端与本地往返后都不展示操作者昵称
+    map.set('system', message.system === true)
     map.set('createdAt', message.createdAt)
     return map
   }
@@ -6471,10 +6555,12 @@ export class CollabManager {
       const quote = map.get('quote')
       const note = map.get('note')
       const createdFrom = map.get('createdFrom')
+      const cascade = map.get('cascade')
+      const system = map.get('system')
       const createdAt = map.get('createdAt')
 
       const validCategories = new Set<CollabHistoryMessage['category']>([
-        'create', 'delete', 'update', 'move', 'lock', 'unlock', 'merge', 'clear', 'room', 'undo', 'redo',
+        'create', 'delete', 'update', 'move', 'lock', 'unlock', 'merge', 'clear', 'room', 'import', 'export', 'undo', 'redo',
       ])
       if (
         typeof id !== 'string' ||
@@ -6500,6 +6586,8 @@ export class CollabManager {
         quote: typeof quote === 'string' && quote !== '' ? quote : null,
         note: typeof note === 'string' && note !== '' ? note : null,
         createdFrom: typeof createdFrom === 'string' && createdFrom !== '' ? createdFrom : null,
+        cascade: typeof cascade === 'string' && cascade !== '' ? cascade : null,
+        system: system === true,
         createdAt,
       }
     } catch {
@@ -6556,6 +6644,22 @@ export class CollabManager {
   /** 查询当前共享文档中的协作历史消息 */
   getCollabMessages(): CollabHistoryMessage[] {
     return this.readCollabMessages()
+  }
+
+  /**
+   * 房间内导出场景文件：只追加一条通知消息。
+   * 导出不改变场景，因此**不产生历史条目、不占撤销步骤**，仅让协作者知悉谁导出了哪个文件。
+   */
+  appendSceneFileExportNotice(fileName: string): void {
+    if (!this.provider || this.roomName === null) return
+    if (!fileName) return
+    this.appendCollabMessages([
+      buildSceneFileExportMessage(fileName, {
+        clientId: this.getProviderClientId(),
+        userName: this.localUserLabel,
+        createdAt: Date.now(),
+      }),
+    ])
   }
 
   /** 监听共享消息数组变化（由 EditorView 在 join 成功后调用），并立即同步一次当前历史 */

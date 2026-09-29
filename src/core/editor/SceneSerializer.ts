@@ -264,6 +264,8 @@ type SerializedRegularPolygonConstraint = {
   vertexCount: number
   vAxisHint: SerializedVec3
   name: string
+  /** 名称显示。历史版本缺失该字段（旧数据以面的同名状态为准，见 Scene.alignRegularPolygonFaceState） */
+  nameVisible: boolean
   edgeLengthLocked: boolean
   lockedEdgeLength: number | null
   valueVisible: boolean
@@ -424,6 +426,27 @@ export type SerializedScene = {
 }
 
 const SCENE_FILE_VERSION = 1
+
+/**
+ * 序列化场景的「可比对」文本：剔除会随每次导出变化的元数据（exportedAt）。
+ * 用于判断两次导出是否代表同一场景状态（自动保存比对、空操作命令判定）。
+ */
+export function serializeSceneForCompare(data: SerializedScene): string {
+  const copy = { ...data }
+  if (copy.metadata) {
+    copy.metadata = { ...copy.metadata }
+    delete (copy.metadata as Record<string, unknown>).exportedAt
+  }
+  return JSON.stringify(copy)
+}
+
+/**
+ * 两次导出是否为同一场景状态（忽略 exportedAt 等易变元数据）。
+ * 用于跳过「空操作」：命令执行前后场景完全一致时不应产生撤销/重做历史。
+ */
+export function isSameSerializedScene(a: SerializedScene, b: SerializedScene): boolean {
+  return serializeSceneForCompare(a) === serializeSceneForCompare(b)
+}
 
 function serializeVec3(v: Vec3): SerializedVec3 {
   return { x: v.x, y: v.y, z: v.z }
@@ -706,6 +729,7 @@ function serializeConstraint(c: SceneConstraint): SerializedConstraint | null {
       vertexCount: c.vertexCount,
       vAxisHint: serializeVec3(c.getVAxisHint()),
       name: c.name,
+      nameVisible: c.nameVisible,
       edgeLengthLocked: c.edgeLengthLocked,
       lockedEdgeLength: c.lockedEdgeLength,
       valueVisible: c.valueVisible,
@@ -1693,6 +1717,8 @@ export function validateSerializedScene(data: unknown): { valid: boolean; error?
         const err = validatePositiveFiniteNumber(rc.lockedEdgeLength, `正多边形约束 "${rc.name}" 锁定了边长但 lockedEdgeLength 无效`)
         if (err) return { valid: false, error: err }
       }
+      if (typeof rc.nameVisible !== 'boolean') rc.nameVisible = false
+      if (typeof rc.valueVisible !== 'boolean') rc.valueVisible = false
     }
     if (c.type === 'planar') {
       const pc = c as SerializedPlanarConstraint
@@ -2249,7 +2275,10 @@ export function importScene(scene: Scene, data: SerializedScene): void {
         rc.name,
         rc.edgeLengthLocked,
         rc.lockedEdgeLength,
-        rc.valueVisible,
+        // 注意参数顺序：nameVisible 在 valueVisible 之前。
+        // 历史版本漏传 nameVisible，使 rc.valueVisible 落入了 nameVisible 参数（错位缺陷）
+        rc.nameVisible === true,
+        rc.valueVisible === true,
       )
       scene.addRegularPolygonConstraint(constraint)
     } else if (sc.type === 'prism') {
@@ -2341,6 +2370,11 @@ export function importScene(scene: Scene, data: SerializedScene): void {
       scene.addParallelLineConstraint(constraint)
     }
   }
+
+  // 正多边形「名称状态」不变式对齐：约束（权威源）⇄ 面（渲染层显示投影）必须一致。
+  // adoptFromFace=true 用于旧数据迁移——历史版本从未正确持久化约束的 nameVisible，
+  // 而面持久化了名称显示/数值显示，故旧数据以面为准回填约束。
+  scene.alignRegularPolygonFaceState(true)
 
   scene.markAllRenderDirty()
 
@@ -2478,10 +2512,15 @@ function localTimestampFileName(prefix?: string): string {
   return `${base}.json`
 }
 
-export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Promise<boolean> {
+/**
+ * 导出场景为 JSON 文件。
+ * @returns 实际写入的文件名（含后缀）；用户取消或失败时返回 null。
+ *          返回文件名是协作消息「导出了场景文件 xxx.json」所必需的。
+ */
+export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Promise<string | null> {
   const serialized = exportScene(scene)
   const jsonStr = JSON.stringify(serialized, null, 2)
-  const fileName = localTimestampFileName(namePrefix)
+  const fallbackFileName = localTimestampFileName(namePrefix)
 
   const picker = (window as Window & { showSaveFilePicker?: (options?: {
     suggestedName?: string
@@ -2490,7 +2529,7 @@ export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Pr
   if (typeof picker === 'function') {
     try {
       const handle = await picker({
-        suggestedName: fileName,
+        suggestedName: fallbackFileName,
         types: [
           {
             description: 'JSON 场景文件',
@@ -2501,9 +2540,10 @@ export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Pr
       const writable = await handle.createWritable()
       await writable.write(jsonStr)
       await writable.close()
-      return true
+      // 用户在系统保存对话框中可能改过文件名，返回实际名（含后缀）
+      return handle.name || fallbackFileName
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return false
+      if (err instanceof DOMException && err.name === 'AbortError') return null
     }
   }
 
@@ -2511,12 +2551,12 @@ export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Pr
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = fileName
+  a.download = fallbackFileName
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-  return true
+  return fallbackFileName
 }
 
 export function openJsonFileForImport(): Promise<{ data: unknown; fileName: string } | null> {

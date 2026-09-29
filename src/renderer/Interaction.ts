@@ -1845,16 +1845,27 @@ export class Interaction {
         new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z),
       )
       const depth = cameraPos.distanceTo(centerWorld)
-      // 端点优先：p1/p2/p3 都在圆周上，鼠标"视觉上落在 p1"时（≤ 4px
-      // 接近某个端点），圆和点的 screenDist 几乎相同，tie break 几乎
-      // 随机。加一个端点接近惩罚让点自然赢。注意不能用"端点保护"直接
-      // 跳过圆——那样圆圈线上的非端点位置也会被误保护（之前的 bug）。
+      // 端点优先：p1/p2/p3 都在圆周上（法向圆的 p1 即圆心），鼠标"视觉上落在端点"时，
+      // 圆和点的 screenDist 几乎相同（法向圆在圆盘内 screenDist=0），tie break 几乎随机，
+      // 加端点接近惩罚让点自然赢。注意不能用"端点保护"直接跳过圆——那样圆圈线上的
+      // 非端点位置也会被误保护（之前的 bug）。
+      // 分两档，与线段端点（addLinearCandidate）完全同规则：
+      // - ≤4px：真正的"鼠标就在点上"，惩罚 6 即可让点胜出；
+      // - 该点在点命中半径内（protectedPointIds 命中，即鼠标已落在点的命中框里）：
+      //   惩罚取 pointHitRadius，使点稳定胜出。否则鼠标放在圆心点上（4~14px 带）
+      //   仍会选中圆盘内部——点难选中，且拖圆心点会被记成拖圆。
       let endpointPenalty = 0
       const CIRCLE_ENDPOINT_PROTECT_PX = 4
       for (const pid of [circle.p1.id, circle.p2.id, circle.p3.id]) {
         const screenPos = pointScreenPositions.get(pid)
-        if (screenPos && pointer.distanceTo(screenPos) <= CIRCLE_ENDPOINT_PROTECT_PX) {
+        if (!screenPos) continue
+        const epDist = pointer.distanceTo(screenPos)
+        if (epDist <= CIRCLE_ENDPOINT_PROTECT_PX) {
           endpointPenalty = 6
+          break
+        }
+        if (protectedPointIds.has(pid) && epDist <= pointHitRadius) {
+          endpointPenalty = pointHitRadius
           break
         }
       }
@@ -2117,6 +2128,11 @@ export class Interaction {
                 geoId,
               })
             }
+          } else if (isConeProtected) {
+            // 鼠标已落在底面中心/顶点的命中框内：与锥体本体同规则让位于点。
+            // 此处若仍以 screenDist=0 入列，会反超带惩罚的法向圆/点候选，
+            // 导致"鼠标放在底面中心点上却选中底面圆"。
+            continue
           } else {
             candidates.push({
               object: obj,
@@ -2171,6 +2187,10 @@ export class Interaction {
                 geoId,
               })
             }
+          } else if (isCylinderProtected) {
+            // 同圆锥注释：鼠标落在轴心点命中框内时让位于点，
+            // 否则"鼠标放在圆心点上却选中底面/顶面圆"
+            continue
           } else {
             candidates.push({
               object: obj,
@@ -2191,6 +2211,8 @@ export class Interaction {
                 geoId,
               })
             }
+          } else if (isCylinderProtected) {
+            continue
           } else {
             candidates.push({
               object: obj,
@@ -4117,7 +4139,8 @@ export class Interaction {
             if (p.circleRole === 'center' && p.circleId) {
               const circle = this.editor.scene.circles.get(p.circleId)
               if (circle && !this.editor.isCircleGeometryLocked(circle)) {
-                this.dragSubject = `圆心${p.name}`
+                // 圆柱/圆锥的轴心点也是其底面(顶面)构成圆的圆心，此处优先按立体角色表达
+                this.dragSubject = this.resolveSolidAxisPointSubject(p) ?? `圆心${p.name}`
                 this.draggingCircleId = p.circleId
                 this.startDrag(this.getCircleDragReferencePoint(circle))
               } else {
@@ -4149,6 +4172,8 @@ export class Interaction {
               p.cylinderId &&
               (p.cylinderRole === 'bottomCenter' || p.cylinderRole === 'topCenter')
             ) {
+              // 兜底分支：圆柱轴心点通常同时是底面(顶面)构成圆的圆心（circleRole='center'），
+              // 已由上面的圆分支接管；仅当该点无构成圆归属（旧数据/构成圆被删除）时走到这里
               if (
                 this.editor.isCylinderGeometryLocked(this.editor.scene.cylinders.get(p.cylinderId)!)
               ) {
@@ -4280,6 +4305,8 @@ export class Interaction {
               this.renderer.renderer.domElement.style.cursor = 'default'
             } else {
               this.draggingCircleId = geoId
+              // 圆柱/圆锥的底面(顶面)构成圆：被操作部位是立体的底面/顶面，而非笼统的「圆」
+              this.dragSubject = this.resolveSolidFaceCircleSubject(geoId)
               this.startDrag(this.getCircleDragReferencePoint(circle))
             }
           }
@@ -5417,7 +5444,8 @@ export class Interaction {
       if (point.circleRole === 'center' && point.circleId) {
         const circle = this.editor.scene.circles.get(point.circleId)
         if (circle && !this.editor.isCircleGeometryLocked(circle)) {
-          this.dragSubject = `圆心${point.name}`
+          // 圆柱/圆锥的轴心点也是其底面(顶面)构成圆的圆心，此处优先按立体角色表达
+          this.dragSubject = this.resolveSolidAxisPointSubject(point) ?? `圆心${point.name}`
           this.draggingCircleId = point.circleId
           this.startDrag(this.getCircleDragReferencePoint(circle))
         } else {
@@ -5686,6 +5714,8 @@ export class Interaction {
         return
       }
       this.draggingCircleId = geoId
+      // 圆柱/圆锥的底面(顶面)构成圆：被操作部位是立体的底面/顶面，而非笼统的「圆」
+      this.dragSubject = this.resolveSolidFaceCircleSubject(geoId)
       this.startDrag(this.getCircleDragReferencePoint(circle))
       return
     }
@@ -6517,30 +6547,111 @@ export class Interaction {
     this.dragStartAxisHints = null
   }
 
+  /**
+   * 圆柱/圆锥轴心点的拖拽主语（点部位词，历史构建器据此判定主操作对象）。
+   * 轴心点同时是底面(顶面)法向圆的圆心（Point3 上 circleRole='center'），若沿用「圆心X」：
+   * 1. 无法表达「哪个立体的哪个面」；
+   * 2. 历史构建器会把主操作对象误判为该构成圆（构成圆被静默归并到立体、不产生消息），
+   *    来源标注挂错对象而退化为旧启发式「由X点拖动」。
+   * 返回 null 时表示非圆柱/圆锥轴心点，由调用方回退到「圆心X」。
+   */
+  private resolveSolidAxisPointSubject(point: Point3): string | null {
+    if (point.cylinderId && point.cylinderRole === 'bottomCenter') return `底面圆心${point.name}`
+    if (point.cylinderId && point.cylinderRole === 'topCenter') return `顶面圆心${point.name}`
+    if (point.coneId && point.coneRole === 'baseCenter') return `底面中心${point.name}`
+    return null
+  }
+
+  /**
+   * 对象本体拖拽主语：必须带对象名称，否则无法辨识被拖的是哪一个对象/子对象
+   * （如拖动正六面体的边界线段时，主消息是「正六面体1」，标注只说「线段」就丢失了目标）。
+   * 命名规则与界面一致：名称自带种类词（中文自述名，如 圆柱1/两点球1/正六面体1）时直接用名称；
+   * 名称为裸符号（如线段 a…z、圆 c、直线 m、垂线 z、平行线 w、向量 v、面 F）时补种类词 → 「线段l」。
+   */
+  private subjectWithObjectName(kind: string, name: string | null | undefined): string {
+    const n = (name ?? '').trim()
+    if (!n) return kind
+    return /[\u4e00-\u9fa5]/.test(n) ? n : `${kind}${n}`
+  }
+
+  /**
+   * 被拖拽的圆是否为圆柱/圆锥的底面(顶面)构成圆：
+   * 拖动该圆盘实际改变的是立体的底面/顶面（如圆柱改变高度），
+   * 主语须精确为「<立体名>底面/顶面」，而非笼统的「圆」——
+   * 否则历史构建器会把构成圆（无独立消息）当作操作对象，退化为「由X点拖动」。
+   * 非构成圆（用户独立创建的圆）返回 null，保持「圆X」。
+   */
+  private resolveSolidFaceCircleSubject(circleId: string): string | null {
+    for (const cylinder of this.editor.scene.cylinders.values()) {
+      if (cylinder.normalCircleId === circleId) return `${cylinder.name}底面`
+      if (cylinder.topNormalCircleId === circleId) return `${cylinder.name}顶面`
+    }
+    for (const cone of this.editor.scene.cones.values()) {
+      if (cone.normalCircleId === circleId) return `${cone.name}底面`
+    }
+    return null
+  }
+
   /** 解析本次场景拖拽被直接操作的对象部位（球心点/圆心由拖拽起始分支显式声明，其余按对象本体推断） */
   private resolveSceneDragSubject(): string | null {
     if (this.dragSubject) return this.dragSubject
-    if (this.draggingSphereId) return '球体'
-    if (this.draggingCircleId) return '圆'
-    if (this.draggingConeId) return '圆锥'
-    if (this.draggingCylinderId) return '圆柱'
-    if (this.draggingLineId) return '线段'
-    if (this.draggingStraightLineId) return '直线'
-    if (this.draggingRayId) return '射线'
-    if (this.draggingVectorId) return '向量'
-    if (this.draggingPerpendicularLineId) return '垂线'
-    if (this.draggingParallelLineId) return '平行线'
+    const scene = this.editor.scene
+    if (this.draggingSphereId) {
+      return this.subjectWithObjectName('球体', scene.spheres.get(this.draggingSphereId)?.name)
+    }
+    if (this.draggingCircleId) {
+      return this.subjectWithObjectName('圆', scene.circles.get(this.draggingCircleId)?.name)
+    }
+    if (this.draggingConeId) {
+      return this.subjectWithObjectName('圆锥', scene.cones.get(this.draggingConeId)?.name)
+    }
+    if (this.draggingCylinderId) {
+      return this.subjectWithObjectName('圆柱', scene.cylinders.get(this.draggingCylinderId)?.name)
+    }
+    if (this.draggingLineId) {
+      return this.subjectWithObjectName('线段', scene.lines.get(this.draggingLineId)?.name)
+    }
+    if (this.draggingStraightLineId) {
+      return this.subjectWithObjectName('直线', scene.straightLines.get(this.draggingStraightLineId)?.name)
+    }
+    if (this.draggingRayId) {
+      return this.subjectWithObjectName('射线', scene.rays.get(this.draggingRayId)?.name)
+    }
+    if (this.draggingVectorId) {
+      return this.subjectWithObjectName('向量', scene.vectors.get(this.draggingVectorId)?.name)
+    }
+    if (this.draggingPerpendicularLineId) {
+      return this.subjectWithObjectName(
+        '垂线',
+        scene.perpendicularLines.get(this.draggingPerpendicularLineId)?.name,
+      )
+    }
+    if (this.draggingParallelLineId) {
+      return this.subjectWithObjectName('平行线', scene.parallelLines.get(this.draggingParallelLineId)?.name)
+    }
     if (this.draggingFaceId) {
-      // 面属于立体时，拖动整面即拖动整个立体（正六面体/正四面体/棱柱/棱锥），
-      // 精确标注被拖动的立体而非笼统的「面」
-      const face = this.editor.scene.faces.get(this.draggingFaceId)
+      // 面属于立体时，拖动整面即拖动整个立体（正六面体/正四面体/棱柱/棱锥/正多边形），
+      // 精确标注被拖动的立体（含名称）而非笼统的「面」
+      const face = scene.faces.get(this.draggingFaceId)
       if (face) {
         if (face.cubeId) {
           const constraint = this.editor.getCubeConstraint(face.cubeId)
-          return constraint?.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+          const kind = constraint?.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+          return this.subjectWithObjectName(kind, constraint?.name)
         }
-        if (face.prismId) return '棱柱'
-        if (face.pyramidId) return '棱锥'
+        if (face.prismId) {
+          return this.subjectWithObjectName('棱柱', this.editor.getPrismConstraint(face.prismId)?.name)
+        }
+        if (face.pyramidId) {
+          return this.subjectWithObjectName('棱锥', this.editor.getPyramidConstraint(face.pyramidId)?.name)
+        }
+        if (face.regularPolygonId) {
+          return this.subjectWithObjectName(
+            '正多边形',
+            this.editor.getRegularPolygonConstraint(face.regularPolygonId)?.name,
+          )
+        }
+        return this.subjectWithObjectName('面', face.name)
       }
       return '面'
     }

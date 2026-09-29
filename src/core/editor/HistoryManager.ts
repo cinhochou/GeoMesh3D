@@ -1,6 +1,6 @@
 // src/core/editor/HistoryManager.ts
 import type { Scene } from '../scene/Scene'
-import { exportScene, importScene, type SerializedScene } from './SceneSerializer'
+import { exportScene, importScene, isSameSerializedScene, type SerializedScene } from './SceneSerializer'
 
 const genId = (prefix: string) => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -97,6 +97,9 @@ export class HistoryManager {
    * 记录一个操作到历史栈。
    * 如果当前在事务中，命令会被收集到事务缓冲区，不直接入栈。
    * 如果当前已暂停（协作模式），push 为空操作。
+   *
+   * 空操作（命令执行前后场景完全一致，例如只把状态重写为同值的命令）**不入栈**：
+   * 否则用户会看到「点击一次就多一步撤销」这类撤销后什么都没变的历史。
    */
   push(entry: HistoryEntry): void {
     if (this.isExecuting || this.paused) return
@@ -106,8 +109,14 @@ export class HistoryManager {
       return
     }
 
+    // before = lastSceneSnapshot（命令执行前的场景状态）
+    // after  = exportScene(scene)（命令执行后的场景状态）
+    const after = exportScene(this.scene)
+    if (isSameSerializedScene(this.lastSceneSnapshot, after)) return
+
     this.undoStack.push(entry)
-    this.captureSnapshotForEntry(entry)
+    this.undoSnapshotEntries.push({ before: this.lastSceneSnapshot, after, label: entry.label })
+    this.lastSceneSnapshot = after
     this.clearRedoStack()
 
     while (this.undoStack.length > this.maxEntries) {
@@ -115,18 +124,6 @@ export class HistoryManager {
       removed.dispose?.()
       this.undoSnapshotEntries.shift()
     }
-  }
-
-  /**
-   * 为刚入栈的命令捕获快照对。
-   * before = lastSceneSnapshot（命令执行前的场景状态）
-   * after = exportScene(scene)（命令执行后的场景状态）
-   */
-  private captureSnapshotForEntry(entry: HistoryEntry): void {
-    const after = exportScene(this.scene)
-    const before = this.lastSceneSnapshot
-    this.undoSnapshotEntries.push({ before, after, label: entry.label })
-    this.lastSceneSnapshot = after
   }
 
   /**
@@ -274,8 +271,14 @@ export class HistoryManager {
    *
    * @param entries 共享历史条目列表
    * @param historyIndex 当前历史指针位置（-1 表示无已应用条目）
+   * @param baseIndex 初始基线（项目导入）索引；该条目只作为第一条可撤销条目的 before，
+   *   不单独入栈，避免「导出房间后本地又能撤销掉项目导入」
    */
-  loadFromSharedHistory(entries: SnapshotHistoryEntry[], historyIndex: number): void {
+  loadFromSharedHistory(
+    entries: SnapshotHistoryEntry[],
+    historyIndex: number,
+    baseIndex: number = -1,
+  ): void {
     // 清空现有命令栈
     this.undoStack.forEach((e) => e.dispose?.())
     this.redoStack.forEach((e) => e.dispose?.())
@@ -285,9 +288,10 @@ export class HistoryManager {
     this.redoSnapshotEntries = []
 
     // 将共享历史条目拆分为 undo 和 redo 部分
-    // entries[0..historyIndex] → 已应用（undo 栈）
+    // entries[0..historyIndex] → 已应用（undo 栈），其中索引 <= baseIndex 的是不可撤销基线
     // entries[historyIndex+1..] → 已撤销（redo 栈）
-    for (let i = 0; i <= historyIndex && i < entries.length; i++) {
+    const firstUndoableIndex = Math.max(0, baseIndex + 1)
+    for (let i = firstUndoableIndex; i <= historyIndex && i < entries.length; i++) {
       const e = entries[i]!
       const cmd = new SharedSnapshotEntry(e.label, e.before, e.after, this.scene)
       this.undoStack.push(cmd)
@@ -302,7 +306,7 @@ export class HistoryManager {
     }
 
     // 更新 lastSceneSnapshot
-    if (historyIndex >= 0 && historyIndex < entries.length) {
+    if (historyIndex > baseIndex && historyIndex < entries.length) {
       this.lastSceneSnapshot = entries[historyIndex]!.after
     } else {
       this.lastSceneSnapshot = exportScene(this.scene)

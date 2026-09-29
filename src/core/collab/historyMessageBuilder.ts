@@ -30,6 +30,9 @@ function numParam(label: string, before: number, after: number): CollabHistoryPa
 
 function nameParam(before: string, after: string): CollabHistoryParam | null {
   if (before === after) return null
+  // 名称必填：空名称不是有效变更。旧数据/旧客户端可能残留空名称，
+  // 此时不生成参数（否则会被渲染成「名称 A」，语义恰好相反）。
+  if (!after || !after.trim()) return null
   return { label: '名称', before, after }
 }
 
@@ -188,7 +191,27 @@ type SLine = { id: string; name: string; userLocked: boolean; lengthLocked: bool
 type SLinear = { id: string; name: string; userLocked: boolean; p1Id: string; p2Id: string; displayLength?: number }
 type SCircle = { id: string; name: string; userLocked: boolean; lockedRadius: number | null; centerVisible: boolean; p1Id: string; p2Id: string; p3Id: string; circleType: string }
 type SSphere = { id: string; name: string; userLocked: boolean; centerPointId: string; radiusPointId: string | null; radiusValue: number }
-type SCylinder = { id: string; name: string; userLocked: boolean; bottomCenterPointId: string; topCenterPointId: string; radiusValue: number }
+type SCylinder = {
+  id: string
+  name: string
+  userLocked: boolean
+  bottomCenterPointId: string
+  topCenterPointId: string
+  radiusValue: number
+  /** 底面/顶面法向圆（圆柱的构成圆）：随圆柱变化静默归并 */
+  normalCircleId?: string | null
+  topNormalCircleId?: string | null
+}
+type SCone = {
+  id: string
+  name: string
+  userLocked: boolean
+  baseCenterPointId: string
+  apexPointId: string
+  radiusValue: number
+  /** 底面法向圆（圆锥的构成圆） */
+  normalCircleId?: string | null
+}
 type SFace = {
   id: string
   name: string
@@ -198,6 +221,7 @@ type SFace = {
   fillColor: number | null
   fillOpacity: number | null
   boundaryPointIds: string[]
+  boundaryLineIds?: string[]
   isRegularPolygon: boolean
   cubeId: string | null
   prismId: string | null
@@ -286,6 +310,54 @@ function buildDependentPointParentMap(scene: SerializedScene): Map<string, strin
       map.set(pointId, targetId)
     }
     // 坐标轴（xAxis/yAxis/zAxis）永不移动，无所属对象
+  }
+  return map
+}
+
+/**
+ * faceOwned 边界线段 → 所属几何对象 id 的静态归并映射：
+ * - 立体/正多边形的面（cubeId/prismId/pyramidId/regularPolygonId）→ 所属立体/正多边形；
+ * - 独立面的自动边界线段 → 面自身；
+ * - 用户手动创建的线段（faceOwned=false，即使被面复用为边界）不映射，保持独立上报。
+ * 归并不依赖运行时「构成点归属一致性」判定，共点/共边（一个点/一条线段被多个
+ * 几何对象共享，如正多边形原始点同时是两点球半径点）时依然稳定归并到父对象。
+ */
+function buildFaceOwnedLineParentMap(scene: SerializedScene): Map<string, string> {
+  const faceOwnedIds = new Set<string>()
+  for (const l of scene.lines as unknown as Array<{ id: string; faceOwned?: boolean }>) {
+    if (l.faceOwned) faceOwnedIds.add(l.id)
+  }
+  const map = new Map<string, string>()
+  if (faceOwnedIds.size === 0) return map
+  const faces = scene.faces as unknown as SFace[]
+  for (const f of faces) {
+    const parent = f.cubeId ?? f.prismId ?? f.pyramidId ?? f.regularPolygonId ?? f.id
+    for (const lid of f.boundaryLineIds ?? []) {
+      // 同一线段被多个面共享（共边）时归属首个声明它的父对象
+      if (faceOwnedIds.has(lid) && !map.has(lid)) map.set(lid, parent)
+    }
+  }
+  return map
+}
+
+/**
+ * 法向圆 → 所属圆柱/圆锥的静态归并映射：
+ * 圆柱的 normalCircleId / topNormalCircleId、圆锥的 normalCircleId 所指的法向圆
+ * 是它们的底面/顶面构成圆（构造基准），属「立体的构成部分」而非独立派生对象——
+ * 立体变化（如拖动顶面圆心改高度）时圆随之联动，应静默归并，不产生「级联移动 法向圆X」标注。
+ * 未被任何立体引用的法向圆（用户独立创建的圆）不映射，保持独立上报。
+ */
+function buildNormalCircleParentMap(scene: SerializedScene): Map<string, string> {
+  const map = new Map<string, string>()
+  const put = (circleId: unknown, ownerId: string) => {
+    if (typeof circleId === 'string' && circleId && !map.has(circleId)) map.set(circleId, ownerId)
+  }
+  for (const c of scene.cylinders as unknown as SCylinder[]) {
+    put(c.normalCircleId, c.id)
+    put(c.topNormalCircleId, c.id)
+  }
+  for (const c of scene.cones as unknown as SCone[]) {
+    put(c.normalCircleId, c.id)
   }
   return map
 }
@@ -388,6 +460,12 @@ function buildViews(
   after: SerializedScene,
   dependentParent: Map<string, string>,
 ): SnapshotView[] {
+  // faceOwned 边界线段的静态父归并：after 为主（当前归属），before 兜底（本条目中被删除的线段）
+  const faceOwnedLineParentAfter = buildFaceOwnedLineParentMap(after)
+  const faceOwnedLineParentBefore = buildFaceOwnedLineParentMap(before)
+  // 法向圆（圆柱/圆锥的底面/顶面构成圆）的静态父归并：随立体变化静默吸收
+  const normalCircleParentAfter = buildNormalCircleParentMap(after)
+  const normalCircleParentBefore = buildNormalCircleParentMap(before)
   const cubeFrom = (list: unknown[]): AnyObj[] =>
     (list as Array<Record<string, unknown>>)
       .filter((c) => c.type === 'cube')
@@ -574,18 +652,22 @@ function buildViews(
   })
 
   const columnSolidView = (key: 'cylinder' | 'cone') => {
-    const list = key === 'cylinder' ? (before.cylinders as unknown as SCylinder[]) : (before.cones as unknown as SCylinder[])
-    const listAfterArr = key === 'cylinder' ? (after.cylinders as unknown as SCylinder[]) : (after.cones as unknown as SCylinder[])
+    const list = key === 'cylinder' ? (before.cylinders as unknown as SCylinder[]) : (before.cones as unknown as SCone[])
+    const listAfterArr = key === 'cylinder' ? (after.cylinders as unknown as SCylinder[]) : (after.cones as unknown as SCone[])
+    /** 轴心点 id：圆柱为 bottomCenter/topCenter，圆锥为 baseCenter/apex——
+     *  两者快照字段名不同，必须按类型读取（曾误用圆柱字段导致圆锥构成点恒为 undefined：
+     *  圆锥在任意操作中都被判为「移动」，且高度变化无法记录） */
+    const axisPointIds = (o: AnyObj): string[] =>
+      key === 'cylinder'
+        ? [(o as unknown as SCylinder).bottomCenterPointId, (o as unknown as SCylinder).topCenterPointId]
+        : [(o as unknown as SCone).baseCenterPointId, (o as unknown as SCone).apexPointId]
     return {
       key,
       listBefore: list.map((c) => ({ ...c, id: c.id })),
       listAfter: listAfterArr.map((c) => ({ ...c, id: c.id })),
       getId: (o: AnyObj) => o.id as string,
       getName: (o: AnyObj) => o.name as string,
-      getRefPointIds: (o: AnyObj) => {
-        const c = o as unknown as SCylinder
-        return [c.bottomCenterPointId, c.topCenterPointId]
-      },
+      getRefPointIds: (o: AnyObj) => axisPointIds(o).filter((id) => typeof id === 'string' && id !== ''),
       getParentId: () => null,
       getParams: (b: AnyObj, a: AnyObj, pb: Map<string, SVec>, pa: Map<string, SVec>) => {
         const beforeC = b as unknown as SCylinder
@@ -594,10 +676,12 @@ function buildViews(
         params.push(...uiDisplayParams(b, a))
         const radius = numParam('半径', beforeC.radiusValue, afterC.radiusValue)
         if (radius) params.push(radius)
-        const b1 = pb.get(beforeC.bottomCenterPointId)
-        const b2 = pb.get(beforeC.topCenterPointId)
-        const a1 = pa.get(afterC.bottomCenterPointId)
-        const a2 = pa.get(afterC.topCenterPointId)
+        const [bLowId, bHighId] = axisPointIds(b)
+        const [aLowId, aHighId] = axisPointIds(a)
+        const b1 = bLowId ? pb.get(bLowId) : undefined
+        const b2 = bHighId ? pb.get(bHighId) : undefined
+        const a1 = aLowId ? pa.get(aLowId) : undefined
+        const a2 = aHighId ? pa.get(aHighId) : undefined
         if (b1 && b2 && a1 && a2) {
           const height = numParam('高度', dist(b1, b2), dist(a1, a2))
           if (height) params.push(height)
@@ -657,9 +741,15 @@ function buildViews(
     getName: (o) => o.name as string,
     getRefPointIds: (o) => {
       const c = o as unknown as SCircle
-      return [c.p1Id, c.p2Id, c.p3Id]
+      // 过滤空/无效引用（防御）：避免 undefined 让「构成点位移」判定恒为真而产生虚假消息
+      return [c.p1Id, c.p2Id, c.p3Id].filter((id) => typeof id === 'string' && id !== '')
     },
-    getParentId: () => null,
+    // 圆柱/圆锥的底面(顶面)法向圆归并到该立体：属其构成圆而非独立派生对象，
+    // 立体变化时静默吸收（不产生「级联移动 法向圆X」）；用户独立创建的圆保持独立上报
+    getParentId: (o) => {
+      const id = o.id as string
+      return normalCircleParentAfter.get(id) ?? normalCircleParentBefore.get(id) ?? null
+    },
     getParams: (b, a, pb, pa) => {
       const beforeC = b as unknown as SCircle
       const afterC = a as unknown as SCircle
@@ -712,9 +802,10 @@ function buildViews(
       if (beforeF.areaLocked !== afterF.areaLocked) locks.push({ label: '面积', toLocked: afterF.areaLocked })
       return locks
     },
-    // 具体种类：正多边形 / 多边形（展开图为其自身对象种类，另行上报）
+    // 具体种类：正多边形 / 多边形（展开图为其自身对象种类，另行上报）。
+    // 不用 forceKind：普通多边形的面名是裸符号（F1）需要补种类词，
+    // 而正多边形的面名与约束名一致（「正多边形1」）已含种类词，由 resolveKindLabel 自动省略前缀。
     getKindLabel: (o) => ((o as unknown as SFace).isRegularPolygon ? '正多边形' : '多边形'),
-    forceKind: true,
   })
 
   const linearPairView = (key: 'perpendicularLine' | 'parallelLine') => {
@@ -811,7 +902,13 @@ function buildViews(
       const l = o as unknown as SLine
       return [l.p1Id, l.p2Id]
     },
-    getParentId: () => null,
+    // faceOwned 边界线段归并到父对象（立体/正多边形/所属面）：
+    // 父对象已判定（生成消息/被吸收）时线段随动被吸收，不再单独上报，
+    // 也不进入「级联标注」——边界线段是父对象的构成部分而非派生物
+    getParentId: (o) => {
+      const id = o.id as string
+      return faceOwnedLineParentAfter.get(id) ?? faceOwnedLineParentBefore.get(id) ?? null
+    },
     getParams: (b, a, pb, pa) => {
       const beforeL = b as unknown as SLine
       const afterL = a as unknown as SLine
@@ -1059,15 +1156,17 @@ function buildMergeMessages(entry: HistoryEntryLike): CollabHistoryMessage[] {
   return [makeMessage('merge', '合并了点', actor, kind, targetName, params, null)]
 }
 
-/** 点角色 → 操作部位中文名（用于「准确表达」标注被直接操作的点部位） */
+/** 点角色 → 操作部位中文名（用于「准确表达」标注被直接操作的点部位）。
+ *  判定顺序：锥柱角色点需先于 circleRole——圆柱/圆锥的轴心点同时是其底面(顶面)
+ *  构成圆的圆心（circleRole='center'），按「圆心X」描述会丢失「哪个立体的哪个面」。 */
 const pointRoleLabel = (p: SPt): string | null => {
   if (p.sphereRole === 'center') return '球心点'
   if (p.sphereRole === 'radius') return '半径点'
-  if (p.circleRole === 'center') return '圆心'
   if (p.coneRole === 'baseCenter') return '底面中心'
   if (p.coneRole === 'apex') return '顶点'
   if (p.cylinderRole === 'bottomCenter') return '底面圆心'
   if (p.cylinderRole === 'topCenter') return '顶面圆心'
+  if (p.circleRole === 'center') return '圆心'
   return null
 }
 
@@ -1083,6 +1182,11 @@ const isPointRoleSubject = (subject: string): boolean => {
   }
   return false
 }
+
+/** subject 是否指向球体：球体/两点球N/半径球N（拖对象本体时主语为「种类词+名称」，
+ *  而球的名称自带种类词（两点球1/半径球1），故前缀判定需覆盖这几种写法） */
+const isSphereSubject = (subject: string): boolean =>
+  subject.startsWith('球') || subject.startsWith('两点球') || subject.startsWith('半径球')
 
 /** 由点 id 推导「被直接操作部位」显示词：角色+点名（球心点J/圆心A），无角色点为点A */
 const subjectForPoint = (
@@ -1152,6 +1256,9 @@ function buildGeometryMessages(
   /** after 点按 id 索引（含角色字段），供「准确表达」按被操作点部位生成来源标注 */
   const afterPointById = new Map<string, SPt>()
   for (const p of after.points) afterPointById.set(p.id, p)
+  /** before 点按 id 索引（被删除的点也能按角色反查所属对象） */
+  const beforePointById = new Map<string, SPt>()
+  for (const p of before.points) beforePointById.set(p.id, p)
   const messages: CollabHistoryMessage[] = []
   const covered = new Set<string>()
   const judgedParentIds = new Set<string>()
@@ -1196,15 +1303,19 @@ function buildGeometryMessages(
     }
     set.add(p.id)
   }
-  /** 吸收根对象的构成点（含从属点）为已上报，避免「移动了 正六面体6」之外又冒出「移动了 点F1」 */
+  /** 吸收根对象的构成点（含从属点）为已上报，避免「移动了 正六面体6」之外又冒出「移动了 点F1」。
+   *  共点（一个点同时属于多个几何对象，如正多边形原始点又是两点球半径点）时，
+   *  归属取首个吸收者（views 顺序即判定优先级：立体/正多边形先于球/圆等），
+   *  后续对象不再覆盖，避免「先归并到正多边形、又被两点球改写」导致
+   *  引用该点的边界线段/派生对象级联归属判定漂移而独立上报。 */
   const absorbRefs = (rids: string[], ownerId: string) => {
     for (const rid of rids) {
       covered.add(rid)
-      refOwner.set(rid, ownerId)
+      if (!refOwner.has(rid)) refOwner.set(rid, ownerId)
     }
     for (const cid of pointsByParent.get(ownerId) ?? []) {
       covered.add(cid)
-      refOwner.set(cid, ownerId)
+      if (!refOwner.has(cid)) refOwner.set(cid, ownerId)
     }
   }
   const constraintObjectId = (c: AnyObj): string | null => {
@@ -1232,7 +1343,9 @@ function buildGeometryMessages(
   const collectObjectIds = (scene: SerializedScene): Set<string> => {
     const s = new Set<string>()
     for (const c of scene.constraints) {
-      const id = constraintObjectId(c as unknown as AnyObj)
+      const obj = c as unknown as AnyObj
+      // 正多边形约束的对象 id 字段为 constraintId（其余立体为 cubeId/prismId/pyramidId）
+      const id = constraintObjectId(obj) ?? (typeof obj.constraintId === 'string' ? obj.constraintId : null)
       if (id) s.add(id)
     }
     for (const obj of [...scene.spheres, ...scene.cones, ...scene.cylinders, ...scene.circles]) {
@@ -1242,6 +1355,176 @@ function buildGeometryMessages(
   }
   const beforeObjIds = collectObjectIds(before)
   const afterObjIds = collectObjectIds(after)
+
+  // ---- 主操作对象（用户实际操作的几何对象）判定：用于「我操作了什么」置顶与来源标注聚焦 ----
+  // 消息按视图顺序生成（prism→…→regularPolygon→…→sphere→…）只保证吸收/去重正确，
+  // 与「用户实际操作哪个对象」无关：拖动与正多边形共点的球心点时，正多边形（连带变形）
+  // 会先于两点球（被操作对象）出消息。共点时一个点可同时属于多个对象
+  // （如球心点又是正多边形顶点），固定的层级优先级不足以消歧，需结合操作意图的
+  // subject（如「球心点A」/「圆心A」/「球体」）判定主操作对象。
+  /** 某点所属的全部几何对象 id（共点时不止一个） */
+  const ownerIdsOfPoint = (pid: string | null): string[] => {
+    if (!pid) return []
+    const p = afterPointById.get(pid) ?? beforePointById.get(pid)
+    if (!p) return []
+    const ids: string[] = []
+    for (const oid of [
+      p.cubeId,
+      p.prismId,
+      p.pyramidId,
+      p.regularPolygonId,
+      p.sphereId,
+      p.coneId,
+      p.cylinderId,
+      p.circleId,
+    ]) {
+      if (typeof oid === 'string' && oid) ids.push(oid)
+    }
+    return ids
+  }
+  /** 意图 targetId 直接指向对象（而非点）时，该对象即被操作对象 */
+  const intentObjectId =
+    intent?.targetId && (afterObjIds.has(intent.targetId) || beforeObjIds.has(intent.targetId))
+      ? intent.targetId
+      : null
+  /** 由 subject 的点部位词 + 点名反查被操作点：拖球心点/圆心等「拖对象整体」的分支
+   *  不设置 draggingPointId（Interaction 走 draggingSphereId/draggingCircleId），
+   *  此时只能从「球心点A」这类声明反查 A，并要求角色匹配以避免同名点误配。 */
+  const findOperatedPointBySubject = (): string | null => {
+    const subject = intent?.subject ?? null
+    if (!subject) return null
+    const matchers: Array<[RegExp, (p: SPt) => boolean]> = [
+      [/^球心点/, (p) => p.sphereRole === 'center' && !!p.sphereId],
+      [/^半径点/, (p) => p.sphereRole === 'radius' && !!p.sphereId],
+      [/^圆心/, (p) => p.circleRole === 'center' && !!p.circleId],
+    ]
+    for (const [re, matchesRole] of matchers) {
+      const m = re.exec(subject)
+      if (!m) continue
+      const name = subject.slice(m[0].length)
+      if (!name) continue
+      for (const p of afterPointById.values()) {
+        if (p.name === name && matchesRole(p)) return p.id
+      }
+    }
+    return null
+  }
+  /** 被拖动的点（draggedPointId 优先，其次 targetId 为点 id，最后按 subject 反查） */
+  const operatedPointId =
+    (draggedPointId && (afterPointById.has(draggedPointId) || beforePointById.has(draggedPointId))
+      ? draggedPointId
+      : null) ??
+    (intent?.targetId && (afterPointById.has(intent.targetId) || beforePointById.has(intent.targetId))
+      ? intent.targetId
+      : null) ??
+    findOperatedPointBySubject()
+  /** 构成圆（圆柱底面/顶面、圆锥底面的法向圆）→ 父立体 id。
+   *  构成圆是立体的构成部分（被静默归并、不产生消息），不能被当作操作对象：
+   *  拖动该圆（或其圆心）实际改变的是立体（如圆柱高度），主操作对象须取父立体，
+   *  否则来源标注挂到无消息的圆上而被丢弃，退化为旧启发式「由X点拖动」。 */
+  const solidParentOfCircle = (circleId: string): string | null => {
+    const scan = (scene: SerializedScene): string | null => {
+      for (const c of scene.cylinders as unknown as SCylinder[]) {
+        if (c.normalCircleId === circleId || c.topNormalCircleId === circleId) return c.id
+      }
+      for (const c of scene.cones as unknown as SCone[]) {
+        if (c.normalCircleId === circleId) return c.id
+      }
+      return null
+    }
+    return scan(after) ?? scan(before)
+  }
+  /** 点作为「对象角色点」的所属对象，角色语义优先于层级优先级：
+   *  球心点/半径点 → 球，圆心 → 圆，锥柱角色点 → 锥柱，立体的构成点 → 立体。
+   *  用于兜底判定主操作对象——拖动与正多边形顶点共点的球半径点时，用户改的是球半径，
+   *  主语应为球（而非按层级取到的正多边形）。
+   *  构成圆（圆柱/圆锥的底面、顶面法向圆）不是独立对象，须剔除，落到其父立体。 */
+  const roleOwnerIdsOfPoint = (pid: string | null): string[] => {
+    if (!pid) return []
+    const p = afterPointById.get(pid) ?? beforePointById.get(pid)
+    if (!p) return []
+    const ids: string[] = []
+    const constituentCircleId = p.circleId && solidParentOfCircle(p.circleId) ? p.circleId : null
+    for (const oid of [p.sphereId, p.circleId, p.coneId, p.cylinderId, p.regularPolygonId, p.cubeId, p.prismId, p.pyramidId]) {
+      // 构成圆本身不算「角色点所属对象」，但保留其父立体（cylinderId/coneId 已在列）
+      if (oid === constituentCircleId) continue
+      if (typeof oid === 'string' && oid) ids.push(oid)
+    }
+    return ids
+  }
+  /** 本次操作涉及的对象集合（主操作对象 + 共点连带对象） */
+  const operatedIds = new Set<string>()
+  if (intentObjectId) operatedIds.add(intentObjectId)
+  for (const oid of ownerIdsOfPoint(operatedPointId)) operatedIds.add(oid)
+  /** 主操作对象：由 subject 消歧——按被操作点的角色词确定「用户抓的是哪个对象」 */
+  const primaryOperatedId = ((): string | null => {
+    if (intentObjectId) return intentObjectId
+    const subject = intent?.subject ?? null
+    if (!subject || !operatedPointId) return null
+    const p = afterPointById.get(operatedPointId) ?? beforePointById.get(operatedPointId)
+    if (!p) return null
+    // 注意判定顺序：「圆锥/圆柱」需先于「圆」
+    if (subject.startsWith('圆锥') && p.coneId) return p.coneId
+    if (subject.startsWith('圆柱') && p.cylinderId) return p.cylinderId
+    // 「圆心X」若指圆柱/圆锥的底面(顶面)构成圆，实际操作的是父立体（构成圆无独立消息）
+    if (subject.startsWith('圆') && p.circleId) return solidParentOfCircle(p.circleId) ?? p.circleId
+    if (isSphereSubject(subject) && p.sphereId) return p.sphereId
+    return null
+  })()
+  /** 来源标注（场景拖动X/场景拖拽X）只挂在实际被操作对象上：
+   *  主操作对象明确时仅它可挂，旁及（共点/共边连带）对象不得误标；
+   *  无法消歧时回退为「属于本次操作对象集合即挂」。 */
+  const isOriginSubjectTarget = (id: string): boolean => {
+    if (primaryOperatedId) return id === primaryOperatedId
+    return operatedIds.size === 0 || operatedIds.has(id)
+  }
+  /** subject 为对象本体词（「球体」「面」「棱柱」…，不含点名）时的对象类型过滤器：
+   *  拖对象本体的分支以 draggingXxxId 记录目标，intent 未携带 id，需按类型 + diff 消歧。
+   *  注意「面」只匹配立体/正多边形/面自身，不匹配球/圆/锥柱——拖动面时连带变化的球不是操作对象。 */
+  const subjectKindFilter = ((): ((id: string) => boolean) | null => {
+    const subject = intent?.subject ?? null
+    if (!subject) return null
+    const idsOf = (list: unknown[]) => new Set(list.map((it) => (it as { id: string }).id))
+    const constraintIds = (type: string) =>
+      new Set(
+        after.constraints
+          .map((c) => c as unknown as AnyObj)
+          .filter((c) => c.type === type)
+          .map(
+            (c) =>
+              // 正多边形约束的对象 id 字段为 constraintId（其余立体为 cubeId/prismId/pyramidId）
+              constraintObjectId(c) ?? (typeof c.constraintId === 'string' ? c.constraintId : null),
+          )
+          .filter((v): v is string => typeof v === 'string'),
+      )
+    // 注意：拖对象本体时主语为「种类词+名称」（如 线段l / 圆c / 正六面体1），
+    // 一律用前缀判定，不能用等值比较
+    if (isSphereSubject(subject)) return (id) => idsOf(after.spheres).has(id)
+    if (subject.startsWith('圆锥')) return (id) => idsOf(after.cones).has(id)
+    if (subject.startsWith('圆柱')) return (id) => idsOf(after.cylinders).has(id)
+    if (subject.startsWith('圆')) return (id) => idsOf(after.circles).has(id)
+    if (subject.startsWith('棱柱')) return (id) => constraintIds('prism').has(id)
+    if (subject.startsWith('棱锥')) return (id) => constraintIds('pyramid').has(id)
+    if (subject.startsWith('正六面体') || subject.startsWith('正四面体'))
+      return (id) => constraintIds('cube').has(id)
+    if (subject.startsWith('正多边形')) return (id) => constraintIds('regularPolygon').has(id)
+    if (subject.startsWith('面'))
+      return (id) =>
+        constraintIds('cube').has(id) ||
+        constraintIds('prism').has(id) ||
+        constraintIds('pyramid').has(id) ||
+        constraintIds('regularPolygon').has(id) ||
+        idsOf(after.faces).has(id)
+    if (subject.startsWith('线段')) return (id) => idsOf(after.lines).has(id)
+    if (subject.startsWith('直线')) return (id) => idsOf(after.straightLines).has(id)
+    if (subject.startsWith('射线')) return (id) => idsOf(after.rays).has(id)
+    if (subject.startsWith('向量')) return (id) => idsOf(after.vectors).has(id)
+    if (subject.startsWith('垂线')) return (id) => idsOf(after.perpendicularLines).has(id)
+    if (subject.startsWith('平行线')) return (id) => idsOf(after.parallelLines).has(id)
+    return null
+  })()
+  /** 消息 → 其归属几何对象 id（用于按主操作对象置顶重排） */
+  const msgOwnerId = new Map<CollabHistoryMessage, string>()
 
   // ---- 删除意图（来自命令 label，如 delete-sphere）：用户直接删除的是「最高层级对象」，
   // 其构成点消失只是连带。快照 diff 无法区分「删点→对象级联」与「删对象→点级联」，
@@ -1264,6 +1547,17 @@ function buildGeometryMessages(
     prism: 'prism',
     pyramid: 'pyramid',
     face: 'face',
+  }
+  /** 本次操作中消失的对象 id 集合（before 有、after 无）。
+   *  用于判断「某构成点的消失是否已由其所属几何对象（同样被删除）表达」，
+   *  避免级联标注里出现「级联删除 正六面体1、点G、点H、点I…」式冗余——范围由顶层对象表达即可。 */
+  const vanishedObjectIds = new Set<string>()
+  for (const v of views) {
+    const afterIds = byAnyId(v.listAfter)
+    for (const o of v.listBefore) {
+      const oid = v.getId(o)
+      if (oid !== 'origin' && !afterIds.has(oid)) vanishedObjectIds.add(oid)
+    }
   }
   let intentMain: {
     view: SnapshotView
@@ -1396,6 +1690,10 @@ function buildGeometryMessages(
     )
     messages.push(message)
     deleteMsgByTarget.set(intentMain.id, message)
+    msgOwnerId.set(message, intentMain.id)
+    // 主对象本身已判定：其构成子对象（面/边界线段/从属点）在删除循环中随父被吸收，
+    // 不再逐个进入级联标注——范围由顶层对象表达，避免「删除了 正多边形1 → 级联删除 面、线段a…e」式冗余
+    judgedParentIds.add(intentMain.id)
   }
 
   // 创建意图：命令声明了被创建对象 → 直接生成主创建消息，其构成点/子对象被吸收不单发
@@ -1407,7 +1705,9 @@ function buildGeometryMessages(
       if (!o) continue
       const name = v.getName(o)
       const createdFrom = resolveCreateSources(views, pointNames, v, o).join('、') || null
-      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(v, o, name), name, [], null, createdFrom))
+      const createMsg = makeMessage('create', '创建了', actor, resolveKindLabel(v, o, name), name, [], null, createdFrom)
+      messages.push(createMsg)
+      msgOwnerId.set(createMsg, intent.targetId)
       absorbRefs(v.getRefPointIds(o), intent.targetId)
       judgedParentIds.add(intent.targetId)
       intentCreateId = intent.targetId
@@ -1452,7 +1752,9 @@ for (const view of views) {
 
       const name = view.getName(o)
       const createdFrom = resolveCreateSources(views, pointNames, view, o).join('、') || null
-      messages.push(makeMessage('create', '创建了', actor, resolveKindLabel(view, o, name), name, [], null, createdFrom))
+      const createMsg = makeMessage('create', '创建了', actor, resolveKindLabel(view, o, name), name, [], null, createdFrom)
+      messages.push(createMsg)
+      msgOwnerId.set(createMsg, id)
       absorbRefs(refs, id)
       judgedParentIds.add(id)
     }
@@ -1495,11 +1797,16 @@ for (const view of views) {
       // 点对象：若该点因父对象（立方体/球体）连带消失 → 转为级联标注，不生成主消息；
       // 属被删主对象的构成点统一挂到主对象；其余并入根因点
       if (view.key === 'point' && !rootPointIds.has(id)) {
-        if (intentMain && intentMain.ownedPointIds.has(id)) {
-          appendCascade(intentMain.id, [resolveKindLabel(view, o, name), name].filter(Boolean).join(''))
-        } else {
-          const root = resolveRoot(id)
-          appendCascade(root, [resolveKindLabel(view, o, name), name].filter(Boolean).join(''))
+        // 其所属几何对象同样在本次操作中消失 → 该点的消失已由顶层对象表达，
+        // 不再逐个列出（如删正六面体顶点只需「级联删除 正六面体1」，无需再列 7 个顶点）
+        const parent = pointParentId(o as unknown as SPt)
+        if (!parent || !vanishedObjectIds.has(parent)) {
+          if (intentMain && intentMain.ownedPointIds.has(id)) {
+            appendCascade(intentMain.id, [resolveKindLabel(view, o, name), name].filter(Boolean).join(''))
+          } else {
+            const root = resolveRoot(id)
+            appendCascade(root, [resolveKindLabel(view, o, name), name].filter(Boolean).join(''))
+          }
         }
         judgedParentIds.add(id)
         continue
@@ -1517,6 +1824,7 @@ for (const view of views) {
       const message = makeMessage('delete', '删除了', actor, resolveKindLabel(view, o, name), name, [], null)
       messages.push(message)
       deleteMsgByTarget.set(id, message)
+      msgOwnerId.set(message, id)
       absorbRefs(refs, id)
       judgedParentIds.add(id)
     }
@@ -1542,7 +1850,9 @@ for (const view of views) {
       const nameBefore = beforeObj.name as string | undefined
       const nameAfter = o.name as string | undefined
       const renamed = nameBefore !== nameAfter
-      const effectiveParams = renamed ? [...params, nameParam(nameBefore ?? '', nameAfter ?? '')!] : params
+      // 空名称不是有效变更：nameParam 会返回 null，此时不追加「名称」参数
+      const nameChange = renamed ? nameParam(nameBefore ?? '', nameAfter ?? '') : null
+      const effectiveParams = nameChange ? [...params, nameChange] : params
       const moved = view.getMoved
         ? view.getMoved(beforeObj, o, refsMoved, posBefore, posAfter)
         : refsMoved || p2Moved
@@ -1554,19 +1864,29 @@ for (const view of views) {
       const parentId = view.getParentId(o)
       if (parentId && judgedParentIds.has(parentId)) continue
       const name = view.getName(o)
-      // 级联归属：对象的所有构成点是否都被「同一根对象」吸收（随根对象变化而联动）
-      let ownerRoot: string | null = null
-      let ownedByRoot = refs.length > 0
+      // 级联归属：对象的所有构成点都被「已判定的根对象」吸收（随根对象变化而联动）。
+      // 共点（一个点同时属于多个几何对象）时构成点可能分属多个根——只要全部有归属
+      // 即视为随动派生物，不再因归属不一致而退化为独立消息；级联标注择根挂载：
+      // 操作意图目标 > 已生成消息的根 > 首个根。
+      const refOwners = new Set<string>()
+      let firstOwner: string | null = null
+      let allOwned = refs.length > 0
       for (const rid of refs) {
         const owner = refOwner.get(rid)
         if (!owner) {
-          ownedByRoot = false
+          allOwned = false
           break
         }
-        if (ownerRoot === null) ownerRoot = owner
-        else if (owner !== ownerRoot) {
-          ownedByRoot = false
-          break
+        if (firstOwner === null) firstOwner = owner
+        refOwners.add(owner)
+      }
+      const ownedByRoot = allOwned && refOwners.size > 0
+      let ownerRoot: string | null = firstOwner
+      if (ownedByRoot && refOwners.size > 1) {
+        if (intent?.targetId && refOwners.has(intent.targetId)) {
+          ownerRoot = intent.targetId
+        } else {
+          ownerRoot = [...refOwners].find((oid) => msgByTargetId.has(oid)) ?? firstOwner
         }
       }
       if (ownedByRoot && ownerRoot) {
@@ -1622,6 +1942,7 @@ for (const view of views) {
         if (message) {
           messages.push(message)
           msgByTargetId.set(id, message)
+          msgOwnerId.set(message, id)
         }
         absorbRefs(refs, id)
         judgedParentIds.add(id)
@@ -1647,6 +1968,7 @@ for (const view of views) {
         )
         messages.push(lockMsg)
         msgByTargetId.set(id, lockMsg)
+        msgOwnerId.set(lockMsg, id)
       } else if (effectiveParams.length > 0) {
         // 改名时省略种类前缀（与立体「修改了 正六面体2：名称 …」格式一致），
         // 名称参数已用对象新名标识对象本身；其余显示/数值修改才带种类
@@ -1656,14 +1978,17 @@ for (const view of views) {
         // - 操作级意图（origin/subject 明确）→「场景拖动X/场景拖拽X/侧边栏修改X坐标」
         // - 旧命令兜底：场景拖动（draggedPointId 明确）→「由X点拖动」；侧边栏坐标编辑→「由X点坐标修改」
         if (refsMoved) {
-          const originNote = buildOriginNote({
-            origin: intent?.origin ?? null,
-            subject: intent?.subject ?? null,
-            draggedPointId,
-            movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
-            pointById: afterPointById,
-            pointNames,
-          })
+          // 来源标注只挂在实际被操作对象上：共点/共边连带变化的对象（如拖球心点时被带动的正多边形）不误标
+          const originNote = isOriginSubjectTarget(id)
+            ? buildOriginNote({
+                origin: intent?.origin ?? null,
+                subject: intent?.subject ?? null,
+                draggedPointId,
+                movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
+                pointById: afterPointById,
+                pointNames,
+              })
+            : null
           if (originNote) {
             message.note = originNote
           } else {
@@ -1684,7 +2009,8 @@ for (const view of views) {
               }
               if (movedNames.length > 0 && movedNames.length <= 2) {
                 // 明确了拖动点（场景拖动）→ 标注「拖动」；否则为坐标修改（侧边栏）
-                message.note = draggedPointId
+                const sceneDrag = !!draggedPointId || intent?.origin === 'scene'
+                message.note = sceneDrag
                   ? `由${movedNames.join('、')}点拖动`
                   : `由${movedNames.join('、')}点坐标修改`
               }
@@ -1693,18 +2019,23 @@ for (const view of views) {
         }
         messages.push(message)
         msgByTargetId.set(id, message)
+        msgOwnerId.set(message, id)
       } else if (moved) {
-        const originNote = buildOriginNote({
-          origin: intent?.origin ?? null,
-          subject: intent?.subject ?? null,
-          draggedPointId,
-          movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
-          pointById: afterPointById,
-          pointNames,
-        })
+        // 来源标注只挂在实际被操作对象上：共点/共边连带移动的对象不误标
+        const originNote = isOriginSubjectTarget(id)
+          ? buildOriginNote({
+              origin: intent?.origin ?? null,
+              subject: intent?.subject ?? null,
+              draggedPointId,
+              movedPointIds: refs.filter((rid) => !eqVec(posBefore.get(rid), posAfter.get(rid))),
+              pointById: afterPointById,
+              pointNames,
+            })
+          : null
         const moveMsg = makeMessage('move', '移动了', actor, resolveKindLabel(view, o, name), name, [], originNote)
         messages.push(moveMsg)
         msgByTargetId.set(id, moveMsg)
+        msgOwnerId.set(moveMsg, id)
       }
 
       absorbRefs(refs, id)
@@ -1719,17 +2050,17 @@ for (const view of views) {
     const cubeObj = cubeView?.listAfter.find((o) => cubeView.getId(o) === cubeId)
     if (!cubeObj) continue
     const name = cubeView!.getName(cubeObj)
-    messages.push(
-      makeMessage(
-        g.toLocked ? 'lock' : 'unlock',
-        g.toLocked ? '锁定了' : '解锁了',
-        actor,
-        resolveKindLabel(cubeView!, cubeObj, name),
-        name,
-        [{ label: '几何', before: '', after: '' }],
-        null,
-      ),
+    const groupMsg = makeMessage(
+      g.toLocked ? 'lock' : 'unlock',
+      g.toLocked ? '锁定了' : '解锁了',
+      actor,
+      resolveKindLabel(cubeView!, cubeObj, name),
+      name,
+      [{ label: '几何', before: '', after: '' }],
+      null,
     )
+    messages.push(groupMsg)
+    msgOwnerId.set(groupMsg, cubeId)
   }
 
   // 将级联删除对象标注到对应的主删除消息（如「删除了 点B」→ 「级联删除 射线X」）
@@ -1746,7 +2077,127 @@ for (const view of views) {
     if (msg) msg.cascade = items.map((i) => `${i.action} ${i.text}`).join('、')
   }
 
+  // ---- 主操作对象消歧兜底：subject 为对象本体词（「球体」「面」…）时，
+  // 按「该类型中实际生成消息的对象」推定主操作对象（如拖正多边形面时，面所属对象为正多边形） ----
+  let effectivePrimary = primaryOperatedId
+  if (!effectivePrimary && subjectKindFilter) {
+    const owners = new Set<string>()
+    for (const m of messages) {
+      const ownerId = msgOwnerId.get(m)
+      if (ownerId && subjectKindFilter(ownerId)) owners.add(ownerId)
+    }
+    if (owners.size === 1) effectivePrimary = [...owners][0]!
+  }
+  // ---- 主操作对象兜底：无 subject/类型线索时（如拖两点球半径点），
+  // 取「被操作点作为角色点的所属对象」中实际生成了消息的第一个
+  // （角色语义优先：球半径点 → 球；无角色字段时才落到立体构成点） ----
+  if (!effectivePrimary) {
+    const ordered = [...(intentObjectId ? [intentObjectId] : []), ...roleOwnerIdsOfPoint(operatedPointId)]
+    const ownersWithMsg = new Set(msgOwnerId.values())
+    effectivePrimary = ordered.find((oid) => ownersWithMsg.has(oid)) ?? null
+  }
+  // ---- 来源标注收敛：主操作对象明确时，清除旁及对象上的同款标注 ----
+  // （如拖正多边形面时两点球仅连带变化，其消息不应显示「场景拖动面」）
+  // 注意：移动类消息的来源标注落在 quote 字段（makeMessage 第 7 参），修改类落在 note 字段
+  if (effectivePrimary && intent?.origin === 'scene' && intent.subject) {
+    const subjectNote = `场景${isPointRoleSubject(intent.subject) ? '拖拽' : '拖动'}${intent.subject}`
+    for (const [msg, ownerId] of msgOwnerId) {
+      if (ownerId === effectivePrimary) continue
+      if (msg.quote === subjectNote) msg.quote = null
+      if (msg.note === subjectNote) msg.note = null
+    }
+  }
+  // ---- 设计规则：一个操作只产生一条消息 ----
+  // 主操作对象确定时，其余受连带影响的对象不再单独成条，而是作为「级联…」条目挂在主消息下方，
+  // 并保留其属性变化（如「级联修改 正多边形1：边长 6.02→5.83」），用户据此了解本次操作的完整影响范围。
+  // 边界：无法确定主操作对象时（多目标批量操作、无意图声明的旧命令）保持逐条输出，避免给出错误主语。
+  if (effectivePrimary && messages.length > 1) {
+    const mainMsg = messages.find((m) => msgOwnerId.get(m) === effectivePrimary)
+    if (mainMsg) {
+      const items: string[] = []
+      const pushItem = (text: string) => {
+        if (!text) return
+        // 主消息既有级联（如随动派生的「级联移动 垂线N」）已在文本中则不重复
+        if (mainMsg.cascade?.includes(text)) return
+        if (!items.includes(text)) items.push(text)
+      }
+      for (const m of messages) {
+        if (m === mainMsg) continue
+        const paramText =
+          m.params.length > 0
+            ? '：' +
+              m.params
+                .map((p) =>
+                  p.before && p.after
+                    ? `${p.label} ${p.before}→${p.after}`
+                    : p.before
+                      ? `${p.label} ${p.before}`
+                      : p.label,
+                )
+                .join('，')
+            : ''
+        const target = `${m.targetType ?? ''}${m.targetName ?? ''}`
+        pushItem(`级联${m.action.replace(/了$/, '')} ${target}${paramText}`.trim())
+        // 该被合并消息自身携带的级联结果（更深层连带）一并保留
+        if (m.cascade) pushItem(m.cascade)
+      }
+      if (items.length > 0) {
+        mainMsg.cascade = mainMsg.cascade ? `${mainMsg.cascade}、${items.join('、')}` : items.join('、')
+      }
+      messages.length = 0
+      messages.push(mainMsg)
+    }
+  }
+
+  // ---- 「我操作了什么」置顶：按主操作对象对消息做稳定重排 ----
+  // 消息按视图顺序生成（只保证吸收/去重正确）；用户期望自己实际操作的几何对象排在最前。
+  // 分档：0 = 主操作对象，1 = 本次操作涉及的其他对象，2 = 旁及（共点/共边连带）对象；
+  // 档内保持原顺序（吸收/去重/级联的既有顺序不变）。
+  // （聚合规则生效时仅剩一条消息，此步自然无影响；仅对未聚合的多目标场景生效）
+  if (effectivePrimary || operatedIds.size > 0) {
+    const rankOf = (m: CollabHistoryMessage): number => {
+      const ownerId = msgOwnerId.get(m)
+      if (!ownerId) return 2
+      if (effectivePrimary && ownerId === effectivePrimary) return 0
+      return operatedIds.has(ownerId) ? 1 : 2
+    }
+    const ranked = messages.map((m, index) => ({ m, rank: rankOf(m), index }))
+    ranked.sort((a, b) => a.rank - b.rank || a.index - b.index)
+    messages.length = 0
+    for (const item of ranked) messages.push(item.m)
+  }
+
   return messages
+}
+
+/**
+ * 房间初始基线（首位成员加载关联项目）消息：系统消息、固定文案。
+ * - 不带操作者昵称：项目导入由系统自动完成，不是某个用户的操作；
+ * - 不做 diff 展开：该条目的 before/after 是「空场景 → 整份项目场景」，
+ *   任何展开都会伪造成「创建了 N 个对象」，撤销/重做的引用同样固定为该文案。
+ */
+export function buildProjectImportMessage(createdAt: number = Date.now()): CollabHistoryMessage {
+  return {
+    ...makeMessage('import', '项目导入加载完成', { clientId: 0, userName: null, createdAt }, null, null, [], null),
+    system: true,
+  }
+}
+
+/**
+ * 房间内导入场景文件：单条消息。
+ * 导入会**整体替换**场景，若按 before/after 做 diff 展开会刷出几十条「创建了/删除了…」，
+ * 因此这里只产生一条带文件名的消息（含后缀），撤销/重做的引用也用同一文案。
+ */
+export function buildSceneFileImportMessage(fileName: string, actor: Actor): CollabHistoryMessage {
+  return makeMessage('import', '导入了场景文件', actor, null, fileName, [], null)
+}
+
+/**
+ * 房间内导出场景文件：单条通知消息。
+ * 导出不改变场景，因此不产生历史条目（不占撤销步骤），只留一条消息供协作者知悉。
+ */
+export function buildSceneFileExportMessage(fileName: string, actor: Actor): CollabHistoryMessage {
+  return makeMessage('export', '导出了场景文件', actor, null, fileName, [], null)
 }
 
 /** 撤销/重做消息：引用被撤销/重做的操作描述 */
@@ -1758,6 +2209,10 @@ export function buildUndoRedoMessage(
     keepPointId?: string | null
     deleteTargetId?: string | null
     intent?: CollabOperationIntent | null
+    /** 初始基线条目（项目导入）：引用文案固定为「项目导入加载完成」 */
+    isBase?: boolean
+    /** 场景文件导入：引用文案固定为「导入了场景文件 xxx.json」 */
+    sceneFileName?: string | null
   },
   actor: Actor,
   kind: 'undo' | 'redo',
@@ -1785,7 +2240,13 @@ export function buildOperationQuote(entry: {
   keepPointId?: string | null
   deleteTargetId?: string | null
   intent?: CollabOperationIntent | null
+  /** 初始基线条目（项目导入）：引用文案固定，不做 diff 展开 */
+  isBase?: boolean
+  /** 场景文件导入：引用文案固定为「导入了场景文件 xxx.json」，不做 diff 展开 */
+  sceneFileName?: string | null
 }): string {
+  if (entry.isBase) return '项目导入加载完成'
+  if (entry.sceneFileName) return `导入了场景文件 ${entry.sceneFileName}`
   const messages = buildMessagesFromHistoryEntry({
     actorClientId: 0,
     actorName: null,
@@ -1814,6 +2275,10 @@ export function buildOperationQuote(entry: {
           .join('，')
         text += `：${paramText}`
       }
+      // 级联影响范围（如「级联删除 正六面体1」）并入引用文本：
+      // 撤销/重做条目据此表达该操作实际影响（将恢复/移除）的对象范围，
+      // 而非只显示「删除了 点L」让用户无从感知连带删除的几何对象
+      if (m.cascade) text += `（${m.cascade}）`
       return text
     })
     .join('、')

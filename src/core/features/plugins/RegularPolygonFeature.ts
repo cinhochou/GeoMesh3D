@@ -79,6 +79,16 @@ export const regularPolygonFeaturePlugin: FeaturePlugin = {
     if (state.lockedEdgeLength !== undefined) constraint.lockedEdgeLength = state.lockedEdgeLength
 
     const faceId = constraint.faceId ?? polygonParams.face.id
+    // 面是渲染层读取的「显示投影」（3D 名称标签、侧栏内容区列表都读面），
+    // 镜像写入必须发生在命令内部：doExecute/doUndo 都会重放，
+    // 撤销/重做才能同时回退约束与面（否则名称显示开关无法正确撤销与重做）。
+    const face = scene.faces.get(faceId)
+    if (face) {
+      if (state.name !== undefined) face.name = state.name
+      if (state.nameVisible !== undefined) face.nameVisible = state.nameVisible
+      if (state.valueVisible !== undefined) face.valueVisible = state.valueVisible
+    }
+
     return { elementIds: { faces: [faceId] } }
   },
 

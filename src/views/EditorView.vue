@@ -32,6 +32,8 @@ import {
   importScene,
   isSceneEmpty,
   isSerializedSceneEmpty,
+  isSameSerializedScene,
+  serializeSceneForCompare as sceneToJsonForCompare,
   type SerializedScene,
 } from '../core/editor/SceneSerializer'
 import { Scene } from '../core/scene/Scene'
@@ -205,6 +207,12 @@ const collabCreateTrigger = ref(0)
 let collabTransactionDepth = 0
 let collabTransactionBefore: SerializedScene | null = null
 let collabTransactionLabel = ''
+/**
+ * 本事务是否真的执行过命令。
+ * 空事务（例如「清空名称」被判定为无效输入后所有 update* 都早退）不应写入共享历史，
+ * 否则协作模式下会凭空多出一条可撤销的空记录。
+ */
+let collabTransactionDirty = false
 
 let lastFpsTime = performance.now()
 let frameCount = 0
@@ -261,14 +269,6 @@ let periodicSaveTimer: number | null = null
 const AUTO_SAVE_DEBOUNCE = 3_000
 const PERIODIC_SAVE_INTERVAL = 30_000
 
-const sceneToJsonForCompare = (data: SerializedScene): string => {
-  const copy = { ...data }
-  if (copy.metadata) {
-    copy.metadata = { ...copy.metadata }
-    delete (copy.metadata as Record<string, unknown>).exportedAt
-  }
-  return JSON.stringify(copy)
-}
 const editProjectDialogVisible = ref(false)
 const editProjectName = ref('')
 const editProjectDescription = ref('')
@@ -866,6 +866,7 @@ onMounted(() => {
       if (collabTransactionDepth > 0) {
         // 协作事务中：只执行命令，不创建共享历史记录（由 commitTransaction 统一创建）
         originalExecuteCommand(cmd)
+        collabTransactionDirty = true
         cm!.syncAction()
       } else {
         // 统一方案：先执行命令，再通过 undo→export→redo 获取 before 快照
@@ -901,19 +902,23 @@ onMounted(() => {
               : draggedPointId
                 ? { category: 'move', targetId: null, draggedPointId }
                 : null)
-        cm!.appendHistoryEntry({
-          id: crypto.randomUUID(),
-          actorClientId: clientId,
-          actorName: cm!.getLocalUserLabel(),
-          createdAt: Date.now(),
-          label,
-          before,
-          after,
-          intent,
-          draggedPointId,
-          keepPointId,
-          deleteTargetId,
-        })
+        // 空操作命令（前后场景完全等价）不写入共享历史，
+        // 避免协作端多出一条「撤销后什么都没变」的历史步
+        if (!isSameSerializedScene(before, after)) {
+          cm!.appendHistoryEntry({
+            id: crypto.randomUUID(),
+            actorClientId: clientId,
+            actorName: cm!.getLocalUserLabel(),
+            createdAt: Date.now(),
+            label,
+            before,
+            after,
+            intent,
+            draggedPointId,
+            keepPointId,
+            deleteTargetId,
+          })
+        }
       }
     } else if (!inRoom) {
       originalExecuteCommand(cmd)
@@ -931,6 +936,7 @@ onMounted(() => {
       if (collabTransactionDepth > 0) {
         // 协作事务中：只执行命令，不创建共享历史记录
         originalExecuteHistoryEntry(entry)
+        collabTransactionDirty = true
         cm!.syncAction()
       } else {
         // 统一方案：先执行命令，再通过 undo→export→redo 获取 before 快照
@@ -960,19 +966,22 @@ onMounted(() => {
               : draggedPointId
                 ? { category: 'move', targetId: null, draggedPointId }
                 : null)
-        cm!.appendHistoryEntry({
-          id: crypto.randomUUID(),
-          actorClientId: clientId,
-          actorName: cm!.getLocalUserLabel(),
-          createdAt: Date.now(),
-          label: entry.label,
-          before,
-          after,
-          intent,
-          draggedPointId,
-          keepPointId,
-          deleteTargetId,
-        })
+        // 空操作命令（前后场景完全等价）不写入共享历史
+        if (!isSameSerializedScene(before, after)) {
+          cm!.appendHistoryEntry({
+            id: crypto.randomUUID(),
+            actorClientId: clientId,
+            actorName: cm!.getLocalUserLabel(),
+            createdAt: Date.now(),
+            label: entry.label,
+            before,
+            after,
+            intent,
+            draggedPointId,
+            keepPointId,
+            deleteTargetId,
+          })
+        }
       }
     } else if (!inRoom) {
       originalExecuteHistoryEntry(entry)
@@ -1013,8 +1022,14 @@ onMounted(() => {
       if (collabTransactionDepth === 1) {
         collabTransactionBefore = exportScene(scene)
         collabTransactionLabel = label
+        collabTransactionDirty = false
       }
     } else {
+      // 非协作模式：复位可能因「事务未提交就退出房间」而遗留的协作事务状态，
+      // 否则重新入房后事务会一直停在嵌套态，共享历史不再新增记录
+      collabTransactionDepth = 0
+      collabTransactionBefore = null
+      collabTransactionDirty = false
       originalBeginTransaction(label)
     }
   }
@@ -1026,17 +1041,23 @@ onMounted(() => {
       if (collabTransactionDepth <= 0) return
       collabTransactionDepth--
       if (collabTransactionDepth === 0 && collabTransactionBefore) {
+        const changed = collabTransactionDirty
+        collabTransactionDirty = false
         const after = exportScene(scene)
         cm!.syncAction()
-        cm!.appendHistoryEntry({
-          id: crypto.randomUUID(),
-          actorClientId: cm!.getProviderClientId(),
-          actorName: cm!.getLocalUserLabel(),
-          createdAt: Date.now(),
-          label: collabTransactionLabel,
-          before: collabTransactionBefore,
-          after,
-        })
+        // 空事务（如无效的名称编辑）以及「命令执行了但场景完全没变」都不写入共享历史，
+        // 避免协作端多出一条「撤销一步却什么都没发生」的历史步
+        if (changed && !isSameSerializedScene(collabTransactionBefore, after)) {
+          cm!.appendHistoryEntry({
+            id: crypto.randomUUID(),
+            actorClientId: cm!.getProviderClientId(),
+            actorName: cm!.getLocalUserLabel(),
+            createdAt: Date.now(),
+            label: collabTransactionLabel,
+            before: collabTransactionBefore,
+            after,
+          })
+        }
         collabTransactionBefore = null
       }
     } else {
@@ -1370,9 +1391,10 @@ const updateLocalHistoryUI = () => {
 const updateSharedHistoryUI = () => {
   const state = sharedHistoryState.value
   if (!state) return
+  // canUndo/canRedo 由 CollabManager 计算（已扣除不可撤销的初始基线「项目导入」）
   sceneStore.setHistoryState({
-    canUndo: state.historyIndex >= 0,
-    canRedo: state.historyIndex < state.entryCount - 1,
+    canUndo: state.canUndo,
+    canRedo: state.canRedo,
   })
 }
 
@@ -1913,8 +1935,10 @@ const handleExportScene = async () => {
   }
   try {
     const prefix = currentProjectId.value ? currentProjectName.value : undefined
-    const saved = await downloadSceneAsJson(scene, prefix)
-    if (saved) {
+    const savedFileName = await downloadSceneAsJson(scene, prefix)
+    if (savedFileName) {
+      // 房间内导出：追加一条通知消息（导出不改变场景，因此不产生历史条目、不占撤销步骤）
+      collabManager.value?.appendSceneFileExportNotice(savedFileName)
       showToast('导出成功', 'global')
     }
   } catch {
@@ -1968,6 +1992,9 @@ const handleImportScene = async () => {
         actorName: cm!.getLocalUserLabel(),
         createdAt: Date.now(),
         label: 'ImportScene',
+        // 携带文件名（含后缀）：该条目只产生一条「导入了场景文件 xxx.json」消息，
+        // 不再按 before/after 展开成几十条「创建了/删除了…」
+        sceneFileName: result.fileName,
         before,
         after,
       })
@@ -2149,6 +2176,9 @@ const autoJoinRoomFromQuery = async (roomId: string) => {
                 collabManager.value.getLocalUserLabel(),
               )
             } else if (!isSceneEmpty(scene)) {
+              // 本地无历史但场景非空（首位成员导入关联项目）：写入一条**初始基线条目**——
+              // 保留 before=空场景 / after=项目场景 作为基线，但它不是一步用户操作，
+              // 撤销不能越过它（撤销按钮初始不可用），消息固定为「项目导入加载完成」。
               const after = exportScene(scene)
               const before = createEmptySerializedScene()
               collabManager.value.appendHistoryEntry({
@@ -2156,7 +2186,8 @@ const autoJoinRoomFromQuery = async (roomId: string) => {
                 actorClientId: collabManager.value.getProviderClientId(),
                 actorName: collabManager.value.getLocalUserLabel(),
                 createdAt: Date.now(),
-                label: 'InitialScene',
+                label: 'ProjectImport',
+                isBase: true,
                 before,
                 after,
               })
@@ -2486,7 +2517,9 @@ const handleCollabJoin = async ({
             collabManager.value.getLocalUserLabel(),
           )
         } else if (!isSceneEmpty(scene)) {
-          // 本地无历史但场景非空（如导入的场景），创建一条初始快照记录
+          // 本地无历史但场景非空（首位成员导入关联项目）：写入一条**初始基线条目**——
+          // 保留 before=空场景 / after=项目场景 作为基线，但它不是一步用户操作，
+          // 撤销不能越过它（撤销按钮初始不可用），消息固定为「项目导入加载完成」。
           const after = exportScene(scene)
           const before = createEmptySerializedScene()
           collabManager.value.appendHistoryEntry({
@@ -2494,7 +2527,8 @@ const handleCollabJoin = async ({
             actorClientId: collabManager.value.getProviderClientId(),
             actorName: collabManager.value.getLocalUserLabel(),
             createdAt: Date.now(),
-            label: 'InitialScene',
+            label: 'ProjectImport',
+            isBase: true,
             before,
             after,
           })
@@ -2598,7 +2632,11 @@ const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = '
       label: e.label,
     }))
     editor.historyManager.resume()
-    editor.historyManager.loadFromSharedHistory(snapshotEntries, sharedState.historyIndex)
+    editor.historyManager.loadFromSharedHistory(
+      snapshotEntries,
+      sharedState.historyIndex,
+      sharedState.baseIndex,
+    )
     editor.historyVersion++
   } else {
     editor.historyManager.resume()

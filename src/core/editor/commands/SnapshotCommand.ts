@@ -284,7 +284,7 @@ type NetSnapshot = {
 type ConstraintSnapshot =
   | { type: 'cube'; cubeId: string; solidType: 'hexahedron' | 'tetrahedron'; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; x: number; y: number; z: number }>; faceIds: string[]; sourceLineId: string | null; vAxisHint: Vec3Snapshot; name: string; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
   | { type: 'intersection'; pointId: string; sourceA: IntersectionTargetRef; sourceB: IntersectionTargetRef }
-  | { type: 'regularPolygon'; constraintId: string; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; angleIndex: number }>; faceId: string; vertexCount: number; vAxisHint: Vec3Snapshot; name: string; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
+  | { type: 'regularPolygon'; constraintId: string; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; angleIndex: number }>; faceId: string; vertexCount: number; vAxisHint: Vec3Snapshot; name: string; nameVisible: boolean; edgeLengthLocked: boolean; lockedEdgeLength: number | null; valueVisible: boolean }
   | { type: 'prism'; prismId: string; ownerPointIds: [string, string]; dependentLayouts: Array<{ pointId: string; baseIndex: number }>; bottomFaceId: string; topFaceId: string; sideFaceIds: string[]; baseReferenceIndex: number; vAxisHint: Vec3Snapshot; name: string; valueVisible: boolean }
   | { type: 'pyramid'; pyramidId: string; ownerPointIds: [string, string]; bottomFaceId: string; sideFaceIds: string[]; baseReferenceIndex: number; vAxisHint: Vec3Snapshot; name: string; valueVisible: boolean }
   | { type: 'planar'; faceId: string }
@@ -522,6 +522,7 @@ function snapConstraint(c: SceneConstraint): ConstraintSnapshot | null {
       dependentLayouts: c.dependentLayouts.map((l) => ({ pointId: l.pointId, angleIndex: l.angleIndex })),
       faceId: c.faceId, vertexCount: c.vertexCount,
       vAxisHint: snapVec3(c.getVAxisHint()), name: c.name,
+      nameVisible: c.nameVisible,
       edgeLengthLocked: c.edgeLengthLocked, lockedEdgeLength: c.lockedEdgeLength,
       valueVisible: c.valueVisible,
     }
@@ -1106,7 +1107,7 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
     } else if (sc.type === 'regularPolygon') {
       if (seenRegularPolygonIds.has(sc.constraintId)) continue
       seenRegularPolygonIds.add(sc.constraintId)
-      scene.addRegularPolygonConstraint(new RegularPolygonConstraint(scene, sc.constraintId, sc.ownerPointIds, sc.dependentLayouts, sc.faceId, sc.vertexCount, new Vec3(sc.vAxisHint.x, sc.vAxisHint.y, sc.vAxisHint.z), sc.name, sc.edgeLengthLocked, sc.lockedEdgeLength, sc.valueVisible))
+      scene.addRegularPolygonConstraint(new RegularPolygonConstraint(scene, sc.constraintId, sc.ownerPointIds, sc.dependentLayouts, sc.faceId, sc.vertexCount, new Vec3(sc.vAxisHint.x, sc.vAxisHint.y, sc.vAxisHint.z), sc.name, sc.edgeLengthLocked, sc.lockedEdgeLength, sc.nameVisible === true, sc.valueVisible === true))
     } else if (sc.type === 'prism') {
       if (seenPrismIds.has(sc.prismId)) continue
       seenPrismIds.add(sc.prismId)
@@ -1143,6 +1144,11 @@ export function restoreFromSnapshot(scene: Scene, snapshot: SceneSubgraphSnapsho
       scene.addParallelLineConstraint(new ParallelLineConstraint(scene, sc.parallelLineId, { type: sc.targetType as ParallelLineConstraint['target']['type'], id: sc.targetId }))
     }
   }
+
+  // 正多边形「名称状态」不变式对齐：快照恢复会重建约束对象，
+  // 必须保证约束 ⇄ 面（渲染层读取的显示投影）一致，否则撤销/重做后二者分叉。
+  // adoptFromFace=true：面持久化更可靠（历史版本快照未记录约束的 nameVisible）。
+  scene.alignRegularPolygonFaceState(true)
 
   scene.invalidateRenderSyncCache()
   scene.markAllRenderDirty()

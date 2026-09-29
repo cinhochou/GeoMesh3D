@@ -66,6 +66,8 @@ const PREFIX_COLOR: Record<CollabHistoryCategory, string> = {
   merge: '#79c0ff',
   clear: '#ff7b72',
   room: '#8b949e',
+  import: '#8b949e',
+  export: '#8b949e',
   undo: '#79c0ff',
   redo: '#79c0ff',
 }
@@ -167,7 +169,13 @@ const fitWidth = () => {
           spans.forEach((span, i) => {
             // 从属的尾注（级联删除/由X拖动）与引用（撤销/重做）内部允许换行，
             // 不参与“恰好填满”宽度候选（避免长文本把消息框撑到和文本一样宽而失去折行）
-            if (span.classList.contains('collab-history-note') || span.classList.contains('collab-history-quote')) return
+            if (
+              span.classList.contains('collab-history-note') ||
+              span.classList.contains('collab-history-cascade') ||
+              span.classList.contains('collab-history-quote')
+            ) {
+              return
+            }
             widths.push(span.getBoundingClientRect().width + (i === 0 ? offset : 0))
           })
         }
@@ -354,14 +362,21 @@ watch(
         <div class="collab-history-main">
           <span class="collab-history-time">{{ timeOf(msg.createdAt) }}</span>
           <span class="collab-history-prefix" :style="{ color: colorOf(msg.category) }">{{ prefixOf(msg.category) }}</span>
-          <span class="collab-history-name">{{ msg.userName || '其他用户' }}</span>
+          <span class="collab-history-name" :class="{ 'is-system': msg.system }">{{
+            msg.system ? '系统' : msg.userName || '其他用户'
+          }}</span>
           <span class="collab-history-action">{{ msg.action }}</span>
-          <!-- 几何对象：种类+名称紧密相连为一个整体（点A、三点圆圆A），中间不留空隙 -->
-          <span v-if="msg.targetName" class="collab-history-target"><span v-if="msg.targetType" class="collab-history-kind">{{ msg.targetType }}</span>{{ msg.targetName }}</span>
+          <!-- 几何对象：种类+名称紧密相连为一个整体（点A、三点圆圆A），中间不留空隙。
+               导入/导出消息的目标位是场景文件名，用黄色区分（见 .is-scene-file） -->
+          <span
+            v-if="msg.targetName"
+            class="collab-history-target"
+            :class="{ 'is-scene-file': msg.category === 'import' || msg.category === 'export' }"
+          ><span v-if="msg.targetType" class="collab-history-kind">{{ msg.targetType }}</span>{{ msg.targetName }}</span>
         </div>
-        <!-- 从属信息：参数变化 / 撤销引用 / 拖拽标注 / 级联删除，换行时缩进体现分级 -->
+        <!-- 从属信息：参数变化 / 撤销引用 / 拖拽标注 / 级联结果（删除范围、随动派生对象），换行时缩进体现分级 -->
         <div
-          v-if="msg.params.length > 0 || msg.quote || msg.note || msg.createdFrom"
+          v-if="msg.params.length > 0 || msg.quote || msg.note || msg.cascade || msg.createdFrom"
           class="collab-history-detail"
         >
           <template v-if="msg.params.length > 0">
@@ -381,6 +396,10 @@ watch(
           <!-- 删除的级联标注：红系 + 箭头，区别于修改的「由X点拖动」（斜体弱化） -->
           <span v-if="msg.note && msg.category === 'delete'" class="collab-history-note collab-history-note-delete">→ {{ msg.note }}</span>
           <span v-if="msg.note && msg.category !== 'delete'" class="collab-history-note collab-history-note-update">{{ msg.note }}</span>
+          <!-- 级联结果：删除操作的实际影响范围（因级联一并消失的几何对象）/ 随动派生对象，
+               让用户感知「删除了 点L」之外哪些对象真正受影响；独占一行（长文本自动折行，不参与宽度候选） -->
+          <span v-if="msg.cascade && msg.category === 'delete'" class="collab-history-note collab-history-cascade collab-history-note-delete">→ {{ msg.cascade }}</span>
+          <span v-if="msg.cascade && msg.category !== 'delete'" class="collab-history-note collab-history-cascade collab-history-note-update">→ {{ msg.cascade }}</span>
         </div>
       </div>
     </div>
@@ -532,6 +551,19 @@ watch(
   color: #9fd8ff;
 }
 
+/* 系统消息（如「项目导入加载完成」）：身份位用灰色胶囊徽标，
+   与人类昵称的强调蓝（#9fd8ff）区分；胶囊范式与侧栏 .constraint-badge 一致，
+   这里改用中性灰。16px 行高 + 上下各 1px 描边 = 18px，与消息正文行高相同，不撑高行。 */
+.collab-history-name.is-system {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #d3d1c7;
+  background: rgba(139, 148, 158, 0.18);
+  border: 1px solid rgba(139, 148, 158, 0.45);
+}
+
 .collab-history-action {
   flex-shrink: 0;
   white-space: nowrap;
@@ -541,6 +573,12 @@ watch(
 .collab-history-target {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* 导入/导出消息的目标位是「场景文件名」：用黄色与几何对象名（白）区分，
+   沿用面板已有的琥珀色（与 [锁定]/[解锁] 前缀同色）；「项目导入加载完成」无目标位，不受影响 */
+.collab-history-target.is-scene-file {
+  color: #f2cc60;
 }
 
 /* 几何对象种类（嵌在对象整体内，紧贴名称） */
@@ -573,13 +611,19 @@ watch(
   color: rgba(255, 255, 255, 0.75);
 }
 
-/* 尾注（删除「级联删除…」/ 修改「由X点拖动」）：从属消息统一允许内部换行 */
+/* 尾注（「由X点拖动」等短标注 / 「级联删除、级联修改」连带影响）：从属消息统一允许内部换行 */
 .collab-history-note {
   flex-shrink: 1;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: normal;
+}
+
+/* 级联标注（本次操作对其他几何对象的连带影响）：独占一行，与「：参数」「引用」等区分开；
+   短注脚（由X点拖动）不加此类，仍与参数同行 */
+.collab-history-cascade {
+  flex-basis: 100%;
 }
 
 /* 修改类标注：斜体弱化 */

@@ -17,6 +17,7 @@ import { CylinderConstraint } from '../constraints/CylinderConstraint'
 import { PrismConstraint } from '../constraints/PrismConstraint'
 import { PyramidConstraint } from '../constraints/PyramidConstraint'
 import { ObjectConstrainedPointConstraint } from '../constraints/ObjectConstrainedPointConstraint'
+import { RegularPolygonConstraint } from '../constraints/RegularPolygonConstraint'
 import { Vec3 } from '../geometry/Vec3'
 import { Net } from '../geometry/Net'
 import { updateNetTransforms } from '../geometry/NetUtils'
@@ -878,6 +879,51 @@ export class Scene {
       }
       this.markConstraintDirty(constraint)
     })
+  }
+
+  /**
+   * 正多边形「名称状态」不变式对齐。
+   *
+   * 权威源是 RegularPolygonConstraint（命令、序列化、侧栏选中区都以它为准）；
+   * 面 PlanarPolygon 只是渲染层读取的显示投影（3D 名称标签、侧栏内容区列表都读面），
+   * 二者必须一致，否则撤销/重做、持久化与协作同步之后会出现分叉。
+   *
+   * @param adoptFromFace 仅用于旧数据迁移：历史版本从未把约束的 nameVisible 落盘
+   *   （`SerializedRegularPolygonConstraint` 缺该字段，且导入时参数错位），
+   *   而面持久化了名称显示与数值显示，因此旧数据需以面为准回填约束。
+   * @returns 是否发生了实际修改
+   */
+  alignRegularPolygonFaceState(adoptFromFace: boolean = false): boolean {
+    let changed = false
+    this.regularPolygonConstraints.forEach((raw) => {
+      if (!(raw instanceof RegularPolygonConstraint)) return
+      const constraint = raw
+      const face = this.faces.get(constraint.faceId)
+      if (!face) return
+      if (adoptFromFace) {
+        if (constraint.nameVisible !== face.nameVisible) {
+          constraint.nameVisible = face.nameVisible
+          changed = true
+        }
+        if (constraint.valueVisible !== face.valueVisible) {
+          constraint.valueVisible = face.valueVisible
+          changed = true
+        }
+      }
+      if (face.name !== constraint.name) {
+        face.name = constraint.name
+        changed = true
+      }
+      if (face.nameVisible !== constraint.nameVisible) {
+        face.nameVisible = constraint.nameVisible
+        changed = true
+      }
+      if (face.valueVisible !== constraint.valueVisible) {
+        face.valueVisible = constraint.valueVisible
+        changed = true
+      }
+    })
+    return changed
   }
 
   onSolverWork(listener: () => void) {

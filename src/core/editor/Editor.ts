@@ -3,6 +3,7 @@ import { numParam, type CollabOperationIntent, type CollabIntentParam } from '..
 import { Scene } from '../scene/Scene'
 import type { Command } from './Command'
 import { HistoryManager, type HistoryEntry } from './HistoryManager'
+import { normalizeNamePatch, normalizeNameText } from './nameRules'
 import { TransformCommand } from './commands/scene/TransformCommand'
 import { TransformPrismOwnerPointCommand } from './commands/scene/TransformPrismOwnerPointCommand'
 import { TransformPyramidOwnerPointCommand } from './commands/scene/TransformPyramidOwnerPointCommand'
@@ -146,6 +147,26 @@ const genIndexedAlphabetName = (index: number, baseCharCode: number) => {
   const letter = String.fromCharCode(baseCharCode + (index % 26))
   const suffix = Math.floor(index / 26)
   return suffix === 0 ? letter : `${letter}${suffix}`
+}
+
+/**
+ * 更新状态记录是否等价。
+ * 用于跳过「空操作」的更新命令：不产生命令、不写历史、不发协作消息。
+ * 记录中的嵌套值（如 topPointPosition）在新旧状态一致时通常为同一引用，
+ * 因此逐层比较即可覆盖现有全部状态结构。
+ */
+function isSameUpdateState(a: object, b: object): boolean {
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  const keys = Object.keys(ra)
+  if (keys.length !== Object.keys(rb).length) return false
+  return keys.every((key) => isSameUpdateValue(ra[key], rb[key]))
+}
+
+function isSameUpdateValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  return isSameUpdateState(a, b)
 }
 
 const genId = (prefix: string) => {
@@ -425,6 +446,8 @@ function buildUpdateParams(
     // 锁定由「锁定/解锁」消息单独表达，不并入修改参数（避免误报为修改）
     if (key === 'userLocked') continue
     if (key in before && before[key] === after[key]) continue
+    // 空名称不是有效变更（名称必填），不作为「名称」参数上报
+    if (key === 'name' && !normalizeNameText(after[key] as string | undefined)) continue
     out.push({
       label: UPDATE_PARAM_LABELS[key] ?? key,
       before: formatUpdateParamValue(before[key]),
@@ -550,7 +573,9 @@ export class Editor {
       return line ? `平行线${line.name}` : '平行线(已删除)'
     }
     const face = this.scene.faces.get(target.id)
-    return face ? `多边形${face.name}` : '多边形(已删除)'
+    if (!face) return '多边形(已删除)'
+    // 正多边形的面名已含种类词（与约束名一致），不再重复前缀
+    return face.isRegularPolygon ? face.name || '正多边形' : `多边形${face.name}`
   }
 
   getIntersectionSummary(pointId: string) {
@@ -861,21 +886,16 @@ export class Editor {
         : undefined,
     }
     const after: ConstructorParameters<typeof UpdatePrismCommand>[2] = {
-      name: patch.name ?? constraint.name,
+      name: normalizeNamePatch(patch.name) ?? constraint.name,
       valueVisible: patch.valueVisible ?? constraint.valueVisible,
       keepVertical: patch.keepVertical ?? constraint.keepVertical,
       topPointPosition: afterTopPosition
         ? { x: afterTopPosition.x, y: afterTopPosition.y, z: afterTopPosition.z }
         : undefined,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdatePrismCommand(constraint.prismId, before, after, this.scene))
-    this.scene.markAllRenderDirty()
-  }
-
-  updatePrismName(prismId: string, name: string) {
-    const constraint = this.getPrismConstraint(prismId)
-    if (!constraint) return
-    constraint.name = name.trim()
     this.scene.markAllRenderDirty()
   }
 
@@ -942,21 +962,16 @@ export class Editor {
         : undefined,
     }
     const after: ConstructorParameters<typeof UpdatePyramidCommand>[2] = {
-      name: patch.name ?? constraint.name,
+      name: normalizeNamePatch(patch.name) ?? constraint.name,
       valueVisible: patch.valueVisible ?? constraint.valueVisible,
       keepVertical: patch.keepVertical ?? constraint.keepVertical,
       apexPointPosition: afterApexPosition
         ? { x: afterApexPosition.x, y: afterApexPosition.y, z: afterApexPosition.z }
         : undefined,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdatePyramidCommand(constraint.pyramidId, before, after, this.scene))
-    this.scene.markAllRenderDirty()
-  }
-
-  updatePyramidName(pyramidId: string, name: string) {
-    const constraint = this.getPyramidConstraint(pyramidId)
-    if (!constraint) return
-    constraint.name = name.trim()
     this.scene.markAllRenderDirty()
   }
 
@@ -1374,19 +1389,14 @@ export class Editor {
       lockedEdgeLength: constraint.lockedEdgeLength,
     }
     const after = {
-      name: patch.name ?? constraint.name,
+      name: normalizeNamePatch(patch.name) ?? constraint.name,
       valueVisible: patch.valueVisible ?? constraint.valueVisible,
       edgeLengthLocked: nextEdgeLengthLocked,
       lockedEdgeLength: nextLockedEdgeLength,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdateCubeCommand(constraint.cubeId, before, after, this.scene))
-    this.scene.markAllRenderDirty()
-  }
-
-  updateCubeName(cubeId: string, suffix: string) {
-    const constraint = this.getCubeConstraint(cubeId)
-    if (!constraint) return
-    constraint.name = `${getSolidNamePrefix(constraint.solidType)}${suffix.trim()}`
     this.scene.markAllRenderDirty()
   }
 
@@ -1511,14 +1521,6 @@ export class Editor {
     return sphere.name.replace(/^(两点球|半径球)/, '')
   }
 
-  updateSphereName(sphereId: string, suffix: string) {
-    const sphere = this.getSphere(sphereId)
-    if (!sphere) return
-    const prefix = sphere.name.startsWith('半径球') ? '半径球' : '两点球'
-    sphere.name = `${prefix}${suffix.trim()}`
-    this.scene.markAllRenderDirty()
-  }
-
   setSphereValueVisible(sphereId: string, visible: boolean) {
     const sphere = this.getSphere(sphereId)
     if (!sphere || sphere.valueVisible === visible) return
@@ -1591,7 +1593,7 @@ export class Editor {
       userLocked: sphere.userLocked,
     }
     const after = {
-      name: patch.name ?? sphere.name,
+      name: normalizeNamePatch(patch.name) ?? sphere.name,
       nameVisible: patch.nameVisible ?? sphere.nameVisible,
       valueVisible: patch.valueVisible ?? sphere.valueVisible,
       labelOffsetX: patch.labelOffsetX ?? sphere.labelOffsetX,
@@ -1599,6 +1601,8 @@ export class Editor {
       visible: patch.visible ?? sphere.visible,
       userLocked: patch.userLocked ?? sphere.userLocked,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(withUpdateIntent(
       new UpdateSphereCommand(sphere.id, before, after, this.scene),
       sphere.id,
@@ -1771,13 +1775,6 @@ export class Editor {
     return cone.name.replace(/^法向圆锥|^圆锥/, '')
   }
 
-  updateConeName(coneId: string, suffix: string) {
-    const cone = this.getCone(coneId)
-    if (!cone) return
-    cone.name = `圆锥${suffix.trim()}`
-    this.scene.markAllRenderDirty()
-  }
-
   setConeValueVisible(coneId: string, visible: boolean) {
     const cone = this.getCone(coneId)
     if (!cone || cone.valueVisible === visible) return
@@ -1847,7 +1844,7 @@ export class Editor {
       userLocked: cone.userLocked,
     }
     const after = {
-      name: patch.name ?? cone.name,
+      name: normalizeNamePatch(patch.name) ?? cone.name,
       nameVisible: patch.nameVisible ?? cone.nameVisible,
       valueVisible: patch.valueVisible ?? cone.valueVisible,
       labelOffsetX: patch.labelOffsetX ?? cone.labelOffsetX,
@@ -1855,6 +1852,8 @@ export class Editor {
       visible: patch.visible ?? cone.visible,
       userLocked: patch.userLocked ?? cone.userLocked,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdateConeCommand(cone.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
@@ -2004,13 +2003,6 @@ export class Editor {
     return cylinder.name.replace(/^法向圆柱|^圆柱/, '')
   }
 
-  updateCylinderName(cylinderId: string, suffix: string) {
-    const cylinder = this.getCylinder(cylinderId)
-    if (!cylinder) return
-    cylinder.name = `圆柱${suffix.trim()}`
-    this.scene.markAllRenderDirty()
-  }
-
   setCylinderValueVisible(cylinderId: string, visible: boolean) {
     const cylinder = this.getCylinder(cylinderId)
     if (!cylinder || cylinder.valueVisible === visible) return
@@ -2104,7 +2096,7 @@ export class Editor {
       userLocked: cylinder.userLocked,
     }
     const after = {
-      name: patch.name ?? cylinder.name,
+      name: normalizeNamePatch(patch.name) ?? cylinder.name,
       nameVisible: patch.nameVisible ?? cylinder.nameVisible,
       valueVisible: patch.valueVisible ?? cylinder.valueVisible,
       labelOffsetX: patch.labelOffsetX ?? cylinder.labelOffsetX,
@@ -2112,6 +2104,8 @@ export class Editor {
       visible: patch.visible ?? cylinder.visible,
       userLocked: patch.userLocked ?? cylinder.userLocked,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdateCylinderCommand(cylinder.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
@@ -2345,6 +2339,7 @@ export class Editor {
   ) {
     const net = this.scene.nets.get(netId)
     if (!net) return
+    const nextName = normalizeNamePatch(updates.name)
     const cmdUpdates: {
       name?: string
       visible?: boolean
@@ -2352,16 +2347,36 @@ export class Editor {
       position?: Vec3
       mode?: NetMode
       reset?: boolean
-    } = {
-      name: updates.name,
-      visible: updates.visible,
-      unfoldRatio: updates.unfoldRatio,
-      mode: updates.mode,
-      reset: updates.reset,
+    } = {}
+    // 只下发真正发生变化的字段：名称被清空 / 值未变化 → 不下发，
+    // 避免产生「空操作」命令写入撤销/重做与协作历史
+    if (updates.reset) {
+      cmdUpdates.reset = true
     }
-    if (updates.position) {
+    if (nextName !== undefined && nextName !== net.name) {
+      cmdUpdates.name = nextName
+    }
+    if (updates.visible !== undefined && updates.visible !== net.visible) {
+      cmdUpdates.visible = updates.visible
+    }
+    if (
+      updates.unfoldRatio !== undefined &&
+      Math.abs(updates.unfoldRatio - net.unfoldRatio) > 1e-9
+    ) {
+      cmdUpdates.unfoldRatio = updates.unfoldRatio
+    }
+    if (updates.mode !== undefined && updates.mode !== net.mode) {
+      cmdUpdates.mode = updates.mode
+    }
+    if (
+      updates.position &&
+      (Math.abs(updates.position.x - net.position.x) > 1e-9 ||
+        Math.abs(updates.position.y - net.position.y) > 1e-9 ||
+        Math.abs(updates.position.z - net.position.z) > 1e-9)
+    ) {
       cmdUpdates.position = new Vec3(updates.position.x, updates.position.y, updates.position.z)
     }
+    if (Object.keys(cmdUpdates).length === 0) return
     const cmd = new UpdateNetCommand(this.scene, netId, cmdUpdates)
     this.executeCommand(cmd)
     this.scene.markAllRenderDirty()
@@ -2417,25 +2432,18 @@ export class Editor {
       lockedEdgeLength: constraint.lockedEdgeLength,
     }
     const after = {
-      name: patch.name ?? constraint.name,
+      name: normalizeNamePatch(patch.name) ?? constraint.name,
       nameVisible: patch.nameVisible ?? constraint.nameVisible,
       valueVisible: patch.valueVisible ?? constraint.valueVisible,
       edgeLengthLocked: nextEdgeLengthLocked,
       lockedEdgeLength: nextLockedEdgeLength,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdateRegularPolygonCommand(constraint.constraintId, before, after, this.scene))
-    const face = this.scene.faces.get(constraint.faceId)
-    if (face) {
-      face.nameVisible = after.nameVisible
-      face.valueVisible = after.valueVisible
-    }
+    // 面（显示投影）的镜像写入由 RegularPolygonFeature.update 在命令内部完成，
+    // 不能再在命令外直写，否则撤销/重做无法覆盖面的状态。
     this.scene.markAllRenderDirty()
-  }
-
-  updateRegularPolygonName(constraintId: string, suffix: string) {
-    const constraint = this.getRegularPolygonConstraint(constraintId)
-    if (!constraint) return
-    constraint.name = `正多边形${suffix}`
   }
 
   setRegularPolygonValueVisible(constraintId: string, visible: boolean) {
@@ -4977,7 +4985,7 @@ export class Editor {
     const point = this.scene.points.get(pointId)
     if (!point) return
 
-    const nextName = patch.name ?? point.name
+    const nextName = normalizeNamePatch(patch.name) ?? point.name
     const nextVisible = patch.nameVisible ?? point.nameVisible
     const nextValueVisible = patch.valueVisible ?? point.valueVisible
     const nextObjVisible = patch.visible ?? point.visible
@@ -5039,7 +5047,7 @@ export class Editor {
     const line = this.scene.lines.get(lineId)
     if (!line) return
 
-    const nextName = patch.name ?? line.name
+    const nextName = normalizeNamePatch(patch.name) ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
@@ -5171,7 +5179,7 @@ export class Editor {
       lockedRadius: circle.lockedRadius,
     }
     const after = {
-      name: patch.name ?? circle.name,
+      name: normalizeNamePatch(patch.name) ?? circle.name,
       nameVisible: patch.nameVisible ?? circle.nameVisible,
       valueVisible: patch.valueVisible ?? circle.valueVisible,
       labelOffsetX: patch.labelOffsetX ?? circle.labelOffsetX,
@@ -5181,6 +5189,8 @@ export class Editor {
       centerVisible: patch.centerVisible ?? circle.centerVisible,
       lockedRadius: patch.lockedRadius ?? circle.lockedRadius,
     }
+    // 空操作（含名称被清空）不入历史、不发协作消息
+    if (isSameUpdateState(before, after)) return
     this.executeCommand(new UpdateCircleCommand(circle.id, before, after, this.scene))
     this.scene.markAllRenderDirty()
   }
@@ -5201,7 +5211,7 @@ export class Editor {
     const ray = this.scene.rays.get(rayId)
     if (!ray) return
 
-    const nextName = patch.name ?? ray.name
+    const nextName = normalizeNamePatch(patch.name) ?? ray.name
     const nextNameVisible = patch.nameVisible ?? ray.nameVisible
     const nextValueVisible = patch.valueVisible ?? ray.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? ray.labelOffsetX
@@ -5266,7 +5276,7 @@ export class Editor {
     const line = this.scene.straightLines.get(lineId)
     if (!line) return
 
-    const nextName = patch.name ?? line.name
+    const nextName = normalizeNamePatch(patch.name) ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
@@ -5333,7 +5343,7 @@ export class Editor {
     const line = this.scene.perpendicularLines.get(lineId)
     if (!line) return
 
-    const nextName = patch.name ?? line.name
+    const nextName = normalizeNamePatch(patch.name) ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
@@ -5402,7 +5412,24 @@ export class Editor {
     const face = this.scene.faces.get(faceId)
     if (!face) return
 
-    const nextName = patch.name ?? face.name
+    // 正多边形的面是约束的显示投影（3D 名称标签与侧栏内容区读面、选中区读约束），
+    // 名称/名称显示/数值显示一律由约束管辖：这里转发给 updateRegularPolygon，
+    // 防止外部调用把面单独改名而破坏「约束 ⇄ 面」不变式。
+    if (face.regularPolygonId) {
+      const hasNameField =
+        patch.name !== undefined ||
+        patch.nameVisible !== undefined ||
+        patch.valueVisible !== undefined
+      if (hasNameField) {
+        const { name, nameVisible, valueVisible, ...rest } = patch
+        this.updateRegularPolygon(face.regularPolygonId, { name, nameVisible, valueVisible })
+        if (Object.keys(rest).length === 0) return
+        this.updateFace(faceId, rest)
+        return
+      }
+    }
+
+    const nextName = normalizeNamePatch(patch.name) ?? face.name
     const nextNameVisible = patch.nameVisible ?? face.nameVisible
     const nextValueVisible = patch.valueVisible ?? face.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? face.labelOffsetX
@@ -5894,7 +5921,7 @@ export class Editor {
     const line = this.scene.parallelLines.get(lineId)
     if (!line) return
 
-    const nextName = patch.name ?? line.name
+    const nextName = normalizeNamePatch(patch.name) ?? line.name
     const nextNameVisible = patch.nameVisible ?? line.nameVisible
     const nextValueVisible = patch.valueVisible ?? line.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? line.labelOffsetX
@@ -6375,7 +6402,7 @@ export class Editor {
     const vector = this.scene.vectors.get(vectorId)
     if (!vector) return
 
-    const nextName = patch.name ?? vector.name
+    const nextName = normalizeNamePatch(patch.name) ?? vector.name
     const nextNameVisible = patch.nameVisible ?? vector.nameVisible
     const nextValueVisible = patch.valueVisible ?? vector.valueVisible
     const nextLabelOffsetX = patch.labelOffsetX ?? vector.labelOffsetX
@@ -6679,11 +6706,6 @@ export class Editor {
       dependentLayouts.push({ pointId: point.id, angleIndex: i })
     }
 
-    const usedFaceNames = new Set([...this.scene.faces.values()].map((face) => face.name))
-    const faceName = genNextAvailableName(usedFaceNames, 0, (index) =>
-      index === 0 ? 'F' : `F${index}`,
-    )
-
     const supportPointIds =
       boundaryPointIds.length >= 3 ? boundaryPointIds.slice(0, 3) : boundaryPointIds
 
@@ -6695,9 +6717,11 @@ export class Editor {
       (index) => `正多边形${index + 1}`,
     )
 
+    // 正多边形的面是约束的显示投影：面名与约束名保持一致。
+    // 否则 3D 名称标签与侧栏内容区会显示自动面名（F/F1），而选中区显示约束名（正多边形1）。
     const face = new PlanarPolygon(
       genId('f'),
-      faceName,
+      rpName,
       boundaryPointIds,
       boundaryPointIds,
       [],

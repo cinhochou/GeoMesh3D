@@ -15,6 +15,8 @@ export type CollabHistoryCategory =
   | 'merge' // 合并点（结构操作）
   | 'clear' // 清空场景（结构操作）
   | 'room' // 加入/离开协作房间
+  | 'import' // 项目导入 / 房间内导入场景文件
+  | 'export' // 房间内导出场景文件
   | 'undo' // 撤销
   | 'redo' // 重做
 
@@ -35,6 +37,11 @@ export interface CollabHistoryMessage {
   clientId: number
   /** 操作者昵称 */
   userName: string | null
+  /**
+   * 系统消息：由系统自动完成、不对应任何用户操作（如「项目导入加载完成」），
+   * 渲染时不展示操作者昵称。
+   */
+  system?: boolean
   /** 消息类别（决定 [前缀] ） */
   category: CollabHistoryCategory
   /** 中文动作短语：创建了/删除了/修改了/移动了/锁定了/解锁了/合并了点/清空了场景/加入了协作/离开了协作/撤销了/重做了 */
@@ -68,6 +75,8 @@ export const COLLAB_HISTORY_PREFIX: Record<CollabHistoryCategory, string> = {
   merge: '[合并]',
   clear: '[清空]',
   room: '[协作]',
+  import: '[导入]',
+  export: '[导出]',
   undo: '[撤销]',
   redo: '[重做]',
 }
@@ -81,7 +90,9 @@ export function formatCollabHistoryTime(timestamp: number): string {
 
 /** 将结构化消息渲染为完整文本（动作 + 种类 + 名称 + 属性变化；撤销/重做带「被引用操作」） */
 export function renderCollabHistoryMessage(message: CollabHistoryMessage): string {
-  const parts: string[] = [COLLAB_HISTORY_PREFIX[message.category], message.userName || '其他用户']
+  const parts: string[] = [COLLAB_HISTORY_PREFIX[message.category]]
+  // 系统消息（如项目导入）由系统自动完成：昵称位显示「系统」
+  parts.push(message.system ? '系统' : message.userName || '其他用户')
 
   let main = message.action
   // 种类+名称紧密相连（点B/三点圆c），与界面一致

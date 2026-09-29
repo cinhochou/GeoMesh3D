@@ -18,6 +18,7 @@ import type { PerpendicularLine3 } from '../core/geometry/PerpendicularLine3'
 import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
 import { Net } from '../core/geometry/Net'
+import { normalizeNamePart, normalizeNameText } from '../core/editor/nameRules'
 
 import type { ParametricRange } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { useUiStore } from '@/store/uiStore'
@@ -33,6 +34,16 @@ const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 // 仅观看模式守卫：返回 true 时表示当前用户无编辑权限，应跳过所有修改操作
 const guardViewOnly = (): boolean => props.viewOnly === true
+/**
+ * 名称提交：名称必填，清空（或纯空白）视为无效输入。
+ * 无效时回退为当前有效名称，保证提交后输入框即时回显正确值，
+ * 且不会产生「名称改为空」的历史记录与协作消息。
+ */
+const resolveName = (draft: string | null | undefined, currentName: string): string =>
+  normalizeNameText(draft) || currentName
+/** 名称后缀（立体编号）提交：无效时回退为当前后缀 */
+const resolveNameSuffix = (draft: string | null | undefined, currentSuffix: string): string =>
+  normalizeNamePart(draft) ?? currentSuffix
 const {
   isCompactLineEditor,
   contentGroupsCollapsed,
@@ -2429,13 +2440,15 @@ const applyEditPoint = () => {
   if (!editing.value || editing.value.type !== 'point') return
   const point = props.scene.points.get(editing.value.id)
   if (point) {
+    const nextName = resolveName(editPoint.name, point.name)
     props.editor.beginCollabTransaction('UpdatePointCommand')
     props.editor.updatePoint(editing.value.id, {
-      name: editPoint.name,
+      name: nextName,
       nameVisible: editPoint.nameVisible,
       valueVisible: editPoint.valueVisible,
       visible: editPoint.visible,
     })
+    editPoint.name = nextName
     if (editPoint.userLocked !== isPointCoordinateLocked(point)) {
       props.editor.setPointLockState(editing.value.id, editPoint.userLocked)
     }
@@ -2458,15 +2471,17 @@ const applyEditLine = () => {
   const previousLengthLocked = line.lengthLocked
   const previousLockedLength = line.lockedLength
   const parsedLockedLength = Number(editLine.lockedLength)
+  const nextName = resolveName(editLine.name, line.name)
   props.editor.beginCollabTransaction('UpdateLineCommand')
   props.editor.updateLine(editing.value.id, {
-    name: editLine.name,
+    name: nextName,
     nameVisible: editLine.nameVisible,
     valueVisible: editLine.valueVisible,
     visible: editLine.visible,
     lengthLocked: editLine.lengthLocked,
     lockedLength: Number.isFinite(parsedLockedLength) ? parsedLockedLength : undefined,
   })
+  editLine.name = nextName
   if (editLine.userLocked !== previousUserLocked) {
     props.editor.setLineLockState(editing.value.id, editLine.userLocked)
   }
@@ -2540,14 +2555,16 @@ const applyEditRay = () => {
   if (!ray) return
   const previousUserLocked = props.editor.isRayLocked(ray)
   const displayLength = Number(editRay.displayLength)
+  const nextName = resolveName(editRay.name, ray.name)
   props.editor.beginCollabTransaction('UpdateRayCommand')
   props.editor.updateRay(editing.value.id, {
-    name: editRay.name,
+    name: nextName,
     nameVisible: editRay.nameVisible,
     valueVisible: editRay.valueVisible,
     visible: editRay.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
+  editRay.name = nextName
   if (editRay.userLocked !== previousUserLocked) {
     props.editor.setRayLockState(editing.value.id, editRay.userLocked)
   }
@@ -2563,13 +2580,15 @@ const applyEditVector = () => {
   const vector = props.scene.vectors.get(editing.value.id)
   if (!vector) return
   const previousUserLocked = props.editor.isVectorLocked(vector)
+  const nextName = resolveName(editVector.name, vector.name)
   props.editor.beginCollabTransaction('UpdateVectorCommand')
   props.editor.updateVector(editing.value.id, {
-    name: editVector.name,
+    name: nextName,
     nameVisible: editVector.nameVisible,
     valueVisible: editVector.valueVisible,
     visible: editVector.visible,
   })
+  editVector.name = nextName
   if (editVector.userLocked !== previousUserLocked) {
     props.editor.setVectorLockState(editing.value.id, editVector.userLocked)
   }
@@ -2657,14 +2676,16 @@ const applyEditStraightLine = () => {
   if (!line) return
   const previousUserLocked = props.editor.isStraightLineLocked(line)
   const displayLength = Number(editStraightLine.displayLength)
+  const nextName = resolveName(editStraightLine.name, line.name)
   props.editor.beginCollabTransaction('UpdateStraightLineCommand')
   props.editor.updateStraightLine(editing.value.id, {
-    name: editStraightLine.name,
+    name: nextName,
     nameVisible: editStraightLine.nameVisible,
     valueVisible: editStraightLine.valueVisible,
     visible: editStraightLine.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
+  editStraightLine.name = nextName
   if (editStraightLine.userLocked !== previousUserLocked) {
     props.editor.setStraightLineLockState(editing.value.id, editStraightLine.userLocked)
   }
@@ -2690,14 +2711,16 @@ const applyEditPerpendicularLine = () => {
   const line = props.scene.perpendicularLines.get(editing.value.id)
   if (!line) return
   const displayLength = Number(editPerpendicularLine.displayLength)
+  const nextName = resolveName(editPerpendicularLine.name, line.name)
   props.editor.beginCollabTransaction('UpdatePerpendicularLineCommand')
   props.editor.updatePerpendicularLine(editing.value.id, {
-    name: editPerpendicularLine.name,
+    name: nextName,
     nameVisible: editPerpendicularLine.nameVisible,
     valueVisible: editPerpendicularLine.valueVisible,
     visible: editPerpendicularLine.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
+  editPerpendicularLine.name = nextName
   if (editPerpendicularLine.userLocked !== line.userLocked) {
     props.editor.setPerpendicularLineLockState(editing.value.id, editPerpendicularLine.userLocked)
   }
@@ -2717,14 +2740,16 @@ const applyEditParallelLine = () => {
   const line = props.scene.parallelLines.get(editing.value.id)
   if (!line) return
   const displayLength = Number(editParallelLine.displayLength)
+  const nextName = resolveName(editParallelLine.name, line.name)
   props.editor.beginCollabTransaction('UpdateParallelLineCommand')
   props.editor.updateParallelLine(editing.value.id, {
-    name: editParallelLine.name,
+    name: nextName,
     nameVisible: editParallelLine.nameVisible,
     valueVisible: editParallelLine.valueVisible,
     visible: editParallelLine.visible,
     displayLength: Number.isFinite(displayLength) ? displayLength : undefined,
   })
+  editParallelLine.name = nextName
   if (editParallelLine.userLocked !== line.userLocked) {
     props.editor.setParallelLineLockState(editing.value.id, editParallelLine.userLocked)
   }
@@ -2743,13 +2768,15 @@ const applyEditFace = () => {
   if (!editing.value || editing.value.type !== 'face') return
   const face = props.scene.faces.get(editing.value.id)
   if (!face) return
+  const nextName = resolveName(editFace.name, face.name)
   props.editor.beginCollabTransaction('UpdateFaceCommand')
   props.editor.updateFace(editing.value.id, {
-    name: editFace.name,
+    name: nextName,
     nameVisible: editFace.nameVisible,
     valueVisible: editFace.valueVisible,
     visible: editFace.visible,
   })
+  editFace.name = nextName
   if (editFace.userLocked !== props.editor.isFaceLocked(face)) {
     props.editor.setFaceLockState(editing.value.id, editFace.userLocked)
   }
@@ -2763,9 +2790,10 @@ const applyEditCircle = () => {
   if (!editing.value || editing.value.type !== 'circle') return
   const circle = props.scene.circles.get(editing.value.id)
   if (!circle) return
+  const nextName = resolveName(editCircle.name, circle.name)
   props.editor.beginCollabTransaction('UpdateCircleCommand')
   const patch: Parameters<typeof props.editor.updateCircle>[1] = {
-    name: editCircle.name,
+    name: nextName,
     nameVisible: editCircle.nameVisible,
     valueVisible: editCircle.valueVisible,
     visible: editCircle.visible,
@@ -2778,6 +2806,7 @@ const applyEditCircle = () => {
     }
   }
   props.editor.updateCircle(editing.value.id, patch)
+  editCircle.name = nextName
   if (editCircle.userLocked !== props.editor.isCircleLocked(circle)) {
     props.editor.setCircleLockState(editing.value.id, editCircle.userLocked)
   }
@@ -2915,12 +2944,18 @@ const handleCirclePointCoordBlur = (pointKey: 'p1' | 'p2' | 'p3', axis: 'x' | 'y
 const applyHexahedronMeta = () => {
   const state = getEditingHexahedronState()
   if (!state) return
+  const prefix = state.constraint.solidType === 'tetrahedron' ? '正四面体' : '正六面体'
+  const suffix = resolveNameSuffix(
+    editHexahedron.nameSuffix,
+    props.editor.getCubeNameSuffix(state.cubeId),
+  )
   props.editor.beginCollabTransaction('UpdateHexahedronCommand')
   props.editor.updateCube(state.cubeId, {
-    name: `${state.constraint.solidType === 'tetrahedron' ? '正四面体' : '正六面体'}${editHexahedron.nameSuffix.trim()}`,
+    name: `${prefix}${suffix}`,
     valueVisible: editHexahedron.valueVisible,
     edgeLengthLocked: editHexahedron.edgeLengthLocked,
   })
+  editHexahedron.nameSuffix = suffix
   props.editor.setCubeLockState(state.cubeId, editHexahedron.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -2974,12 +3009,17 @@ const getEditingPrismState = () => {
 const applyPrismMeta = () => {
   const state = getEditingPrismState()
   if (!state) return
+  const suffix = resolveNameSuffix(
+    editPrism.nameSuffix,
+    props.editor.getPrismNameSuffix(state.prismId),
+  )
   props.editor.beginCollabTransaction('UpdatePrismCommand')
   props.editor.updatePrism(state.prismId, {
-    name: `棱柱${editPrism.nameSuffix.trim()}`,
+    name: `棱柱${suffix}`,
     valueVisible: editPrism.valueVisible,
     keepVertical: editPrism.keepVertical,
   })
+  editPrism.nameSuffix = suffix
   props.editor.setPrismLockState(state.prismId, editPrism.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -3197,12 +3237,17 @@ const getEditingPyramidState = () => {
 const applyPyramidMeta = () => {
   const state = getEditingPyramidState()
   if (!state) return
+  const suffix = resolveNameSuffix(
+    editPyramid.nameSuffix,
+    props.editor.getPyramidNameSuffix(state.pyramidId),
+  )
   props.editor.beginCollabTransaction('UpdatePyramidCommand')
   props.editor.updatePyramid(state.pyramidId, {
-    name: `棱锥${editPyramid.nameSuffix.trim()}`,
+    name: `棱锥${suffix}`,
     valueVisible: editPyramid.valueVisible,
     keepVertical: editPyramid.keepVertical,
   })
+  editPyramid.nameSuffix = suffix
   props.editor.setPyramidLockState(state.pyramidId, editPyramid.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -3413,13 +3458,20 @@ const getEditingRegularPolygonState = () => {
 const applyRegularPolygonMeta = () => {
   const state = getEditingRegularPolygonState()
   if (!state) return
+  const suffix = resolveNameSuffix(
+    editRegularPolygon.nameSuffix,
+    props.editor.getRegularPolygonNameSuffix(state.constraintId),
+  )
+  props.editor.beginCollabTransaction('UpdateRegularPolygonCommand')
   props.editor.updateRegularPolygon(state.constraintId, {
-    name: `正多边形${editRegularPolygon.nameSuffix.trim()}`,
+    name: `正多边形${suffix}`,
     nameVisible: editRegularPolygon.nameVisible,
     valueVisible: editRegularPolygon.valueVisible,
     edgeLengthLocked: editRegularPolygon.edgeLengthLocked,
   })
+  editRegularPolygon.nameSuffix = suffix
   props.editor.setRegularPolygonLockState(state.constraintId, editRegularPolygon.userLocked)
+  props.editor.commitCollabTransaction()
 }
 
 const applyRegularPolygonEdgeLength = () => {
@@ -3548,12 +3600,17 @@ const applyEditSphereMeta = () => {
   const state = getEditingSphereState()
   if (!state) return
   const prefix = state.sphere.name.startsWith('半径球') ? '半径球' : '两点球'
+  const suffix = resolveNameSuffix(
+    editSphere.nameSuffix,
+    props.editor.getSphereNameSuffix(state.sphereId),
+  )
   props.editor.beginCollabTransaction('UpdateSphereCommand')
   props.editor.updateSphere(state.sphereId, {
-    name: `${prefix}${editSphere.nameSuffix.trim()}`,
+    name: `${prefix}${suffix}`,
     nameVisible: editSphere.nameVisible,
     valueVisible: editSphere.valueVisible,
   })
+  editSphere.nameSuffix = suffix
   props.editor.setSphereLockState(state.sphereId, editSphere.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -3684,12 +3741,17 @@ const applyEditConeMeta = () => {
   const state = getEditingConeState()
   if (!state) return
   const prefix = state.cone.coneType === 'normalCircle' ? '法向圆锥' : '圆锥'
+  const suffix = resolveNameSuffix(
+    editCone.nameSuffix,
+    props.editor.getConeNameSuffix(state.coneId),
+  )
   props.editor.beginCollabTransaction('UpdateConeCommand')
   props.editor.updateCone(state.coneId, {
-    name: `${prefix}${editCone.nameSuffix.trim()}`,
+    name: `${prefix}${suffix}`,
     nameVisible: editCone.nameVisible,
     valueVisible: editCone.valueVisible,
   })
+  editCone.nameSuffix = suffix
   props.editor.setConeLockState(state.coneId, editCone.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -3849,12 +3911,17 @@ const applyEditCylinderMeta = () => {
   const state = currentEditCylinder.value
   if (!state) return
   const prefix = '圆柱'
+  const suffix = resolveNameSuffix(
+    editCylinder.nameSuffix,
+    props.editor.getCylinderNameSuffix(state.cylinderId),
+  )
   props.editor.beginCollabTransaction('UpdateCylinderCommand')
   props.editor.updateCylinder(state.cylinderId, {
-    name: prefix + editCylinder.nameSuffix.trim(),
+    name: prefix + suffix,
     nameVisible: editCylinder.nameVisible,
     valueVisible: editCylinder.valueVisible,
   })
+  editCylinder.nameSuffix = suffix
   props.editor.setCylinderLockState(state.cylinderId, editCylinder.userLocked)
   props.editor.commitCollabTransaction()
 }
@@ -4000,11 +4067,13 @@ const applyEditNet = () => {
   if (!editing.value || editing.value.type !== 'net') return
   const net = props.scene.nets.get(editing.value.id)
   if (!net) return
+  const suffix = resolveName(editNet.name, net.name?.replace(/^展开图/, '') ?? '')
   props.editor.beginCollabTransaction('UpdateNetCommand')
   props.editor.updateNet(editing.value.id, {
-    name: `展开图${editNet.name.trim()}`,
+    name: `展开图${suffix}`,
     visible: editNet.visible,
   })
+  editNet.name = suffix
   props.editor.commitCollabTransaction()
   // 触发实时同步（33ms 节流），避免仅依赖 50ms 节流的 syncAction 导致远端延迟感知
   props.editor.syncLiveNet(editing.value.id)
@@ -4171,7 +4240,12 @@ const getPerpendicularLineSourceParts = (line: PerpendicularLine3) => {
     targetLabel = obj ? `向量${obj.name ?? ''}` : '向量'
   } else if (target.type === 'face') {
     const obj = props.scene.faces.get(target.id)
-    targetLabel = obj ? `多边形${obj.name ?? ''}` : '多边形'
+    // 正多边形的面名已含种类词（与约束名一致），不再重复前缀，避免「多边形正多边形1」
+    targetLabel = obj
+      ? obj.isRegularPolygon
+        ? (obj.name || '正多边形')
+        : `多边形${obj.name ?? ''}`
+      : '多边形'
   } else if (target.type === 'coneBase') {
     const obj = props.scene.cones.get(target.id)
     targetLabel = obj ? `圆锥底${obj.name ?? ''}` : '圆锥底'
@@ -4938,6 +5012,7 @@ watch(
     if (ownerPoints.length < 2) return null
     return {
       nameSuffix: props.editor.getRegularPolygonNameSuffix(editing.value.id),
+      nameVisible: constraint.nameVisible === true,
       valueVisible: constraint.valueVisible === true,
       userLocked: props.scene.faces.get(constraint.faceId)?.userLocked === true,
       edgeLengthLocked: constraint.edgeLengthLocked,
@@ -4957,6 +5032,7 @@ watch(
   (nextRp) => {
     if (!nextRp) return
     editRegularPolygon.nameSuffix = nextRp.nameSuffix
+    editRegularPolygon.nameVisible = nextRp.nameVisible
     editRegularPolygon.valueVisible = nextRp.valueVisible
     editRegularPolygon.userLocked = nextRp.userLocked
     editRegularPolygon.edgeLengthLocked = nextRp.edgeLengthLocked
@@ -5109,7 +5185,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'point' && editing?.id === p!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editPoint.name" @input="applyEditPoint" />
+              <input type="text" v-model="editPoint.name" @change="applyEditPoint" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editPoint.visible" @change="applyEditPoint" />
                 {{ editPoint.visible ? '对象显示' : '对象隐藏' }}
@@ -5372,7 +5448,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'line' && editing?.id === l!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editLine.name" @input="applyEditLine" />
+              <input type="text" v-model="editLine.name" @change="applyEditLine" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editLine.visible" @change="applyEditLine" />
                 线段显示
@@ -5687,7 +5763,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'straightLine' && editing?.id === sl!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editStraightLine.name" @input="applyEditStraightLine" />
+              <input type="text" v-model="editStraightLine.name" @change="applyEditStraightLine" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -6009,7 +6085,7 @@ onUnmounted(() => {
               <input
                 type="text"
                 v-model="editPerpendicularLine.name"
-                @input="applyEditPerpendicularLine"
+                @change="applyEditPerpendicularLine"
               />
               <label class="toggle-label">
                 <input
@@ -6249,7 +6325,7 @@ onUnmounted(() => {
               <input
                 type="text"
                 v-model="editParallelLine.name"
-                @input="applyEditParallelLine"
+                @change="applyEditParallelLine"
               />
               <label class="toggle-label">
                 <input
@@ -6473,7 +6549,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'ray' && editing?.id === r!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editRay.name" @input="applyEditRay" />
+              <input type="text" v-model="editRay.name" @change="applyEditRay" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editRay.visible" @change="applyEditRay" />
                 {{ editRay.visible ? '射线显示' : '射线隐藏' }}
@@ -6768,7 +6844,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'vector' && editing?.id === v!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editVector.name" @input="applyEditVector" />
+              <input type="text" v-model="editVector.name" @change="applyEditVector" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editVector.visible" @change="applyEditVector" />
                 {{ editVector.visible ? '向量显示' : '向量隐藏' }}
@@ -7062,7 +7138,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'circle' && editing?.id === c!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editCircle.name" @input="applyEditCircle" />
+              <input type="text" v-model="editCircle.name" @change="applyEditCircle" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editCircle.visible" @change="applyEditCircle" />
                 {{ editCircle.visible ? '圆显示' : '圆隐藏' }}
@@ -7746,7 +7822,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'face' && editing?.id === face!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editFace.name" @input="applyEditFace" />
+              <input type="text" v-model="editFace.name" @change="applyEditFace" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editFace.visible" @change="applyEditFace" />
                 多边形显示
@@ -7818,7 +7894,7 @@ onUnmounted(() => {
           </div>
           <div v-else>
             <div class="card-summary-header">
-              {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ subName(face!.name) }}
+              {{ face!.isRegularPolygon ? '' : '多边形' }}{{ subName(face!.name) }}
               <span v-if="face!.isRegularPolygon" class="constraint-badge"
                 >正{{ face!.regularPolygonVertexCount }}边形</span
               >
@@ -7836,7 +7912,7 @@ onUnmounted(() => {
                   handleDeleteElement(
                     'face',
                     face!.id,
-                    (face!.isRegularPolygon ? '正多边形' : '多边形') + (face!.name ?? ''),
+                    (face!.isRegularPolygon ? '' : '多边形') + (face!.name ?? ''),
                   )
                 "
               >
@@ -7895,7 +7971,7 @@ onUnmounted(() => {
           >
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editHexahedron.nameSuffix" @input="applyHexahedronMeta" />
+              <input type="text" v-model="editHexahedron.nameSuffix" @change="applyHexahedronMeta" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -8220,7 +8296,7 @@ onUnmounted(() => {
           >
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editPrism.nameSuffix" @input="applyPrismMeta" />
+              <input type="text" v-model="editPrism.nameSuffix" @change="applyPrismMeta" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -8498,7 +8574,7 @@ onUnmounted(() => {
           >
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editPyramid.nameSuffix" @input="applyPyramidMeta" />
+              <input type="text" v-model="editPyramid.nameSuffix" @change="applyPyramidMeta" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -8779,7 +8855,7 @@ onUnmounted(() => {
               <input
                 type="text"
                 v-model="editRegularPolygon.nameSuffix"
-                @input="applyRegularPolygonMeta"
+                @change="applyRegularPolygonMeta"
               />
               <label class="toggle-label">
                 <input
@@ -9177,7 +9253,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'sphere' && editing?.id === s!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editSphere.nameSuffix" @input="applyEditSphereMeta" />
+              <input type="text" v-model="editSphere.nameSuffix" @change="applyEditSphereMeta" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -9536,7 +9612,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'cone' && editing?.id === c!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editCone.nameSuffix" @input="applyEditConeMeta" />
+              <input type="text" v-model="editCone.nameSuffix" @change="applyEditConeMeta" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editCone.nameVisible" @change="applyEditConeMeta" />
                 {{ editCone.nameVisible ? '名称显示' : '名称隐藏' }}
@@ -9941,7 +10017,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'cylinder' && editing?.id === c!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editCylinder.nameSuffix" @input="applyEditCylinderMeta" />
+              <input type="text" v-model="editCylinder.nameSuffix" @change="applyEditCylinderMeta" />
               <label class="toggle-label">
                 <input
                   type="checkbox"
@@ -10364,7 +10440,7 @@ onUnmounted(() => {
           <div v-if="editing?.type === 'net' && editing?.id === net!.id" class="edit-grid">
             <div class="name-row">
               <label>名称</label>
-              <input type="text" v-model="editNet.name" @input="applyEditNet" />
+              <input type="text" v-model="editNet.name" @change="applyEditNet" />
               <label class="toggle-label">
                 <input type="checkbox" v-model="editNet.visible" @change="applyEditNet" />
                 对象显示
@@ -11336,7 +11412,7 @@ onUnmounted(() => {
               @click="selectFaceFromContent(face!.id)"
             >
               <div class="card-summary-header">
-                {{ face!.isRegularPolygon ? '正多边形' : '多边形' }}{{ subName(face!.name) }}
+                {{ face!.isRegularPolygon ? '' : '多边形' }}{{ subName(face!.name) }}
                 <span v-if="face!.isRegularPolygon" class="constraint-badge"
                   >正{{ face!.regularPolygonVertexCount }}边形</span
                 >
