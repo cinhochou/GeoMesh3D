@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { roomApi } from '@/api/room'
 import { useAuthStore } from '@/store/authStore'
 import { ApiError } from '@/api/client'
-import type { Room, RoomMember, RoomRole, RoomCategory, UpdateRoomRequest, RoomApplication, ApprovalBadge, ApplicationFilter, ApplicationRole } from '@/types/room'
+import type { Room, RoomMember, RoomRole, RoomCategory, UpdateRoomRequest, RoomApplication, ApprovalBadge, ApplicationFilter, ApplicationRole, RoomImportMode } from '@/types/room'
 import { useSessionGuard } from '@/composables/useSessionGuard'
 import ProxiedImage from '@/components/ProxiedImage.vue'
 import { useCollabStore } from '@/store/collabStore'
@@ -979,8 +979,8 @@ const togglePermissions = async (roomId: string) => {
 
 const updateRoomPerm = async (
   room: Room,
-  field: 'allowShare' | 'disableExport' | 'disableImport' | 'defaultRole' | 'disableClear' | 'disableUndoRedo' | 'approvalRequired',
-  value: boolean | 'editor' | 'viewer',
+  field: 'allowShare' | 'disableExport' | 'disableImport' | 'importMode' | 'defaultRole' | 'disableClear' | 'disableUndoRedo' | 'approvalRequired',
+  value: boolean | 'editor' | 'viewer' | RoomImportMode,
 ) => {
   const oldVal = room[field]
   room[field] = value as never
@@ -2417,6 +2417,26 @@ const formatDateTime = (dateStr: string | null) => {
                           "
                         />
                       </label>
+                      <!-- 「禁用导入」的子设置：仅在允许导入时可选，统一约束房间内所有成员的导入行为 -->
+                      <div
+                        v-if="!room.disableImport"
+                        class="rl-perm-toggle-item rl-perm-toggle-select rl-perm-sub"
+                      >
+                        <span class="rl-perm-toggle-label">导入模式</span>
+                        <select
+                          :value="room.importMode"
+                          @change="
+                            updateRoomPerm(
+                              room,
+                              'importMode',
+                              ($event.target as HTMLSelectElement).value as RoomImportMode,
+                            )
+                          "
+                        >
+                          <option value="overwrite">覆盖</option>
+                          <option value="merge">合并</option>
+                        </select>
+                      </div>
                       <label class="rl-perm-toggle-item">
                         <span class="rl-perm-toggle-label">禁用清空场景</span>
                         <input
@@ -4424,6 +4444,17 @@ const formatDateTime = (dateStr: string | null) => {
   padding: 4px 8px;
   font-size: 12px;
   cursor: pointer;
+}
+/* 「禁用导入」的子设置：左缩进 + 引导线，体现从属层级 */
+.rl-perm-sub {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid #3a3a3a;
+  font-size: 12px;
+  color: #a8a8a8;
+}
+.rl-perm-sub select {
+  padding: 3px 6px;
 }
 
 .section-fade-enter-active,

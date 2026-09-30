@@ -4,16 +4,18 @@ import type { EditorMode } from '@/core/editor/Editor'
 
 export type ToastScope = 'global' | 'viewport'
 
-export type SettingsCategory = 'graphics' | 'performance' | 'display' | 'advanced' | 'interaction'
+export type SettingsCategory = 'graphics' | 'performance' | 'display' | 'data' | 'interaction'
 
-// GPU 偏好选项：默认 / 高性能
-export type PowerPreference = 'default' | 'high-performance'
+// 场景文件导入模式：
+// - overwrite：覆盖模式，导入时清空原场景后重建（默认）
+// - merge：合并模式，在原场景基础上追加导入内容
+export type ImportMode = 'overwrite' | 'merge'
 
 export interface AppSettings {
   antialias: boolean
   pixelRatioScale: number
   fpsCap: number
-  powerPreference: PowerPreference
+  importMode: ImportMode
   depthOcclusion: boolean
   hiddenEdge: boolean
   confirmBeforeDelete: boolean
@@ -29,7 +31,7 @@ const defaultAppSettings: AppSettings = {
   antialias: false,
   pixelRatioScale: 1.0,
   fpsCap: 0,
-  powerPreference: 'default',
+  importMode: 'overwrite',
   depthOcclusion: true,
   hiddenEdge: true,
   confirmBeforeDelete: false,
@@ -51,8 +53,7 @@ function loadAppSettings(): AppSettings {
           ? Math.min(1.0, Math.max(0.5, parsed.pixelRatioScale))
           : defaultAppSettings.pixelRatioScale,
       fpsCap: [0, 30, 60, 90, 120].includes(parsed.fpsCap as number) ? (parsed.fpsCap as number) : defaultAppSettings.fpsCap,
-      powerPreference:
-        parsed.powerPreference === 'high-performance' ? 'high-performance' : defaultAppSettings.powerPreference,
+      importMode: parsed.importMode === 'merge' ? 'merge' : defaultAppSettings.importMode,
       depthOcclusion: typeof parsed.depthOcclusion === 'boolean' ? parsed.depthOcclusion : defaultAppSettings.depthOcclusion,
       hiddenEdge: typeof parsed.hiddenEdge === 'boolean' ? parsed.hiddenEdge : defaultAppSettings.hiddenEdge,
       confirmBeforeDelete: typeof parsed.confirmBeforeDelete === 'boolean' ? parsed.confirmBeforeDelete : defaultAppSettings.confirmBeforeDelete,

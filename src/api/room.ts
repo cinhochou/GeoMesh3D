@@ -14,6 +14,7 @@ import type {
   ApplyJoinRequest,
   ReviewApplicationRequest,
   ApprovalBadge,
+  RoomImportMode,
 } from '@/types/room'
 
 // ============================================================================
@@ -50,6 +51,7 @@ interface BackendRoomDTO {
   allowShare: boolean | null
   disableExport: boolean | null
   disableImport: boolean | null
+  importMode: string | null // OVERWRITE / MERGE
   disableClear: boolean | null
   disableUndoRedo: boolean | null
   defaultRole: string | null
@@ -109,6 +111,7 @@ const DEFAULT_ROOM_PERMS: {
   allowShare: boolean
   disableExport: boolean
   disableImport: boolean
+  importMode: RoomImportMode
   defaultRole: 'editor' | 'viewer'
   disableClear: boolean
   disableUndoRedo: boolean
@@ -116,6 +119,7 @@ const DEFAULT_ROOM_PERMS: {
   allowShare: true,
   disableExport: false,
   disableImport: false,
+  importMode: 'overwrite',
   defaultRole: 'editor',
   disableClear: false,
   disableUndoRedo: false,
@@ -170,6 +174,13 @@ const mapRoom = (dto: BackendRoomDTO): Room => {
     allowShare: dto.allowShare ?? perms?.allowShare ?? DEFAULT_ROOM_PERMS.allowShare,
     disableExport: dto.disableExport ?? perms?.disableExport ?? DEFAULT_ROOM_PERMS.disableExport,
     disableImport: dto.disableImport ?? perms?.disableImport ?? DEFAULT_ROOM_PERMS.disableImport,
+    // 后端值优先（大写）；后端未提供时回退 localStorage，再回退默认值
+    importMode:
+      dto.importMode?.toLowerCase() === 'merge'
+        ? 'merge'
+        : dto.importMode?.toLowerCase() === 'overwrite'
+          ? 'overwrite'
+          : (perms?.importMode ?? DEFAULT_ROOM_PERMS.importMode),
     defaultRole:
       dto.defaultRole?.toLowerCase() === 'editor' || dto.defaultRole?.toLowerCase() === 'viewer'
         ? (dto.defaultRole.toLowerCase() as 'editor' | 'viewer')
@@ -228,6 +239,7 @@ const toBackendUpdateRequest = (req: UpdateRoomRequest) => ({
   allowShare: req.allowShare,
   disableExport: req.disableExport,
   disableImport: req.disableImport,
+  importMode: req.importMode?.toUpperCase(),
   disableClear: req.disableClear,
   disableUndoRedo: req.disableUndoRedo,
   defaultRole: req.defaultRole?.toUpperCase(),
@@ -408,6 +420,7 @@ export const roomApi = {
     if (data.allowShare !== undefined) permFields.allowShare = data.allowShare
     if (data.disableExport !== undefined) permFields.disableExport = data.disableExport
     if (data.disableImport !== undefined) permFields.disableImport = data.disableImport
+    if (data.importMode !== undefined) permFields.importMode = data.importMode
     if (data.defaultRole !== undefined) permFields.defaultRole = data.defaultRole
     if (data.disableClear !== undefined) permFields.disableClear = data.disableClear
     if (data.disableUndoRedo !== undefined) permFields.disableUndoRedo = data.disableUndoRedo

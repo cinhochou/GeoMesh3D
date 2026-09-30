@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
  * 设置面板组件
- * 提供交互、画质、性能、显示、高级五类应用参数的配置界面
+ * 提供交互、画质、性能、渲染、数据五类应用参数的配置界面
  * 支持实时预览、确认保存、恢复默认、二次确认等功能
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useUiStore, type SettingsCategory, type AppSettings } from '@/store/uiStore'
+import { useUiStore, type SettingsCategory, type AppSettings, type ImportMode } from '@/store/uiStore'
 
 defineOptions({
   name: 'SettingsPanel',
@@ -22,7 +22,7 @@ const categories: { key: SettingsCategory; label: string }[] = [
   { key: 'graphics', label: '画质' },
   { key: 'performance', label: '性能' },
   { key: 'display', label: '渲染' },
-  { key: 'advanced', label: '高级' },
+  { key: 'data', label: '数据' },
 ]
 
 // 帧率限制下拉选项
@@ -34,10 +34,10 @@ const fpsCapOptions = [
   { value: 120, label: '120 FPS' },
 ]
 
-// GPU 偏好下拉选项
-const powerPreferenceOptions = [
-  { value: 'default' as const, label: '默认' },
-  { value: 'high-performance' as const, label: '高性能' },
+// 导入模式下拉选项
+const importModeOptions: { value: ImportMode; label: string }[] = [
+  { value: 'overwrite', label: '覆盖' },
+  { value: 'merge', label: '合并' },
 ]
 
 // 分辨率缩放步长选项
@@ -70,7 +70,7 @@ const hasChanges = computed(() => {
     localSettings.value.antialias !== appSettings.value.antialias ||
     localSettings.value.pixelRatioScale !== appSettings.value.pixelRatioScale ||
     localSettings.value.fpsCap !== appSettings.value.fpsCap ||
-    localSettings.value.powerPreference !== appSettings.value.powerPreference ||
+    localSettings.value.importMode !== appSettings.value.importMode ||
     localSettings.value.depthOcclusion !== appSettings.value.depthOcclusion ||
     localSettings.value.hiddenEdge !== appSettings.value.hiddenEdge ||
     localSettings.value.confirmBeforeDelete !== appSettings.value.confirmBeforeDelete ||
@@ -106,7 +106,7 @@ const isDefaultSettings = computed(() => {
     localSettings.value.antialias === false &&
     localSettings.value.pixelRatioScale === 1.0 &&
     localSettings.value.fpsCap === 0 &&
-    localSettings.value.powerPreference === 'default' &&
+    localSettings.value.importMode === 'overwrite' &&
     localSettings.value.depthOcclusion === true &&
     localSettings.value.hiddenEdge === true &&
     localSettings.value.confirmBeforeDelete === false &&
@@ -134,7 +134,7 @@ const handleReset = () => {
       antialias: false,
       pixelRatioScale: 1.0,
       fpsCap: 0,
-      powerPreference: 'default',
+      importMode: 'overwrite',
       depthOcclusion: true,
       hiddenEdge: true,
       confirmBeforeDelete: false,
@@ -319,18 +319,51 @@ watch(
               </div>
             </div>
 
-            <div v-if="activeCategory === 'advanced'" class="settings-section">
+            <!-- 数据分类：按重要度排列——先「数据会不会丢」，再「数据怎么导入」 -->
+            <div v-if="activeCategory === 'data'" class="settings-section">
               <div class="setting-item">
                 <div class="setting-header">
-                  <label class="setting-label">GPU 偏好</label>
+                  <label class="setting-label">项目自动保存</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.autoSaveProject }"
+                    @click="localSettings.autoSaveProject = !localSettings.autoSaveProject"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
                 </div>
-                <select class="setting-select" v-model="localSettings.powerPreference">
-                  <option v-for="opt in powerPreferenceOptions" :key="opt.value" :value="opt.value">
+                <p class="setting-desc">
+                  开启后，编辑项目场景时将自动保存到云端；关闭后只能通过菜单手动保存。不影响临时场景的本地存储。
+                </p>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">临时场景数据保护</label>
+                  <button
+                    class="setting-toggle"
+                    :class="{ active: localSettings.draftProtection }"
+                    @click="localSettings.draftProtection = !localSettings.draftProtection"
+                  >
+                    <span class="toggle-thumb"></span>
+                  </button>
+                </div>
+                <p class="setting-desc">
+                  开启后，未关联项目的临时场景将自动存储到本地，关闭或刷新网页时弹出确认框，且可恢复意外关闭的场景；关闭后不存储、不提示、不恢复。
+                </p>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">导入模式</label>
+                </div>
+                <select class="setting-select" v-model="localSettings.importMode">
+                  <option v-for="opt in importModeOptions" :key="opt.value" :value="opt.value">
                     {{ opt.label }}
                   </option>
                 </select>
                 <p class="setting-desc">
-                  选择高性能 GPU 可提升渲染性能，但会增加功耗。修改后需刷新页面生效。
+                  覆盖会清空原场景，合并则在原场景基础上追加；协作房间内以房主设置为准。
                 </p>
               </div>
             </div>
@@ -381,38 +414,6 @@ watch(
                 </div>
                 <p class="setting-desc">
                   开启后，通过侧边栏选中区的删除按钮删除几何元素时，将弹出确认对话框；关闭则直接删除。
-                </p>
-              </div>
-
-              <div class="setting-item">
-                <div class="setting-header">
-                  <label class="setting-label">项目自动保存</label>
-                  <button
-                    class="setting-toggle"
-                    :class="{ active: localSettings.autoSaveProject }"
-                    @click="localSettings.autoSaveProject = !localSettings.autoSaveProject"
-                  >
-                    <span class="toggle-thumb"></span>
-                  </button>
-                </div>
-                <p class="setting-desc">
-                  开启后，编辑项目场景时将自动保存到云端；关闭后只能通过菜单手动保存。不影响临时场景的本地存储。
-                </p>
-              </div>
-
-              <div class="setting-item">
-                <div class="setting-header">
-                  <label class="setting-label">临时场景数据保护</label>
-                  <button
-                    class="setting-toggle"
-                    :class="{ active: localSettings.draftProtection }"
-                    @click="localSettings.draftProtection = !localSettings.draftProtection"
-                  >
-                    <span class="toggle-thumb"></span>
-                  </button>
-                </div>
-                <p class="setting-desc">
-                  开启后，未关联项目的临时场景将自动存储到本地，关闭或刷新网页时弹出确认框，且可恢复意外关闭的场景；关闭后不存储、不提示、不恢复。
                 </p>
               </div>
             </div>

@@ -21,10 +21,17 @@ const nameError = ref('')
 const deleteConfirmVisible = ref(false)
 const descTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
+/**
+ * 项目描述归一化为字符串。
+ * 描述可能为 null/undefined（例如由协作房间自动创建的关联项目没有描述），
+ * 若直接 .trim() 会在渲染期抛错，导致整个弹窗渲染失败——表现为「点击编辑项目没有任何反应」。
+ */
+const baseDescription = computed(() => props.projectDescription ?? '')
+
 const hasChanges = computed(() => {
   return (
     editName.value.trim() !== props.projectName.trim() ||
-    editDescription.value.trim() !== props.projectDescription.trim() ||
+    editDescription.value.trim() !== baseDescription.value.trim() ||
     editIsPublic.value !== props.projectIsPublic
   )
 })
@@ -75,7 +82,7 @@ watch(
   (val) => {
     if (val) {
       editName.value = props.projectName
-      editDescription.value = props.projectDescription
+      editDescription.value = baseDescription.value
       editIsPublic.value = props.projectIsPublic
       nameError.value = ''
       deleteConfirmVisible.value = false

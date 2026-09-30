@@ -50,7 +50,7 @@ const collabStore = useCollabStore()
 const authStore = useAuthStore()
 const router = useRouter()
 const route = useRoute()
-const { isARMode, toolbarMenus } = storeToRefs(uiStore)
+const { isARMode, toolbarMenus, appSettings } = storeToRefs(uiStore)
 const { currentMode, canUndo, canRedo } = storeToRefs(sceneStore)
 const { currentRoom, isConnected } = storeToRefs(collabStore)
 const { isAuthenticated, user, isLoading: isAuthLoading } = storeToRefs(authStore)
@@ -63,6 +63,10 @@ const isEditingLocked = computed(
 // 协作房间权限限制（实时响应 currentRoom 变化）：创建者配置后所有成员对应操作被禁用
 const collabDisableExport = computed(() => !!currentRoom.value?.disableExport)
 const collabDisableImport = computed(() => !!currentRoom.value?.disableImport)
+// 「导入」按钮上的实时模式标签：非协作时取本地设置，协作时取房间权限设置（房间优先）
+const importModeLabel = computed(() =>
+  (currentRoom.value?.importMode ?? appSettings.value.importMode) === 'merge' ? '合并' : '覆盖',
+)
 const collabDisableClear = computed(() => !!currentRoom.value?.disableClear)
 const collabDisableUndoRedo = computed(
   () => !!currentRoom.value?.disableUndoRedo && currentRoom.value.myRole !== 'creator',
@@ -1939,6 +1943,8 @@ onUnmounted(() => {
             <line x1="12" y1="3" x2="12" y2="15" />
           </svg>
           <span>导入</span>
+          <!-- 房间「禁用导入」时该标签随之隐藏（此时导入方式无意义） -->
+          <span v-if="!collabDisableImport" class="side-menu-mode-tag">{{ importModeLabel }}</span>
         </button>
         <div class="side-menu-divider"></div>
         <button class="side-menu-item" @click="handleOpenManual">
@@ -2711,6 +2717,18 @@ button.is-active {
 .side-menu-item-danger:hover {
   background: #2a2a2a;
   color: #ff6b6b;
+}
+
+/* 「导入」项的实时模式标签：绿底胶囊，靠右显示当前生效的导入方式 */
+.side-menu-mode-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: #2b4432;
+  color: #8fe6a0;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .side-menu-item:active {

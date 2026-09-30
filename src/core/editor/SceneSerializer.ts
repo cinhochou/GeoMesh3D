@@ -2383,6 +2383,178 @@ export function importScene(scene: Scene, data: SerializedScene): void {
   scene.endSnapshotRestore()
 }
 
+// ─── 合并导入（ImportMode = 'merge'）───────────────────────
+// 语义：在现有场景基础上「追加」场景文件内容，不清空原场景（相当于新增内容）。
+// 关键约束：
+//   1. 导入数据的所有「对象标识」必须重新生成并同步改写全部交叉引用，
+//      否则与现有场景 id 冲突会导致引用悬空/几何错乱（同一文件二次导入必然撞车）；
+//   2. 导入数据的原点必须映射到当前场景原点，不得产生第二个原点；
+//   3. 重名的点按字母序列改名，维持「点名唯一」的既有约定。
+
+/** 生成合并导入使用的新对象标识（加 m_ 前缀便于排查来源） */
+function genMergedIdentityId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `m_${crypto.randomUUID()}`
+  }
+  return `m_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * 收集场景数据中所有作为「对象标识」的 id。
+ * 除各元素的 id 外，还需包含「不是独立元素」的立体/正多边形等约束自身的标识
+ * （cubeId / constraintId / prismId / pyramidId / cylinderId）——它们的 id 只存在于约束上。
+ */
+function collectSceneIdentityIds(data: SerializedScene): Set<string> {
+  const ids = new Set<string>()
+  const collectFrom = (items: ReadonlyArray<unknown>) => {
+    for (const item of items) {
+      const id = (item as { id?: unknown }).id
+      if (typeof id === 'string' && id !== '') ids.add(id)
+    }
+  }
+  collectFrom(data.points)
+  collectFrom(data.lines)
+  collectFrom(data.straightLines)
+  collectFrom(data.perpendicularLines ?? [])
+  collectFrom(data.parallelLines ?? [])
+  collectFrom(data.rays)
+  collectFrom(data.vectors)
+  collectFrom(data.circles)
+  collectFrom(data.faces)
+  collectFrom(data.spheres)
+  collectFrom(data.cones)
+  collectFrom(data.cylinders)
+  collectFrom(data.nets)
+
+  for (const constraint of data.constraints ?? []) {
+    switch (constraint.type) {
+      case 'cube':
+        ids.add(constraint.cubeId)
+        break
+      case 'regularPolygon':
+        ids.add(constraint.constraintId)
+        break
+      case 'prism':
+        ids.add(constraint.prismId)
+        break
+      case 'pyramid':
+        ids.add(constraint.pyramidId)
+        break
+      case 'cylinder':
+        ids.add(constraint.cylinderId)
+        break
+      default:
+        break
+    }
+  }
+  return ids
+}
+
+/**
+ * 深度克隆并按 idMap 重写其中的对象标识与引用。
+ * 依赖前提：对象标识形如 `p_<uuid>` / `m_<uuid>`，与用户可见的 name 文本（A、B、O…）
+ * 不可能相同，因此「字符串恰为某个对象标识」即等价于「这是一个引用」。
+ * 为杜绝任何误伤，name 字段被显式跳过。
+ *
+ * 注意：不仅要改写「值」，还要改写「键」——net.faceTransforms 是以面 id 为键的映射，
+ * 只改值会导致该映射的键悬空。
+ */
+function remapSceneDataDeep<T>(value: T, idMap: ReadonlyMap<string, string>): T {
+  if (typeof value === 'string') {
+    return (idMap.get(value) ?? value) as unknown as T
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => remapSceneDataDeep(item, idMap)) as unknown as T
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const mappedKey = idMap.get(key) ?? key
+      out[mappedKey] = key === 'name' ? val : remapSceneDataDeep(val, idMap)
+    }
+    return out as unknown as T
+  }
+  return value
+}
+
+/** 生成一个未被占用的点名称（沿用 A、B…Z、A1、B1… 的既有字母序列风格） */
+function genUniquePointName(usedNames: ReadonlySet<string>): string {
+  let index = 0
+  while (true) {
+    const letter = String.fromCharCode(65 + (index % 26))
+    const suffix = Math.floor(index / 26)
+    const candidate = suffix === 0 ? letter : `${letter}${suffix}`
+    if (!usedNames.has(candidate)) return candidate
+    index += 1
+  }
+}
+
+/**
+ * 为合并导入重映射场景数据：重新生成全部对象标识、改写全部引用、去重点名。
+ * 原点保持原 id，以便合并后复用当前场景的原点。
+ */
+function remapImportedSceneForMerge(
+  data: SerializedScene,
+  existingPointNames: readonly string[],
+): SerializedScene {
+  const idMap = new Map<string, string>()
+  for (const oldId of collectSceneIdentityIds(data)) {
+    idMap.set(oldId, oldId === Scene.ORIGIN_ID ? Scene.ORIGIN_ID : genMergedIdentityId())
+  }
+
+  const remapped = remapSceneDataDeep(data, idMap)
+
+  const usedNames = new Set(existingPointNames)
+  for (const point of remapped.points) {
+    if (point.id === Scene.ORIGIN_ID) continue
+    if (usedNames.has(point.name)) {
+      point.name = genUniquePointName(usedNames)
+    }
+    usedNames.add(point.name)
+  }
+
+  return remapped
+}
+
+/**
+ * 合并导入：在当前场景基础上追加导入的场景文件内容（不覆盖原场景）。
+ *
+ * 实现上复用 importScene：先序列化当前场景，与「重映射后的导入数据」合并成一份
+ * 完整场景数据，再整体重建。这样既保留了 importScene 对全部元素/约束的还原逻辑，
+ * 又无需在其中插入分支，避免影响既有的覆盖导入路径。
+ */
+export function mergeScene(scene: Scene, data: SerializedScene): void {
+  const base = exportScene(scene)
+  const imported = remapImportedSceneForMerge(
+    data,
+    base.points.map((point) => point.name),
+  )
+
+  const combined: SerializedScene = {
+    version: SCENE_FILE_VERSION,
+    points: [
+      ...base.points,
+      // 丢弃导入数据的原点条目：原点恒为当前场景原点，不新建第二个
+      ...imported.points.filter((point) => point.id !== Scene.ORIGIN_ID),
+    ],
+    lines: [...base.lines, ...imported.lines],
+    straightLines: [...base.straightLines, ...imported.straightLines],
+    perpendicularLines: [...base.perpendicularLines, ...imported.perpendicularLines],
+    parallelLines: [...base.parallelLines, ...imported.parallelLines],
+    rays: [...base.rays, ...imported.rays],
+    vectors: [...base.vectors, ...imported.vectors],
+    circles: [...base.circles, ...imported.circles],
+    faces: [...base.faces, ...imported.faces],
+    spheres: [...base.spheres, ...imported.spheres],
+    cones: [...base.cones, ...imported.cones],
+    cylinders: [...base.cylinders, ...imported.cylinders],
+    nets: [...base.nets, ...imported.nets],
+    constraints: [...base.constraints, ...imported.constraints],
+  }
+
+  importScene(scene, combined)
+}
+
 type SceneElementCounts = {
   points: number
   lines: number

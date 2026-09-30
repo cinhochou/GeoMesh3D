@@ -110,7 +110,7 @@ export class ThreeRenderer {
       antialias: false,
       pixelRatioScale: 1.0,
       fpsCap: 0,
-      powerPreference: 'default',
+      importMode: 'overwrite',
       depthOcclusion: true,
       hiddenEdge: true,
       confirmBeforeDelete: true,
@@ -135,12 +135,11 @@ export class ThreeRenderer {
     this.camera.position.set(32, 20, 32)
     this.camera.lookAt(0, 0, 0)
 
-    // 创建 WebGLRenderer，应用用户设置的抗锯齿与 GPU 偏好
+    // 创建 WebGLRenderer，应用用户设置的抗锯齿
     this.renderer = new THREE.WebGLRenderer({
       antialias: this.appSettings.antialias,
       alpha: true,
       preserveDrawingBuffer: true,
-      powerPreference: this.appSettings.powerPreference,
     })
     this.renderer.setSize(w, h, false)
 
@@ -568,11 +567,10 @@ export class ThreeRenderer {
   /**
    * 设置渲染参数
    * pixelRatioScale 与 fpsCap 可立即生效；
-   * antialias 与 powerPreference 变更需要重建 WebGLRenderer，返回 needsRecreate 通知调用方
+   * antialias 变更需要重建 WebGLRenderer，返回 needsRecreate 通知调用方
    */
   applySettings(settings: Partial<AppSettings>) {
     const prevAntialias = this.appSettings.antialias
-    const prevPowerPreference = this.appSettings.powerPreference
 
     this.appSettings = {
       ...this.appSettings,
@@ -594,12 +592,10 @@ export class ThreeRenderer {
       this.geometrySyncer.setHiddenEdgeEnabled(settings.hiddenEdge)
     }
 
-    // 抗锯齿与 GPU 偏好变更需要重建 WebGLRenderer，返回标志通知调用方刷新页面
+    // 抗锯齿变更需要重建 WebGLRenderer，返回标志通知调用方刷新页面
     return {
       needsRecreate:
-        (typeof settings.antialias === 'boolean' && settings.antialias !== prevAntialias) ||
-        (settings.powerPreference !== undefined &&
-          settings.powerPreference !== prevPowerPreference),
+        typeof settings.antialias === 'boolean' && settings.antialias !== prevAntialias,
     }
   }
 

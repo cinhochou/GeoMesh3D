@@ -800,6 +800,9 @@ const handleCreateRoom = async () => {
       try {
         const project = await projectApi.createProject({
           name,
+          // 与房间描述同源：此前未传 description，关联项目的描述会缺失（null），
+          // 单独打开该项目时「编辑项目」弹窗会因读不到描述而无法渲染
+          description: createForm.value.description.trim(),
           isPublic: createForm.value.isPublic,
         })
         projectId = project.id

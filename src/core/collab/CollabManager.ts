@@ -69,8 +69,9 @@ export type SharedHistoryEntry = {
   isBase?: boolean
   /**
    * 房间内导入场景文件时携带的文件名（含后缀）。
-   * 有值时该条目**只产生一条**「导入了场景文件 xxx.json」消息，不做 diff 展开
-   * （导入会整体替换场景，展开会刷出几十条「创建了/删除了…」）。
+   * 有值时该条目**只产生一条**带文件名的消息，不做 diff 展开
+   * （导入会清空（覆盖）或追加（合并）场景，展开会刷出几十条「创建了/删除了…」）。
+   * 消息的动作短语按 `label` 标注为「覆盖导入了场景文件」或「合并导入了场景文件」。
    */
   sceneFileName?: string | null
 }
@@ -6123,14 +6124,18 @@ export class CollabManager {
     }
     // 兼容旧房间中已存在但未带 isBase 标记的 'InitialScene' 基线条目（同样保持静默）
     if (entry.label === 'InitialScene') return
-    // 房间内导入场景文件：只写一条带文件名的消息，不做 diff 展开
+    // 房间内导入场景文件：只写一条带文件名的消息（按 label 标注覆盖/合并），不做 diff 展开
     if (entry.sceneFileName) {
       this.appendCollabMessages([
-        buildSceneFileImportMessage(entry.sceneFileName, {
-          clientId: entry.actorClientId,
-          userName: entry.actorName,
-          createdAt: entry.createdAt,
-        }),
+        buildSceneFileImportMessage(
+          entry.sceneFileName,
+          {
+            clientId: entry.actorClientId,
+            userName: entry.actorName,
+            createdAt: entry.createdAt,
+          },
+          entry.label,
+        ),
       ])
       return
     }

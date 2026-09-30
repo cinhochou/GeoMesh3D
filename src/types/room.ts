@@ -1,6 +1,11 @@
 // 房间角色：创建者拥有全部权限；可编辑者可参与协作场景编辑但不能改房间基本信息；仅观看者只能加入房间
 export type RoomRole = 'creator' | 'editor' | 'viewer'
 
+// 房间级导入模式：房主统一设定，房间内全体协作成员强制遵循（房主本人同样遵循）
+// - overwrite：覆盖模式，导入时清空原场景后重建
+// - merge：合并模式，在原场景基础上追加导入内容
+export type RoomImportMode = 'overwrite' | 'merge'
+
 // 房间成员
 export interface RoomMember {
   userId: string
@@ -57,6 +62,8 @@ export interface Room {
   disableExport: boolean
   // 是否禁用导入
   disableImport: boolean
+  // 房间级导入模式（「禁用导入」未勾选时生效，房主在权限管理中设定）
+  importMode: RoomImportMode
   // 新成员进入房间的默认身份
   defaultRole: 'editor' | 'viewer'
   // 是否禁用清空场景
@@ -92,6 +99,7 @@ export interface UpdateRoomRequest {
   allowShare?: boolean
   disableExport?: boolean
   disableImport?: boolean
+  importMode?: RoomImportMode
   defaultRole?: 'editor' | 'viewer'
   disableClear?: boolean
   disableUndoRedo?: boolean

@@ -30,12 +30,14 @@ import {
   validateSerializedScene,
   exportScene,
   importScene,
+  mergeScene,
   isSceneEmpty,
   isSerializedSceneEmpty,
   isSameSerializedScene,
   serializeSceneForCompare as sceneToJsonForCompare,
   type SerializedScene,
 } from '../core/editor/SceneSerializer'
+import { SnapshotCommand } from '../core/editor/commands/SnapshotCommand'
 import { Scene } from '../core/scene/Scene'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
@@ -257,6 +259,12 @@ const collabDisableUndoRedo = computed(
   () => !!collabStore.currentRoom?.disableUndoRedo && collabStore.currentRoom?.myRole !== 'creator',
 )
 
+// 生效的导入模式：协作房间内以房主设定的「房间导入模式」为准（全体成员强制遵循，
+// 房主本人同样遵循）；房间外才使用设置面板中的本地导入模式。
+const effectiveImportMode = computed(
+  () => collabStore.currentRoom?.importMode ?? appSettings.value.importMode,
+)
+
 // 权限变化时实时同步到 Interaction（viewer 不能拖拽/创建/删除，但可选中浏览）
 watch(isViewOnlyCollab, (viewOnly) => {
   interaction?.setViewOnly(viewOnly)
@@ -406,7 +414,7 @@ const isEditableTarget = (target: EventTarget | null) => {
 /**
  * 处理设置实时预览事件
  * 仅将 pixelRatioScale 与 fpsCap 的变更应用到 renderer，
- * antialias 与 powerPreference 的变更需要刷新页面才能生效，不在预览中处理
+ * antialias 的变更需要刷新页面才能生效，不在预览中处理
  */
 const handlePreviewSettings = (e: Event) => {
   const detail = (e as CustomEvent).detail as AppSettings
@@ -1424,7 +1432,7 @@ watch(
  * 监听设置变化
  * 当 store 中的 appSettings 被确认保存后，将变更同步到 ThreeRenderer
  * pixelRatioScale 与 fpsCap 可立即生效；
- * antialias 与 powerPreference 变更需要重建 WebGLRenderer，故提示用户刷新页面
+ * antialias 变更需要重建 WebGLRenderer，故提示用户刷新页面
  */
 watch(
   appSettings,
@@ -1440,9 +1448,6 @@ watch(
     if (newSettings.antialias !== oldSettings?.antialias) {
       changes.antialias = newSettings.antialias
     }
-    if (newSettings.powerPreference !== oldSettings?.powerPreference) {
-      changes.powerPreference = newSettings.powerPreference
-    }
     if (newSettings.depthOcclusion !== oldSettings?.depthOcclusion) {
       changes.depthOcclusion = newSettings.depthOcclusion
     }
@@ -1453,12 +1458,9 @@ watch(
 
     const result = renderer.applySettings(changes)
     if (result.needsRecreate) {
-      // 拆分提示：分别提示抗锯齿和 GPU 偏好的变更
-      const msgs: string[] = []
-      if (changes.antialias !== undefined) msgs.push('抗锯齿')
-      if (changes.powerPreference !== undefined) msgs.push('GPU 偏好')
-      if (msgs.length > 0) {
-        showToast(`${msgs.join('、')}已更改，刷新页面后生效`, 'global')
+      // 抗锯齿变更需重建渲染器，刷新页面后生效
+      if (changes.antialias !== undefined) {
+        showToast('抗锯齿已更改，刷新页面后生效', 'global')
       }
     }
   },
@@ -1966,19 +1968,41 @@ const handleImportScene = async () => {
       return
     }
 
-    if (!isSceneEmpty(scene)) {
-      const confirmed = window.confirm('场景中已有创作内容，若继续导入将覆盖原内容，且无法恢复')
+    // 生效模式：房间内由房主的房间设置决定，房间外取本地设置
+    const isMerge = effectiveImportMode.value === 'merge'
+
+    // 合并模式不销毁任何内容，无需覆盖确认；覆盖模式保留二次确认（可撤销恢复）
+    if (!isMerge && !isSceneEmpty(scene)) {
+      const confirmed = window.confirm('场景中已有创作内容，若继续导入将覆盖原内容')
       if (!confirmed) return
     }
 
-    editor.clearHistory()
     editor.selectedPoints = []
     scene.selection.clear()
 
     const cm = collabManager.value
     const inRoom = cm && cm.getStatus().room !== null
     const before = exportScene(scene)
-    importScene(scene, result.data as SerializedScene)
+
+    // 两种模式统一用 SnapshotCommand 包裹：全量快照自动支持撤销/重做，
+    // 因此不再清空历史（导入成为可撤销的一步）。
+    const importCommand = new SnapshotCommand(
+      isMerge ? 'MergeImportScene' : 'ImportScene',
+      scene,
+      () => {
+        if (isMerge) {
+          mergeScene(scene, result.data as SerializedScene)
+        } else {
+          importScene(scene, result.data as SerializedScene)
+        }
+      },
+    )
+    importCommand.executeAndCapture()
+    // 必须走「未包装」的原方法入本地历史，不能走 editor.executeHistoryEntry：
+    // 后者在协作房间内会自动 appendHistoryEntry 一条**不带 sceneFileName** 的共享条目，
+    // 会让导入重新按 before/after 展开成几十条「创建了/删除了…」。
+    // 房间内的共享条目由下方显式上报（携带 sceneFileName，只产生一条带文件名的消息）。
+    originalExecuteHistoryEntry(importCommand)
 
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
@@ -1991,8 +2015,9 @@ const handleImportScene = async () => {
         actorClientId: cm!.getProviderClientId(),
         actorName: cm!.getLocalUserLabel(),
         createdAt: Date.now(),
-        label: 'ImportScene',
-        // 携带文件名（含后缀）：该条目只产生一条「导入了场景文件 xxx.json」消息，
+        // label 同时决定协作历史消息的动作短语（覆盖导入 / 合并导入）
+        label: isMerge ? 'MergeImportScene' : 'ImportScene',
+        // 携带文件名（含后缀）：该条目只产生一条带文件名的消息，
         // 不再按 before/after 展开成几十条「创建了/删除了…」
         sceneFileName: result.fileName,
         before,
@@ -2003,7 +2028,7 @@ const handleImportScene = async () => {
       updateLocalHistoryUI()
     }
 
-    showToast('导入成功', 'global')
+    showToast(isMerge ? `已合并导入 ${result.fileName}` : '导入成功', 'global')
   } catch {
     showToast('导入失败：文件读取错误', 'global')
   }
@@ -2423,6 +2448,7 @@ const syncRoomMetaToStore = (room: Room) => {
   if (current.allowShare !== room.allowShare) current.allowShare = room.allowShare
   if (current.disableExport !== room.disableExport) current.disableExport = room.disableExport
   if (current.disableImport !== room.disableImport) current.disableImport = room.disableImport
+  if (current.importMode !== room.importMode) current.importMode = room.importMode
   if (current.disableClear !== room.disableClear) current.disableClear = room.disableClear
   if (current.disableUndoRedo !== room.disableUndoRedo)
     current.disableUndoRedo = room.disableUndoRedo
@@ -2882,7 +2908,8 @@ const handleEditProject = async () => {
   try {
     const detail = await projectApi.getProject(currentProjectId.value)
     editProjectName.value = detail.name
-    editProjectDescription.value = detail.description
+    // 描述可能缺失（如由协作房间自动创建的关联项目）：归一为空串，避免弹窗渲染期抛错
+    editProjectDescription.value = detail.description ?? ''
     editProjectIsPublic.value = detail.isPublic
     editProjectDialogVisible.value = true
   } catch (err) {

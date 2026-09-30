@@ -2184,12 +2184,25 @@ export function buildProjectImportMessage(createdAt: number = Date.now()): Colla
 }
 
 /**
- * 房间内导入场景文件：单条消息。
- * 导入会**整体替换**场景，若按 before/after 做 diff 展开会刷出几十条「创建了/删除了…」，
- * 因此这里只产生一条带文件名的消息（含后缀），撤销/重做的引用也用同一文案。
+ * 场景文件导入的方式短语（覆盖 / 合并）。
+ * 依据条目 label 判定：'MergeImportScene' 为合并导入，其余（含历史条目 'ImportScene'）为覆盖导入。
+ * label 随 Yjs 持久化，因此房间内所有成员、以及撤销/重做的引用都能得到一致文案。
  */
-export function buildSceneFileImportMessage(fileName: string, actor: Actor): CollabHistoryMessage {
-  return makeMessage('import', '导入了场景文件', actor, null, fileName, [], null)
+const sceneImportActionText = (label: string): string =>
+  label === 'MergeImportScene' ? '合并导入了场景文件' : '覆盖导入了场景文件'
+
+/**
+ * 房间内导入场景文件：单条消息。
+ * 导入会整体替换（覆盖）或在原场景上追加（合并），若按 before/after 做 diff 展开会刷出
+ * 几十条「创建了/删除了…」，因此这里只产生一条带文件名（含后缀）的消息，
+ * 并在动作短语中标注是覆盖导入还是合并导入；撤销/重做的引用也用同一文案。
+ */
+export function buildSceneFileImportMessage(
+  fileName: string,
+  actor: Actor,
+  label = 'ImportScene',
+): CollabHistoryMessage {
+  return makeMessage('import', sceneImportActionText(label), actor, null, fileName, [], null)
 }
 
 /**
@@ -2211,7 +2224,7 @@ export function buildUndoRedoMessage(
     intent?: CollabOperationIntent | null
     /** 初始基线条目（项目导入）：引用文案固定为「项目导入加载完成」 */
     isBase?: boolean
-    /** 场景文件导入：引用文案固定为「导入了场景文件 xxx.json」 */
+    /** 场景文件导入：引用文案固定为「覆盖/合并导入了场景文件 xxx.json」 */
     sceneFileName?: string | null
   },
   actor: Actor,
@@ -2242,11 +2255,11 @@ export function buildOperationQuote(entry: {
   intent?: CollabOperationIntent | null
   /** 初始基线条目（项目导入）：引用文案固定，不做 diff 展开 */
   isBase?: boolean
-  /** 场景文件导入：引用文案固定为「导入了场景文件 xxx.json」，不做 diff 展开 */
+  /** 场景文件导入：引用文案固定为「覆盖/合并导入了场景文件 xxx.json」，不做 diff 展开 */
   sceneFileName?: string | null
 }): string {
   if (entry.isBase) return '项目导入加载完成'
-  if (entry.sceneFileName) return `导入了场景文件 ${entry.sceneFileName}`
+  if (entry.sceneFileName) return `${sceneImportActionText(entry.label)} ${entry.sceneFileName}`
   const messages = buildMessagesFromHistoryEntry({
     actorClientId: 0,
     actorName: null,
