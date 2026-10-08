@@ -34,6 +34,7 @@ import {
   type IntersectionTargetRef,
 } from '../geometry/IntersectionPoint3'
 import { importScene, type SerializedScene } from '../editor/SceneSerializer'
+import { pointSetsIntersect, type LockScope } from './lockScope'
 import {
   buildMessagesFromHistoryEntry,
   buildUndoRedoMessage,
@@ -159,6 +160,29 @@ type PrismSharedMap = Y.Map<string | number | boolean>
 type PyramidSharedMap = Y.Map<string | number | boolean>
 type WorldTransformSharedMap = Y.Map<string | number | boolean>
 type NetSharedMap = Y.Map<string | number | boolean>
+type LockSharedMap = Y.Map<string | number | boolean>
+
+/**
+ * Yjs 权威锁注册表条目。
+ * 注册表以「持有者 clientId」为键（一个客户端同时只持有一把锁），
+ * 因此两个客户端并发写入**不会互相覆盖**——两份条目会同时存在，再由确定性优先级规则收敛到唯一持有者。
+ */
+export type SharedLockEntry = {
+  owner: number
+  ownerName: string | null
+  /** 持有者本地的单调申请序号（仅用于诊断/展示） */
+  seq: number
+  /** 租约时间戳（Date.now()，由持有者心跳续约） */
+  updatedAt: number
+  elementId: string
+  elementType: string
+  elementName: string
+  rootId: string
+  rootType: string
+  rootName: string
+  writePoints: string[]
+  presentIds: string[]
+}
 
 export type SharedWorldRotationState = {
   quaternion: {
@@ -183,13 +207,42 @@ export type DragLockTarget = {
   elementName: string
 }
 
-/** 房间内所有用户（含自己）当前拖拽状态的信息，用于渲染"xxx正在操作..."气泡 */
+/** 拖拽被互斥锁拒绝的原因（交互层据此生成 toast 文案） */
+export type DragLockDenial = {
+  message: string
+}
+
+/** 房间内所有用户（含自己）当前拖拽状态的信息，用于渲染"xxx正在操作..."气泡与占用红光 */
 export type RemoteDragState = DragLockTarget & {
   /** 远端用户的 Yjs clientId（也用作 awareness state 的唯一标识） */
   clientId: number
   userName: string | null
   /** 最近一次心跳时间戳（Date.now()），用于过期释放 */
   updatedAt: number
+  /**
+   * v2：写入点集——该拖拽实际会写入的点。互斥判定用「点集相交」而非元素 id 相等，
+   * 这样只读关联（如圆 K 与立方体 C 通过交点间接关联）不会被误锁。
+   * 旧客户端（v1）缺失该字段时，回退为 elementId 保守比对。
+   */
+  writePoints?: string[]
+  /** v2：呈现集——占用红光需要标记的元素（点级 + 对象级） */
+  presentIds?: string[]
+  /** v2：对象级主语（气泡/提示文案用，如「正六面体1」） */
+  rootId?: string
+  rootType?: string
+  rootName?: string
+}
+
+/** awareness 中承载拖拽状态的字段名（v1/v2 共用，v2 仅追加字段） */
+const DRAG_AWARENESS_VERSION = 2
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item === 'string') out.push(item)
+  }
+  return out
 }
 
 export class CollabManager {
@@ -202,8 +255,15 @@ export class CollabManager {
   // 拖拽感知：心跳间隔（保持 updatedAt 新鲜）与锁过期时间（拖拽用户掉线/崩溃后自动让出互斥）
   private static readonly DRAG_LOCK_HEARTBEAT_MS = 8_000
   private static readonly DRAG_LOCK_STALE_TIMEOUT_MS = 16_000
+  /**
+   * 竞态仲裁宽限窗口：仅当「本客户端刚刚拿到锁」时才可能因并发抢夺而让出。
+   * 超过该窗口后不再让出——否则一个已稳定持锁的用户会被延迟到达的并发申请误夺。
+   */
+  private static readonly LOCK_ACQUIRE_GRACE_MS = 1_500
   // awareness 中承载拖拽状态的字段名
   private static readonly DRAG_AWARENESS_FIELD = 'dragInfo'
+  // Yjs 共享文档中承载「权威占用锁」的顶层 Map 名（键 = 持有者 clientId 字符串）
+  private static readonly LOCK_REGISTRY_NAME = 'locks'
   // awareness 中承载"成员角色变更广播"的字段名：创建者改某成员角色后写入，
   // 经 WebSocket/信令实时同步给房间内所有协作者，使目标成员无需等待轮询即时生效。
   private static readonly ROLE_CHANGE_AWARENESS_FIELD = 'roleChangeInfo'
@@ -294,6 +354,12 @@ export class CollabManager {
   private roomName: string | null = null
   private connecting = false
   private connected = false
+  /**
+   * joinRoom 尝试期间为true：屏蔽「连接断开」的外部处理。
+   * 见 joinRoom 内注释——候选地址失败时的 status 事件不应被
+   * EditorView.onStatusUpdate 当作「掉线」而触发 leaveRoom 与本方法交错。
+   */
+  private suppressDisconnectHandling = false
   private latencyMs: number | null = null
 
   private syncTimer: number | null = null
@@ -365,6 +431,11 @@ export class CollabManager {
   public onSharedHistoryUpdate: (state: SharedHistoryState) => void = () => {}
   /** 房间内所有用户（含自己）当前的拖拽状态变化（用于"xxx正在操作..."气泡与互斥提示） */
   public onActiveDragsUpdate: (drags: RemoteDragState[]) => void = () => {}
+  /**
+   * 本客户端持有拖拽锁后，被并发申请者按确定性优先级抢占时回调。
+   * 上层据此中止本地拖拽并提示用户（避免两人同时写同一批点、互相拉扯）。
+   */
+  public onDragLockPreempted: (info: { userName: string | null; rootName: string }) => void = () => {}
   /** 协作历史消息变化（含新成员同步到的历史与新增消息） */
   public onCollabMessagesUpdate: (messages: CollabHistoryMessage[]) => void = () => {}
   /** 收到来自创建者广播的"成员角色变更"（经 awareness 实时同步，不等轮询）。 */
@@ -378,6 +449,15 @@ export class CollabManager {
   private readonly roleChangeSeenMap = new Map<number, number>()
 
   private dragLockHeartbeatTimer: number | null = null
+  /** 最近一次拖拽锁申请失败时的冲突方（交互层据此生成「X 正被 Y 操作」提示） */
+  private lastDragConflict: RemoteDragState | null = null
+  /** Yjs 权威锁注册表（键 = 持有者 clientId 字符串） */
+  private yLocks!: Y.Map<LockSharedMap>
+  private locksObserver: ((events: Y.YEvent<Y.AbstractType<unknown>>[]) => void) | null = null
+  /** 本客户端当前持有的锁（含申请时刻，用于竞态宽限判定） */
+  private localLock: { scope: LockScope; acquiredAt: number; seq: number } | null = null
+  /** 本地申请序号（单调递增，仅用于诊断与展示） */
+  private localLockSeq = 0
 
   constructor(private scene: Scene) {
     this.ydoc = new Y.Doc()
@@ -405,6 +485,7 @@ export class CollabManager {
     this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
     this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
+    this.yLocks = this.ydoc.getMap<LockSharedMap>(CollabManager.LOCK_REGISTRY_NAME)
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
     // 关闭浏览器页面（非主动离开房间）时尽力把「离开了协作」广播在连接关闭前送达服务器
@@ -923,6 +1004,11 @@ export class CollabManager {
     return this.latencyMs
   }
 
+  /** joinRoom 是否正在尝试连接（含候选地址回退过程中）。供外部避免误判为掉线 */
+  get isJoiningRoom(): boolean {
+    return this.suppressDisconnectHandling
+  }
+
   async joinRoom(roomName: string, options?: { wsUrl?: string; ticket?: string }) {
     const normalizedRoomName = roomName.trim()
     if (!normalizedRoomName) throw new Error('roomName is empty')
@@ -936,6 +1022,14 @@ export class CollabManager {
     this.connecting = true
     this.connected = false
     this.emitStatus()
+
+    // 本次 joinRoom 尚未完成连接。在整个尝试期间屏蔽「连接断开」事件，
+    // 否则候选地址失败的 status 事件会让 EditorView.onStatusUpdate 误判为
+    // 「已连接后掉线」，进而调用 handleCollabLeave('disconnect') →
+    // leaveRoom() 把 this.provider 置空、this.roomName 清空，
+    // 与本方法并发交错后导致 joinRoom 失败甚至状态错乱。
+    // 失败时由下面的 catch 自行处理；成功返回后才解除屏蔽。
+    this.suppressDisconnectHandling = true
 
     // 按顺序尝试每个候选 websocket 地址，只要有一个成功完成同步就停止继续回退。
     // 后端返回的 wsUrl（通常是公网实例）优先尝试；随后是 serverUrls 列表
@@ -959,46 +1053,69 @@ export class CollabManager {
     let lastError: unknown = null
 
     for (const serverUrl of candidateUrls) {
-      this.provider = new WebsocketProvider(serverUrl, normalizedRoomName, this.ydoc, {
+      const provider = new WebsocketProvider(serverUrl, normalizedRoomName, this.ydoc, {
         params: wsParams,
         // 每 15 秒请求服务器重发完整状态，防止单协作者长时间无消息导致状态不同步
         resyncInterval: 15_000,
         // 缩短重连退避上限，断线后更快恢复
         maxBackoffTime: 3_000,
       })
+      this.provider = provider
 
       try {
-        const provider = this.provider
         this.bindProviderStatus(provider)
         await this.waitForInitialRoomState(provider, normalizedRoomName, timeoutMs)
         this.reconcileInitialScene(localSnapshot)
         // 广播「加入协作」消息（写入共享文档，房间内所有人可见）
         this.appendRoomMessage('加入了协作')
+        // 加入成功：恢复正常掉线处理
+        this.suppressDisconnectHandling = false
         return
       } catch (err) {
         lastError = err
         console.warn(`collab room: ${normalizedRoomName}, failed to connect via ${serverUrl}`, err)
         // 当前地址连接失败后，先完整释放 provider，再尝试下一个备用地址。
+        // 注意：必须使用局部变量 provider 而非 this.provider ——
+        // await 期间可能已被其他路径（如 onStatusUpdate 触发的
+        // handleCollabLeave('disconnect') → leaveRoom()）把 this.provider 置为 null，
+        // 此时再读 this.provider.disconnect() 会抛 "Cannot read properties of null"。
         this.clearProviderBindings()
-        this.provider.disconnect()
-        this.provider.destroy()
-        this.provider = null
+        // 只有当 this.provider 仍指向本次创建的 provider 时才置空，
+        // 避免误清后续已建立的新连接。
+        if (this.provider === provider) this.provider = null
+        provider.disconnect()
+        provider.destroy()
         this.connected = false
         this.connecting = true
         this.emitStatus()
       }
     }
 
+    // 全部候选地址均失败：先解除屏蔽，再走正常退出流程，
+    // 否则 leaveRoom 期间 emitStatus 会被自身的抑制标记干扰。
+    this.suppressDisconnectHandling = false
     this.leaveRoom()
     this.restoreLocalSnapshot(localSnapshot)
     throw lastError instanceof Error ? lastError : new Error('all collaboration servers failed')
   }
 
-  leaveRoom() {
+  /**
+   * 离开房间。
+   *
+   * @param options.announceLeave 是否广播「离开了协作」。
+   *   - 默认 true：用户主动离开 / 页面正常关闭（pagehide）——连接尚在，消息能送达。
+   *   - 传 false：连接已断开（服务器掉线、崩溃恢复等）。此时写入的消息只存在于本地
+   *     文档，provider 随即被销毁，永远同步不到服务器与其他协作者，属于无效写入；
+   *     该场景的离开记录由信令服务器在观察到连接断开时权威补写。
+   */
+  leaveRoom(options?: { announceLeave?: boolean }) {
+    const announceLeave = options?.announceLeave ?? true
     if (this.provider && this.roomName !== null) {
       this.releaseSharedWorldRotationOwnership()
       this.releaseDragLock()
-      this.appendRoomMessage('离开了协作')
+      if (announceLeave) {
+        this.appendRoomMessage('离开了协作')
+      }
     }
     this.clearProviderBindings()
     this.stopWorldRotationOwnerHeartbeat()
@@ -2090,6 +2207,7 @@ export class CollabManager {
     this.yPyramids = this.ydoc.getMap<PyramidSharedMap>('pyramids')
     this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
+    this.yLocks = this.ydoc.getMap<LockSharedMap>(CollabManager.LOCK_REGISTRY_NAME)
     this.setupObservers()
   }
 
@@ -4408,6 +4526,11 @@ export class CollabManager {
   }
 
   private setupObservers() {
+    // 权威锁注册表观察者：并发抢夺的迟到条目到达时，按确定性优先级决定是否让出。
+    // 必须用 observeDeep —— 锁条目是嵌套 Y.Map，浅观察只在顶层键增删时触发，
+    // 拿不到「条目字段刚被填充/续约」的事件。
+    this.locksObserver = () => this.handleLockRegistryChange()
+    this.yLocks.observeDeep(this.locksObserver)
     this.pointsObserver = (event) => {
       if (event.transaction.local) {
         // 本地写入：仅挂载记录观察者（接收将来的远端字段更新）/释放已删除记录的观察者，
@@ -5501,12 +5624,20 @@ export class CollabManager {
     if (!value || typeof value !== 'object') return null
     const v = value as Record<string, unknown>
     if (typeof v.elementId !== 'string' || typeof v.elementType !== 'string') return null
+    const writePoints = readStringArray(v.writePoints)
+    const presentIds = readStringArray(v.presentIds)
     return {
       elementId: v.elementId,
       elementType: v.elementType,
       elementName: typeof v.elementName === 'string' ? v.elementName : '',
       userName: typeof v.userName === 'string' ? v.userName : null,
       updatedAt: typeof v.updatedAt === 'number' ? v.updatedAt : Date.now(),
+      // v1 客户端不写这些字段 → undefined，判定时回退为 elementId 保守比对
+      writePoints: writePoints && writePoints.length > 0 ? writePoints : undefined,
+      presentIds: presentIds && presentIds.length > 0 ? presentIds : undefined,
+      rootId: typeof v.rootId === 'string' ? v.rootId : undefined,
+      rootType: typeof v.rootType === 'string' ? v.rootType : undefined,
+      rootName: typeof v.rootName === 'string' ? v.rootName : undefined,
     }
   }
 
@@ -5514,6 +5645,7 @@ export class CollabManager {
     if (!this.provider || this.roomName === null) return []
     const now = Date.now()
     const result: RemoteDragState[] = []
+    const seenClientIds = new Set<number>()
     // 包含本地用户自己的拖拽：拖拽者也要看到自己名字的气泡
     this.provider.awareness.getStates().forEach((state, clientId) => {
       const drag = this.readAwarenessDragState(
@@ -5522,8 +5654,18 @@ export class CollabManager {
       if (!drag) return
       // 超过过期时间（拖拽者掉线/崩溃后心跳停止）的拖拽不再展示，避免幽灵气泡
       if (now - drag.updatedAt > CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS) return
+      seenClientIds.add(clientId)
       result.push({ ...drag, clientId })
     })
+
+    // 权威锁兜底：若某持有者的 awareness 尚未到达/已过期，但注册表里仍有有效租约，
+    // 仍要展示（否则会被锁住却看不到红光与气泡，用户无法理解为何拖不动）
+    this.getSharedLocks().forEach((entry) => {
+      if (seenClientIds.has(entry.owner)) return
+      seenClientIds.add(entry.owner)
+      result.push(CollabManager.lockEntryToDragState(entry))
+    })
+
     return result
   }
 
@@ -5531,52 +5673,358 @@ export class CollabManager {
     this.onActiveDragsUpdate(this.collectActiveDrags())
   }
 
+  // ===== 权威占用锁（Yjs 共享注册表 yLocks）=====
+  //
+  // awareness 是 per-client 的临时状态，语义上不提供互斥保证：两人几乎同时按下拖动时可能都通过检查。
+  // yLocks 是写进 ydoc 的权威注册表，以「持有者 clientId」为键 —— 并发写入不会互相覆写，
+  // 两份条目会短暂共存，再由下面的确定性优先级规则收敛到唯一持有者：
+  //   让出条件 = 对方与自己写入点集相交 ∧ 对方优先级更高（clientId 更小）∧ 自己仍在申请宽限窗口内
+  // 该规则对双方对称，因此无论消息到达顺序如何，双方都会收敛到同一个胜者。
+
+  /** 读取注册表条目（字段缺失/类型异常时返回 null） */
+  private readLockEntry(record: LockSharedMap | undefined): SharedLockEntry | null {
+    if (!record) return null
+    const owner = this.readNullableNumber(record, 'owner')
+    if (owner === null) return null
+    return {
+      owner,
+      ownerName: this.readNullableString(record, 'ownerName'),
+      seq: this.readNullableNumber(record, 'seq') ?? 0,
+      updatedAt: this.readNullableNumber(record, 'updatedAt') ?? 0,
+      elementId: this.readNullableString(record, 'elementId') ?? '',
+      elementType: this.readNullableString(record, 'elementType') ?? '',
+      elementName: this.readNullableString(record, 'elementName') ?? '',
+      rootId: this.readNullableString(record, 'rootId') ?? '',
+      rootType: this.readNullableString(record, 'rootType') ?? '',
+      rootName: this.readNullableString(record, 'rootName') ?? '',
+      writePoints: this.readJsonStringArray(record, 'writePoints'),
+      presentIds: this.readJsonStringArray(record, 'presentIds'),
+    }
+  }
+
+  private isLockEntryStale(entry: SharedLockEntry, now: number): boolean {
+    return now - entry.updatedAt > CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS
+  }
+
+  /** 收集注册表中未过期的条目（跳过自己）。纯读，不做任何写入——便于在观察者回调内安全调用 */
+  private collectLiveLockEntries(): SharedLockEntry[] {
+    const localClientId = this.getLocalClientId()
+    const now = Date.now()
+    const live: SharedLockEntry[] = []
+    this.yLocks.forEach((record) => {
+      const entry = this.readLockEntry(record)
+      if (!entry) return
+      if (this.isLockEntryStale(entry, now)) return
+      if (entry.owner !== localClientId) live.push(entry)
+    })
+    return live
+  }
+
   /**
-   * 当前是否有其他用户正在拖拽该元素（互斥检查）。
+   * 清理过期锁条目（持有者崩溃/掉线后留下的租约）。
+   * 只在非观察者路径（申请、心跳）调用，避免在 Yjs 观察者回调内写文档造成重入。
+   * 二次确认「仍然过期」再删，避免误删刚被续约的记录。
+   */
+  private pruneStaleLocks() {
+    if (!this.yLocks) return
+    const localClientId = this.getLocalClientId()
+    const staleKeys: string[] = []
+    this.yLocks.forEach((record, key) => {
+      const entry = this.readLockEntry(record)
+      if (!entry) {
+        staleKeys.push(key)
+        return
+      }
+      if (entry.owner === localClientId) return
+      if (this.isLockEntryStale(entry, Date.now())) staleKeys.push(key)
+    })
+    if (staleKeys.length === 0) return
+    this.ydoc.transact(() => {
+      staleKeys.forEach((key) => {
+        const entry = this.readLockEntry(this.yLocks.get(key))
+        if (!entry) {
+          this.yLocks.delete(key)
+          return
+        }
+        if (entry.owner !== localClientId && this.isLockEntryStale(entry, Date.now())) {
+          this.yLocks.delete(key)
+        }
+      })
+    })
+  }
+
+  /** 找到与给定写入点集相交的未过期锁（排除指定 owner），并把结果转成提示所需的形态 */
+  private findConflictingLock(
+    writePoints: ReadonlySet<string>,
+    ignoreOwner?: number,
+  ): SharedLockEntry | null {
+    for (const entry of this.collectLiveLockEntries()) {
+      if (ignoreOwner !== undefined && entry.owner === ignoreOwner) continue
+      if (entry.writePoints.length === 0) continue
+      if (pointSetsIntersect(writePoints, new Set(entry.writePoints))) return entry
+    }
+    return null
+  }
+
+  private static lockEntryToDragState(entry: SharedLockEntry): RemoteDragState {
+    return {
+      clientId: entry.owner,
+      elementId: entry.elementId,
+      elementType: entry.elementType,
+      elementName: entry.elementName,
+      userName: entry.ownerName,
+      updatedAt: entry.updatedAt,
+      writePoints: entry.writePoints,
+      presentIds: entry.presentIds,
+      rootId: entry.rootId,
+      rootType: entry.rootType,
+      rootName: entry.rootName,
+    }
+  }
+
+  /** 把本客户端的锁写入注册表（键 = 自己的 clientId，永不与他人冲突） */
+  private writeLocalLockRecord(scope: LockScope, seq: number) {
+    const key = String(this.getLocalClientId())
+    this.ydoc.transact(() => {
+      let record = this.yLocks.get(key)
+      if (!record) {
+        record = new Y.Map<string | number | boolean>()
+        this.yLocks.set(key, record)
+      }
+      this.setScalarField(record, 'owner', this.getLocalClientId())
+      this.setNullableScalarField(record, 'ownerName', this.localUserLabel)
+      this.setScalarField(record, 'seq', seq)
+      this.setScalarField(record, 'updatedAt', Date.now())
+      this.setScalarField(record, 'elementId', scope.elementId)
+      this.setScalarField(record, 'elementType', scope.elementType)
+      this.setScalarField(record, 'elementName', scope.elementName)
+      this.setScalarField(record, 'rootId', scope.rootId)
+      this.setScalarField(record, 'rootType', scope.rootType)
+      this.setScalarField(record, 'rootName', scope.rootName)
+      this.setScalarField(record, 'writePoints', JSON.stringify(scope.writePoints))
+      this.setScalarField(record, 'presentIds', JSON.stringify(scope.presentIds))
+    })
+  }
+
+  /** 删除本客户端的锁条目（只删自己那一把，绝不动他人） */
+  private clearLocalLockRecord() {
+    const key = String(this.getLocalClientId())
+    const record = this.yLocks.get(key)
+    if (!record) return
+    const entry = this.readLockEntry(record)
+    if (entry && entry.owner !== this.getLocalClientId()) return
+    this.ydoc.transact(() => {
+      this.yLocks.delete(key)
+    })
+  }
+
+  /** 续约：只刷新 updatedAt，避免每次心跳都重写整条记录 */
+  private renewLocalLockRecord() {
+    const key = String(this.getLocalClientId())
+    const record = this.yLocks.get(key)
+    if (!record) return
+    this.ydoc.transact(() => {
+      this.setScalarField(record, 'updatedAt', Date.now())
+    })
+  }
+
+  /**
+   * 注册表变更时的抢占判定：若自己持锁、但出现了一把「相交且优先级更高」的锁，
+   * 且自己仍在申请宽限窗口内（说明是并发抢夺而非迟到申请），则让出。
+   */
+  private handleLockRegistryChange() {
+    if (!this.provider || this.roomName === null) return
+    const localLock = this.localLock
+    if (!localLock) return
+
+    const withinGrace =
+      Date.now() - localLock.acquiredAt <= CollabManager.LOCK_ACQUIRE_GRACE_MS
+    if (!withinGrace) return
+
+    const localClientId = this.getLocalClientId()
+    const ownWritePoints = new Set(localLock.scope.writePoints)
+    let winner: SharedLockEntry | null = null
+
+    for (const entry of this.collectLiveLockEntries()) {
+      if (entry.writePoints.length === 0) continue
+      if (!pointSetsIntersect(ownWritePoints, new Set(entry.writePoints))) continue
+      // 优先级：clientId 更小者胜（对双方对称的确定性规则）
+      if (entry.owner < localClientId && (!winner || entry.owner < winner.owner)) {
+        winner = entry
+      }
+    }
+    if (!winner) return
+
+    // 让出：清掉自己的锁与 awareness，并通知上层中止本地拖拽
+    this.localLock = null
+    this.clearLocalLockRecord()
+    this.stopDragLockHeartbeat()
+    this.clearDragAwarenessField()
+    this.lastDragConflict = CollabManager.lockEntryToDragState(winner)
+    this.emitActiveDrags()
+    this.onDragLockPreempted({
+      userName: winner.ownerName,
+      rootName: winner.rootName || localLock.scope.rootName,
+    })
+  }
+
+  private clearDragAwarenessField() {
+    if (!this.provider) return
+    const localState = this.provider.awareness.getLocalState() as Record<string, unknown> | null
+    if (localState && this.readAwarenessDragState(localState[CollabManager.DRAG_AWARENESS_FIELD])) {
+      this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, null)
+    }
+  }
+
+  /** 房间内当前所有未过期的权威锁（含自己），供调试与占用态兜底展示 */
+  getSharedLocks(): SharedLockEntry[] {
+    const localClientId = this.getLocalClientId()
+    const result: SharedLockEntry[] = []
+    this.collectLiveLockEntries().forEach((entry) => result.push(entry))
+    const own = this.readLockEntry(this.yLocks.get(String(localClientId)))
+    if (own && !this.isLockEntryStale(own, Date.now())) result.push(own)
+    return result
+  }
+
+  /**
+   * 查找与给定「写入点集」冲突的远端拖拽（互斥判定核心）。
+   *
+   * 判据：两次拖拽冲突 ⟺ 写入点集相交。该判据天然对称（双方判定一致），
+   * 并且能排掉「只读关联」造成的过度锁定：只要对方的拖拽不会写到我方任何会变动的点，
+   * 即便两者在对象图上连通，也判定为不冲突。
+   *
+   * - v2 客户端（携带 writePoints）：按点集相交判定；
+   * - v1 客户端（无 writePoints）：回退为「其拖拽元素 id 是否属于我方目标元素」的保守判定。
+   *
+   * @param writePoints 我方本次会写入的点
+   * @param targetElementIds 可选：我方直接操作的元素 id（供 v1 回退比对）
+   */
+  findDragConflict(
+    writePoints: ReadonlySet<string>,
+    targetElementIds?: ReadonlySet<string>,
+  ): RemoteDragState | null {
+    if (!this.provider || this.roomName === null) return null
+
+    // ① 权威注册表优先：写进 ydoc 的锁是唯一权威（覆盖两人同时按下的竞态）
+    const authoritative = this.findConflictingLock(writePoints)
+    if (authoritative) return CollabManager.lockEntryToDragState(authoritative)
+
+    // ② awareness 兜底：覆盖尚未写注册表的旧版本协作者，以及注册表尚未到达的瞬时感知
+    const localClientId = this.getLocalClientId()
+    const now = Date.now()
+    let conflict: RemoteDragState | null = null
+    this.provider.awareness.getStates().forEach((state, clientId) => {
+      if (clientId === localClientId || conflict) return
+      const drag = this.readAwarenessDragState(
+        (state as Record<string, unknown>)[CollabManager.DRAG_AWARENESS_FIELD],
+      )
+      if (!drag) return
+      if (now - drag.updatedAt > CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS) return
+
+      if (drag.writePoints) {
+        if (pointSetsIntersect(writePoints, new Set(drag.writePoints))) {
+          conflict = { ...drag, clientId }
+        }
+        return
+      }
+
+      // v1 回退：只有元素 id 可比
+      if (targetElementIds && targetElementIds.has(drag.elementId)) {
+        conflict = { ...drag, clientId }
+      }
+    })
+    return conflict
+  }
+
+  /**
+   * 当前是否有其他用户正在拖拽该元素（单元素判定，向后兼容）。
    * 返回 true 表示可以拖拽；未被拖拽 / 占用已过期 / 不在协作房间时返回 true。
    */
   canDragElement(elementId: string): boolean {
     if (!this.provider || this.roomName === null) return true
-    const localClientId = this.getLocalClientId()
-    const now = Date.now()
-    let lockedByOther = false
-    this.provider.awareness.getStates().forEach((state, clientId) => {
-      if (clientId === localClientId || lockedByOther) return
-      const drag = this.readAwarenessDragState(
-        (state as Record<string, unknown>)[CollabManager.DRAG_AWARENESS_FIELD],
-      )
-      if (!drag || drag.elementId !== elementId) return
-      if (now - drag.updatedAt <= CollabManager.DRAG_LOCK_STALE_TIMEOUT_MS) {
-        lockedByOther = true
-      }
-    })
-    return !lockedByOther
+    return this.findDragConflict(new Set([elementId]), new Set([elementId])) === null
   }
 
   /**
-   * 尝试获取某几何元素的拖拽互斥锁：
-   * - 不在协作房间时直接放行（本地编辑不受影响）；
-   * - 该元素正被其他用户拖拽（且未过期）时返回 false；
-   * - 获取成功后立即写入 awareness 广播给房间内所有人，并启动心跳续约。
+   * 非拖拽写路径的互斥检查（侧边栏改数值、删除对象等）。
+   * 传入该操作将要写入的点集，返回冲突的远端拖拽；无冲突返回 null。
+   * 不在协作房间 / 无活跃拖拽时返回 null。
    */
-  tryAcquireDragLock(target: DragLockTarget): boolean {
-    if (!this.provider || this.roomName === null) return true
-    if (!this.canDragElement(target.elementId)) return false
+  canWritePoints(pointIds: Iterable<string>): RemoteDragState | null {
+    if (!this.provider || this.roomName === null) return null
+    const set = pointIds instanceof Set ? (pointIds as Set<string>) : new Set(pointIds)
+    if (set.size === 0) return null
+    return this.findDragConflict(set)
+  }
+
+  /** 最近一次 tryAcquireDragLock 失败的原因（供交互层生成对象级提示文案） */
+  getLastDragConflict(): RemoteDragState | null {
+    return this.lastDragConflict
+  }
+
+  /**
+   * 尝试获取拖拽互斥锁（写入点集作用域）：
+   * - 不在协作房间时直接放行（本地编辑不受影响）；
+   * - 与房间内任一未过期拖拽的写入点集相交时返回 false，并把冲突方记入 lastDragConflict；
+   * - 通过检查后先写入**权威注册表**（ydoc，键 = 自己的 clientId），再写 awareness 广播呈现信息；
+   * - 写后复检一次：同 RTT 内到达的并发条目若优先级更高（clientId 更小）则立即让出。
+   */
+  tryAcquireDragLock(scope: LockScope): boolean {
+    if (!this.provider || this.roomName === null) {
+      this.lastDragConflict = null
+      return true
+    }
+    const writePoints = new Set(scope.writePoints)
+    // 顺带回收他人崩溃/掉线留下的过期租约（此路径在观察者之外，可安全写文档）
+    this.pruneStaleLocks()
+    const conflict = this.findDragConflict(writePoints, new Set([scope.elementId]))
+    if (conflict) {
+      this.lastDragConflict = conflict
+      return false
+    }
+
+    // 写入权威注册表 + 锁定本地态
+    const seq = (this.localLockSeq += 1)
+    this.writeLocalLockRecord(scope, seq)
+    this.localLock = { scope, acquiredAt: Date.now(), seq }
+    this.lastDragConflict = null
+
     this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, {
-      elementId: target.elementId,
-      elementType: target.elementType,
-      elementName: target.elementName,
+      v: DRAG_AWARENESS_VERSION,
+      elementId: scope.elementId,
+      elementType: scope.elementType,
+      elementName: scope.elementName,
+      rootId: scope.rootId,
+      rootType: scope.rootType,
+      rootName: scope.rootName,
+      writePoints: scope.writePoints,
+      presentIds: scope.presentIds,
       userName: this.localUserLabel,
       updatedAt: Date.now(),
     })
     this.ensureDragLockHeartbeat()
     this.emitActiveDrags()
+
+    // 写后复检：抢先到达的并发条目按 clientId 小者胜的规则裁决；本条已进入宽限窗口，
+    // 因此这里遇到的任何相交锁都必然是与本次竞争（或极罕见的延迟到达），让出是安全方向。
+    const racer = this.findConflictingLock(writePoints, this.getLocalClientId())
+    if (racer && racer.owner < this.getLocalClientId()) {
+      this.localLock = null
+      this.clearLocalLockRecord()
+      this.stopDragLockHeartbeat()
+      this.clearDragAwarenessField()
+      this.lastDragConflict = CollabManager.lockEntryToDragState(racer)
+      this.emitActiveDrags()
+      return false
+    }
     return true
   }
 
-  /** 拖拽进行中的心跳：刷新 updatedAt，防止拖拽时间过长导致锁被他人接管 */
+  /** 拖拽进行中的心跳：续约权威锁租约 + 刷新 awareness，防止拖拽时间过长导致锁被接管 */
   refreshDragLock() {
     if (!this.provider || this.roomName === null) return
+    this.renewLocalLockRecord()
+    this.pruneStaleLocks()
     const localState = this.provider.awareness.getLocalState() as Record<string, unknown> | null
     const current = localState ? localState[CollabManager.DRAG_AWARENESS_FIELD] : undefined
     const drag = this.readAwarenessDragState(current)
@@ -5587,14 +6035,14 @@ export class CollabManager {
     })
   }
 
-  /** 释放当前用户持有的拖拽锁（拖拽结束 / 离开房间 / 断开连接时调用） */
+  /** 释放当前用户持有的拖拽锁（拖拽结束 / 离开房间 / 断开连接 / 被抢占时调用） */
   releaseDragLock() {
     if (!this.provider || this.roomName === null) return
     this.stopDragLockHeartbeat()
-    const localState = this.provider.awareness.getLocalState() as Record<string, unknown> | null
-    if (localState && this.readAwarenessDragState(localState[CollabManager.DRAG_AWARENESS_FIELD])) {
-      this.provider.awareness.setLocalStateField(CollabManager.DRAG_AWARENESS_FIELD, null)
-    }
+    this.localLock = null
+    // 只删自己那一把锁，绝不触碰他人条目
+    this.clearLocalLockRecord()
+    this.clearDragAwarenessField()
     this.emitActiveDrags()
   }
 

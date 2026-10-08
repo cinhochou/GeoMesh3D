@@ -7,6 +7,8 @@ import * as decoding from 'lib0/decoding'
 import http from 'node:http'
 import https from 'node:https'
 import fs from 'node:fs'
+import { gzipSync } from 'node:zlib'
+import { randomUUID } from 'node:crypto'
 
 // ============================================================================
 // 生产环境配置（全部通过环境变量）
@@ -96,7 +98,7 @@ const loadPersistedDoc = async (roomId) => {
   try {
     const response = await fetch(
       `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(roomId)}/doc`,
-      { signal: AbortSignal.timeout(10_000) },
+      { headers: { 'ngrok-skip-browser-warning': 'true' }, signal: AbortSignal.timeout(10_000) },
     )
     if (response.status === 404) return null
     if (!response.ok) {
@@ -119,13 +121,17 @@ const doSaveRoomDoc = async (room) => {
   room.dirtyDuringSave = false
   try {
     const state = Y.encodeStateAsUpdate(room.doc)
+    const compressed = gzipSync(Buffer.from(state))
     const response = await fetch(
       `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(room.name)}/doc`,
       {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: Buffer.from(state),
-        signal: AbortSignal.timeout(10_000),
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: compressed,
+        signal: AbortSignal.timeout(30_000),
       },
     )
     if (!response.ok) {
@@ -154,7 +160,7 @@ const deletePersistedDoc = async (roomId) => {
   try {
     await fetch(
       `${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(roomId)}/doc`,
-      { method: 'DELETE', signal: AbortSignal.timeout(10_000) },
+      { method: 'DELETE', headers: { 'ngrok-skip-browser-warning': 'true' }, signal: AbortSignal.timeout(10_000) },
     )
   } catch (err) {
     console.warn(`[y-websocket] delete doc state failed for room "${roomId}":`, err?.message ?? err)
@@ -281,7 +287,7 @@ const verifyTicket = async (ticket, roomId) => {
     const params = new URLSearchParams({ ticket, roomId })
     const response = await fetch(
       `${COLLAB_BACKEND_URL}/internal/collab/ticket/verify?${params.toString()}`,
-      { method: 'POST' },
+      { method: 'POST', headers: { 'ngrok-skip-browser-warning': 'true' } },
     )
     if (!response.ok) {
       console.error(`[y-websocket] ticket verify HTTP ${response.status}`)
@@ -351,11 +357,122 @@ const sendSyncStep2 = (room, client) => {
   client.send(payload)
 }
 
+// ---- 「离开了协作」消息：服务端权威补写 ----
+// 客户端异常退出（浏览器崩溃 / 进程被 kill / 断网 / 断电 / 移动端直接杀进程）时，
+// 它自身的 appendRoomMessage('离开了协作') 根本没有机会执行，消息永远不会进入共享文档，
+// 其他协作者的历史里就缺少该成员的离开记录。
+// 服务端是唯一必然观察到「某条连接已断开」的一方，因此由服务端在此补写，
+// 使协作历史对「崩溃 / 掉线 / 强杀」等场景同样完整。
+//
+// 消息字段与客户端 serializeCollabMessage() 严格对齐，否则会被
+// deserializeCollabMessage() 的结构校验整条丢弃。
+
+const LEAVE_MESSAGE_ACTION = '离开了协作'
+/**
+ * 去重时回溯的最大消息条数。
+ * 客户端主动离开时，「写入离开消息」与「关闭连接」是同一批 TCP 数据里相邻的两步，
+ * 服务端处理完 sync 消息后紧接着就会收到 close 事件，中间几乎不可能插入 200 条消息。
+ */
+const LEAVE_DECLARATION_SCAN_LIMIT = 200
+/** 主动离开声明的有效时间窗：超过则视为上一次会话的旧消息，不用于本次去重 */
+const LEAVE_DECLARATION_WINDOW_MS = 30_000
+
+/**
+ * 该成员是否已自行声明过离开。
+ * 客户端主动离开时会先写入自己的离开消息再断开；TCP 有序保证该 sync 消息
+ * 先于本连接的 close 事件到达服务端，因此这里能可靠地识别出「已声明」，避免重复。
+ */
+const hasDeclaredLeave = (room, clientIds) => {
+  const messages = room.doc.getArray('collabMessages')
+  const total = messages.length
+  const from = Math.max(0, total - LEAVE_DECLARATION_SCAN_LIMIT)
+  const now = Date.now()
+
+  for (let i = total - 1; i >= from; i--) {
+    const map = messages.get(i)
+    if (map.get('category') !== 'room' || map.get('action') !== LEAVE_MESSAGE_ACTION) continue
+    if (!clientIds.has(map.get('clientId'))) continue
+    const createdAt = map.get('createdAt')
+    if (typeof createdAt !== 'number' || now - createdAt > LEAVE_DECLARATION_WINDOW_MS) continue
+    return true
+  }
+  return false
+}
+
+/** 优先取断开前 awareness 里的 userLabel（与客户端自己写入时用的是同一个名字），回退到票据用户名 */
+const readDisconnectingUserLabel = (room, client, clientIds) => {
+  const states = room.awareness.getStates()
+  for (const clientId of clientIds) {
+    const state = states.get(clientId)
+    const label = state && typeof state.userLabel === 'string' ? state.userLabel.trim() : ''
+    if (label) return label
+  }
+  return typeof client.username === 'string' ? client.username : ''
+}
+
+/** 同一用户仍有其他连接在线（如多标签页）：该成员并未真正离开房间，不写离开消息 */
+const hasOtherConnectionOfSameUser = (room, client) => {
+  if (!client.userId) return false
+  for (const other of room.clients) {
+    if (other !== client && other.userId === client.userId) return true
+  }
+  return false
+}
+
+/**
+ * 在共享文档中补写一条「离开了协作」。
+ * 必须在 client.clientIds 被清空、awareness 状态被移除之前调用：
+ * 依赖 awareness 的 userLabel 解析显示名。
+ */
+const appendLeaveMessageOnDisconnect = (room, client) => {
+  // 房间已销毁：文档即将释放/删除，写入无意义且会报错
+  if (room.closed) return
+  // 从未建立 awareness（握手未完成就断开）：该成员没有真正参与过协作，不产生离开记录
+  if (client.clientIds.size === 0) return
+  // 客户端已自行声明离开：服务端不重复写入
+  if (hasDeclaredLeave(room, client.clientIds)) return
+  // 同一账号的其他连接仍在线：人还在房间里，只是一条连接断开
+  if (hasOtherConnectionOfSameUser(room, client)) return
+
+  const primaryClientId = client.clientIds.values().next().value
+  const map = new Y.Map()
+  map.set('id', randomUUID())
+  map.set('clientId', primaryClientId)
+  map.set('userName', readDisconnectingUserLabel(room, client, client.clientIds))
+  map.set('category', 'room')
+  map.set('action', LEAVE_MESSAGE_ACTION)
+  map.set('targetType', '')
+  map.set('targetName', '')
+  map.set('params', '[]')
+  map.set('quote', '')
+  // 标注为非正常退出，与客户端主动离开的消息区分开
+  map.set('note', '未正常退出（连接中断）')
+  map.set('createdFrom', '')
+  map.set('cascade', '')
+  map.set('system', false)
+  map.set('createdAt', Date.now())
+
+  room.doc.getArray('collabMessages').push([map])
+  console.log(
+    `[y-websocket] appended leave message for "${client.username}" in room "${room.name}" (abnormal disconnect)`,
+  )
+}
+
 const cleanupClient = (room, client) => {
   room.clients.delete(client)
 
   // 房间已销毁（关房/落盘完成）：不再触碰其 awareness/doc，直接返回
   if (room.closed) return
+
+  // 服务端补写离开消息（须在 clientIds 清空 / awareness 移除之前）
+  try {
+    appendLeaveMessageOnDisconnect(room, client)
+  } catch (err) {
+    console.warn(
+      `[y-websocket] append leave message failed for room "${room.name}":`,
+      err?.message ?? err,
+    )
+  }
 
   if (client.clientIds.size > 0) {
     const removedClients = Array.from(client.clientIds)
@@ -384,7 +501,7 @@ const syncPeerCountToBackend = async (roomId, onlineCount) => {
   try {
     await fetch(`${COLLAB_BACKEND_URL}/internal/collab/room/${encodeURIComponent(roomId)}/peers`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({ onlineCount }),
     })
   } catch (err) {

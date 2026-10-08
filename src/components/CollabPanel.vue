@@ -9,6 +9,7 @@ import { roomApi } from '@/api/room'
 import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
 import type { Room, RoomDetail, RoomMember, RoomRole, ApplicationRole, RoomApplication } from '@/types/room'
+import { getMemberJoinedTime } from '@/types/room'
 import type { Project } from '@/types/project'
 import { validateSerializedScene } from '@/core/editor/SceneSerializer'
 import ProxiedImage from '@/components/ProxiedImage.vue'
@@ -341,17 +342,43 @@ const myRoleLabel = computed(() => {
   return '仅观看'
 })
 
-// 成员列表排序：创建者始终最前 → 在线用户优先 → 离线用户靠后
-// 在线用户不会排在创建者前面；同组内保持后端返回顺序（稳定排序）
+/**
+ * 成员列表排序：在线优先 → 权限高的优先 → 加入时间早的优先。
+ *
+ * 1) 在线（isOnline）优先：在线成员始终排在离线成员之前
+ * 2) 权限：creator > editor > viewer
+ * 3) 加入时间：早的在前（取「上一次加入时间」，缺失时回退首次加入时间）
+ *
+ * 创建者不再被强制置顶——它在「权限高的优先」这一档中自然领先，
+ * 但当其离线而他人在线时，会按规则排到在线成员之后（符合「在线优先」的语义）。
+ * 各档位均以显式比较实现，不依赖 sort 稳定性对原始顺序的偶然依赖。
+ */
+const ROLE_WEIGHT: Record<RoomRole, number> = {
+  creator: 0,
+  editor: 1,
+  viewer: 2,
+}
+
 const allMembers = computed<RoomMember[]>(() => {
   const members = roomDetail.value?.members ?? []
   return [...members].sort((a, b) => {
-    const aCreator = a.role === 'creator' ? 0 : 1
-    const bCreator = b.role === 'creator' ? 0 : 1
-    if (aCreator !== bCreator) return aCreator - bCreator
+    // 1. 在线优先
     const aOnline = a.isOnline ? 0 : 1
     const bOnline = b.isOnline ? 0 : 1
-    return aOnline - bOnline
+    if (aOnline !== bOnline) return aOnline - bOnline
+
+    // 2. 权限高的优先
+    const roleDiff = ROLE_WEIGHT[a.role] - ROLE_WEIGHT[b.role]
+    if (roleDiff !== 0) return roleDiff
+
+    // 3. 加入时间早的优先；时间相同或都无效时用 userId 兜底，保证结果稳定可预期
+    const aTime = new Date(getMemberJoinedTime(a)).getTime()
+    const bTime = new Date(getMemberJoinedTime(b)).getTime()
+    const aValid = Number.isFinite(aTime)
+    const bValid = Number.isFinite(bTime)
+    if (aValid && bValid && aTime !== bTime) return aTime - bTime
+    if (aValid !== bValid) return aValid ? -1 : 1
+    return a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0
   })
 })
 const hasMoreMembers = computed(() => allMembers.value.length > MEMBERS_COLLAPSED_LIMIT)
@@ -387,8 +414,12 @@ const getMemberTooltip = (member: RoomMember): string => {
     : `${member.username} · ID ${suffix}`
 }
 
-// 格式化成员加入时间：1小时内显示"刚刚/X分钟前"，1天内显示小时，30天内显示天数，否则显示日期
-const formatJoinedTime = (iso: string): string => {
+/**
+ * 格式化成员的加入时间：1小时内显示"刚刚/X分钟前"，1天内显示小时，30天内显示天数，否则显示日期。
+ * 入参为「上一次加入时间」（lastJoinedAt），缺失时回退首次加入时间（joinedAt）。
+ */
+const formatJoinedTime = (member: RoomMember): string => {
+  const iso = getMemberJoinedTime(member)
   if (!iso) return ''
   const then = new Date(iso).getTime()
   if (!Number.isFinite(then)) return ''
@@ -1415,10 +1446,24 @@ const onDialogClick = (event: MouseEvent) => {
 // ---- 生命周期 / 监听 ----
 let appStatusTimer: ReturnType<typeof setInterval> | null = null
 
+/**
+ * 对话框数据是否已预热过。
+ *
+ * onMounted 会预热「申请状态」与「已加入房间」，
+ * 随后用户首次打开对话框时 dialogOpen 的 watch 又会把这四项全部重发一遍，
+ * 导致同一次开合内产生 6 个请求（其中 /project/my 会被请求 2 次：
+ * loadMyProjects 与 loadJoinedRoomIds 内部的 getMyRooms → enrichRoomThumbnails 各拉一次）。
+ *
+ * 这里标记首次已预热，watch 首次打开时只补拉 watch 独有的两项。
+ */
+let dialogPrimedOnMount = false
+
 watch(
   () => props.dialogOpen,
   async (open) => {
     if (open) {
+      const skipPrimedLoads = dialogPrimedOnMount
+      dialogPrimedOnMount = false
       resetDialogState()
       await loadMyProjects()
       // 加载完项目列表后，若 currentProjectId 存在，同步项目名称
@@ -1430,9 +1475,10 @@ watch(
       }
       loadRecommendedRooms()
       // 加载用户已加入的房间列表（用于判断是否需要申请加入）
-      loadJoinedRoomIds()
+      // onMounted 已预热过则跳过，避免与预热请求重复
+      if (!skipPrimedLoads) loadJoinedRoomIds()
       // 加载申请状态并启动轮询（实时同步"正在审核..."按钮）
-      loadMyApplicationsStatus()
+      if (!skipPrimedLoads) loadMyApplicationsStatus()
       appStatusTimer = setInterval(loadMyApplicationsStatus, 10_000)
     } else {
       if (appStatusTimer) {
@@ -1523,38 +1569,36 @@ const handlePermissionChange = (event: CollabRoomEvent) => {
   }
 }
 
+// 面板位置随视口/滚动变化的处理函数。
+// 必须用具名函数而非内联匿名函数，否则 onUnmounted 无法 removeEventListener，
+// 会随每次挂载累积一份监听器。
+const handleViewportChange = () => {
+  if (props.panelOpen) {
+    updatePanelPosition()
+    if (transferConfirm.value) {
+      nextTick(() => updateTransferMaskRect())
+    }
+  }
+}
+
 onMounted(() => {
   document.addEventListener('mousedown', handlePanelClickOutside)
-  window.addEventListener('resize', () => {
-    if (props.panelOpen) {
-      updatePanelPosition()
-      if (transferConfirm.value) {
-        nextTick(() => updateTransferMaskRect())
-      }
-    }
-  })
-  document.addEventListener(
-    'scroll',
-    () => {
-      if (props.panelOpen) {
-        updatePanelPosition()
-        if (transferConfirm.value) {
-          nextTick(() => updateTransferMaskRect())
-        }
-      }
-    },
-    true,
-  )
+  window.addEventListener('resize', handleViewportChange)
+  document.addEventListener('scroll', handleViewportChange, true)
   // 监听跨 Tab 权限变更事件（如 approvalRequired 开关），实时同步所有入口和标签
   collabRoomEvents.on(handlePermissionChange)
   // 初始加载申请状态
   loadMyApplicationsStatus()
   // 初始加载用户已加入的房间列表
   loadJoinedRoomIds()
+  // 标记已预热：dialogOpen 首次打开时不再重复拉这两项
+  dialogPrimedOnMount = true
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handlePanelClickOutside)
+  window.removeEventListener('resize', handleViewportChange)
+  document.removeEventListener('scroll', handleViewportChange, true)
   collabRoomEvents.off(handlePermissionChange)
   if (maxMembersBubbleTimer) {
     clearTimeout(maxMembersBubbleTimer)
@@ -2188,8 +2232,8 @@ defineExpose({
                   {{ roleLabels[member.role] }}
                 </span>
               </div>
-              <!-- 加入时间 -->
-              <div v-if="member.joinedAt" class="cp-member-card-meta">
+              <!-- 加入时间（取上一次加入时间，缺失时回退首次加入时间） -->
+              <div v-if="getMemberJoinedTime(member)" class="cp-member-card-meta">
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
@@ -2201,7 +2245,7 @@ defineExpose({
                   <circle cx="12" cy="12" r="10" />
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
-                <span>{{ formatJoinedTime(member.joinedAt) }}</span>
+                <span>{{ formatJoinedTime(member) }}</span>
               </div>
               <!-- 成员操作区：仅创建者可对非创建者成员操作 -->
               <div

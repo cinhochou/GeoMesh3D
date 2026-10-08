@@ -250,10 +250,13 @@ onMounted(() => {
   window.addEventListener('storage', handleStorageEvent)
   collabRoomEvents.on(handleCollabRoomEvent)
   // 定时轮询：实时同步在线人数、标签、房间信息（静默刷新，不触发 loading 骨架）
+  // 间隔 15 秒（与房间列表页对齐）：大厅轮询的目的只是刷新 onlineCount 与标签，
+  // 而在线状态本身由信令服务器的实时 peer 查询提供，3 秒一轮并无额外精度收益，
+  // 却让每轮多打一批请求（hall + myApplications + peers）。
   pollTimer = setInterval(() => {
     void loadRooms(true)
     refreshActiveRoom()
-  }, 3000)
+  }, 15_000)
 })
 
 onBeforeUnmount(() => {

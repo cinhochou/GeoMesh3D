@@ -75,6 +75,8 @@ interface BackendRoomMemberDTO {
   avatarUrl: string | null
   role: string // OWNER / EDITOR / VIEWER
   joinedAt: string | null
+  /** 上一次加入房间的时间（后端新增字段；旧版本后端不返回，映射为 null） */
+  lastJoinedAt?: string | null
   isOnline: boolean | null
   lastSeenAt: string | null
 }
@@ -198,6 +200,8 @@ const mapMember = (dto: BackendRoomMemberDTO): RoomMember => ({
   avatarUrl: dto.avatarUrl,
   role: mapRole(dto.role),
   joinedAt: dto.joinedAt ?? new Date().toISOString(),
+  // 后端未提供时保持 null，由 getMemberJoinedTime 回退到 joinedAt
+  lastJoinedAt: dto.lastJoinedAt ?? null,
   isOnline: dto.isOnline === true,
   lastSeenAt: dto.lastSeenAt ?? null,
 })
@@ -262,32 +266,131 @@ const toBackendRole = (role: RoomRole): string => {
 // 后端房间表不会自动刷新缩略图与修改时间。这里每次读取时都拿关联项目的最新数据
 // 与房间对账：用实时项目缩略图覆盖（"改动即更新"），并让房间修改时间取 项目更新时间
 // 与 房间时间 的较大者，使协作房间的项目信息/缩略图/修改时间始终与项目列表保持一致。
-const enrichRoomThumbnails = async (rooms: Room[]): Promise<Room[]> => {
+
+/** "我的项目"列表缓存有效期：项目列表在几十秒内几乎不变，而轮询每3~15 秒就会触发一次 */
+const MY_PROJECTS_CACHE_TTL_MS = 30_000
+/** 项目详情对账缓存有效期：与我的项目同量级，避免轮询反复回查同一projectId */
+const PROJECT_DETAIL_CACHE_TTL_MS = 30_000
+
+interface ProjectSnapshot {
+  id: string
+  name?: string
+  thumbnailUrl?: string
+  updatedAt?: string
+}
+
+let myProjectsCache: { at: number; data: ProjectSnapshot[] } | null = null
+/** in-flight 去重：同一时刻多个调用方共用同一次 "我的项目" 请求 */
+let myProjectsPending: Promise<ProjectSnapshot[]> | null = null
+
+const projectDetailCache = new Map<string, { at: number; data: ProjectSnapshot }>()
+/** projectId -> in-flight，避免同一 projectId 被并发重复查询 */
+const projectDetailPending = new Map<string, Promise<ProjectSnapshot>>()
+
+/**
+ * 读取"我的项目"（带短 TTL 缓存与 in-flight 去重）。
+ *
+ * 该接口原先在每轮轮询中被无条件调用：协作大厅 3 秒一次、房间列表 15 秒一次、
+ * 协作面板打开一次 → 大量重复请求，而"我的项目"在这期间几乎不会变化。
+ */
+const fetchMyProjectSnapshots = async (): Promise<ProjectSnapshot[]> => {
+  const now = Date.now()
+  if (myProjectsCache && now - myProjectsCache.at < MY_PROJECTS_CACHE_TTL_MS) {
+    return myProjectsCache.data
+  }
+  if (myProjectsPending) return myProjectsPending
+
+  const task = (async () => {
+    const projects = await projectApi.getMyProjects()
+    const data: ProjectSnapshot[] = projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      thumbnailUrl: p.thumbnailUrl ?? undefined,
+      updatedAt: p.updatedAt ?? undefined,
+    }))
+    myProjectsCache = { at: Date.now(), data }
+    return data
+  })().finally(() => {
+    myProjectsPending = null
+  })
+
+  myProjectsPending = task
+  return task
+}
+
+/** 读取单个项目详情（带短 TTL 缓存与 in-flight 去重） */
+const fetchProjectSnapshot = (projectId: string): Promise<ProjectSnapshot> => {
+  const now = Date.now()
+  const cached = projectDetailCache.get(projectId)
+  if (cached && now - cached.at < PROJECT_DETAIL_CACHE_TTL_MS) {
+    return Promise.resolve(cached.data)
+  }
+  const pending = projectDetailPending.get(projectId)
+  if (pending) return pending
+
+  const task = (async () => {
+    const detail = await projectApi.getProject(projectId)
+    const data: ProjectSnapshot = {
+      id: projectId,
+      name: detail.name,
+      thumbnailUrl: detail.thumbnailUrl ?? undefined,
+      updatedAt: detail.updatedAt ?? undefined,
+    }
+    projectDetailCache.set(projectId, { at: Date.now(), data })
+    return data
+  })().finally(() => {
+    projectDetailPending.delete(projectId)
+  })
+
+  projectDetailPending.set(projectId, task)
+  return task
+}
+
+/** 项目更新（改名/换缩略图）后调用，使相关对账缓存立即失效 */
+export const invalidateProjectSnapshotCache = (projectId?: string): void => {
+  myProjectsCache = null
+  if (projectId) projectDetailCache.delete(projectId)
+  else projectDetailCache.clear()
+}
+
+/**
+ * @param includeMyProjects 是否把"我的项目"纳入对账。
+ *   公开大厅（getHallRooms）传 false —— 大厅里的房间大多属于他人，
+ *   拉"我的项目"几乎无用，却是每 3 秒轮询里最大的固定开销。
+ */
+const enrichRoomThumbnails = async (
+  rooms: Room[],
+  includeMyProjects = true,
+): Promise<Room[]> => {
   const linked = rooms.filter((r) => r.projectId)
   if (linked.length === 0) return rooms
   const coverMap = new Map<string, string>()
   const nameMap = new Map<string, string>()
   const updatedMap = new Map<string, string>()
-  // 1) 批量拿"我的项目"构建映射
-  try {
-    const myProjects = await projectApi.getMyProjects()
-    for (const p of myProjects) {
-      nameMap.set(p.id, p.name)
-      if (p.thumbnailUrl) coverMap.set(p.id, p.thumbnailUrl)
-      if (p.updatedAt) updatedMap.set(p.id, p.updatedAt)
+  // 1) 批量拿"我的项目"构建映射（带缓存；公开大厅跳过）
+  if (includeMyProjects) {
+    try {
+      const myProjects = await fetchMyProjectSnapshots()
+      for (const p of myProjects) {
+        if (!p || !p.id) continue
+        nameMap.set(p.id, p.name ?? '')
+        if (p.thumbnailUrl) coverMap.set(p.id, p.thumbnailUrl)
+        if (p.updatedAt) updatedMap.set(p.id, p.updatedAt)
+      }
+    } catch {
+      // 忽略，下面逐个兜底
     }
-  } catch {
-    // 忽略，下面逐个兜底
   }
   // 2) 仍未匹配到的逐个查项目详情（可能属于他人公开项目）
-  const stillMissing = linked.filter((r) => !nameMap.has(r.projectId))
+  //projectId 去重：多个房间关联同一项目时只查一次
+  const missingIds = [...new Set(linked.filter((r) => !nameMap.has(r.projectId)).map((r) => r.projectId))]
   await Promise.all(
-    stillMissing.map(async (r) => {
+    missingIds.map(async (projectId) => {
       try {
-        const detail = await projectApi.getProject(r.projectId)
-        nameMap.set(r.projectId, detail.name)
-        if (detail.thumbnailUrl) coverMap.set(r.projectId, detail.thumbnailUrl)
-        if (detail.updatedAt) updatedMap.set(r.projectId, detail.updatedAt)
+        const detail = await fetchProjectSnapshot(projectId)
+        if (detail.name) nameMap.set(projectId, detail.name)
+        if (detail.thumbnailUrl) coverMap.set(projectId, detail.thumbnailUrl)
+        if (detail.updatedAt) updatedMap.set(projectId, detail.updatedAt)
       } catch {
         // 项目可能已删除或无权限，保留后端已有值
       }
@@ -367,6 +470,57 @@ const mapApplication = (dto: BackendApplicationDTO): RoomApplication => ({
   reviewerRead: dto.reviewerRead === true,
 })
 
+// ---- 房间详情：短时缓存 + 并发合并 ----
+//协作浮窗打开时，房间详情存在两条并行的轮询链路：
+//   CollabPanel：每 15 秒 GET /collab/room/:id/detail（展示成员列表）
+//   EditorView：每 20 秒 GET /collab/room/:id/detail（兜底检测是否被踢出）
+// 两者打同一端点，浮窗开着时该端点被双份请求。
+//
+// 这里按「房间 id」做一个极短 TTL 的合并窗口：窗口内的重复请求复用同一结果，
+// in-flight 期间到来的请求共享同一个 Promise。
+// TTL 取得很短（2秒），既足以合并两条错开的轮询，又不会让数据明显滞后——
+// 成员变化另有 Yjs awareness 与跨 Tab 事件实时推送，不依赖此接口的时效性。
+const ROOM_DETAIL_MERGE_WINDOW_MS = 2_000
+
+interface RoomDetailEntry {
+  at: number
+  data: RoomDetail
+}
+
+const roomDetailCache = new Map<string, RoomDetailEntry>()
+const roomDetailPending = new Map<string, Promise<RoomDetail>>()
+
+const fetchRoomDetailMerged = (id: string, fetchPeerCount: boolean): Promise<RoomDetail> => {
+  const key = `${id}|${fetchPeerCount ? 'peer' : 'nopeer'}`
+  const now = Date.now()
+  const cached = roomDetailCache.get(key)
+  if (cached && now - cached.at < ROOM_DETAIL_MERGE_WINDOW_MS) {
+    return Promise.resolve(cached.data)
+  }
+  const pending = roomDetailPending.get(key)
+  if (pending) return pending
+
+  const task = (async () => {
+    const dto = await apiClient.get<BackendRoomDetailDTO>(`/collab/room/${id}/detail`)
+    const detail = mapRoomDetail(dto)
+    if (fetchPeerCount) {
+      try {
+        const peerInfo = await signalingApi.getRoomPeers(id)
+        detail.onlineCount = peerInfo.onlineCount
+      } catch {
+        // 信令服务器不可用时使用后端的 onlineCount
+      }
+    }
+    roomDetailCache.set(key, { at: Date.now(), data: detail })
+    return detail
+  })().finally(() => {
+    roomDetailPending.delete(key)
+  })
+
+  roomDetailPending.set(key, task)
+  return task
+}
+
 export const roomApi = {
   async getMyRooms(): Promise<Room[]> {
     const dtos = await apiClient.get<BackendRoomDTO[]>('/collab/room')
@@ -393,17 +547,7 @@ export const roomApi = {
   },
 
   async getRoomDetail(id: string, fetchPeerCount = true): Promise<RoomDetail> {
-    const dto = await apiClient.get<BackendRoomDetailDTO>(`/collab/room/${id}/detail`)
-    const detail = mapRoomDetail(dto)
-    if (fetchPeerCount) {
-      try {
-        const peerInfo = await signalingApi.getRoomPeers(id)
-        detail.onlineCount = peerInfo.onlineCount
-      } catch {
-        // 信令服务器不可用时使用后端的 onlineCount
-      }
-    }
-    return detail
+    return fetchRoomDetailMerged(id, fetchPeerCount)
   },
 
   async createRoom(data: CreateRoomRequest): Promise<Room> {
@@ -518,7 +662,9 @@ export const roomApi = {
       `/collab/room/hall?${params.toString()}`,
     )
     const rooms = dtos.map(mapRoom)
-    return enrichRoomPeerCounts(await enrichRoomThumbnails(rooms))
+    // 大厅房间大多属于他人，不纳入"我的项目"对账（includeMyProjects=false）：
+    // 大厅每 3 秒轮询一次，拉"我的项目"几乎无用却是最大的固定开销
+    return enrichRoomPeerCounts(await enrichRoomThumbnails(rooms, false))
   },
 
   // ---- 回收站 ----

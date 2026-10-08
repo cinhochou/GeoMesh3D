@@ -19,6 +19,7 @@ import type { ParallelLine3 } from '../core/geometry/ParallelLine3'
 import type { PlanarPolygon } from '../core/geometry/PlanarPolygon'
 import { Net } from '../core/geometry/Net'
 import { normalizeNamePart, normalizeNameText } from '../core/editor/nameRules'
+import { collabWriteEvents } from '../utils/collabWriteEvents'
 
 import type { ParametricRange } from '../core/constraints/ObjectConstrainedPointConstraint'
 import { useUiStore } from '@/store/uiStore'
@@ -4062,6 +4063,81 @@ const startEditNet = (net: Net | undefined) => {
   editNet.mode = net.mode
 }
 
+/**
+ * 把当前编辑卡片的所有字段从场景重新回灌。
+ *
+ * 触发场景：本地命令被协作互斥拦截（他人正在操作相关几何对象）。
+ * 此时**场景没有变化**，而下面监听各编辑对象的 watcher 都由「场景对象变化」驱动，
+ * 因此不会触发；输入框会保留用户已输入但未生效的值（局部界面漂移）。
+ * 这里主动重跑一次对应的 startEditXxx，把草稿对齐到场景真实值。
+ *
+ * 注意：startEditXxx 会重新赋值 editing.value，与用户再次点选同一对象是同一路径，行为一致。
+ */
+const rehydrateEditingDraft = () => {
+  const target = editing.value
+  if (!target) return
+  const { type, id } = target
+  const scene = props.scene
+  switch (type) {
+    case 'point':
+      startEditPoint(scene.points.get(id))
+      return
+    case 'line':
+      startEditLine(scene.lines.get(id))
+      return
+    case 'straightLine':
+      startEditStraightLine(scene.straightLines.get(id))
+      return
+    case 'perpendicularLine':
+      startEditPerpendicularLine(scene.perpendicularLines.get(id))
+      return
+    case 'parallelLine':
+      startEditParallelLine(scene.parallelLines.get(id))
+      return
+    case 'ray':
+      startEditRay(scene.rays.get(id))
+      return
+    case 'vector':
+      startEditVector(scene.vectors.get(id))
+      return
+    case 'circle':
+      startEditCircle(scene.circles.get(id))
+      return
+    case 'face':
+      startEditFace(scene.faces.get(id))
+      return
+    case 'hexahedron':
+      startEditHexahedron(id)
+      return
+    case 'regularPolygon':
+      startEditRegularPolygon(id)
+      return
+    case 'prism':
+      startEditPrism(id)
+      return
+    case 'pyramid':
+      startEditPyramid(id)
+      return
+    case 'sphere':
+      startEditSphere(id)
+      return
+    case 'cone':
+      startEditCone(id)
+      return
+    case 'cylinder':
+      startEditCylinder(id)
+      return
+    case 'net':
+      startEditNet(scene.nets.get(id))
+      return
+    default:
+      return
+  }
+}
+
+/** 协作写拦截订阅的退订函数（onMounted 登记，onUnmounted 释放） */
+let unsubscribeCollabWriteBlocked: (() => void) | null = null
+
 const applyEditNet = () => {
   if (guardViewOnly()) return
   if (!editing.value || editing.value.type !== 'net') return
@@ -5109,11 +5185,15 @@ onMounted(() => {
   document.addEventListener('pointermove', handleSplitPaneDrag)
   document.addEventListener('pointerup', stopSplitPaneDrag)
   document.addEventListener('pointercancel', stopSplitPaneDrag)
+  // 本地命令被协作互斥拦截时，把编辑卡片草稿从场景回灌，消除界面漂移
+  unsubscribeCollabWriteBlocked = collabWriteEvents.on(() => rehydrateEditingDraft())
   syncSelectedPaneHeight()
 })
 
 onUnmounted(() => {
   cancelAnimationFrame(hintRafId)
+  unsubscribeCollabWriteBlocked?.()
+  unsubscribeCollabWriteBlocked = null
   window.removeEventListener('resize', updateCompactLineEditorMode)
   window.removeEventListener('resize', syncSplitPaneMode)
   window.removeEventListener('resize', syncSelectedPaneHeight)

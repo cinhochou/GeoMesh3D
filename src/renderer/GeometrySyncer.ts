@@ -202,6 +202,23 @@ const SELECTED_RENDER_ORDER = 30
 // 点精灵在选中时需要绘制在线段之上，避免线段在端点处穿透点渲染
 const SELECTED_POINT_RENDER_ORDER = SELECTED_RENDER_ORDER + 1
 
+// ===== 协作占用红光叠加层 =====
+// 被其他协作者拖拽（占用）的元素会叠加一层红色光晕并做呼吸动画。
+// 采用「叠加层」而非改材质色：不与选中色冲突，也不需要引入 postprocessing。
+const OCCUPIED_COLOR = 0xff3b30
+/** 点光晕绘制在几何体之上、点精灵之下（点精灵 depthTest=false，需要压住光晕） */
+const OCCUPIED_POINT_HALO_RENDER_ORDER = SELECTED_RENDER_ORDER - 2
+/** 点光晕相对点精灵的放大倍率（径向渐变需要更大半径才可见） */
+const OCCUPIED_POINT_HALO_SCALE = 2.6
+/** 线状光晕与选中元素同层 */
+const OCCUPIED_LINE_HALO_RENDER_ORDER = SELECTED_RENDER_ORDER
+/** 面光晕略高于普通边线，但仍参与深度测试，避免穿透遮挡 */
+const OCCUPIED_SURFACE_HALO_RENDER_ORDER = SOLID_EDGE_RENDER_ORDER + 1
+/** 呼吸周期（秒） */
+const OCCUPIED_BREATH_PERIOD_S = 1.6
+/** 呼吸最低不透明度系数（1.0 为峰值） */
+const OCCUPIED_BREATH_MIN = 0.45
+
 const LINEAR_TYPES = new Set<string>([
   'line', 'straightLine', 'perpendicularLine', 'parallelLine', 'ray', 'vector', 'circle', 'sphere', 'cone', 'cylinder', 'face',
 ])
@@ -303,6 +320,20 @@ export class GeometrySyncer {
   private activePointValueTarget: { type: 'point'; geoId: string } | null = null
   private facePreviewGroup: THREE.Group | null = null
   private rubberBand: THREE.Line | undefined
+
+  // 协作占用红光叠加层
+  private occupiedLayer: THREE.Group | null = null
+  private occupiedEntries = new Map<
+    string,
+    {
+      source: THREE.Object3D
+      halo: THREE.Object3D
+      materials: THREE.Material[]
+      /** 光晕相对源对象的缩放倍率（点光晕需要放大才可见） */
+      scaleFactor: number
+    }
+  >()
+  private occupiedHaloTexture: THREE.Texture | null = null
 
   private _cachedOccluders: THREE.Object3D[] | null = null
   private _cachedOccludersFrame = -1
@@ -465,6 +496,204 @@ export class GeometrySyncer {
 
   isDragging(): boolean {
     return (this.currentSceneRef?.activeDraggedPointIds.size ?? 0) > 0
+  }
+
+  // ===== 协作占用红光叠加层 =====
+
+  /**
+   * 设置当前「被他人占用」的元素集合（点级 + 对象级 id）。
+   * 语义幂等：集合未变化时不重建任何对象，因此可以按占用态更新频率安全调用。
+   */
+  setOccupied(ids: Iterable<string>): void {
+    const next = ids instanceof Set ? (ids as Set<string>) : new Set(ids)
+
+    // 1) 移除不再占用、或源对象已消失/已重建的条目（避免幽灵光晕与陈旧几何引用）
+    for (const id of [...this.occupiedEntries.keys()]) {
+      const entry = this.occupiedEntries.get(id)!
+      const current = this.meshMap.get(id) ?? this.groupMap.get(id)
+      if (!next.has(id) || !current || current !== entry.source) this.removeOccupiedEntry(id)
+    }
+
+    // 2) 为新进入占用集合的元素构建光晕
+    next.forEach((id) => {
+      if (this.occupiedEntries.has(id)) return
+      const source = this.meshMap.get(id) ?? this.groupMap.get(id)
+      if (!source) return
+      const materials: THREE.Material[] = []
+      const built = this.buildOccupiedHalo(source, materials)
+      if (!built) return
+      if (!this.occupiedLayer) {
+        this.occupiedLayer = new THREE.Group()
+        this.occupiedLayer.name = 'collabOccupiedLayer'
+        this.deps.world.add(this.occupiedLayer)
+      }
+      built.halo.userData = { ...built.halo.userData, __occupiedHalo: true }
+      this.occupiedLayer.add(built.halo)
+      this.occupiedEntries.set(id, {
+        source,
+        halo: built.halo,
+        materials,
+        scaleFactor: built.scaleFactor,
+      })
+    })
+
+    if (this.occupiedEntries.size === 0 && this.occupiedLayer) this.occupiedLayer.visible = false
+  }
+
+  /** 每帧更新：同步光晕变换到源对象，并做呼吸不透明度动画。无占用时零开销。 */
+  updateOccupied(): void {
+    const layer = this.occupiedLayer
+    if (!layer) return
+    if (this.occupiedEntries.size === 0) {
+      layer.visible = false
+      return
+    }
+    layer.visible = true
+    const phase = (performance.now() / 1000) * ((Math.PI * 2) / OCCUPIED_BREATH_PERIOD_S)
+    const breathe = OCCUPIED_BREATH_MIN + (1 - OCCUPIED_BREATH_MIN) * (0.5 + 0.5 * Math.sin(phase))
+    this.occupiedEntries.forEach((entry) => {
+      // 光晕与源对象同属 deps.world 的子级，直接复制本地变换即可保持贴合
+      entry.halo.position.copy(entry.source.position)
+      entry.halo.quaternion.copy(entry.source.quaternion)
+      entry.halo.scale.copy(entry.source.scale).multiplyScalar(entry.scaleFactor)
+      entry.halo.visible = entry.source.visible !== false
+      for (const material of entry.materials) {
+        const record = material as THREE.Material & {
+          opacity: number
+          userData: { __occupiedBaseOpacity?: number }
+        }
+        const base = record.userData?.__occupiedBaseOpacity ?? 0.6
+        record.opacity = base * breathe
+      }
+    })
+  }
+
+  /** 释放全部占用光晕（离开房间 / 断开连接时调用） */
+  clearOccupied(): void {
+    for (const id of [...this.occupiedEntries.keys()]) this.removeOccupiedEntry(id)
+    if (this.occupiedLayer) this.occupiedLayer.visible = false
+  }
+
+  private removeOccupiedEntry(id: string): void {
+    const entry = this.occupiedEntries.get(id)
+    if (!entry) return
+    this.occupiedEntries.delete(id)
+    entry.halo.removeFromParent()
+    // 只释放本层自有的材质：几何体是与源对象共享引用的，绝不能释放
+    entry.materials.forEach((material) => material.dispose())
+  }
+
+  private getOccupiedHaloTexture(): THREE.Texture | null {
+    if (this.occupiedHaloTexture) return this.occupiedHaloTexture
+    if (typeof document === 'undefined') return null
+    const size = 128
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    const half = size / 2
+    const gradient = ctx.createRadialGradient(half, half, 0, half, half, half)
+    gradient.addColorStop(0, 'rgba(255, 74, 64, 0.95)')
+    gradient.addColorStop(0.42, 'rgba(255, 74, 64, 0.42)')
+    gradient.addColorStop(1, 'rgba(255, 74, 64, 0)')
+    ctx.fillStyle = gradient
+    ctx.fillRect(0, 0, size, size)
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.needsUpdate = true
+    this.occupiedHaloTexture = texture
+    return texture
+  }
+
+  /**
+   * 为源对象构建对应的红色光晕对象。
+   * 几何体按引用共享（本项目线/面的顶点是原地改写），因此光晕会跟随形变自动更新；
+   * 变换通过每帧复制源对象的本地变换（position/quaternion/scale）来同步。
+   */
+  private buildOccupiedHalo(
+    source: THREE.Object3D,
+    materials: THREE.Material[],
+  ): { halo: THREE.Object3D; scaleFactor: number } | null {
+    const flags = source as THREE.Object3D & {
+      isSprite?: boolean
+      isMesh?: boolean
+      isLine?: boolean
+      isLineSegments?: boolean
+      isLineLoop?: boolean
+      isGroup?: boolean
+    }
+
+    if (flags.isSprite) {
+      const texture = this.getOccupiedHaloTexture()
+      const material = new THREE.SpriteMaterial({
+        map: texture ?? undefined,
+        color: 0xffffff,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+      material.userData = { __occupiedBaseOpacity: 0.85 }
+      const halo = new THREE.Sprite(material)
+      halo.renderOrder = OCCUPIED_POINT_HALO_RENDER_ORDER
+      materials.push(material)
+      return { halo, scaleFactor: OCCUPIED_POINT_HALO_SCALE }
+    }
+
+    if (flags.isLine || flags.isLineSegments || flags.isLineLoop) {
+      const lineSource = source as THREE.Line
+      if (!lineSource.geometry) return null
+      const material = new THREE.LineBasicMaterial({
+        color: OCCUPIED_COLOR,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      })
+      material.userData = { __occupiedBaseOpacity: 0.7 }
+      const halo = flags.isLineLoop
+        ? new THREE.LineLoop(lineSource.geometry, material)
+        : flags.isLineSegments
+          ? new THREE.LineSegments(lineSource.geometry, material)
+          : new THREE.Line(lineSource.geometry, material)
+      halo.renderOrder = OCCUPIED_LINE_HALO_RENDER_ORDER
+      materials.push(material)
+      return { halo, scaleFactor: 1 }
+    }
+
+    if (flags.isMesh) {
+      const meshSource = source as THREE.Mesh
+      if (!meshSource.geometry) return null
+      // 深度占位网格（colorWrite=false）只参与遮挡，不需要光晕
+      const sourceMaterial = meshSource.material as THREE.Material | undefined
+      if (sourceMaterial && sourceMaterial.colorWrite === false) return null
+      const material = new THREE.MeshBasicMaterial({
+        color: OCCUPIED_COLOR,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+      material.userData = { __occupiedBaseOpacity: 0.34 }
+      const halo = new THREE.Mesh(meshSource.geometry, material)
+      halo.renderOrder = OCCUPIED_SURFACE_HALO_RENDER_ORDER
+      materials.push(material)
+      return { halo, scaleFactor: 1 }
+    }
+
+    if (flags.isGroup) {
+      const group = new THREE.Group()
+      source.children.forEach((child) => {
+        const built = this.buildOccupiedHalo(child, materials)
+        if (!built) return
+        built.halo.position.copy(child.position)
+        built.halo.quaternion.copy(child.quaternion)
+        built.halo.scale.copy(child.scale).multiplyScalar(built.scaleFactor)
+        group.add(built.halo)
+      })
+      if (group.children.length === 0) return null
+      return { halo: group, scaleFactor: 1 }
+    }
+
+    return null
   }
 
   private updateBounds(geo: THREE.BufferGeometry): void {

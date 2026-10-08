@@ -1175,6 +1175,20 @@ const formatDate = (dateStr: string) => {
   return dateStr.replace('T', ' ').replace(/\.\d+.*$/, '')
 }
 
+/**
+ * 房间列表页成员卡片的悬浮说明：同时展示首次加入时间与上一次加入时间。
+ * - 首次加入时间（joinedAt）：成员关系建立的时间，整个存续期不变
+ * - 上一次加入时间（lastJoinedAt）：最近一次加入协作的时刻，每次重新加入都会刷新
+ * 后者缺失时（后端未提供该字段）只展示首次加入时间，避免出现空行。
+ */
+const memberJoinTitle = (member: RoomMember): string => {
+  const first = formatDate(member.joinedAt)
+  const last = formatDate(member.lastJoinedAt ?? '')
+  const base = `@${member.username}`
+  if (!last || last === first) return `${base} · 加入于 ${first}`
+  return `${base} · 首次加入 ${first} · 最后加入 ${last}`
+}
+
 // ---- 顶部三个入口 ----
 const handleCollabHall = () => {
   router.push({ name: 'collab-hall' })
@@ -1194,8 +1208,15 @@ const handleCreateRoom = () => {
 // ---- 审批角标 ----
 const approvalBadge = ref<ApprovalBadge>({ sentUnread: 0, reviewUnread: 0, totalUnread: 0 })
 let badgeTimer: ReturnType<typeof setInterval> | null = null
+/** 上次请求审批角标的时间戳，用于 5 秒节流 */
+let lastBadgeLoadAt = 0
 
 const loadApprovalBadge = async () => {
+  // 节流：角标除30 秒轮询外，还会在审批、房间切换等事件中被单独调用。
+  // 这些事件可能密集触发，短时间内的重复请求没有意义。
+  const now = Date.now()
+  if (now - lastBadgeLoadAt < 5_000) return
+  lastBadgeLoadAt = now
   try {
     approvalBadge.value = await roomApi.getApprovalBadge()
   } catch {
@@ -2233,7 +2254,7 @@ const formatDateTime = (dateStr: string | null) => {
                           v-for="member in filteredMembers(room.id)"
                           :key="member.userId"
                           class="rl-member-card"
-                          :title="`@${member.username} · 加入于 ${formatDate(member.joinedAt)}`"
+                          :title="memberJoinTitle(member)"
                         >
                           <div class="rl-member-avatar">
                             <ProxiedImage

@@ -16,7 +16,7 @@ import { isIntersectionTargetType } from '../core/geometry/IntersectionPoint3'
 import { ThreeRenderer } from './ThreeRenderer'
 import { DEFAULT_POINT_COLOR } from './GeometrySyncer'
 import { findBestUnfoldRatioByGradient, selectNetDragPointsByScreenDirection, type NetControlPoint } from './NetMath'
-import type { DragLockTarget } from '../core/collab/CollabManager'
+import type { DragLockDenial, DragLockTarget } from '../core/collab/CollabManager'
 import type { CollabOperationIntent } from '@/types/collabIntent'
 
 export class Interaction {
@@ -337,11 +337,43 @@ export class Interaction {
   public onARSceneRotateEnd: (() => void) | null = null
   /**
    * 协作拖拽互斥锁回调（由 EditorView 注入 CollabManager 的实现）：
-   * - onDragLockRequest：拖拽开始时请求锁定目标元素，返回 false 表示元素正被他人操作，本次拖拽被取消；
+   * - onDragLockRequest：拖拽开始时请求锁定目标元素，返回 null 表示可以拖拽；
+   *   返回 { message } 表示目标（或其关联闭包）正被他人操作，本次拖拽被取消并提示该文案；
    * - onDragLockRelease：拖拽结束时释放锁（拖动已触发的元素会随后被清除）。
    */
-  public onDragLockRequest: ((target: DragLockTarget) => boolean) | null = null
+  public onDragLockRequest: ((target: DragLockTarget) => DragLockDenial | null) | null = null
   public onDragLockRelease: (() => void) | null = null
+  /** 被他人占用的元素 id 集合（点级 + 对象级），用于悬停时的 not-allowed 光标预判 */
+  private blockedDragIds: ReadonlySet<string> = new Set()
+  /** 悬停占位光标当前是否已置为 not-allowed（避免每帧重复写 style） */
+  private blockedHoverCursorActive = false
+  /** 悬停占用预判的拾取节流时间戳（pickScreenSpace 成本较高，限制到 ~30fps） */
+  private blockedHoverPickAt = 0
+  private static readonly BLOCKED_HOVER_PICK_INTERVAL_MS = 33
+
+  /**
+   * 是否处于协作房间（由 EditorView 注入）。
+   * 仅协作房间内启用「拖拽锁延迟申请 + 拖拽启动死区」：单机编辑保持原有的零死区手感，
+   * 也不会因为一次普通单击而进入协作占用流程。
+   */
+  public isCollabRoomActive: (() => boolean) | null = null
+  /**
+   * 拖拽意图死区（px）：指针相对按下点的位移超过该值，才被视为「确实要拖动」并申请占用锁。
+   * 单击选中（位移在死区内）既不申请锁、也不广播占用气泡，且不修改几何，因此被拒时无需回滚。
+   */
+  private static readonly DRAG_LOCK_INTENT_THRESHOLD_PX = 3
+  /** 待申请拖拽锁的目标：按下时登记，位移确认拖拽意图后才真正申请 */
+  private dragLockPending: DragLockTarget | null = null
+  /** 本次拖拽是否真正申请到过协作锁（决定结束时是否需要释放） */
+  private dragLockAcquired = false
+  /** 按下时的屏幕坐标（拖拽意图死区的基准点） */
+  private dragIntentOrigin: { x: number; y: number } | null = null
+
+  /** 由 EditorView 在收到协作占用态更新时调用（传入空集合即清除悬停预判） */
+  setBlockedDragIds(ids: Iterable<string>) {
+    this.blockedDragIds = ids instanceof Set ? (ids as ReadonlySet<string>) : new Set(ids)
+    if (this.blockedDragIds.size === 0) this.clearBlockedHoverCursor()
+  }
 
   constructor(
     public editor: Editor,
@@ -1962,9 +1994,17 @@ export class Interaction {
             geoId,
           })
         } else if (type === 'cone' || type === 'coneBase') {
+          // 与桌面端同规则：轴心点/顶点落入点的命中保护框内时，锥面让位于点，
+          // 否则「手指放在底面中心点上却选中锥面」，点将完全不可拾取。
+          const cone = this.editor.scene.cones.get(geoId)
+          if (
+            cone &&
+            isObjectProtected(geoId, [cone.baseCenterPoint.id, cone.apexPoint.id])
+          ) {
+            continue
+          }
           // AR 模式下 raycast 优先：当法向圆已被屏幕空间检测命中时，
           // 给 raycast 命中加微小深度惩罚，让法向圆在排序中胜出。
-          const cone = this.editor.scene.cones.get(geoId)
           const arDepthPenalty = cone?.normalCircleId && hitNormalCircleIds.has(cone.normalCircleId) ? 1e-3 : 0
           candidates.push({
             object: resolved,
@@ -1974,8 +2014,15 @@ export class Interaction {
             geoId,
           })
         } else if (type === 'cylinder' || type === 'cylinderBottom' || type === 'cylinderTop') {
-          // AR 模式下 raycast 优先：原理同上。
+          // 与桌面端同规则：上下底面圆心落入点的命中保护框内时，柱面让位于点。
           const cylinder = this.editor.scene.cylinders.get(geoId)
+          if (
+            cylinder &&
+            isObjectProtected(geoId, [cylinder.bottomCenterPoint.id, cylinder.topCenterPoint.id])
+          ) {
+            continue
+          }
+          // AR 模式下 raycast 优先：原理同上。
           const arDepthPenalty =
             cylinder &&
             ((cylinder.normalCircleId && hitNormalCircleIds.has(cylinder.normalCircleId)) ||
@@ -1986,6 +2033,17 @@ export class Interaction {
             object: resolved,
             screenDist: 0,
             depth: hit.distance + arDepthPenalty,
+            type,
+            geoId,
+          })
+        } else if (type === 'sphere') {
+          // 与桌面端同规则：球心点落入命中保护框内时，球面让位于点。
+          const sphere = this.editor.scene.spheres.get(geoId)
+          if (sphere && isObjectProtected(geoId, [sphere.centerPoint.id])) continue
+          candidates.push({
+            object: resolved,
+            screenDist: 0,
+            depth: hit.distance,
             type,
             geoId,
           })
@@ -4058,6 +4116,8 @@ export class Interaction {
     // 仅观看模式：仅允许选中浏览，禁止创建/删除等修改操作
     if (this.viewOnly && this.editor.mode !== EditorMode.Select) return
     this.updateMouse(e)
+    // 拖拽意图死区基准点：用于把「单击选中」与「按住拖拽」分开（见 beginDragIfLocked）
+    this.dragIntentOrigin = { x: e.clientX, y: e.clientY }
     const labelHit =
       this.editor.mode === EditorMode.Select ? this.pickLabelAtClient(e.clientX, e.clientY) : null
     const hit =
@@ -4723,6 +4783,10 @@ export class Interaction {
     if (this.shouldIgnoreMouseEvent()) return
     this.updateMouse(e)
 
+    // 协作占用预判：命中他人正在操作的元素时切换 not-allowed 光标。
+    // 仅在房间内存在远端占用时有开销（无协作者时 blockedDragIds 为空，直接返回）。
+    this.updateBlockedHoverCursor(e.clientX, e.clientY)
+
     if (this.arSceneRotating) {
       this.updateARSceneRotation(e.clientX, e.clientY)
       return
@@ -4818,6 +4882,9 @@ export class Interaction {
       this.previewLabelDrag(e.clientX, e.clientY)
       return
     }
+
+    // 协作房间内：位移超过死区、确认拖拽意图后才申请占用锁（死区内不写几何、不占锁）
+    if (!this.beginDragIfLocked(e.clientX, e.clientY)) return
 
     this.handleSelectionDragMove(e.altKey)
   }
@@ -4961,6 +5028,8 @@ export class Interaction {
     this.mobileInteractionMoved = false
     this.mobileInteractionStartedOnEmpty = false
     this.mobileInteractionStartClient.set(e.clientX, e.clientY)
+    // 拖拽意图死区基准点（触屏路径）
+    this.dragIntentOrigin = { x: e.clientX, y: e.clientY }
     this.updatePointerPosition(e.clientX, e.clientY)
     const labelHit =
       this.editor.mode === EditorMode.Select ? this.pickLabelAtClient(e.clientX, e.clientY) : null
@@ -6043,6 +6112,10 @@ export class Interaction {
       this.previewLabelDrag(e.clientX, e.clientY)
       return
     }
+    // 触屏：沿用与点击判定一致的阈值，确认拖拽意图后才申请占用锁
+    if (!this.beginDragIfLocked(e.clientX, e.clientY, Interaction.MOBILE_TAP_MOVE_THRESHOLD)) {
+      return
+    }
     this.handleSelectionDragMove(false)
   }
 
@@ -6212,6 +6285,8 @@ export class Interaction {
       !this.dragReferenceStartMathPos
     ) {
       this.startDrag(referencePos)
+      // 兜底路径：拖拽平面直到移动时才建立，锁申请在此刻补上（避免"几何已改、锁未申请"的空窗）
+      if (!this.commitPendingDragLock()) return
     }
     if (
       !this.dragPlane ||
@@ -6292,6 +6367,8 @@ export class Interaction {
       !this.dragReferenceStartMathPos
     ) {
       this.startDrag(rotatingPoint.position)
+      // 兜底路径：拖拽平面直到移动时才建立，锁申请在此刻补上
+      if (!this.commitPendingDragLock()) return null
     }
     if (
       !this.dragPlane ||
@@ -6367,13 +6444,13 @@ export class Interaction {
     // 仅观看模式：不启动拖拽，避免设置拖拽平面
     if (this.viewOnly) return
 
-    // 协作房间内：尝试获取目标元素的拖拽互斥锁；若已被其他用户拖拽，则取消本次拖拽
-    if (this.onDragLockRequest) {
+    // 协作房间内：只**登记**待申请目标，不在按下瞬间申请互斥锁。
+    // Select 模式下按下命中即调用 startDrag，因此「单纯选中」也会走到这里；
+    // 若在此申请，一次普通单击就会占用整个写入闭包并广播"正在操作"气泡。
+    // 真正的申请推迟到指针位移超过死区、确认拖拽意图之后（见 beginDragIfLocked）。
+    if (this.onDragLockRequest && this.isCollabRoomActive?.()) {
       const target = this.getActiveDragTarget()
-      if (target && !this.onDragLockRequest(target)) {
-        this.cancelBlockedDragStart()
-        return
-      }
+      if (target) this.dragLockPending = target
     }
 
     const cameraDir = this.renderer.getActiveCameraWorldDirection()
@@ -6806,8 +6883,12 @@ export class Interaction {
     this.liveSyncPointIdsCache = null
     this.dragSceneStartPositions = null
     this.dragStartAxisHints = null
-    // 拖拽结束（含取消/离开/切工具等所有路径）：释放协作拖拽互斥锁
-    this.onDragLockRelease?.()
+    // 拖拽结束（含取消/离开/切工具等所有路径）：释放协作拖拽互斥锁。
+    // 只有真正申请过锁（指针位移确认过拖拽意图）才需要释放——单纯选中从未持锁，无需广播。
+    if (this.dragLockAcquired) this.onDragLockRelease?.()
+    this.dragLockAcquired = false
+    this.dragLockPending = null
+    this.dragIntentOrigin = null
   }
 
   /** 获取当前正在拖拽的几何元素（互斥锁目标）；无有效目标（如纯标签拖拽）返回 null */
@@ -6886,9 +6967,11 @@ export class Interaction {
     return null
   }
 
-  /** 互斥锁被占用时取消本次拖拽：清除拖拽状态、恢复交互并可给出提示 */
-  private cancelBlockedDragStart() {
+  /** 互斥锁被占用时取消本次拖拽：清除拖拽状态、恢复交互并给出提示（文案由协作层提供） */
+  private cancelBlockedDragStart(message?: string) {
     this.draggingPointId = null
+    // 清掉待申请状态，避免泄漏到下一次按下（真正申请过的锁已在 endDrag 中释放）
+    this.dragLockPending = null
     // clearDraggingIds 会清空所有拖拽 id 与 pendingToggleSelection
     this.clearDraggingIds()
     this.dragSubject = null
@@ -6900,11 +6983,137 @@ export class Interaction {
     this.dragDepth = null
     this.syncControlLockState()
     this.renderer.renderer.domElement.style.cursor = 'default'
-    const toastMsg = '该元素正被其他用户拖拽，暂不可操作'
+    this.blockedHoverCursorActive = false
+    const toastMsg = message && message.length > 0
+      ? message
+      : '该元素正被其他用户拖拽，暂不可操作'
     window.dispatchEvent(
       new CustomEvent('toast', {
         detail: { msg: toastMsg, scope: 'viewport' },
       }),
+    )
+  }
+
+  /**
+   * 悬停命中「被他人占用」的元素时切换为 not-allowed 光标，让用户在拖动前就能预知冲突。
+   * 仅在房间内确有远端占用（blockedDragIds 非空）时才有开销，无协作者时直接返回。
+   */
+  private updateBlockedHoverCursor(clientX: number, clientY: number) {
+    const dom = this.renderer.renderer.domElement
+    if (
+      this.blockedDragIds.size === 0 ||
+      this.editor.mode !== EditorMode.Select ||
+      this.isDragInProgress()
+    ) {
+      this.clearBlockedHoverCursor()
+      return
+    }
+    const now = performance.now()
+    if (now - this.blockedHoverPickAt < Interaction.BLOCKED_HOVER_PICK_INTERVAL_MS) return
+    this.blockedHoverPickAt = now
+    const hit = this.pickScreenSpace(clientX, clientY)
+    const geoId = hit?.userData?.geoId as string | undefined
+    const blocked = geoId ? this.blockedDragIds.has(geoId) : false
+    if (blocked) {
+      if (!this.blockedHoverCursorActive) {
+        dom.style.cursor = 'not-allowed'
+        this.blockedHoverCursorActive = true
+      }
+      return
+    }
+    this.clearBlockedHoverCursor()
+  }
+
+  private clearBlockedHoverCursor() {
+    if (!this.blockedHoverCursorActive) return
+    const dom = this.renderer.renderer.domElement
+    if (dom.style.cursor === 'not-allowed') dom.style.cursor = 'default'
+    this.blockedHoverCursorActive = false
+  }
+
+  /**
+   * 协作锁的「延迟申请」+ 拖拽启动死区。
+   *
+   * 背景：拖拽锁原先在 startDrag（按下瞬间）申请，而 Select 模式下「单击选中」同样会走 startDrag，
+   * 于是一次普通单击就会占用整个写入闭包、广播"正在操作"气泡，甚至触发并发抢占。
+   *
+   * 现在拆成两步：
+   *   1) 按下（startDrag）时只登记待申请目标，不写锁、不广播；
+   *   2) 指针相对按下点位移超过阈值（确认拖拽意图）时才真正申请。
+   * 死区内不执行任何拖拽预览，因此申请被拒时几何尚未被改写，无需回滚。
+   *
+   * @returns true 表示可以继续拖拽；false 表示本次拖拽已取消（未确认意图，或已被他人占用）
+   */
+  private beginDragIfLocked(
+    clientX: number,
+    clientY: number,
+    thresholdPx: number = Interaction.DRAG_LOCK_INTENT_THRESHOLD_PX,
+  ): boolean {
+    if (!this.dragLockPending) return true
+
+    const origin = this.dragIntentOrigin
+    if (origin) {
+      const dx = clientX - origin.x
+      const dy = clientY - origin.y
+      if (dx * dx + dy * dy < thresholdPx * thresholdPx) return false
+    }
+    return this.commitPendingDragLock()
+  }
+
+  /**
+   * 确认拖拽意图后真正申请协作锁（不再判死区）。
+   *
+   * 两处调用：
+   * ① 指针位移超过死区（beginDragIfLocked）；
+   * ② 「拖拽平面直到移动时才建立」的兜底路径（handleDrag / handleRotateAroundPointDrag）——
+   *    该路径下拖拽已经在改写几何，必须立刻锁定，否则会出现「几何已改、锁尚未申请」的协作空窗。
+   *
+   * @returns true 表示可以继续拖拽；false 表示已被他人占用并已中止本次拖拽
+   */
+  private commitPendingDragLock(): boolean {
+    const pending = this.dragLockPending
+    if (!pending) return true
+    this.dragLockPending = null
+
+    const denial = this.onDragLockRequest?.(pending) ?? null
+    if (denial) {
+      // 拖拽尚未开始写几何，直接中止拖拽并提示
+      this.abortActiveDrag(denial.message)
+      return false
+    }
+    this.dragLockAcquired = true
+    return true
+  }
+
+  /**
+   * 被更高优先级的协作者抢占时中止当前拖拽（协作层权威锁仲裁用）。
+   * 与「拖拽开始被拒」不同，此时拖拽已进行中：先 endDrag 完整清理拖拽本地簿记
+   * （拖拽平面、起点快照、live-sync 缓存等），再清交互态并提示。
+   */
+  abortActiveDrag(reason: string) {
+    if (!this.isDragInProgress()) return
+    this.endDrag()
+    this.cancelBlockedDragStart(reason)
+  }
+
+  /** 当前是否有任何元素正在被本用户拖拽（含标签拖拽） */
+  private isDragInProgress(): boolean {
+    return (
+      this.draggingPointId !== null ||
+      this.draggingLineId !== null ||
+      this.draggingStraightLineId !== null ||
+      this.draggingPerpendicularLineId !== null ||
+      this.draggingParallelLineId !== null ||
+      this.draggingRayId !== null ||
+      this.draggingVectorId !== null ||
+      this.draggingCircleId !== null ||
+      this.draggingSphereId !== null ||
+      this.draggingConeId !== null ||
+      this.draggingCylinderId !== null ||
+      this.draggingFaceId !== null ||
+      this.draggingNetId !== null ||
+      this.draggingNetControlEdgeId !== null ||
+      this.draggingLabelTarget !== null
     )
   }
 

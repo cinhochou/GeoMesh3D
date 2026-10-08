@@ -13,12 +13,26 @@ export interface RoomMember {
   nickname: string | null
   avatarUrl: string | null
   role: RoomRole
+  /** 首次加入房间的时间（后端成员记录创建时间，整个成员关系存续期不变） */
   joinedAt: string
+  /**
+   * 上一次加入房间的时间：每次重新加入协作都会刷新。
+   * 后端未提供该字段时回退为 null，此时界面退化为展示 joinedAt。
+   */
+  lastJoinedAt?: string | null
   // 是否在线（由后端心跳维护）
   isOnline?: boolean
   // 最后心跳时间
   lastSeenAt?: string | null
 }
+
+/**
+ * 成员列表排序与展示所用的「加入时间」。
+ * 优先取上一次加入时间（lastJoinedAt），缺失时回退到首次加入时间（joinedAt），
+ * 保证后端尚未提供 lastJoinedAt 时界面行为与原先一致。
+ */
+export const getMemberJoinedTime = (member: RoomMember): string =>
+  member.lastJoinedAt || member.joinedAt
 
 // 房间（当前用户视角）
 export interface Room {

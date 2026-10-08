@@ -9,12 +9,20 @@ type ARToolkitSourceLike = {
   onResize?: () => void
   copyElementSizeTo?: (el: HTMLElement) => void
   copySizeTo?: (el: HTMLElement) => void
+  dispose?: () => void
 }
 
 type ARToolkitContextLike = {
   init: (onReady: () => void) => void
   getProjectionMatrix: () => THREE.Matrix4
   update: (sourceElement: HTMLElement) => void
+  /** ar.js 内部持有的 ARToolKit 控制器：持有 WASM 内存与 50Hz 轮询定时器，必须显式释放 */
+  arController?: { dispose?: () => void } | null
+  dispose?: () => void
+}
+
+type ARMarkerControlsLike = {
+  dispose?: () => void
 }
 
 interface ARManagerDeps {
@@ -37,6 +45,16 @@ interface ARManagerDeps {
 export class ARManager {
   private arToolkitSource: ARToolkitSourceLike | null = null
   private arToolkitContext: ARToolkitContextLike | null = null
+  private arMarkerControls: ARMarkerControlsLike | null = null
+  /**
+   * camera_para.dat / myTraining.patt 的加载去重。
+   *
+   * ar.js 内部用 XHR 直接拉这两个文件，既不走THREE.Cache，也不受浏览器缓存可靠控制，
+   * 且每次 new ArToolkitContext / ArMarkerControls 都会重新拉一遍。
+   * 这里记录「是否已发起过初始化」：同一页面会话内只初始化一次，
+   * 反复开关 AR 时复用已有的 context / controls，不再重复下载。
+   */
+  private arKitInitialized = false
   private _isARMode = false
   private arAnchorInitialized = false
   private arLastMarkerSeenAt = 0
@@ -200,6 +218,8 @@ export class ARManager {
   }
 
   private initAR() {
+    // 摄像头源每次进入 AR 都要重建（MediaStream 是一次性的，必须重新申请权限与轨道），
+    // 但 ARToolKit 的标定参数与 marker 图样不随进入次数变化，重建会造成重复 XHR 下载。
     this.arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' })
     const source = this.arToolkitSource
     if (!source) return
@@ -219,6 +239,12 @@ export class ARManager {
       }, 200)
     })
 
+    // 标定参数 + marker 图样：整个会话内只初始化一次，复用已有实例避免重复下载
+    if (this.arKitInitialized && this.arToolkitContext) {
+      this.deps.scene.visible = false
+      return
+    }
+
     this.arToolkitContext = new THREEx.ArToolkitContext({
       cameraParametersUrl: '/data/camera_para.dat',
       detectionMode: 'mono',
@@ -237,14 +263,50 @@ export class ARManager {
       this.deps.arCamera.updateMatrixWorld(true)
     })
 
-    new THREEx.ArMarkerControls(this.arToolkitContext, this.deps.arMarkerRoot, {
+    this.arMarkerControls = new THREEx.ArMarkerControls(this.arToolkitContext, this.deps.arMarkerRoot, {
       type: 'pattern',
       patternUrl: '/arcode/myTraining.patt',
       changeMatrixMode: 'modelViewMatrix',
       maxDetectionRate: 60,
     })
 
+    this.arKitInitialized = true
     this.deps.scene.visible = false
+  }
+
+  /**
+   * 彻底释放 ARToolKit 相关资源。
+   *
+   * 必须在丢弃引用之前调用：ar.js 的 ArMarkerControls._initArtoolkit 会启动一个
+   * 50Hz（setInterval(..., 1000/50)）轮询等待 arController 就绪，
+   * 该定时器只在 arController !== null 时 clearInterval。若在初始化完成前退出 AR，
+   * 仅把 context 置为 null 会让这个 50Hz 定时器永久泄漏。
+   */
+  private disposeARKit() {
+    if (this.arMarkerControls) {
+      try {
+        this.arMarkerControls.dispose?.()
+      } catch {
+        // dispose 失败不影响继续释放其余资源
+      }
+      this.arMarkerControls = null
+    }
+
+    if (this.arToolkitContext) {
+      try {
+        this.arToolkitContext.arController?.dispose?.()
+      } catch {
+        // 同上
+      }
+      try {
+        this.arToolkitContext.dispose?.()
+      } catch {
+        // 同上
+      }
+      this.arToolkitContext = null
+    }
+
+    this.arKitInitialized = false
   }
 
   async toggleAR(enabled: boolean) {
@@ -293,9 +355,17 @@ export class ARManager {
         }
         this.arToolkitSource.domElement.remove()
       }
+      try {
+        this.arToolkitSource.dispose?.()
+      } catch {
+        // dispose 失败不影响继续恢复场景状态
+      }
       this.arToolkitSource = null
     }
-    this.arToolkitContext = null
+    // ARToolKit 的标定参数与 marker 图样较贵（需 XHR 下载 + WASM 实例），
+    // 保留实例供下次进入 AR 复用，避免反复开关 AR 都重新下载。
+    // camera_para.dat 与 myTraining.patt 是内容恒定的静态资源，无过期风险。
+    this.deps.arMarkerRoot.visible = false
 
     this.deps.scene.visible = true
     this.deps.camera.visible = true
@@ -386,5 +456,32 @@ export class ARManager {
     return this._isARMode && this.arToolkitSource?.domElement
       ? (this.arToolkitSource.domElement as HTMLVideoElement)
       : null
+  }
+
+  /**
+   * 释放全部 AR 资源。应在编辑器销毁时调用（ARManager 生命周期与编辑器一致）。
+   *
+   * 与 restoreFromBackupState 的区别：退出 AR 时为了避免重复下载会保留
+   * ARToolKit 实例复用，而这里是彻底销毁（页面卸载 / 编辑器销毁场景），
+   * 必须释放 arController 以停掉 ar.js 内部的 50Hz 轮询定时器。
+   */
+  dispose() {
+    if (this.arToolkitSource) {
+      const video = this.arToolkitSource.domElement
+      if (video) {
+        const srcObject = video.srcObject
+        if (srcObject instanceof MediaStream) {
+          srcObject.getTracks().forEach((t: MediaStreamTrack) => t.stop())
+        }
+        video.remove()
+      }
+      try {
+        this.arToolkitSource.dispose?.()
+      } catch {
+        // 忽略释放失败
+      }
+      this.arToolkitSource = null
+    }
+    this.disposeARKit()
   }
 }

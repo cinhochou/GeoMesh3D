@@ -664,7 +664,19 @@ export class ThreeRenderer {
     }
     this.geometrySyncer.updateScreenSpaceLabels()
     this.geometrySyncer.updateDepthOcclusion()
+    // 协作占用红光：同步光晕变换 + 呼吸动画（无占用时内部直接返回，零开销）
+    this.geometrySyncer.updateOccupied()
     this.renderer.render(this.scene, this.getActiveCamera())
+  }
+
+  /** 设置被其他协作者占用的元素集合（红光反馈）；语义幂等，可随占用态更新频繁调用 */
+  setOccupied(ids: Iterable<string>) {
+    this.geometrySyncer.setOccupied(ids)
+  }
+
+  /** 清除全部占用红光 */
+  clearOccupied() {
+    this.geometrySyncer.clearOccupied()
   }
 
   private updateSharedWorldRotation() {

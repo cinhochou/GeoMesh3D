@@ -16,12 +16,34 @@ const getCachesApi = (): CacheStorage | null => {
   }
 }
 
+// Cache Storage 只在安全上下文（https / localhost）可用。
+// 不可用时会静默退化为「每次直接 fetch」，表现为刷新页面后所有图片重新下载，
+// 非常容易被误判为缓存 bug，故这里只提示一次，避免刷屏。
+let hasWarnedNoCacheStorage = false
+
+const warnNoCacheStorageOnce = (reason: 'unsupported' | 'open-failed'): void => {
+  if (hasWarnedNoCacheStorage) return
+  hasWarnedNoCacheStorage = true
+  const secureContext =
+    typeof self !== 'undefined' && self.isSecureContext ? '安全上下文' : '非安全上下文'
+  console.warn(
+    `[imageCache] 图片持久化缓存不可用（${reason}，当前为${secureContext}），` +
+      '头像等图片将在每次刷新后重新下载。' +
+      '如需启用，请通过 https 或 http://localhost 访问（Cache Storage 仅在安全上下文可用）。' +
+      '当前会话内的图片仍由 blob URL 缓存复用，切换页面不会重复请求。',
+  )
+}
+
 const openImageCache = async (): Promise<Cache | null> => {
   const cachesApi = getCachesApi()
-  if (!cachesApi) return null
+  if (!cachesApi) {
+    warnNoCacheStorageOnce('unsupported')
+    return null
+  }
   try {
     return await cachesApi.open(IMAGE_CACHE_NAME)
   } catch {
+    warnNoCacheStorageOnce('open-failed')
     return null
   }
 }

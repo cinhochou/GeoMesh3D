@@ -42,6 +42,12 @@ import { Scene } from '../core/scene/Scene'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
 import { CollabManager, type DragLockTarget, type RemoteDragState } from '../core/collab/CollabManager'
+import {
+  collectSceneElementIds,
+  computeLockScope,
+  computeWritePointsForElementIds,
+} from '../core/collab/lockScope'
+import { collabWriteEvents } from '../utils/collabWriteEvents'
 import SolverSchedulerWorker from '../core/perf/solverScheduler.worker?worker'
 import { useUiStore, type AppSettings } from '@/store/uiStore'
 import { useSceneStore } from '@/store/sceneStore'
@@ -235,6 +241,50 @@ const dragAwarenessLayerRef = ref<HTMLElement | null>(null)
 const activeDrags = ref<RemoteDragState[]>([])
 // 气泡位于元素屏幕坐标右侧的间距（px）
 const DRAG_BUBBLE_GAP_PX = 18
+
+/**
+ * 汇总房间内「他人」的占用态，分发给渲染层（红光反馈）与交互层（悬停 not-allowed 预判）。
+ * 本用户自己的拖拽不计入——自己的占用不该干扰自己的视觉与操作。
+ * 锁判定用点级（最小精确），红光呈现用对象级（直观），这里分发的是呈现集。
+ */
+const refreshOccupiedFeedback = () => {
+  const cm = collabManager.value
+  const localClientId = cm?.getProviderClientId() ?? null
+  const occupied = new Set<string>()
+  for (const drag of activeDrags.value) {
+    if (localClientId !== null && drag.clientId === localClientId) continue
+    if (drag.presentIds && drag.presentIds.length > 0) {
+      drag.presentIds.forEach((id) => occupied.add(id))
+    } else {
+      // 旧版本协作者只广播单元素：至少把它自己标红
+      occupied.add(drag.elementId)
+    }
+  }
+  renderer.setOccupied(occupied)
+  interaction.setBlockedDragIds(occupied)
+}
+
+/**
+ * 非拖拽写路径的互斥拦截（侧边栏改数值、删除、对齐、合并、撤销/重做等）。
+ * 命令实例 → 场景元素 id → 写入点集 → 与远端拖拽的写入点集求交，
+ * 与拖拽共用同一套判据，避免「拖拽被锁住了但侧边栏还能改」的漏洞。
+ * 返回提示文案与被拦元素 id；无冲突返回 null。
+ */
+const resolveWriteConflictMessage = (
+  source: unknown,
+): { message: string; elementIds: string[] } | null => {
+  const cm = collabManager.value
+  if (!cm || cm.getStatus().room === null) return null
+  if (cm.getIsApplyingSharedHistory()) return null
+  const elementIds = collectSceneElementIds(scene, source)
+  if (elementIds.length === 0) return null
+  const writePoints = computeWritePointsForElementIds(scene, elementIds)
+  const conflict = cm.canWritePoints(writePoints)
+  if (!conflict) return null
+  const blocker = conflict.userName || '其他用户'
+  const subject = conflict.rootName || '相关几何对象'
+  return { message: `${subject} 正被 ${blocker} 操作，本次修改已取消`, elementIds }
+}
 
 // 协作历史消息（UI 骨架阶段为空数组；消息机制后续讨论后落实）
 const collabHistoryMessages = ref<CollabHistoryMessage[]>([])
@@ -789,7 +839,15 @@ onMounted(() => {
     // 清理本地残留项目（clearLocalSceneOnly），避免协作项目资产残留在编辑器页面导致泄露。
     // 不调用 leaveRoom API、不发跨 Tab leave 事件（用户非主动离开，服务端成员关系保留）。
     // 不清空服务端协作项目数据（leaveRoom 已断开 Yjs 同步，本地清空不影响远端）。
-    if (wasConnected && !status.connected && collabStore.currentRoom) {
+    // 正在 joinRoom 的过程中（正在尝试候选地址），
+    // 其中的连接失败不是「掉线」，不能触发退出协作流程，
+    // 否则会与 joinRoom 的清理逻辑交错（leaveRoom 会把 provider 置空）。
+    if (
+      wasConnected &&
+      !status.connected &&
+      collabStore.currentRoom &&
+      !collabManager.value?.isJoiningRoom
+    ) {
       const roomId = collabStore.currentRoom.id
       // 用 setTimeout(0) 延迟到下一宏任务，避免在状态回调中同步重入 leaveRoom
       window.setTimeout(() => {
@@ -825,9 +883,11 @@ onMounted(() => {
     sharedHistoryState.value = state
   }
 
-  // 协作拖拽感知：监听房间内所有用户（含自己）的拖拽状态，渲染"xxx正在操作..."气泡
+  // 协作拖拽感知：监听房间内所有用户（含自己）的拖拽状态，渲染"xxx正在操作..."气泡，
+  // 并把「被他人占用」的元素集合分发给渲染层（红光）与交互层（not-allowed 悬停预判）
   collabManager.value.onActiveDragsUpdate = (drags) => {
     activeDrags.value = drags
+    refreshOccupiedFeedback()
   }
   // 协作历史消息：从 Yjs 共享文档同步，渲染到左上角消息框
   collabManager.value.onCollabMessagesUpdate = (messages) => {
@@ -844,10 +904,32 @@ onMounted(() => {
     if (role !== 'creator' && role !== 'editor' && role !== 'viewer') return
     current.myRole = role as Room['myRole']
   }
-  interaction.onDragLockRequest = (target: DragLockTarget) =>
-    collabManager.value?.tryAcquireDragLock(target) ?? true
+  // 拖拽锁的申请时机：仅协作房间内启用「按下时登记 + 位移确认后申请」，
+  // 使单纯的单击选中不占用互斥锁、不广播占用气泡；单机编辑保持原有零死区手感。
+  interaction.isCollabRoomActive = () => collabManager.value?.getStatus().room !== null
+
+  interaction.onDragLockRequest = (target: DragLockTarget) => {
+    const cm = collabManager.value
+    if (!cm) return null
+    // 以「写入点集作用域」申请互斥锁：只有与自己会写入的点相交的远端拖拽才算冲突
+    const scope = computeLockScope(scene, target)
+    if (cm.tryAcquireDragLock(scope)) return null
+    const conflict = cm.getLastDragConflict()
+    const blocker = conflict?.userName || '其他用户'
+    const subject = conflict?.rootName || scope.rootName || '该元素'
+    return { message: `${subject} 正被 ${blocker} 操作，暂不可拖动` }
+  }
   interaction.onDragLockRelease = () => {
     collabManager.value?.releaseDragLock()
+    // 本用户退出拖拽后立即回收自己贡献的占用红光
+    refreshOccupiedFeedback()
+  }
+  // 权威锁仲裁：本地拖拽被并发申请者按确定性优先级抢占时中止拖拽并提示
+  collabManager.value.onDragLockPreempted = ({ userName, rootName }) => {
+    interaction.abortActiveDrag(
+      `${rootName || '该对象'} 已被 ${userName || '其他用户'} 接管，本次拖动已中止`,
+    )
+    refreshOccupiedFeedback()
   }
 
   interaction.onARSceneRotateStartRequest = () =>
@@ -870,6 +952,18 @@ onMounted(() => {
   editor.executeCommand = (cmd: Command) => {
     const cm = collabManager.value
     const inRoom = cm && cm.getStatus().room !== null
+    // 非拖拽写路径互斥：命令写入的点若与他人拖拽的写入点集相交，直接取消并提示。
+    // 必须在执行前拦截——否则一边求解器回写、一边拖拽预览，几何会被互相拉回。
+    if (inRoom) {
+      const blocked = resolveWriteConflictMessage(cmd)
+      if (blocked) {
+        showToast(blocked.message, 'viewport')
+        // 命令被拦 = 场景未变化，SideBar 依赖场景变化的草稿同步不会触发，
+        // 输入框会保留未生效的值；主动通知它回灌一次，消除界面漂移。
+        collabWriteEvents.emit(blocked)
+        return
+      }
+    }
     if (inRoom && !cm!.getIsApplyingSharedHistory()) {
       if (collabTransactionDepth > 0) {
         // 协作事务中：只执行命令，不创建共享历史记录（由 commitTransaction 统一创建）
@@ -940,6 +1034,16 @@ onMounted(() => {
   editor.executeHistoryEntry = (entry: HistoryEntry) => {
     const cm = collabManager.value
     const inRoom = cm && cm.getStatus().room !== null
+    // 撤销/重做同样是非拖拽写路径：历史条目携带的 before/after 快照被扫描时已跳过，
+    // 只按 intent / 目标 id 判定是否与远端拖拽冲突
+    if (inRoom) {
+      const blocked = resolveWriteConflictMessage(entry)
+      if (blocked) {
+        showToast(blocked.message, 'viewport')
+        collabWriteEvents.emit(blocked)
+        return
+      }
+    }
     if (inRoom && !cm!.getIsApplyingSharedHistory()) {
       if (collabTransactionDepth > 0) {
         // 协作事务中：只执行命令，不创建共享历史记录
@@ -1538,6 +1642,9 @@ onUnmounted(() => {
   window.removeEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
   window.removeEventListener('show-cone-radius-dialog', handleShowConeRadiusDialog)
   window.removeEventListener('show-cylinder-radius-dialog', handleShowCylinderRadiusDialog)
+  // 协作占用反馈清理：移除红光叠加层并复位悬停光标状态
+  interaction?.setBlockedDragIds([])
+  renderer?.clearOccupied()
   renderer?.dispose()
   viewportResizeObserver?.disconnect()
   viewportResizeObserver = null
@@ -2669,7 +2776,13 @@ const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = '
   }
   // 先断开协作连接，再清空本地场景。
   // 必须在 leaveRoom() 之后清空，否则清空操作会被 Yjs 同步回协作房间。
-  cm?.leaveRoom()
+  // 连接已断开时（reason === 'disconnect'）不再广播「离开了协作」：此时写入的消息
+  // 只存在于本地文档，provider 随即销毁，永远同步不到服务器与其他协作者。
+  // 该场景的离开记录由信令服务器在观察到连接断开时权威补写。
+  cm?.leaveRoom({ announceLeave: reason !== 'disconnect' })
+  // 离开房间后立即清空占用反馈（红光泽灭 + 悬停光标复位）
+  activeDrags.value = []
+  refreshOccupiedFeedback()
   // 清空本地编辑器场景（不影响协作房间项目内容，因为已断开同步）
   clearLocalSceneOnly()
   // 房间关闭后清空协作历史消息，等待下次加入重置
