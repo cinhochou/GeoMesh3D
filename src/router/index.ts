@@ -7,6 +7,7 @@ import ProfileView from '@/views/ProfileView.vue'
 import ProjectListView from '@/views/ProjectListView.vue'
 import RoomListView from '@/views/RoomListView.vue'
 import CollabHallView from '@/views/CollabHallView.vue'
+import PublicResourcesView from '@/views/PublicResourcesView.vue'
 import RecycleBinView from '@/views/RecycleBinView.vue'
 import { useAuthStore } from '@/store/authStore'
 
@@ -52,6 +53,12 @@ const routes = [
     name: 'collab-hall',
     component: CollabHallView,
     meta: { requiresAuth: true, title: '协作大厅' },
+  },
+  {
+    path: '/public-resources',
+    name: 'public-resources',
+    component: PublicResourcesView,
+    meta: { requiresAuth: true, title: '公开资源' },
   },
   {
     path: '/recycle-bin',

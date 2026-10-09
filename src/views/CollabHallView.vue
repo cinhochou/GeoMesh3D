@@ -39,6 +39,43 @@ const searchKeyword = ref('')
 const currentSort = ref<HallSort>('latest')
 const joiningRoomId = ref<string | null>(null)
 
+// ---- 懒加载：滚动到底部附近时追加渲染一批 ----
+// 一次性拉取全部公开房间数据，但只渲染前 visibleCount 个卡片，
+// 接近底部时再追加，避免房间很多时首屏一次性挂载大量 DOM。
+const LAZY_BATCH_SIZE = 12
+const visibleCount = ref(LAZY_BATCH_SIZE)
+const bodyRef = ref<HTMLElement | null>(null)
+const showBackToTop = ref(false)
+
+const hasMore = computed(() => visibleCount.value < filteredRooms.value.length)
+const visibleRooms = computed(() => filteredRooms.value.slice(0, visibleCount.value))
+
+const loadMore = () => {
+  if (!hasMore.value) return
+  visibleCount.value = Math.min(visibleCount.value + LAZY_BATCH_SIZE, filteredRooms.value.length)
+}
+
+const onBodyScroll = () => {
+  const el = bodyRef.value
+  if (!el) return
+  showBackToTop.value = el.scrollTop > 240
+  if (!hasMore.value) return
+  // 距离底部 400px 内即预加载下一批，滚动无停顿感
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
+    loadMore()
+  }
+}
+
+const scrollToTop = () => {
+  bodyRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+/** 搜索/排序变化时重置懒加载窗口，避免"结果变少了但已渲染很多"的错位 */
+const resetVisible = () => {
+  visibleCount.value = LAZY_BATCH_SIZE
+  bodyRef.value?.scrollTo({ top: 0 })
+}
+
 // 我的申请状态缓存（用于显示"正在审核"遮罩）
 const myApplicationsByRoom = computed(() => {
   const map = new Map<string, RoomApplication>()
@@ -50,29 +87,50 @@ const myApplicationsByRoom = computed(() => {
 })
 const myApplications = ref<RoomApplication[]>([])
 
-const sortOptions: { value: HallSort; label: string }[] = [
-  { value: 'latest', label: '最新' },
-  { value: 'active', label: '最多在线' },
-  { value: 'members', label: '最多成员' },
-  { value: 'capacity', label: '最大容量' },
+// 排序方向（组件内 UI 概念，不进入共享类型）
+type HallSortDir = 'asc' | 'desc'
+
+const sortOptions: {
+  value: HallSort
+  defaultDir: HallSortDir
+  labels: Record<HallSortDir, string>
+}[] = [
+  { value: 'latest', defaultDir: 'desc', labels: { desc: '最新', asc: '最早' } },
+  { value: 'active', defaultDir: 'desc', labels: { desc: '最多在线', asc: '最少在线' } },
+  { value: 'members', defaultDir: 'desc', labels: { desc: '最多成员', asc: '最少成员' } },
+  { value: 'capacity', defaultDir: 'desc', labels: { desc: '最大容量', asc: '最小容量' } },
 ]
+
+// 各维度的排序方向记忆：每个维度各自记住上次选定的方向，切换维度互不影响。
+// 仅存活于组件实例内存中（页面刷新即回到 defaultDir），不写入 localStorage / sessionStorage。
+const sortDirMap = ref<Record<HallSort, HallSortDir>>(
+  Object.fromEntries(sortOptions.map((o) => [o.value, o.defaultDir])) as Record<
+    HallSort,
+    HallSortDir
+  >,
+)
+
+/** 按钮文案：取自该维度自己记住的方向（含未激活的维度，故切换维度不丢失方向） */
+const sortLabelOf = (opt: (typeof sortOptions)[number]) => opt.labels[sortDirMap.value[opt.value]]
 
 // 客户端排序：大厅一次性加载全部公开房间后，本地按需排序
 const filteredRooms = computed(() => {
   const rooms = [...allRooms.value]
+  // asc → 1 / desc → -1，统一乘到比较结果上
+  const dir = sortDirMap.value[currentSort.value] === 'asc' ? 1 : -1
   switch (currentSort.value) {
     case 'active':
-      rooms.sort((a, b) => (b.onlineCount || 0) - (a.onlineCount || 0))
+      rooms.sort((a, b) => ((a.onlineCount || 0) - (b.onlineCount || 0)) * dir)
       break
     case 'members':
-      rooms.sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0))
+      rooms.sort((a, b) => ((a.memberCount || 0) - (b.memberCount || 0)) * dir)
       break
     case 'capacity':
-      rooms.sort((a, b) => (b.maxMembers || 0) - (a.maxMembers || 0))
+      rooms.sort((a, b) => ((a.maxMembers || 0) - (b.maxMembers || 0)) * dir)
       break
     default:
       rooms.sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        (a, b) => (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * dir,
       )
   }
   return rooms
@@ -82,6 +140,10 @@ const loadRooms = async (silent = false) => {
   if (!silent) isLoading.value = true
   try {
     allRooms.value = await roomApi.getHallRooms(searchKeyword.value.trim() || undefined)
+    // 列表变短时收敛已渲染窗口，避免 visibleRooms 越界（slice 本身安全，这里是状态一致性）
+    if (visibleCount.value > allRooms.value.length) {
+      visibleCount.value = Math.max(LAZY_BATCH_SIZE, allRooms.value.length)
+    }
     // 同时加载当前用户的申请状态
     if (user.value?.id) {
       myApplications.value = await roomApi.getMyApplications()
@@ -137,12 +199,20 @@ const submitApplication = async () => {
 }
 
 const handleSearch = () => {
+  resetVisible()
   loadRooms()
 }
 
 const handleSort = (sort: HallSort) => {
-  currentSort.value = sort
-  // 客户端排序，无需重新请求
+  if (currentSort.value === sort) {
+    // 重复点击同一按钮：切换该维度的排序方向（如「最多在线」⇄「最少在线」）
+    sortDirMap.value[sort] = sortDirMap.value[sort] === 'desc' ? 'asc' : 'desc'
+  } else {
+    // 切换到另一维度：沿用该维度上次记住的方向，不重置
+    currentSort.value = sort
+  }
+  // 客户端排序，无需重新请求；重置懒加载窗口避免错位
+  resetVisible()
 }
 
 const formatTime = (iso: string): string => {
@@ -249,6 +319,10 @@ onMounted(() => {
   // 跨 Tab 同步：active-room 标记变化时立即刷新高亮
   window.addEventListener('storage', handleStorageEvent)
   collabRoomEvents.on(handleCollabRoomEvent)
+  // 懒加载滚动监听
+  if (bodyRef.value) {
+    bodyRef.value.addEventListener('scroll', onBodyScroll, { passive: true })
+  }
   // 定时轮询：实时同步在线人数、标签、房间信息（静默刷新，不触发 loading 骨架）
   // 间隔 15 秒（与房间列表页对齐）：大厅轮询的目的只是刷新 onlineCount 与标签，
   // 而在线状态本身由信令服务器的实时 peer 查询提供，3 秒一轮并无额外精度收益，
@@ -262,6 +336,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('storage', handleStorageEvent)
   collabRoomEvents.off(handleCollabRoomEvent)
+  if (bodyRef.value) {
+    bodyRef.value.removeEventListener('scroll', onBodyScroll)
+  }
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -307,19 +384,25 @@ onBeforeUnmount(() => {
           <button v-if="searchKeyword" class="hall-search-clear" @click="searchKeyword = ''; handleSearch()">×</button>
         </div>
         <div class="hall-sort-bar">
+          <!-- 每个按钮各自记住自己的排序方向；重复点击同一按钮切换方向，箭头指示该维度当前方向 -->
           <button
             v-for="opt in sortOptions"
             :key="opt.value"
             class="hall-sort-btn"
             :class="{ active: currentSort === opt.value }"
             @click="handleSort(opt.value)"
-          >{{ opt.label }}</button>
+          >
+            {{ sortLabelOf(opt) }}
+            <span class="hall-sort-arrow" :class="{ 'is-dim': currentSort !== opt.value }">{{
+              sortDirMap[opt.value] === 'asc' ? '↑' : '↓'
+            }}</span>
+          </button>
         </div>
       </div>
       <div class="hall-divider"></div>
     </div>
 
-    <div class="hall-body">
+    <div ref="bodyRef" class="hall-body">
       <div class="hall-body-inner">
         <div v-if="isLoading" class="hall-loading">
           <div class="hall-spinner"></div>
@@ -332,9 +415,10 @@ onBeforeUnmount(() => {
           </svg>
           <p>暂无公开房间</p>
         </div>
-        <div v-else class="hall-grid">
+        <template v-else>
+        <div class="hall-grid">
           <div
-            v-for="room in filteredRooms"
+            v-for="room in visibleRooms"
             :key="room.id"
             class="hall-card"
             :class="{
@@ -382,8 +466,31 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+
+        <!-- 懒加载状态：还有更多时显示触发按钮（滚动也会自动加载），到底显示结束提示 -->
+        <div v-if="hasMore" class="hall-load-more">
+          <button class="hall-load-more-btn" @click="loadMore">加载更多</button>
+        </div>
+        <div v-else class="hall-list-end">已显示全部 {{ filteredRooms.length }} 个房间</div>
+        </template>
       </div>
     </div>
+
+    <!-- 回到顶部悬浮按钮 -->
+    <Transition name="backtop-fade">
+      <button
+        v-if="showBackToTop"
+        class="hall-back-to-top"
+        @click="scrollToTop"
+        title="回到顶部"
+        aria-label="回到顶部"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5" />
+          <polyline points="5 12 12 5 19 12" />
+        </svg>
+      </button>
+    </Transition>
 
     <!-- 申请加入浮窗（需要批准的房间） -->
     <Transition name="hall-fade">
@@ -567,6 +674,9 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 .hall-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 8px 18px;
   border-radius: 8px;
   border: 1px solid #3d3d3d;
@@ -586,6 +696,15 @@ onBeforeUnmount(() => {
   border-color: #43f260;
   color: #43f260;
   background: rgba(67, 242, 96, 0.08);
+}
+/* 排序方向箭头：每个按钮显示自己记住的方向 */
+.hall-sort-arrow {
+  font-size: 12px;
+  line-height: 1;
+}
+/* 非当前生效的维度：箭头降透明度，突出真正生效的排序 */
+.hall-sort-arrow.is-dim {
+  opacity: 0.5;
 }
 
 .hall-divider {
@@ -1033,5 +1152,87 @@ onBeforeUnmount(() => {
 .hall-fade-enter-from .hall-popup,
 .hall-fade-leave-to .hall-popup {
   transform: scale(0.96);
+}
+
+/* ---- 懒加载 ---- */
+.hall-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 28px 0 8px;
+}
+.hall-load-more-btn {
+  padding: 9px 28px;
+  border-radius: 8px;
+  border: 1px solid #3d3d3d;
+  background: #252525;
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.hall-load-more-btn:hover {
+  border-color: #43f260;
+  color: #43f260;
+  background: #2a2a2a;
+}
+.hall-list-end {
+  text-align: center;
+  padding: 24px 0 8px;
+  color: #666;
+  font-size: 12px;
+}
+
+/* ---- 回到顶部 ---- */
+.hall-back-to-top {
+  position: fixed;
+  right: 28px;
+  bottom: 32px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(67, 242, 96, 0.4);
+  background: linear-gradient(180deg, #2a2a2a 0%, #1d1d1d 100%);
+  color: #43f260;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(67, 242, 96, 0.1);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+  z-index: 50;
+}
+.hall-back-to-top svg {
+  width: 20px;
+  height: 20px;
+}
+.hall-back-to-top:hover {
+  transform: translateY(-2px);
+  border-color: rgba(67, 242, 96, 0.7);
+  color: #8df2a0;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.5),
+    0 0 0 2px rgba(67, 242, 96, 0.18);
+}
+.hall-back-to-top:active {
+  transform: translateY(0);
+}
+
+.backtop-fade-enter-active,
+.backtop-fade-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.backtop-fade-enter-from,
+.backtop-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>

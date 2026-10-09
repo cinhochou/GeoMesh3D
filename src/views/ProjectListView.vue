@@ -10,6 +10,7 @@ import ProxiedImage from '@/components/ProxiedImage.vue'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
 import { mergeArrayById } from '@/utils/reactiveMerge'
 import { withThumbnailVersion } from '@/utils/imageCache'
+import { getProjectSourceLabel, getProjectSourceClass } from '@/utils/projectLabels'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +43,8 @@ type SortValue =
   | 'updatedAsc'
   | 'createdDesc'
   | 'createdAsc'
+  | 'viewsDesc'
+  | 'clonesDesc'
 const sortBy = ref<SortValue>('nameAsc')
 const sortOpen = ref(false)
 const sortBarRef = ref<HTMLElement | null>(null)
@@ -53,6 +56,8 @@ const sortOptions: { value: SortValue; label: string; arrow: 'up' | 'down' }[] =
   { value: 'updatedAsc', label: '按修改时间', arrow: 'up' },
   { value: 'createdDesc', label: '按创建时间', arrow: 'down' },
   { value: 'createdAsc', label: '按创建时间', arrow: 'up' },
+  { value: 'viewsDesc', label: '按浏览量', arrow: 'down' },
+  { value: 'clonesDesc', label: '按另存量', arrow: 'down' },
 ]
 
 const currentSortLabel = computed(
@@ -235,6 +240,12 @@ const filteredProjects = computed(() => {
       break
     case 'createdAsc':
       sorted.sort((a, b) => timeOf(a.createdAt) - timeOf(b.createdAt))
+      break
+    case 'viewsDesc':
+      sorted.sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0))
+      break
+    case 'clonesDesc':
+      sorted.sort((a, b) => (b.cloneCount || 0) - (a.cloneCount || 0))
       break
   }
   return sorted
@@ -424,11 +435,7 @@ const formatDate = (dateStr: string) => {
 }
 
 const handlePublicResources = () => {
-  window.dispatchEvent(
-    new CustomEvent('toast', {
-      detail: { msg: '公开资源功能开发中', scope: 'global' },
-    }),
-  )
+  router.push({ name: 'public-resources' })
 }
 
 const handleNewProject = () => {
@@ -709,6 +716,18 @@ const handleRecycleBin = () => {
                       </button>
                     </template>
                     <span class="pl-card-id">#{{ project.id }}</span>
+                    <!-- 项目来源：紧跟项目 ID 之后 -->
+                    <span
+                      class="pl-source-badge"
+                      :class="getProjectSourceClass(project.source)"
+                      :title="
+                        project.source === 'PUBLIC_RESOURCE' && project.sourceProjectId
+                          ? `项目来源：${getProjectSourceLabel(project.source)}（派生自项目 ${project.sourceProjectId}）`
+                          : `项目来源：${getProjectSourceLabel(project.source)}`
+                      "
+                    >
+                      {{ getProjectSourceLabel(project.source) }}
+                    </span>
                   </div>
                   <div v-if="isEditing(project.id, 'description')" class="pl-edit-wrap">
                     <textarea
@@ -839,6 +858,40 @@ const handleRecycleBin = () => {
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                   </svg>
                   修改：{{ formatDate(project.updatedAt) }}
+                </span>
+              </div>
+
+              <!-- 浏览量 / 另存量 -->
+              <div class="pl-card-stats">
+                <span class="pl-card-stat" title="浏览量">
+                  <svg
+                    class="pl-meta-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  {{ project.viewCount ?? 0 }}
+                </span>
+                <span class="pl-card-stat" title="另存量">
+                  <svg
+                    class="pl-meta-icon"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  {{ project.cloneCount ?? 0 }}
                 </span>
               </div>
 
@@ -1847,6 +1900,61 @@ const handleRecycleBin = () => {
 
 .pl-meta-sep {
   color: #444;
+}
+
+/* ---- 项目来源 / 浏览量 / 另存量 ---- */
+.pl-card-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 2px;
+  color: #888;
+  font-size: 12px;
+}
+
+.pl-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: default;
+  /* 位于项目 ID 右侧：不参与压缩，保持完整显示 */
+  flex-shrink: 0;
+  /* 名称行采用 baseline 对齐，徽章自身上移使文字基线更贴合 ID */
+  align-self: center;
+}
+
+/* 用户自主创建：中性灰 */
+.pl-source-badge.is-user {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: #3d3d3d;
+  color: #aaa;
+}
+
+/* 协作关联创建：蓝青色系 */
+.pl-source-badge.is-collab {
+  background: rgba(80, 180, 255, 0.12);
+  border-color: rgba(80, 180, 255, 0.35);
+  color: #7cc4ff;
+}
+
+/* 公开资源创建：绿色系（与主色一致，突出"派生自公开资源"） */
+.pl-source-badge.is-public-resource {
+  background: rgba(67, 242, 96, 0.1);
+  border-color: rgba(67, 242, 96, 0.32);
+  color: #6ee08a;
+}
+
+.pl-card-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .pl-sticky-bottom {

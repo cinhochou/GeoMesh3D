@@ -24,6 +24,8 @@ const props = defineProps<{
   viewOnly?: boolean
   // 外部触发打开"创建协作"对话框（自增计数，>0 且变化时触发）
   collabCreateTrigger?: number
+  // 当前打开的是他人的公开项目（只读）：显示「另存为我的项目」，隐藏「编辑项目」
+  isForeignProject?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +42,7 @@ const emit = defineEmits<{
   (e: 'new-project'): void
   (e: 'exit-project'): void
   (e: 'edit-project'): void
+  (e: 'save-as-my-project'): void
   (e: 'open-align-points'): void
   (e: 'project-created', projectId: string): void
 }>()
@@ -513,9 +516,17 @@ const handleExitProject = () => {
   emit('exit-project')
 }
 
+// 当前打开的是他人的公开项目（只读）：由父组件传入
+const isForeignProject = computed(() => props.isForeignProject === true)
+
 const handleEditProject = () => {
   closeSideMenu()
   emit('edit-project')
+}
+
+const handleSaveAsMyProject = () => {
+  closeSideMenu()
+  emit('save-as-my-project')
 }
 
 const handleOpenManual = () => {
@@ -1873,7 +1884,7 @@ onUnmounted(() => {
           <span>新建项目</span>
         </button>
         <button
-          v-if="hasActiveProject && (!currentRoom || isRoomCreator)"
+          v-if="hasActiveProject && (!currentRoom || isRoomCreator) && !isForeignProject"
           class="side-menu-item"
           @click="handleEditProject"
         >
@@ -1890,6 +1901,26 @@ onUnmounted(() => {
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
           </svg>
           <span>编辑项目</span>
+        </button>
+        <!-- 他人公开项目：提供「另存为我的项目」，创建属于自己的副本 -->
+        <button
+          v-if="hasActiveProject && isForeignProject"
+          class="side-menu-item"
+          @click="handleSaveAsMyProject"
+        >
+          <svg
+            class="side-menu-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+          <span>另存为我的项目</span>
         </button>
         <button
           v-if="hasActiveProject && !currentRoom"

@@ -11,6 +11,7 @@ import Timeline from '../components/TimeLine.vue'
 import InputDialog from '../components/InputDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import NewProjectDialog from '../components/NewProjectDialog.vue'
+import SaveAsMyProjectDialog from '../components/SaveAsMyProjectDialog.vue'
 import EditProjectDialog from '../components/EditProjectDialog.vue'
 import CollabHistoryBox from '../components/CollabHistoryBox.vue'
 import type { CollabHistoryMessage } from '@/types/collabHistory'
@@ -41,7 +42,11 @@ import { SnapshotCommand } from '../core/editor/commands/SnapshotCommand'
 import { Scene } from '../core/scene/Scene'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
-import { CollabManager, type DragLockTarget, type RemoteDragState } from '../core/collab/CollabManager'
+import {
+  CollabManager,
+  type DragLockTarget,
+  type RemoteDragState,
+} from '../core/collab/CollabManager'
 import {
   collectSceneElementIds,
   computeLockScope,
@@ -149,8 +154,7 @@ const handleSessionInvalidated = async (reason: string) => {
     path: '/login',
     query: { reason: 'expired', redirect },
   })
-  currentProjectId.value = null
-  currentProjectName.value = ''
+  resetProjectContext()
 }
 const {
   fps,
@@ -292,12 +296,45 @@ const collabHistoryMessages = ref<CollabHistoryMessage[]>([])
 const newProjectDialogVisible = ref(false)
 const currentProjectId = ref<string | null>(null)
 const currentProjectName = ref('')
+// 当前项目所有者 ID：用于判定"他人项目"，决定是否进入只读+另存为模式
+const currentProjectOwnerId = ref<string | null>(null)
+// 当前项目描述/公开性：作为「另存为我的项目」弹窗的默认值
+const currentProjectDescription = ref('')
+const currentProjectIsPublic = ref(true)
+// 是否从公开资源页进入（URL ?from=public）
+const openedFromPublic = ref(false)
+// 另存为我的项目：弹窗可见性与提交中状态
+const saveAsDialogVisible = ref(false)
+const isSavingAs = ref(false)
 const isCreatingProject = ref(false)
 const lastSavedSceneJson = ref<string | null>(null)
 
 // 协作仅观看模式：当前用户在协作房间中角色为 viewer 时，禁止编辑操作
 const isViewOnlyCollab = computed(
   () => !!collabStore.currentRoom && collabStore.currentRoom.myRole === 'viewer',
+)
+
+// ---- 他人公开项目（只读）判定 ----
+// 语义：当前打开的项目属于他人（ownerId ≠ 当前用户），且是通过公开资源页进入的。
+// 二者同时成立才认定为"他人公开项目"：
+//   - 仅 ownerId 不等于自己还不够 —— 用户可能通过 URL 直接访问他人项目，
+//     此时应视为无权限访问（由后端拒绝），而不是给出只读+另存为入口；
+//   - from=public 只作为 UI 识别信号，真正的权限仍由后端在 scene/save 接口把关。
+const isForeignProject = computed(
+  () =>
+    !!currentProjectId.value &&
+    !!currentProjectOwnerId.value &&
+    currentProjectOwnerId.value !== user.value?.id,
+)
+
+// 他人公开项目是否已进入"编辑态"：
+// 用户点击"点击编辑"后为 true —— 场景可自由编辑，但所有改动都只存在于内存/临时副本中，
+// 绝不回写源项目（自动保存已被 isForeignProject 拦截）。
+const isForeignEditing = ref(false)
+
+// 统一的「只读」状态：协作观看者 或 他人公开项目的「预览态」（尚未点击编辑）
+const isReadOnly = computed(
+  () => isViewOnlyCollab.value || (isForeignProject.value && !isForeignEditing.value),
 )
 
 // 协作房间权限（实时响应 currentRoom 变化）：创建者可在房间列表配置这些限制，
@@ -315,9 +352,9 @@ const effectiveImportMode = computed(
   () => collabStore.currentRoom?.importMode ?? appSettings.value.importMode,
 )
 
-// 权限变化时实时同步到 Interaction（viewer 不能拖拽/创建/删除，但可选中浏览）
-watch(isViewOnlyCollab, (viewOnly) => {
-  interaction?.setViewOnly(viewOnly)
+// 权限变化时实时同步到 Interaction（viewer / 他人公开项目 不能拖拽/创建/删除，但可选中浏览）
+watch(isReadOnly, (readOnly) => {
+  interaction?.setViewOnly(readOnly)
 })
 
 // 草稿自动保存与意外关闭恢复
@@ -510,12 +547,26 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 // ---- 草稿自动保存与意外关闭恢复 ----
 
+/** 统一重置项目上下文（含只读判定所需的 owner/元信息），供退出/删除/会话失效复用 */
+const resetProjectContext = () => {
+  currentProjectId.value = null
+  currentProjectName.value = ''
+  currentProjectOwnerId.value = null
+  currentProjectDescription.value = ''
+  currentProjectIsPublic.value = true
+  openedFromPublic.value = false
+  isForeignEditing.value = false
+  saveAsDialogVisible.value = false
+}
+
 /** 自动保存：根据设置和项目状态决定保存行为 */
 const autoSave = async () => {
   // Yjs 负责房间内实时同步，但项目列表读取的是项目表的 scene_data；
   // 因此协作房间仍需由可编辑成员把当前共享场景定期落库。
   // 观看者不能覆盖项目数据。
   if (isViewOnlyCollab.value) return
+  // 他人公开项目为只读：绝不回写源项目（服务端也会拒绝），只能通过「另存为我的项目」保存副本
+  if (isForeignProject.value) return
   if (currentProjectId.value) {
     // 普通项目遵循用户的自动保存设置；协作房间必须落库，保证项目列表
     // 与房间共享数据一致，不受个人设置开关影响。
@@ -559,6 +610,8 @@ const autoSave = async () => {
 const scheduleAutoSave = () => {
   // 协作房间也需要把 Yjs 合并后的场景落到关联项目，使用同一去抖策略。
   if (isViewOnlyCollab.value) return
+  // 他人公开项目只读，无需调度自动保存
+  if (isForeignProject.value) return
   // 两个开关都关闭时不需要调度
   if (!currentProjectId.value && !appSettings.value.draftProtection) return
   if (currentProjectId.value && !collabStore.currentRoom && !appSettings.value.autoSaveProject)
@@ -700,6 +753,9 @@ const handleDraftRecoveryCancel = () => {
 }
 
 onMounted(() => {
+  // 是否从公开资源页进入（决定他人项目是否给出只读+另存为入口）
+  openedFromPublic.value = route.query.from === 'public'
+
   uiStore.setTouchDevice(
     navigator.maxTouchPoints > 0 ||
       window.matchMedia('(pointer: coarse)').matches ||
@@ -1236,8 +1292,13 @@ onMounted(() => {
         const a = toVec(c.p1)
         const b = toVec(c.p2)
         const d = toVec(c.p3)
-        if (a && b && d) return a.clone().add(b).add(d).multiplyScalar(1 / 3)
-        return (a ?? b ?? d)
+        if (a && b && d)
+          return a
+            .clone()
+            .add(b)
+            .add(d)
+            .multiplyScalar(1 / 3)
+        return a ?? b ?? d
       }
       case 'sphere': {
         const sp = s.spheres.get(drag.elementId)
@@ -2360,8 +2421,7 @@ const autoJoinRoomFromQuery = async (roomId: string) => {
     } else {
       clearLocalSceneOnly()
       clearCollabInSession()
-      currentProjectId.value = null
-      currentProjectName.value = ''
+      resetProjectContext()
       lastSavedSceneJson.value = null
       const restQuery = { ...route.query }
       delete restQuery.roomId
@@ -2601,6 +2661,10 @@ const handleCollabJoin = async ({
           const detail = await projectApi.loadScene(room.projectId)
           currentProjectId.value = detail.id
           currentProjectName.value = detail.name
+          // 协作房间的项目：显式不做"他人项目只读"判定（房间成员本就有编辑权限）
+          currentProjectOwnerId.value = null
+          currentProjectDescription.value = detail.description ?? ''
+          currentProjectIsPublic.value = detail.isPublic ?? false
           router.replace({ query: { ...route.query, projectId: detail.id } })
           if (detail.sceneData) {
             try {
@@ -2627,9 +2691,13 @@ const handleCollabJoin = async ({
       } else {
         // 后续加入者：场景已从 Yjs 同步，仅设置项目上下文（使自动保存同步到真实项目）
         currentProjectId.value = room.projectId
+        // 协作房间的项目：显式不做"他人项目只读"判定（房间成员本就有编辑权限）
+        currentProjectOwnerId.value = null
         try {
           const detail = await projectApi.getProject(room.projectId)
           currentProjectName.value = detail.name
+          currentProjectDescription.value = detail.description ?? ''
+          currentProjectIsPublic.value = detail.isPublic ?? false
         } catch {
           currentProjectName.value = room.projectName || ''
         }
@@ -2788,8 +2856,7 @@ const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = '
   // 房间关闭后清空协作历史消息，等待下次加入重置
   collabHistoryMessages.value = []
   // 退出关联项目：清理项目状态、URL query、浏览器标签标题
-  currentProjectId.value = null
-  currentProjectName.value = ''
+  resetProjectContext()
   lastSavedSceneJson.value = null
   router.replace({ query: {} })
   sharedHistoryState.value = null
@@ -2889,6 +2956,11 @@ const handleNewProjectConfirm = async (data: {
 
     currentProjectId.value = project.id
     currentProjectName.value = data.name
+    // 新建项目属于当前用户：清空所有者判定，确保可编辑
+    currentProjectOwnerId.value = null
+    currentProjectDescription.value = data.description || ''
+    currentProjectIsPublic.value = data.isPublic
+    openedFromPublic.value = false
     newProjectDialogVisible.value = false
     router.replace({ query: { projectId: project.id } })
 
@@ -3001,8 +3073,7 @@ const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
-  currentProjectId.value = null
-  currentProjectName.value = ''
+  resetProjectContext()
   lastSavedSceneJson.value = null
   // O4：保存成功时清草稿（虽然项目场景不走草稿路径，这里仍然清理以防未来扩展引入），
   // 保存失败时保留草稿作为最后一道防线——下次用户打开编辑器还能从草稿恢复
@@ -3018,6 +3089,11 @@ const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
 
 const handleEditProject = async () => {
   if (!currentProjectId.value) return
+  // 他人公开项目只读：不允许修改项目元信息（防御性拦截，菜单项本身已隐藏）
+  if (isForeignProject.value) {
+    showToast('当前为他人公开项目，无法编辑项目信息', 'global')
+    return
+  }
   try {
     const detail = await projectApi.getProject(currentProjectId.value)
     editProjectName.value = detail.name
@@ -3056,6 +3132,70 @@ const handleEditProjectCancel = () => {
   editProjectDialogVisible.value = false
 }
 
+// ---- 另存为我的项目（他人公开项目专用出口）----
+
+/**
+ * 进入他人公开项目的编辑态：解除视图只读限制（工具栏/侧边栏/交互全部恢复可用），
+ * 但仍不回写源项目 —— 所有编辑只存在于内存中，用户需通过「另存为我的项目」落库。
+ */
+const handleEnterForeignEdit = () => {
+  if (!isForeignProject.value) return
+  isForeignEditing.value = true
+}
+
+const handleOpenSaveAsDialog = () => {
+  if (!currentProjectId.value || !isForeignProject.value) return
+  saveAsDialogVisible.value = true
+}
+
+const handleSaveAsCancel = () => {
+  saveAsDialogVisible.value = false
+}
+
+const handleSaveAsConfirm = async (data: {
+  name: string
+  description: string
+  isPublic: boolean
+}) => {
+  if (!currentProjectId.value) return
+  isSavingAs.value = true
+  try {
+    // 用户若对临时副本做过编辑，先把当前内存场景序列化，另存时一并写入新项目，
+    // 保证"编辑后另存"能保留用户的改动（未编辑时与源项目内容一致）。
+    let editedSceneJson: string | undefined
+    const currentJson = sceneToJsonForCompare(exportScene(scene))
+    if (lastSavedSceneJson.value === null || currentJson !== lastSavedSceneJson.value) {
+      editedSceneJson = JSON.stringify(exportScene(scene))
+    }
+
+    // 服务端复制源项目的场景与缩略图文件，并让源项目 另存量 +1
+    const newProject = await projectApi.cloneProject(currentProjectId.value, {
+      name: data.name,
+      description: data.description || undefined,
+      isPublic: data.isPublic,
+      sceneData: editedSceneJson,
+    })
+    // 切换到新副本：此时已是自己的项目，解除只读/预览态
+    currentProjectId.value = newProject.id
+    currentProjectName.value = newProject.name
+    currentProjectOwnerId.value = newProject.ownerId
+    currentProjectDescription.value = newProject.description ?? ''
+    currentProjectIsPublic.value = newProject.isPublic ?? false
+    openedFromPublic.value = false
+    isForeignEditing.value = false
+    // 去掉 from=public，避免刷新后又回到预览判定
+    router.replace({ query: { projectId: newProject.id } })
+    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    saveAsDialogVisible.value = false
+    showToast(`已另存为「${newProject.name}」`, 'global')
+  } catch (err) {
+    const msg = err instanceof ApiError ? err.message : '另存失败'
+    showToast(msg, 'global')
+  } finally {
+    isSavingAs.value = false
+  }
+}
+
 const handleEditProjectDelete = async () => {
   if (!currentProjectId.value) return
   const projectId = currentProjectId.value
@@ -3072,8 +3212,7 @@ const handleEditProjectDelete = async () => {
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
-  currentProjectId.value = null
-  currentProjectName.value = ''
+  resetProjectContext()
   lastSavedSceneJson.value = null
   editProjectDialogVisible.value = false
   router.replace({ query: {} })
@@ -3087,6 +3226,9 @@ const handleEditProjectDelete = async () => {
 const handleProjectCreated = (projectId: string) => {
   if (!projectId) return
   currentProjectId.value = projectId
+  // 协作房间新建的关联项目：属于当前用户，显式清空所有者判定避免误入只读
+  currentProjectOwnerId.value = null
+  openedFromPublic.value = false
   // 同步 URL，使刷新后仍能恢复项目
   router.replace({ query: { ...route.query, projectId } })
   // 拉取项目名称
@@ -3094,6 +3236,8 @@ const handleProjectCreated = (projectId: string) => {
     .getProject(projectId)
     .then((detail) => {
       currentProjectName.value = detail.name
+      currentProjectDescription.value = detail.description ?? ''
+      currentProjectIsPublic.value = detail.isPublic ?? false
     })
     .catch(() => {
       // 获取项目信息失败不阻塞
@@ -3107,7 +3251,11 @@ const loadProjectScene = async (projectId: string) => {
     const detail = await projectApi.loadScene(projectId)
     currentProjectId.value = detail.id
     currentProjectName.value = detail.name
-    router.replace({ query: { projectId: detail.id } })
+    // 记录所有者与元信息：用于判定"他人公开项目"（只读）与另存为弹窗的默认值
+    currentProjectOwnerId.value = detail.ownerId
+    currentProjectDescription.value = detail.description ?? ''
+    currentProjectIsPublic.value = detail.isPublic ?? false
+    router.replace({ query: { ...route.query, projectId: detail.id } })
     if (detail.sceneData) {
       try {
         const parsed = JSON.parse(detail.sceneData)
@@ -3157,6 +3305,11 @@ const handleCrossTabLogin = (event: CrossTabLoginEvent) => {
 const handleSaveScene = async () => {
   if (!currentProjectId.value) {
     showToast('当前未关联项目，无需保存', 'global')
+    return
+  }
+  // 他人公开项目：不能保存到源项目，引导使用「另存为我的项目」保存副本
+  if (isForeignProject.value) {
+    showToast('当前为其他用户公开项目，请使用「另存为我的项目」保存副本', 'global')
     return
   }
   try {
@@ -3451,7 +3604,8 @@ const handleSaveScene = async () => {
       :is-ar-mode="isARMode"
       :has-active-project="!!currentProjectId"
       :current-project-id="currentProjectId"
-      :view-only="isViewOnlyCollab"
+      :view-only="isReadOnly"
+      :is-foreign-project="isForeignProject"
       :collab-create-trigger="collabCreateTrigger"
       @mode-change="onModeChange"
       @clear-all="handleClearAll"
@@ -3467,13 +3621,14 @@ const handleSaveScene = async () => {
       @new-project="handleNewProjectFromMenu"
       @exit-project="handleExitProject"
       @edit-project="handleEditProject"
+      @save-as-my-project="handleOpenSaveAsDialog"
       @open-align-points="handleOpenAlignPoints"
       @project-created="handleProjectCreated"
     />
 
     <div ref="editorBodyRef" class="editor-body">
       <div ref="sidebarShellRef" class="sidebar-shell" :style="sidebarShellStyle">
-        <Sidebar :scene="scene" :editor="editor" :view-only="isViewOnlyCollab" />
+        <Sidebar :scene="scene" :editor="editor" :view-only="isReadOnly" />
       </div>
       <div
         class="sidebar-width-resizer"
@@ -3487,7 +3642,27 @@ const handleSaveScene = async () => {
       </div>
 
       <div ref="viewportRef" class="viewport">
-        <div v-if="isViewOnlyCollab" class="view-only-banner">正在观看协作，当前编辑权限不可用</div>
+        <!-- 他人公开项目：预览态提示，可直接点击"点击编辑"进入编辑（临时副本，不影响源项目） -->
+        <div v-if="isForeignProject && !isForeignEditing" class="view-only-banner preview-banner">
+          <span>正在预览「{{ currentProjectName || '该项目' }}」，</span>
+          <button class="preview-edit-btn" @click="handleEnterForeignEdit">点击编辑</button>
+        </div>
+        <!-- 他人公开项目：已进入编辑态提示（可切回预览，保留已有编辑） -->
+        <div
+          v-else-if="isForeignProject && isForeignEditing"
+          class="view-only-banner preview-banner"
+        >
+          <span
+            >正在编辑「{{
+              currentProjectName || '该项目'
+            }}」的临时副本，可通过菜单「另存为我的项目」保存，</span
+          >
+          <button class="preview-edit-btn" @click="isForeignEditing = false">切回预览</button>
+        </div>
+        <!-- 协作观看者：只读提示 -->
+        <div v-else-if="isViewOnlyCollab" class="view-only-banner">
+          正在观看协作，当前编辑权限不可用
+        </div>
         <Transition name="toast-fade">
           <div v-if="toastVisible && toastScope === 'viewport'" class="toast-container-viewport">
             <div class="toast-content">
@@ -3503,18 +3678,16 @@ const handleSaveScene = async () => {
         <!-- 协作历史消息框：房间关闭前始终维持，关闭后清空重置 -->
         <CollabHistoryBox v-if="collabStore.isConnected" :messages="collabHistoryMessages" />
         <!-- 协作拖拽感知气泡层：跟随被拖拽的几何元素（含自己），显示"xxx正在操作..." -->
-        <div
-          v-if="activeDrags.length > 0"
-          ref="dragAwarenessLayerRef"
-          class="drag-awareness-layer"
-        >
+        <div v-if="activeDrags.length > 0" ref="dragAwarenessLayerRef" class="drag-awareness-layer">
           <div
             v-for="drag in activeDrags"
             :key="drag.clientId"
             class="drag-awareness-bubble"
             :data-client-id="drag.clientId"
           >
-            <span class="drag-awareness-bubble-text">{{ drag.userName || '其他用户' }}正在操作...</span>
+            <span class="drag-awareness-bubble-text"
+              >{{ drag.userName || '其他用户' }}正在操作...</span
+            >
             <span class="drag-awareness-bubble-tail" aria-hidden="true"></span>
           </div>
         </div>
@@ -3563,6 +3736,15 @@ const handleSaveScene = async () => {
       :visible="newProjectDialogVisible"
       @confirm="handleNewProjectConfirm"
       @cancel="handleNewProjectCancel"
+    />
+
+    <SaveAsMyProjectDialog
+      :visible="saveAsDialogVisible"
+      :source-project-name="currentProjectName"
+      :source-description="currentProjectDescription"
+      :source-is-public="currentProjectIsPublic"
+      @confirm="handleSaveAsConfirm"
+      @cancel="handleSaveAsCancel"
     />
 
     <EditProjectDialog
@@ -3803,6 +3985,33 @@ const handleSaveScene = async () => {
   pointer-events: none;
   backdrop-filter: blur(6px);
   white-space: nowrap;
+}
+
+/* 预览/编辑他人公开项目提示：需要可点击，因此放开 pointer-events 并改为 flex 布局 */
+.view-only-banner.preview-banner {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* "点击编辑"：无边框、无背景的纯文字按钮，用高亮色与提示文字区分 */
+.preview-edit-btn {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: #4ea1ff;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.preview-edit-btn:hover {
+  color: #7cbcff;
 }
 
 .viewport-controls {

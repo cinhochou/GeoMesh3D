@@ -835,6 +835,8 @@ const handleCreateRoom = async () => {
           // 单独打开该项目时「编辑项目」弹窗会因读不到描述而无法渲染
           description: createForm.value.description.trim(),
           isPublic: createForm.value.isPublic,
+          // 标记来源：协作房间自动创建的项目在项目列表中显示为「协作关联创建」
+          source: 'COLLAB',
         })
         projectId = project.id
         createForm.value.projectId = project.id
