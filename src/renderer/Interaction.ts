@@ -175,6 +175,19 @@ export class Interaction {
   mouse = new THREE.Vector2()
   // 仅观看模式：协作中 viewer 角色只能选中元素浏览，不能拖拽/创建/删除
   private viewOnly = false
+  /** 「尝试操作但被挡下」的通知回调（见 setBlockedAttemptListener） */
+  private onBlockedAttempt: (() => void) | null = null
+  /**
+   * 注册「用户尝试操作几何对象但被只读/播放锁定挡下」的回调。
+   *
+   * 用途：原地播放期间主视图显示的是播放场景、几何对象不可拖拽，
+   * 用户容易误以为「当前已是原场景」。上层据此给出一次短促的视觉提示。
+   * 传入 null 取消注册。
+   */
+  setBlockedAttemptListener(listener: (() => void) | null): void {
+    this.onBlockedAttempt = listener
+  }
+
   setViewOnly(value: boolean) {
     this.viewOnly = value
     // 切换为仅观看时立即终止任何进行中的拖拽
@@ -6441,8 +6454,12 @@ export class Interaction {
   }
 
   private startDrag(referencePos: Vec3) {
-    // 仅观看模式：不启动拖拽，避免设置拖拽平面
-    if (this.viewOnly) return
+    // 仅观看 / 播放锁定：不启动拖拽，但要告知上层「用户尝试操作了几何对象」，
+    // 以便给出提示（startDrag 只在指针命中几何对象时才会被调用）
+    if (this.viewOnly) {
+      this.onBlockedAttempt?.()
+      return
+    }
 
     // 协作房间内：只**登记**待申请目标，不在按下瞬间申请互斥锁。
     // Select 模式下按下命中即调用 startDrag，因此「单纯选中」也会走到这里；

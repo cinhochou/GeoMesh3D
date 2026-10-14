@@ -54,6 +54,8 @@ interface BackendRoomDTO {
   importMode: string | null // OVERWRITE / MERGE
   disableClear: boolean | null
   disableUndoRedo: boolean | null
+  disableRecordAnimation: boolean | null
+  forceWatchAnimation: boolean | null
   defaultRole: string | null
   currentPeers: number | null
   onlineCount: number | null
@@ -117,6 +119,8 @@ const DEFAULT_ROOM_PERMS: {
   defaultRole: 'editor' | 'viewer'
   disableClear: boolean
   disableUndoRedo: boolean
+  disableRecordAnimation: boolean
+  forceWatchAnimation: boolean
 } = {
   allowShare: true,
   disableExport: false,
@@ -125,6 +129,8 @@ const DEFAULT_ROOM_PERMS: {
   defaultRole: 'editor',
   disableClear: false,
   disableUndoRedo: false,
+  disableRecordAnimation: false,
+  forceWatchAnimation: false,
 }
 
 const getRoomPermsKey = (roomId: string) => `collab:room_perms:${roomId}`
@@ -190,6 +196,12 @@ const mapRoom = (dto: BackendRoomDTO): Room => {
     disableClear: dto.disableClear ?? perms?.disableClear ?? DEFAULT_ROOM_PERMS.disableClear,
     disableUndoRedo:
       dto.disableUndoRedo ?? perms?.disableUndoRedo ?? DEFAULT_ROOM_PERMS.disableUndoRedo,
+    disableRecordAnimation:
+      dto.disableRecordAnimation ??
+      perms?.disableRecordAnimation ??
+      DEFAULT_ROOM_PERMS.disableRecordAnimation,
+    forceWatchAnimation:
+      dto.forceWatchAnimation ?? perms?.forceWatchAnimation ?? DEFAULT_ROOM_PERMS.forceWatchAnimation,
   }
 }
 
@@ -246,6 +258,8 @@ const toBackendUpdateRequest = (req: UpdateRoomRequest) => ({
   importMode: req.importMode?.toUpperCase(),
   disableClear: req.disableClear,
   disableUndoRedo: req.disableUndoRedo,
+  disableRecordAnimation: req.disableRecordAnimation,
+  forceWatchAnimation: req.forceWatchAnimation,
   defaultRole: req.defaultRole?.toUpperCase(),
 })
 
@@ -568,6 +582,12 @@ export const roomApi = {
     if (data.defaultRole !== undefined) permFields.defaultRole = data.defaultRole
     if (data.disableClear !== undefined) permFields.disableClear = data.disableClear
     if (data.disableUndoRedo !== undefined) permFields.disableUndoRedo = data.disableUndoRedo
+    if (data.disableRecordAnimation !== undefined) {
+      permFields.disableRecordAnimation = data.disableRecordAnimation
+    }
+    if (data.forceWatchAnimation !== undefined) {
+      permFields.forceWatchAnimation = data.forceWatchAnimation
+    }
     if (Object.keys(permFields).length > 0) {
       saveRoomPerms(id, permFields)
     }

@@ -12,8 +12,12 @@ export function createAddHexahedronCommand(
   constraint: CubeConstraint,
   boundaryLines: Line3[] = [],
 ): ReturnType<typeof createAddFeatureCommand> {
-  const featureId = `hexa_${crypto.randomUUID()}`
-  return createAddFeatureCommand(scene, featureId, 'hexahedron', {
+  // 必须用约束自身的 cubeId 作为 feature id：
+  // 约束在场景里是以 cubeId 挂载的（points/faces 也带 cubeId），
+  // 若换成独立的合成 id，命令声明的 intent.targetId 在场景里查不到任何对象，
+  // 会导致「相机聚焦拿不到主体范围 → 该步相机不动」，
+  // 同时 HexahedronFeature.update() 的 scene.cubeConstraints.get(feature.id) 也会失败。
+  return createAddFeatureCommand(scene, constraint.cubeId, 'hexahedron', {
     points,
     boundaryLines,
     faces,

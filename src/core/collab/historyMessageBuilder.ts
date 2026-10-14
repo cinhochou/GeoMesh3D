@@ -1566,8 +1566,15 @@ function buildGeometryMessages(
     name: string
     ownedPointIds: Set<string>
   } | null = null
-  if (deleteIntentLabel && deleteIntentLabel.startsWith('delete-')) {
-    const intentViewKey = INTENT_VIEW_KEY[deleteIntentLabel.slice('delete-'.length)]
+  // 被删要素的类型：优先取意图里的结构化字段 targetType；
+  // 旧数据（早于该字段引入）仍从 `delete-<type>` 形式的标签里解析，保持兼容
+  const deleteTargetType =
+    (intent?.category === 'delete' ? (intent.targetType ?? null) : null) ??
+    (deleteIntentLabel && deleteIntentLabel.startsWith('delete-')
+      ? deleteIntentLabel.slice('delete-'.length)
+      : null)
+  if (deleteTargetType) {
+    const intentViewKey = INTENT_VIEW_KEY[deleteTargetType]
     const intentView = intentViewKey ? views.find((v) => v.key === intentViewKey) : undefined
     if (intentView) {
       const intentAfterMap = byAnyId(intentView.listAfter)

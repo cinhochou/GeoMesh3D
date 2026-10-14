@@ -15,8 +15,9 @@ export function createAddPrismCommand(
   topPointId: string,
   constraint: PrismConstraint,
 ): ReturnType<typeof createAddFeatureCommand> {
-  const featureId = `prism_${crypto.randomUUID()}`
-  return createAddFeatureCommand(scene, featureId, 'prism', {
+  // 同 AddHexahedronCommand：必须用约束自身的 prismId，否则 intent.targetId
+  // 在场景里查不到（聚焦失效），PrismFeature.update() 也会找不到约束。
+  return createAddFeatureCommand(scene, constraint.prismId, 'prism', {
     points,
     boundaryLines,
     faces,

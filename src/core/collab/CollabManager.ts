@@ -35,6 +35,10 @@ import {
 } from '../geometry/IntersectionPoint3'
 import { importScene, type SerializedScene } from '../editor/SceneSerializer'
 import { pointSetsIntersect, type LockScope } from './lockScope'
+import type {
+  AnimationBroadcastState,
+  BroadcastControlMap,
+} from './AnimationBroadcast'
 import {
   buildMessagesFromHistoryEntry,
   buildUndoRedoMessage,
@@ -264,6 +268,11 @@ export class CollabManager {
   private static readonly DRAG_AWARENESS_FIELD = 'dragInfo'
   // Yjs 共享文档中承载「权威占用锁」的顶层 Map 名（键 = 持有者 clientId 字符串）
   private static readonly LOCK_REGISTRY_NAME = 'locks'
+  // 动画广播：控制状态（键 = 被广播的录制段 id，value 为扁平标量对象），仅房主写入
+  static readonly ANIMATION_BROADCAST_NAME = 'animationBroadcast'
+  // 动画广播：录制段数据（键同上，value 为 JSON 字符串）。
+  // 与心跳分表存放，避免每次心跳都把整段数据重新同步一遍。
+  static readonly ANIMATION_BROADCAST_DATA_NAME = 'animationBroadcastData'
   // awareness 中承载"成员角色变更广播"的字段名：创建者改某成员角色后写入，
   // 经 WebSocket/信令实时同步给房间内所有协作者，使目标成员无需等待轮询即时生效。
   private static readonly ROLE_CHANGE_AWARENESS_FIELD = 'roleChangeInfo'
@@ -453,6 +462,10 @@ export class CollabManager {
   private lastDragConflict: RemoteDragState | null = null
   /** Yjs 权威锁注册表（键 = 持有者 clientId 字符串） */
   private yLocks!: Y.Map<LockSharedMap>
+  /** 动画广播：控制状态（键 = 录制段 id；仅房主写入，成员只读） */
+  private yAnimationBroadcast!: BroadcastControlMap
+  /** 动画广播：录制段数据（键 = 录制段 id；开播时写入一次） */
+  private yAnimationBroadcastData!: Y.Map<string>
   private locksObserver: ((events: Y.YEvent<Y.AbstractType<unknown>>[]) => void) | null = null
   /** 本客户端当前持有的锁（含申请时刻，用于竞态宽限判定） */
   private localLock: { scope: LockScope; acquiredAt: number; seq: number } | null = null
@@ -486,6 +499,12 @@ export class CollabManager {
     this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.yLocks = this.ydoc.getMap<LockSharedMap>(CollabManager.LOCK_REGISTRY_NAME)
+    this.yAnimationBroadcast = this.ydoc.getMap<AnimationBroadcastState>(
+      CollabManager.ANIMATION_BROADCAST_NAME,
+    )
+    this.yAnimationBroadcastData = this.ydoc.getMap<string>(
+      CollabManager.ANIMATION_BROADCAST_DATA_NAME,
+    )
     this.serverUrls = CollabManager.resolveServerUrls()
     this.setupObservers()
     // 关闭浏览器页面（非主动离开房间）时尽力把「离开了协作」广播在连接关闭前送达服务器
@@ -990,6 +1009,22 @@ export class CollabManager {
       )
     }
     return [...new Set(candidates.map((url) => CollabManager.normalizeServerUrl(url)))]
+  }
+
+  /**
+   * 动画广播的共享表（控制状态 + 录制段数据）。
+   * 供 AnimationBroadcastChannel 绑定；未连接房间时仍返回对象（写入无效但不会报错）。
+   */
+  getAnimationBroadcastMaps(): {
+    control: BroadcastControlMap
+    data: Y.Map<string>
+  } {
+    return { control: this.yAnimationBroadcast, data: this.yAnimationBroadcastData }
+  }
+
+  /** 本客户端在 Yjs 中的 clientId（广播归属判定用） */
+  getYjsClientId(): number {
+    return this.ydoc.clientID
   }
 
   getStatus(): CollabStatus {
@@ -2208,6 +2243,12 @@ export class CollabManager {
     this.yNets = this.ydoc.getMap<NetSharedMap>('nets')
     this.yWorldTransform = this.ydoc.getMap<string | number | boolean>('worldTransform')
     this.yLocks = this.ydoc.getMap<LockSharedMap>(CollabManager.LOCK_REGISTRY_NAME)
+    this.yAnimationBroadcast = this.ydoc.getMap<AnimationBroadcastState>(
+      CollabManager.ANIMATION_BROADCAST_NAME,
+    )
+    this.yAnimationBroadcastData = this.ydoc.getMap<string>(
+      CollabManager.ANIMATION_BROADCAST_DATA_NAME,
+    )
     this.setupObservers()
   }
 
@@ -6654,14 +6695,15 @@ export class CollabManager {
     this.emitSharedHistoryState()
   }
 
-  sharedUndo(): void {
-    if (!this.provider || this.roomName === null) return
+  /** @returns 被撤销条目的 label；未实际撤销时返回 null（供动画录制的撤销旁听使用） */
+  sharedUndo(): string | null {
+    if (!this.provider || this.roomName === null) return null
     const currentIndex = this.yHistoryIndex.get('value') ?? -1
     // 撤销不能越过初始基线（项目导入不是一步用户操作）
-    if (currentIndex <= this.getSharedBaseIndex()) return
+    if (currentIndex <= this.getSharedBaseIndex()) return null
 
     const entry = this.readSharedHistoryEntryAt(currentIndex)
-    if (!entry) return
+    if (!entry) return null
 
     this.isApplyingSharedHistory = true
     try {
@@ -6692,15 +6734,17 @@ export class CollabManager {
         'undo',
       ),
     ])
+    return entry.label
   }
 
-  sharedRedo(): void {
-    if (!this.provider || this.roomName === null) return
+  /** @returns 被重做条目的 label；未实际重做时返回 null */
+  sharedRedo(): string | null {
+    if (!this.provider || this.roomName === null) return null
     const currentIndex = this.yHistoryIndex.get('value') ?? -1
-    if (currentIndex >= this.yHistory.length - 1) return
+    if (currentIndex >= this.yHistory.length - 1) return null
 
     const entry = this.readSharedHistoryEntryAt(currentIndex + 1)
-    if (!entry) return
+    if (!entry) return null
 
     this.isApplyingSharedHistory = true
     try {
@@ -6731,6 +6775,7 @@ export class CollabManager {
         'redo',
       ),
     ])
+    return entry.label
   }
 
   private syncFullScene(): void {

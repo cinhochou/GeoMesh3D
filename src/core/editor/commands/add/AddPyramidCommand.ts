@@ -13,8 +13,9 @@ export function createAddPyramidCommand(
   apexPointId: string,
   constraint: PyramidConstraint,
 ): ReturnType<typeof createAddFeatureCommand> {
-  const featureId = `pyramid_${crypto.randomUUID()}`
-  return createAddFeatureCommand(scene, featureId, 'pyramid', {
+  // 同 AddHexahedronCommand：必须用约束自身的 pyramidId，否则 intent.targetId
+  // 在场景里查不到（聚焦失效），PyramidFeature.update() 也会找不到约束。
+  return createAddFeatureCommand(scene, constraint.pyramidId, 'pyramid', {
     boundaryLines,
     faces,
     bottomFaceId,

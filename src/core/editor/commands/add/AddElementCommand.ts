@@ -87,5 +87,11 @@ export function createAddElementCommand(
   const featureType = type as FeatureType
   const params = buildFeatureParams(element, type, boundaryLines)
 
+  // 部分类型的参数是嵌套对象（如 { circle } / { face }），没有顶层 name，
+  // 会让历史/动画步骤标签退化成「创建圆」而拿不到名称。这里统一补一个顶层 name。
+  if (!('name' in params) && typeof element.name === 'string' && element.name) {
+    params.name = element.name
+  }
+
   return createAddFeatureCommand(scene, element.id, featureType, params)
 }

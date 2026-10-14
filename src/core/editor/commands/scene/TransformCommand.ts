@@ -15,7 +15,7 @@ type AxisHintChange = {
  * 使用 pointId 而非直接 Point3 引用，确保在 SnapshotCommand 重建对象后仍能正确操作。
  */
 export class TransformCommand extends ConstraintAwareCommand {
-  readonly label = 'TransformCommand'
+  readonly label = '移动点'
 
   /** 交互层明确的实际被拖动点 id（多数情况下即 pointId，供协作历史标注「由X点拖动」） */
   readonly draggedPointId: string

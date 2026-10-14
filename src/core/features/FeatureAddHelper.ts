@@ -5,7 +5,7 @@
 import { SnapshotCommand } from '../editor/commands/SnapshotCommand'
 import { Scene } from '../scene/Scene'
 import { featureRegistry } from './FeatureRegistry'
-import type { FeatureType } from './Feature'
+import { buildFeatureActionLabel, resolveFeatureName, type FeatureType } from './Feature'
 
 export function createAddFeatureCommand(
   scene: Scene,
@@ -14,10 +14,15 @@ export function createAddFeatureCommand(
   params: Record<string, unknown>,
 ): SnapshotCommand {
   const dependencies = featureRegistry.get(type)?.getDependencies(params) ?? []
-  const cmd = new SnapshotCommand(`add-${type}`, scene, () => {
-    featureRegistry.create(scene, { id, type, params, dependencies })
-  })
-  cmd.intent = { category: 'create', targetId: id }
+  const cmd = new SnapshotCommand(
+    buildFeatureActionLabel('创建', type, resolveFeatureName(params)),
+    scene,
+    () => {
+      featureRegistry.create(scene, { id, type, params, dependencies })
+    },
+  )
+  // targetType 结构化记录要素类型：显示与协作消息都不再需要解析标签文本
+  cmd.intent = { category: 'create', targetId: id, targetType: type }
 
   cmd.executeAndCapture()
   return cmd

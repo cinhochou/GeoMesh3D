@@ -5687,7 +5687,7 @@ export class Editor {
     )
 
     // 使用 SnapshotCommand 统一管理垂线+约束的创建，确保撤销/重做完整
-    const cmd = new SnapshotCommand('CreatePerpendicularLine', this.scene, () => {
+    const cmd = new SnapshotCommand('创建垂线', this.scene, () => {
       this.scene.addPerpendicularLine(perpendicularLine)
       const constraint = new PerpendicularLineConstraint(this.scene, perpendicularLine.id, { type: target.type, id: target.id })
       this.scene.addPerpendicularLineConstraint(constraint)
@@ -5871,7 +5871,7 @@ export class Editor {
     )
 
     // 使用 SnapshotCommand 统一管理平行线+约束的创建，确保撤销/重做完整
-    const cmd = new SnapshotCommand('CreateParallelLine', this.scene, () => {
+    const cmd = new SnapshotCommand('创建平行线', this.scene, () => {
       this.scene.addParallelLine(parallelLine)
       const constraint = new ParallelLineConstraint(this.scene, parallelLine.id, { type: target.type, id: target.id })
       this.scene.addParallelLineConstraint(constraint)

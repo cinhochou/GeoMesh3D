@@ -27,7 +27,7 @@ type ParametricSnapshot = {
  * 使用 pointId 而非直接 Point3 引用，确保在 SnapshotCommand 重建对象后仍能正确操作。
  */
 export class TransformPointsCommand extends ConstraintAwareCommand {
-  readonly label = 'TransformPointsCommand'
+  readonly label = '移动多个点'
 
   /** 交互层明确的实际被拖动点 id（如拖动立方体顶点缩放整面时，多点在移动中仍能精确标注源点） */
   readonly draggedPointId: string | null

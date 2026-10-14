@@ -12,8 +12,9 @@ export function createAddRegularPolygonCommand(
   constraint: RegularPolygonConstraint,
   boundaryLines: Line3[] = [],
 ): ReturnType<typeof createAddFeatureCommand> {
-  const featureId = `regpoly_${crypto.randomUUID()}`
-  return createAddFeatureCommand(scene, featureId, 'regularPolygon', {
+  // 同 AddHexahedronCommand：必须用约束自身的 constraintId，否则 intent.targetId
+  // 在场景里查不到（聚焦失效），RegularPolygonFeature.update() 也会找不到约束。
+  return createAddFeatureCommand(scene, constraint.constraintId, 'regularPolygon', {
     points,
     boundaryLines,
     face,

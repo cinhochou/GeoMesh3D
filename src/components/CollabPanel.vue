@@ -8,13 +8,21 @@ import { useAuthStore } from '@/store/authStore'
 import { roomApi } from '@/api/room'
 import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
-import type { Room, RoomDetail, RoomMember, RoomRole, ApplicationRole, RoomApplication } from '@/types/room'
+import type {
+  Room,
+  RoomDetail,
+  RoomMember,
+  RoomRole,
+  ApplicationRole,
+  RoomApplication,
+} from '@/types/room'
 import { getMemberJoinedTime } from '@/types/room'
 import type { Project } from '@/types/project'
 import { validateSerializedScene } from '@/core/editor/SceneSerializer'
 import ProxiedImage from '@/components/ProxiedImage.vue'
 import { patchObject, mergeArrayById } from '@/utils/reactiveMerge'
 import { collabRoomEvents, type CollabRoomEvent } from '@/utils/collabRoomEvents'
+import { useAnimationStore } from '@/store/animationStore'
 
 defineOptions({ name: 'CollabPanel' })
 
@@ -183,8 +191,8 @@ const loadMyApplicationsStatus = async () => {
   try {
     const apps = await roomApi.getMyApplications()
     const map = new Map<string, RoomApplication>()
-    const sorted = [...apps].sort((a, b) =>
-      new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime(),
+    const sorted = [...apps].sort(
+      (a, b) => new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime(),
     )
     for (const app of sorted) {
       if (!map.has(app.roomId)) map.set(app.roomId, app)
@@ -248,12 +256,12 @@ const selectedRoomNeedsApproval = computed(() => {
   return selectedRoom.value.approvalRequired === true
 })
 // 选中房间是否正在审核中
-const selectedRoomUnderReview = computed(() =>
-  selectedRoomNeedsApproval.value && selectedRoomAppStatus.value === 'pending',
+const selectedRoomUnderReview = computed(
+  () => selectedRoomNeedsApproval.value && selectedRoomAppStatus.value === 'pending',
 )
 // 选中房间是否已被批准（可直接加入）
-const selectedRoomApproved = computed(() =>
-  selectedRoomNeedsApproval.value && selectedRoomAppStatus.value === 'approved',
+const selectedRoomApproved = computed(
+  () => selectedRoomNeedsApproval.value && selectedRoomAppStatus.value === 'approved',
 )
 const confirmLabel = computed(() => {
   if (isSubmitting.value) return '处理中...'
@@ -909,7 +917,9 @@ const handleJoinRoom = async (room: Room) => {
       const appStatus = myApplicationsByRoom.value.get(room.id)?.status
       if (appStatus === 'PENDING') {
         window.dispatchEvent(
-          new CustomEvent('toast', { detail: { msg: '申请正在审核中，请等待创建者审核', scope: 'global' } }),
+          new CustomEvent('toast', {
+            detail: { msg: '申请正在审核中，请等待创建者审核', scope: 'global' },
+          }),
         )
         return
       }
@@ -979,7 +989,9 @@ const handleJoinByUrl = async (url: string) => {
             const appStatus = myApplicationsByRoom.value.get(roomInfo.id)?.status
             if (appStatus === 'PENDING') {
               window.dispatchEvent(
-                new CustomEvent('toast', { detail: { msg: '申请正在审核中，请等待创建者审核', scope: 'global' } }),
+                new CustomEvent('toast', {
+                  detail: { msg: '申请正在审核中，请等待创建者审核', scope: 'global' },
+                }),
               )
               isSubmitting.value = false
               return
@@ -1553,6 +1565,20 @@ watch([roomDetail, detailLoading], async () => {
   }
 })
 
+// ---- 动画广播（房主向全体成员演示本地录制段）----
+const animationStore = useAnimationStore()
+/** 选中的待广播录制段 */
+const broadcastSessionId = ref('')
+
+const handleStartBroadcast = () => {
+  if (!broadcastSessionId.value) return
+  if (!animationStore.startBroadcast(broadcastSessionId.value)) {
+    window.dispatchEvent(
+      new CustomEvent('toast', { detail: { msg: '广播失败：该录制段不可用', scope: 'global' } }),
+    )
+  }
+}
+
 // ---- 跨 Tab 权限变更实时同步 ----
 // 当创建者在房间列表页切换 approvalRequired 开关时，同步更新搜索结果、大厅推荐和当前房间的标签/入口
 const handlePermissionChange = (event: CollabRoomEvent) => {
@@ -1873,7 +1899,9 @@ defineExpose({
                     <div class="cp-room-card-meta">
                       <span class="cp-meta-owner">{{ room.ownerName }}</span>
                       <span class="cp-meta-dot">·</span>
-                      <span class="cp-meta-online">{{ room.onlineCount }}/{{ room.maxMembers }}人在线</span>
+                      <span class="cp-meta-online"
+                        >{{ room.onlineCount }}/{{ room.maxMembers }}人在线</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -1917,7 +1945,9 @@ defineExpose({
                   <div class="cp-loading-spinner"></div>
                   <span>加载中...</span>
                 </div>
-                <div v-else-if="recommendedRooms.length === 0" class="cp-empty">暂无推荐的公开房间</div>
+                <div v-else-if="recommendedRooms.length === 0" class="cp-empty">
+                  暂无推荐的公开房间
+                </div>
                 <div
                   v-else
                   v-for="room in recommendedRooms"
@@ -1941,7 +1971,9 @@ defineExpose({
                   <div class="cp-room-card-meta">
                     <span class="cp-meta-owner">{{ room.ownerName }}</span>
                     <span class="cp-meta-dot">·</span>
-                    <span class="cp-meta-online">{{ room.onlineCount }}/{{ room.maxMembers }}人在线</span>
+                    <span class="cp-meta-online"
+                      >{{ room.onlineCount }}/{{ room.maxMembers }}人在线</span
+                    >
                   </div>
                 </div>
               </div>
@@ -1987,7 +2019,9 @@ defineExpose({
         <div class="cp-apply-box" @click.stop @mousedown.stop>
           <div class="cp-apply-header">
             <h3 class="cp-apply-title">申请加入房间</h3>
-            <button class="cp-apply-close" @click="cancelApplyForm" :disabled="applySubmitting">×</button>
+            <button class="cp-apply-close" @click="cancelApplyForm" :disabled="applySubmitting">
+              ×
+            </button>
           </div>
           <div class="cp-apply-body">
             <div class="cp-apply-room-name">{{ applyFormRoom.name }}</div>
@@ -2011,7 +2045,11 @@ defineExpose({
             </div>
             <div class="cp-form-group">
               <label class="cp-label">申请协作权限类型 <span class="cp-required">*</span></label>
-              <select v-model="applyForm.requestedRole" class="cp-input" :disabled="applySubmitting">
+              <select
+                v-model="applyForm.requestedRole"
+                class="cp-input"
+                :disabled="applySubmitting"
+              >
                 <option value="viewer">仅观看</option>
                 <option value="editor">可编辑</option>
               </select>
@@ -2032,12 +2070,16 @@ defineExpose({
               class="cp-btn cp-btn-cancel"
               @click="cancelApplyForm"
               :disabled="applySubmitting"
-            >取消</button>
+            >
+              取消
+            </button>
             <button
               class="cp-btn cp-btn-confirm"
               :disabled="applySubmitting"
               @click="submitApplication"
-            >{{ applySubmitting ? '提交中...' : '提交' }}</button>
+            >
+              {{ applySubmitting ? '提交中...' : '提交' }}
+            </button>
           </div>
         </div>
       </div>
@@ -2149,6 +2191,43 @@ defineExpose({
           <button v-if="descOverflow" class="cp-desc-toggle" @click="descExpanded = !descExpanded">
             {{ descExpanded ? '收起' : '展开' }}
           </button>
+        </div>
+
+        <!-- 动画广播（仅创建者）：把本地录制段演示给全体成员 -->
+        <div v-if="isRoomCreator" class="cp-panel-section cp-broadcast-section">
+          <div class="cp-panel-section-title">
+            动画广播
+            <span class="cp-broadcast-hint">
+              {{
+                animationStore.broadcast.selfHosted
+                  ? '成员正在跟随你的演示。'
+                  : '广播后全体成员将进入动画播放视图。'
+              }}
+            </span>
+          </div>
+          <div class="cp-broadcast-row">
+            <select
+              v-model="broadcastSessionId"
+              class="cp-broadcast-select"
+              :disabled="animationStore.isBroadcastActive"
+            >
+              <option value="">选择录制段…</option>
+              <option v-for="s in animationStore.sessions" :key="s.id" :value="s.id">
+                {{ s.name }}（{{ s.steps.length }} 步）
+              </option>
+            </select>
+            <button
+              v-if="!animationStore.broadcast.selfHosted"
+              class="cp-broadcast-btn"
+              :disabled="!broadcastSessionId || animationStore.sessions.length === 0"
+              @click="handleStartBroadcast"
+            >
+              广播
+            </button>
+            <button v-else class="cp-broadcast-btn stop" @click="animationStore.stopBroadcast()">
+              停止广播
+            </button>
+          </div>
         </div>
 
         <!-- 成员列表（自适应宽度，超过两行收起，展开/收起按钮在标题旁） -->
@@ -3356,6 +3435,67 @@ defineExpose({
   font-weight: 600;
 }
 
+/* ── 动画广播（房主） ── */
+.cp-broadcast-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cp-broadcast-select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  color: #ddd;
+  font-size: 12px;
+}
+.cp-broadcast-select:disabled {
+  opacity: 0.5;
+}
+.cp-broadcast-btn {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  background: #1d4a7a;
+  border: 1px solid #4a9eff;
+  border-radius: 4px;
+  color: #eaf4ff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cp-broadcast-btn:hover:not(:disabled) {
+  background: #245a92;
+}
+.cp-broadcast-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cp-broadcast-btn.stop {
+  background: #4a1e1e;
+  border-color: #8a3030;
+  color: #ff9a9a;
+}
+.cp-broadcast-btn.stop:hover {
+  background: #5c2626;
+}
+/* 提示文字跟在「动画广播」标题右侧（标题本身是 flex 行），
+   需取消继承的加粗与间距，并在窄面板里允许省略 */
+.cp-broadcast-hint {
+  flex: 1;
+  min-width: 0;
+  color: #777;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cp-panel-member-count {
   color: #777;
   font-size: 11px;
@@ -3921,7 +4061,9 @@ defineExpose({
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
 .cp-apply-close:hover:not(:disabled) {

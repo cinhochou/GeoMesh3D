@@ -4,12 +4,14 @@ import {
   isSceneEmpty,
   isSerializedSceneEmpty,
   validateSerializedScene,
+  type SavedAnimationDocument,
   type SerializedScene,
 } from './SceneSerializer'
 import type { Scene } from '../scene/Scene'
 
 const DRAFT_KEY = 'geomesh3d_draft'
 const GRACEFUL_EXIT_KEY = 'geomesh3d_graceful_exit'
+const ROOM_ANIMATION_KEY_PREFIX = 'geomesh3d_room_animation:'
 
 /**
  * 临时场景（草稿）本地存储服务
@@ -37,13 +39,18 @@ const GRACEFUL_EXIT_KEY = 'geomesh3d_graceful_exit'
  *   - graceful_exit 不存在 → 异常关闭（崩溃/杀进程/断电等）→ 弹出恢复提示
  */
 export const DraftStorageService = {
-  /** 保存草稿到 localStorage（空场景不保存，并清除旧草稿） */
-  saveDraft(scene: Scene): void {
+  /**
+   * 保存草稿到 localStorage（空场景不保存，并清除旧草稿）。
+   * @param animation 动画数据（可选）；传入时会随草稿一起保存，恢复时一并还原。
+   */
+  saveDraft(scene: Scene, animation?: SavedAnimationDocument | null): void {
     if (isSceneEmpty(scene)) {
       localStorage.removeItem(DRAFT_KEY)
       return
     }
     const data = exportScene(scene)
+    if (animation) data.animation = animation
+    else delete data.animation
     localStorage.setItem(DRAFT_KEY, JSON.stringify(data))
   },
 
@@ -87,8 +94,8 @@ export const DraftStorageService = {
    * 注意：beforeunload 在崩溃/杀进程时不触发，这正是我们期望的——
    * 没有 graceful_exit 标记意味着异常关闭，下次加载时弹出恢复提示。
    */
-  onBeforeUnload(scene: Scene): void {
-    this.saveDraft(scene)
+  onBeforeUnload(scene: Scene, animation?: SavedAnimationDocument | null): void {
+    this.saveDraft(scene, animation)
   },
 
   /**
@@ -108,8 +115,8 @@ export const DraftStorageService = {
    * - 桌面端最小化浏览器
    * - 标签页切换到后台
    */
-  onVisibilityHidden(scene: Scene): void {
-    this.saveDraft(scene)
+  onVisibilityHidden(scene: Scene, animation?: SavedAnimationDocument | null): void {
+    this.saveDraft(scene, animation)
   },
 
   /**
@@ -135,5 +142,53 @@ export const DraftStorageService = {
 
     // 异常关闭（无 graceful_exit 标记）→ 有草稿则弹出恢复提示
     return { needsRecovery: this.hasDraft() }
+  },
+}
+
+/**
+ * 协作房间内「成员本地录制」的本地缓存。
+ *
+ * 背景：房间关联的项目是**共享**的。若成员把自己的录制段随自动保存写进该项目，
+ * 多人同时录制就会 last-writer-wins 相互覆盖（也会覆盖房主的录制段），
+ * 且违反「成员本地录制只存本地」的需求。
+ *
+ * 因此：房间内非房主的录制改写到这里，按房间 id 分键——
+ *  - 不进入共享项目、不进入 Yjs；
+ *  - 重新加入同一房间时按会话 id 合并回来（只追加，不覆盖房主的段）。
+ *
+ * 纯存储层：只负责读写 payload，解析与合并由上层用 AnimationSerializer 完成。
+ */
+export const RoomAnimationCache = {
+  save(roomId: string, animation: SavedAnimationDocument | null): void {
+    if (!roomId) return
+    try {
+      if (!animation) {
+        localStorage.removeItem(ROOM_ANIMATION_KEY_PREFIX + roomId)
+        return
+      }
+      localStorage.setItem(ROOM_ANIMATION_KEY_PREFIX + roomId, JSON.stringify(animation))
+    } catch {
+      // 配额不足等异常静默处理，不影响主流程
+    }
+  },
+
+  load(roomId: string): SavedAnimationDocument | null {
+    if (!roomId) return null
+    try {
+      const raw = localStorage.getItem(ROOM_ANIMATION_KEY_PREFIX + roomId)
+      if (!raw) return null
+      return JSON.parse(raw) as SavedAnimationDocument
+    } catch {
+      return null
+    }
+  },
+
+  clear(roomId: string): void {
+    if (!roomId) return
+    try {
+      localStorage.removeItem(ROOM_ANIMATION_KEY_PREFIX + roomId)
+    } catch {
+      // ignore
+    }
   },
 }

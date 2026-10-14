@@ -123,6 +123,14 @@ export interface GeometrySyncerDeps {
   renderer: THREE.WebGLRenderer
   camera: THREE.PerspectiveCamera
   controls: { target: THREE.Vector3 }
+  /**
+   * 精灵/标签的**像素缩放系数**（缺省 1）。
+   *
+   * 点精灵与名称标签的尺寸常量是「固定像素数」，因此在小画布（浮窗）上，
+   * 它们相对画布会显得过大、甚至与点位重叠。提供本钩子后，
+   * 浮窗可按「自身画布高度 / 主视图画布高度」等比缩小，观感与主视图一致。
+   */
+  getSpritePixelScaleFactor?: () => number
 }
 
 const POINT_PIXEL = 9
@@ -3664,6 +3672,13 @@ export class GeometrySyncer {
     return getCollection(this.currentSceneRef).get(geoId) ?? null
   }
 
+  /**
+   * 锚点 + 像素偏移 → 世界坐标。
+   *
+   * 像素偏移会乘上「精灵像素缩放系数」：浮窗里点与标签都按比例缩小了，
+   * 若偏移量仍保持原像素，两者的相对间距就失真（小窗出现「点与名称标签重合」的原因之一）。
+   * 主视图该系数恒为 1，行为不变。
+   */
   getScreenOffsetPosition(pointPos: THREE.Vector3, offsetXpx: number, offsetYpx: number): THREE.Vector3 {
     const camera = this.deps.getActiveCamera()
     const worldPoint = this.deps.world.localToWorld(this._screenOffsetTmpWorld.copy(pointPos))
@@ -3685,13 +3700,15 @@ export class GeometrySyncer {
       const depth = -v.z
       const halfH = depth * Math.tan(((perspectiveCam.fov * Math.PI) / 180) / 2)
       const halfW = halfH * aspect
-      offsetViewX = (offsetXpx / w) * 2 * halfW
-      offsetViewY = (offsetYpx / h) * 2 * halfH
+      const pixelScale = this.getSpritePixelScaleFactor()
+      offsetViewX = ((offsetXpx * pixelScale) / w) * 2 * halfW
+      offsetViewY = ((offsetYpx * pixelScale) / h) * 2 * halfH
     } else if (orthoCam) {
       const halfH = (orthoCam.top - orthoCam.bottom) / 2
       const halfW = (orthoCam.right - orthoCam.left) / 2
-      offsetViewX = (offsetXpx / w) * 2 * halfW
-      offsetViewY = (offsetYpx / h) * 2 * halfH
+      const pixelScale = this.getSpritePixelScaleFactor()
+      offsetViewX = ((offsetXpx * pixelScale) / w) * 2 * halfW
+      offsetViewY = ((offsetYpx * pixelScale) / h) * 2 * halfH
     } else {
       offsetViewX = 0
       offsetViewY = 0
@@ -3770,7 +3787,11 @@ export class GeometrySyncer {
     })
     this.deps.labelRenderer.cubeValueLabels.forEach((label) => this.deps.labelRenderer.setAdaptiveSpriteScale(label, lineLabelScale))
     this.deps.axisGridManager.axisLabels.forEach((label) => {
-      const axisLabelScale = (AxisGridManager.AXIS_LABEL_PIXEL / h / this.deps.arManager.currentWorldScale) * this.getFovSpriteScale()
+      const axisLabelScale =
+        ((AxisGridManager.AXIS_LABEL_PIXEL * this.getSpritePixelScaleFactor()) /
+          h /
+          this.deps.arManager.currentWorldScale) *
+        this.getFovSpriteScale()
       label.scale.set(axisLabelScale, axisLabelScale, 1)
     })
   }
@@ -3798,9 +3819,17 @@ export class GeometrySyncer {
     return 1
   }
 
+  /** 精灵/标签的像素缩放系数（见 deps 说明） */
+  private getSpritePixelScaleFactor(): number {
+    const factor = this.deps.getSpritePixelScaleFactor?.() ?? 1
+    return Number.isFinite(factor) && factor > 0 ? factor : 1
+  }
+
   getPointSpriteScale(): number {
     const h = this.deps.renderer.domElement.clientHeight || 1
-    const baseScale = (POINT_PIXEL / h / this.deps.arManager.currentWorldScale) * this.getFovSpriteScale()
+    const baseScale =
+      ((POINT_PIXEL * this.getSpritePixelScaleFactor()) / h / this.deps.arManager.currentWorldScale) *
+      this.getFovSpriteScale()
     if (this.deps.arManager.isARMode) {
       const safeInitialScale = Math.max(this.deps.arManager.initialWorldScale, 0.0001)
       const zoomRatio = this.deps.arManager.currentWorldScale / safeInitialScale
@@ -3854,7 +3883,9 @@ export class GeometrySyncer {
 
   getResponsiveLabelScale(basePixel: number, pointScaleMultiplier: number): number {
     const h = this.deps.renderer.domElement.clientHeight || 1
-    const baseScale = (basePixel / h / this.deps.arManager.currentWorldScale) * this.getFovSpriteScale()
+    const baseScale =
+      ((basePixel * this.getSpritePixelScaleFactor()) / h / this.deps.arManager.currentWorldScale) *
+      this.getFovSpriteScale()
     const pointDrivenScale = this.getPointSpriteScale() * pointScaleMultiplier
     const minScale = baseScale * LABEL_MIN_SCALE_FACTOR
     const maxScale = baseScale * LABEL_MAX_SCALE_FACTOR

@@ -7,7 +7,9 @@ import * as THREE from 'three'
 
 import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
-import Timeline from '../components/TimeLine.vue'
+import Timeline from '../components/Timeline.vue'
+import AnimationFloatWindow from '../components/AnimationFloatWindow.vue'
+import { FloatSceneRenderer } from '../renderer/FloatSceneRenderer'
 import InputDialog from '../components/InputDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import NewProjectDialog from '../components/NewProjectDialog.vue'
@@ -42,6 +44,19 @@ import { SnapshotCommand } from '../core/editor/commands/SnapshotCommand'
 import { Scene } from '../core/scene/Scene'
 import { ThreeRenderer } from '../renderer/ThreeRenderer'
 import { Interaction } from '../renderer/Interaction'
+import { AnimationRecorder } from '../core/animation/AnimationRecorder'
+import { AnimationPlayer } from '../core/animation/AnimationPlayer'
+import { ShadowScene, type CameraController } from '../core/animation/ShadowScene'
+import {
+  animationCompareJson,
+  attachAnimationToSceneData,
+  deserializeAnimationDocument,
+  deserializeRecordingSession,
+  serializeAnimationDocument,
+  serializeRecordingSession,
+} from '../core/animation/AnimationSerializer'
+import { AnimationBroadcastChannel } from '../core/collab/AnimationBroadcast'
+import { useAnimationStore } from '../store/animationStore'
 import {
   CollabManager,
   type DragLockTarget,
@@ -60,7 +75,7 @@ import { useCollabStore } from '@/store/collabStore'
 import { useAuthStore } from '@/store/authStore'
 import { projectApi } from '@/api/project'
 import { ApiError } from '@/api/client'
-import { DraftStorageService } from '@/core/editor/DraftStorageService'
+import { DraftStorageService, RoomAnimationCache } from '@/core/editor/DraftStorageService'
 import { useOrientationLock } from '@/composables/useOrientationLock'
 import { useSessionGuard } from '@/composables/useSessionGuard'
 import { crossTabLoginEvents, type CrossTabLoginEvent } from '@/utils/sessionEvents'
@@ -83,6 +98,7 @@ const uiStore = useUiStore()
 const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
 const authStore = useAuthStore()
+const animationStore = useAnimationStore()
 
 // 会话失效善后：useSessionGuard 在 onInvalidated 回调中处理保存、断连、跳转等清理。
 // 重登成功后 store.clearSessionInvalidation() 会自动复位。
@@ -116,7 +132,7 @@ const handleSessionInvalidated = async (reason: string) => {
   //   - S2（'other_tab'）时 token 已被其他 Tab 清除，saveScene 必然 401，跳过避免控制台报错
   if (reason === 'refresh_failed') {
     try {
-      const sceneData = exportScene(scene)
+      const sceneData = exportSceneWithAnimationData()
       const sceneJson = JSON.stringify(sceneData)
       await projectApi.saveScene(currentProjectId.value, {
         sceneData: sceneJson,
@@ -210,6 +226,60 @@ let detachSolverListener = () => {}
 let solverFlushRequested = false
 let solverFlushReady = false
 
+// ─── 动画系统（操作录像机）───
+let animationRecorder: AnimationRecorder | null = null
+let animationPlayer: AnimationPlayer | null = null
+let shadowScene: ShadowScene | null = null
+
+/** 协作动画广播通道（加入房间后建立，离开时销毁） */
+let broadcastChannel: AnimationBroadcastChannel | null = null
+/** 广播存活轮询（共享表在房主停止心跳时不会有事件，需轮询兜底） */
+let broadcastLivenessTimer: number | null = null
+/** 当前正在观看的广播段 id（用于判断是否需要退出播放） */
+let broadcastWatchingSessionId: string | null = null
+/** 上一次已装载的广播载荷（避免每次轮询都重新解析并重建临时会话） */
+let lastBroadcastPayload: { sessionId: string | null; text: string | null } = {
+  sessionId: null,
+  text: null,
+}
+
+/** 浮窗播放的第二渲染栈（仅在浮窗模式下存在） */
+let floatRenderer: FloatSceneRenderer | null = null
+/** 主视图降帧计数（浮窗开启时主视图隔帧渲染） */
+let mainViewFrameSkipCounter = 0
+/**
+ * 浮窗开启时，主视图在**空闲**状态下的渲染间隔。
+ *
+ * 取 2 即「隔帧渲染」：在 60Hz 屏幕上主视图约 30fps、浮窗仍为满帧。
+ * 一旦主视图有指针活动（拖拽/旋转/滚轮）会立即恢复满帧，
+ * 保证在浮窗播放的同时继续作图不卡顿。
+ */
+const FLOAT_MODE_MAIN_VIEW_FRAME_SKIP = 2
+
+/**
+ * 主视图「满帧」状态的持续时间（毫秒）。
+ * 每次指针活动都会重新计时；超过该时长才回落到降帧策略。
+ */
+const MAIN_VIEW_FULL_RATE_AFTER_ACTIVITY_MS = 600
+
+/** 主视图最近一次指针活动时刻（performance.now()；0 表示从未活动） */
+let mainViewLastActivityAt = 0
+/** 记录主视图指针活动（用于「活动时满帧、空闲时降帧」） */
+const markMainViewActivity = () => {
+  mainViewLastActivityAt = performance.now()
+}
+/** 主视图画布上的活动监听（挂载时注册、卸载时解除） */
+let mainViewActivityCleanup: (() => void) | null = null
+
+const bindMainViewActivityListeners = (canvas: HTMLCanvasElement) => {
+  const events = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'wheel'] as const
+  events.forEach((name) => canvas.addEventListener(name, markMainViewActivity, { passive: true }))
+  mainViewActivityCleanup = () => {
+    events.forEach((name) => canvas.removeEventListener(name, markMainViewActivity))
+    mainViewActivityCleanup = null
+  }
+}
+
 const collabManager = ref<CollabManager | null>(null)
 
 // 外部触发打开"创建协作"对话框（房间列表"创建房间"跳转时置为 1）
@@ -238,6 +308,29 @@ let viewportResizeObserver: ResizeObserver | null = null
 
 // 提示框相关的响应式变量
 let toastTimer: number | null = null
+
+/**
+ * 统一的提示函数（**所有提示都应经此路径**）。
+ *
+ * ⚠ 不要直接调用 `uiStore.openToast`：它没有自动关闭逻辑，
+ * 一旦被直接调用，提示会永久停留在屏幕正中间
+ * （用户实测反馈过「一直显示 xxx 正在广播动画」）。
+ */
+const showToast = (
+  msg: string,
+  scope: 'global' | 'viewport' = 'global',
+  durationMs = 1000,
+) => {
+  if (toastTimer) clearTimeout(toastTimer)
+  uiStore.openToast(msg, scope)
+  toastTimer = window.setTimeout(() => {
+    uiStore.closeToast()
+  }, durationMs)
+}
+
+/** 需要稍长阅读时间的提示时长（广播类消息） */
+const LONG_TOAST_MS = 2600
+
 const sharedRotationOwnerNotice = ref('')
 
 // 协作拖拽感知：房间内所有用户（含自己）正在拖拽的几何元素（用于渲染"xxx正在操作..."气泡）
@@ -308,6 +401,14 @@ const saveAsDialogVisible = ref(false)
 const isSavingAs = ref(false)
 const isCreatingProject = ref(false)
 const lastSavedSceneJson = ref<string | null>(null)
+/**
+ * 动画数据的独立保存基线。
+ *
+ * 为什么需要独立基线：`serializeSceneForCompare` 会剔除 `animation` 字段
+ * （动画不参与场景等价判定），因此「只改了录制内容」在场景比对里看不出变化；
+ * 若不做这份独立比对，纯动画改动就永远不会被保存。
+ */
+const lastSavedAnimationJson = ref<string>('')
 
 // 协作仅观看模式：当前用户在协作房间中角色为 viewer 时，禁止编辑操作
 const isViewOnlyCollab = computed(
@@ -320,6 +421,12 @@ const isViewOnlyCollab = computed(
 //   - 仅 ownerId 不等于自己还不够 —— 用户可能通过 URL 直接访问他人项目，
 //     此时应视为无权限访问（由后端拒绝），而不是给出只读+另存为入口；
 //   - from=public 只作为 UI 识别信号，真正的权限仍由后端在 scene/save 接口把关。
+/**
+ * 视口顶部是否已有提示横幅（他人项目预览/只读协作）。
+ * 用于给「播放中」提示让位，避免两条横幅叠在一起。
+ */
+const hasViewportTopBanner = computed(() => isForeignProject.value || isViewOnlyCollab.value)
+
 const isForeignProject = computed(
   () =>
     !!currentProjectId.value &&
@@ -353,9 +460,310 @@ const effectiveImportMode = computed(
 )
 
 // 权限变化时实时同步到 Interaction（viewer / 他人公开项目 不能拖拽/创建/删除，但可选中浏览）
-watch(isReadOnly, (readOnly) => {
-  interaction?.setViewOnly(readOnly)
+// 动画播放期间同样锁定：播放渲染的是影子场景，若允许拾取会出现「看不到选中却改了主场景」。
+const syncInteractionLock = () => {
+  // 规则见 store.locksMainViewInteraction（浮窗播放时主视图保持可编辑）
+  interaction?.setViewOnly(isReadOnly.value || animationStore.locksMainViewInteraction)
+  // 不再处于锁定态时清除残留的「操作被拦截」提示
+  if (!animationStore.locksMainViewInteraction) animationStore.clearInteractionBlockedHint()
+}
+
+watch(isReadOnly, syncInteractionLock)
+watch(() => animationStore.playback.active, syncInteractionLock)
+watch(() => animationStore.mode, syncInteractionLock)
+
+// ---- 动画系统「环境能力」（AR + 协作权限，单一来源）----
+
+/** 房主是否禁止成员录制动画（房主本人不受限） */
+const collabDisableRecordAnimation = computed(
+  () =>
+    !!collabStore.currentRoom?.disableRecordAnimation &&
+    collabStore.currentRoom.myRole !== 'creator',
+)
+
+/**
+ * 汇总所有环境限制。这是动画录制/浮窗/相机能力的唯一判定处：
+ *  - AR：设备摄像头即相机、虚实叠加 → 禁止录制与浮窗，也不移动虚拟相机；
+ *  - 协作：房主可禁止成员录制（房主除外）；
+ *  - 协作 viewer：无法改动场景，录制只会得到空会话，一并禁止。
+ */
+const animationCapabilities = computed(() => {
+  const ar = isARMode.value
+  const collabBlocked = collabDisableRecordAnimation.value
+  const viewerBlocked = isViewOnlyCollab.value
+  return {
+    canRecord: !ar && !collabBlocked && !viewerBlocked,
+    canFloat: !ar,
+    canMoveCamera: !ar,
+    recordBlockedReason: ar
+      ? 'AR 模式下只能播放，不能录制'
+      : collabBlocked
+        ? '房主已禁止成员录制动画'
+        : viewerBlocked
+          ? '仅观看权限不能录制动画'
+          : '',
+  }
 })
+
+/** 把能力写入 store；若因此中止了进行中的录制，给出对应提示 */
+const applyAnimationCapabilities = () => {
+  const caps = animationCapabilities.value
+  const stopped = animationStore.setCapabilities(caps)
+  if (stopped) {
+    showToast(
+      caps.recordBlockedReason ? `${caps.recordBlockedReason}，录制已结束` : '录制已结束',
+      'viewport',
+      LONG_TOAST_MS,
+    )
+  }
+}
+
+// ---- 浮窗播放（第二 renderer）----
+
+/** 是否应显示浮窗（规则见 store.shouldShowFloatWindow） */
+const showFloatWindow = computed(() => animationStore.shouldShowFloatWindow)
+
+/** 浮窗容器就绪/销毁 → 创建/释放第二渲染栈 */
+const handleFloatContainer = (el: HTMLElement | null) => {
+  disposeFloatRenderer()
+  if (!el) return
+  try {
+    floatRenderer = new FloatSceneRenderer(el, {
+      antialias: appSettings.value.antialias,
+      backgroundColor: 0x111111,
+      pixelRatioScale: appSettings.value.pixelRatioScale,
+      onContextLost: handleFloatContextLost,
+      // 以主视图画布高度为基准等比缩放精灵与标签，避免小窗里点过大、标签重叠
+      getReferenceCanvasHeight: () => renderer.renderer.domElement.clientHeight,
+      axisGridSize: renderer.getAxisGridSize(),
+    })
+  } catch (err) {
+    // 双 WebGL 上下文在低配设备/上下文数超限时可能创建失败：降级为原地播放
+    console.warn('[Animation] 浮窗渲染器创建失败，已回退原地播放', err)
+    floatRenderer = null
+    showToast('浮窗渲染器创建失败，已切回原地播放', 'viewport', LONG_TOAST_MS)
+    animationStore.setMode('inline')
+    return
+  }
+  // 小窗与原地共用同一个播放视角：优先用已记下的播放视角；
+  // 若本次播放是从小窗直接开始的（还没有播放视角），
+  // 此刻主相机所持的正是播放视角（聚焦已写入），直接沿用它 → 两个载体视角一致。
+  const seedView = playbackView ?? cameraControllerRef?.getState() ?? null
+  if (seedView) {
+    floatRenderer.setCameraState(seedView)
+    playbackView = seedView
+  }
+  floatRenderer.setSize(el.clientWidth || 1, el.clientHeight || 1)
+  // 关键：渲染脏状态是「一次性消费」的，创建浮窗渲染器之前可能已被主视图消费，
+  // 此时浮窗的 syncer 看不到任何脏标记 → 画面全空。这里强制影子场景全量重建。
+  shadowScene?.scene?.markAllRenderDirty()
+
+  // 若本次播放是「直接以小窗开始」的（模式切换 watch 不会触发）：
+  // 进入播放时聚焦写到了主相机上，此刻播放视角已经搬到浮窗，
+  // 主视图显示的是编辑器场景 → 必须把主相机交还编辑器视角。
+  void nextTick(() => {
+    if (animationStore.playback.active && animationStore.mode === 'float') {
+      handMainViewBackToEditor()
+    }
+  })
+}
+
+const handleFloatResize = (width: number, height: number) => {
+  floatRenderer?.setSize(width, height)
+}
+
+const handleFloatResetCamera = () => {
+  floatRenderer?.resetCamera()
+}
+
+const handleFloatToggleAxes = (visible: boolean) => {
+  floatRenderer?.setCoordinateSystemVisible(visible)
+}
+
+/** WebGL 上下文丢失：无法继续渲染，降级回原地播放并提示 */
+const handleFloatContextLost = () => {
+  showToast('浮窗渲染上下文已丢失，已切回原地播放', 'viewport', LONG_TOAST_MS)
+  disposeFloatRenderer()
+  animationStore.setMode('inline')
+}
+
+const disposeFloatRenderer = () => {
+  floatRenderer?.dispose()
+  floatRenderer = null
+}
+
+/** 主视图相机控制器（延迟创建） */
+let cameraControllerRef: CameraController | null = null
+
+/**
+ * 播放视角（**原地播放与小窗播放共用同一个**）。
+ *
+ * 视角一共两个，各自独立：
+ *  1. 编辑器视角：非播放态下主视图的视角（由 ShadowScene 的存档保管，退出播放时还原）
+ *  2. 播放视角：动画播放的视角，**原地与小窗是同一条**，切换载体时原样带过去
+ *
+ * 切换载体只做「把播放视角从一个载体搬到另一个载体」+「主视图交还/收回编辑器视角」，
+ * 绝不把编辑器视角复制给播放，也不把播放视角带回编辑器。
+ */
+let playbackView: ReturnType<CameraController['getState']> | null = null
+
+/** 清空播放视角（退出播放时调用，下次播放重新开始） */
+const clearPlaybackView = () => {
+  playbackView = null
+}
+
+/**
+ * 把主视图交还编辑器场景：写入编辑器自己的视角存档（而不是留着播放视角）。
+ * 原地播放期间主相机持的是播放视角，一旦主视图改为显示编辑器场景就必须换回来。
+ */
+const handMainViewBackToEditor = () => {
+  const editorView = animationPlayer?.getEditorCameraBaseline()
+  if (editorView) cameraControllerRef?.setState(editorView)
+}
+/** 复位主视图轨道控制的距离钳制（播放聚焦会临时放开，退出播放时复位） */
+let restoreControlsDistanceClampRef: (() => void) | null = null
+
+// ---- 协作动画广播（房主演示 / 成员跟随）----
+
+/**
+ * 建立广播通道（加入房间后调用）。
+ * 成员侧通过 observe 即时响应，另加 1s 轮询兜底处理「房主停止心跳导致的过期」——
+ * 心跳停止不会产生任何 Yjs 事件，只能靠轮询发现。
+ */
+const setupBroadcastChannel = () => {
+  teardownBroadcastChannel()
+  const cm = collabManager.value
+  if (!cm) return
+  const maps = cm.getAnimationBroadcastMaps()
+  broadcastChannel = new AnimationBroadcastChannel(
+    maps,
+    cm.getYjsClientId(),
+    () => cm.getLocalUserLabel() ?? '房主',
+  )
+  animationStore.bindBroadcastChannel(broadcastChannel)
+  broadcastChannel.observe(() => syncBroadcastFromShared())
+  broadcastLivenessTimer = window.setInterval(() => syncBroadcastFromShared(), 1000)
+  syncBroadcastFromShared()
+}
+
+const teardownBroadcastChannel = () => {
+  if (broadcastLivenessTimer !== null) {
+    clearInterval(broadcastLivenessTimer)
+    broadcastLivenessTimer = null
+  }
+  // 房主离开前先撤掉广播，避免成员一直等到心跳过期
+  if (broadcastChannel?.isBroadcasting) broadcastChannel.stopBroadcast()
+  broadcastChannel?.dispose()
+  broadcastChannel = null
+  animationStore.unbindBroadcastChannel()
+  animationStore.clearBroadcastView()
+  animationPlayer?.clearTransientSessions()
+  broadcastWatchingSessionId = null
+}
+
+/**
+ * 同步广播状态（共享表 → 本地）。
+ *
+ * 分工：
+ *  - 房主：只维护自身视图标记（forceWatch）与心跳，不做「被广播」处理；
+ *  - 成员：把广播段导入为**临时会话**（不写入本地文档，避免随自动保存污染房间项目），
+ *    并在未被收起时强制进入该段播放，随后按控制状态纠偏。
+ */
+const syncBroadcastFromShared = () => {
+  const channel = broadcastChannel
+  if (!channel) return
+
+  // 房间要求强制观看 → 成员无法收起
+  animationStore.setBroadcastForceWatch(!!collabStore.currentRoom?.forceWatchAnimation)
+
+  if (channel.isBroadcasting) {
+    // 房主自身：心跳由通道负责；视图标记已在 startBroadcast 中设置
+    return
+  }
+
+  const state = channel.getActiveBroadcast()
+  if (!state) {
+    // 广播已结束（或被判定过期）
+    if (broadcastWatchingSessionId !== null) {
+      broadcastWatchingSessionId = null
+      animationPlayer?.clearTransientSessions()
+      if (animationStore.isActive) animationStore.exitPlayback()
+    }
+    lastBroadcastPayload = { sessionId: null, text: null }
+    animationStore.applyRemoteBroadcast(null, null)
+    return
+  }
+
+  // 轮询与 Yjs 事件都会触发本函数（约 1s 一次，且事件可能更密）。
+  // 广播数据在一次开播内是不变的，若每次都 JSON.parse 整段并重建临时会话，
+  // 会周期性触发 buildSnapshotCache 全量重放，大录制段（数百步）会掉帧。
+  // 因此缓存「上次已装载的 sessionId + payload 文本」，未变则跳过。
+  const payloadText = channel.getSessionPayload(state.sessionId)
+  if (
+    payloadText !== null &&
+    (lastBroadcastPayload.sessionId !== state.sessionId ||
+      lastBroadcastPayload.text !== payloadText)
+  ) {
+    const session = deserializeRecordingSession(payloadText)
+    if (session) animationPlayer?.setTransientSession(session)
+    lastBroadcastPayload = { sessionId: state.sessionId, text: payloadText }
+  } else if (payloadText === null) {
+    lastBroadcastPayload = { sessionId: null, text: null }
+  }
+  const session = animationPlayer?.getTransientSession(state.sessionId) ?? null
+  animationStore.applyRemoteBroadcast(
+    { sessionId: state.sessionId, hostName: state.hostName },
+    session,
+  )
+
+  // ─── 成员侧「对账」而非「边沿触发」───
+  //
+  // 期望态：正在跟随广播（isWatchingBroadcast）→ 应当处于**这条广播**的播放中。
+  // 实际态：playback.active 且 playback.sessionId === 该广播。
+  //
+  // 两者不一致就纠正。相比「只在 sessionId 变化时进入一次」的边沿写法，对账能
+  // 自动收敛以下全部路径（之前每种都要单独处理，漏一个就出 bug）：
+  //   · 首次跟随（广播开始）
+  //   · 收起后重新跟随（followBroadcast）
+  //   · 跟随中手动退出播放 → 又希望回到广播
+  //   · 已收起（dismissed）→ 必须退出广播播放，否则「收起」看起来毫无反应
+  const watching = animationStore.isWatchingBroadcast
+  const playingThisBroadcast =
+    animationStore.isActive && animationStore.playback.sessionId === state.sessionId
+
+  if (!watching || !session) {
+    // 不再跟随（或数据未就绪）：若仍在该广播的播放里就退出，交还编辑场景
+    if (playingThisBroadcast) animationStore.exitPlayback()
+    if (!watching) broadcastWatchingSessionId = null
+    return
+  }
+
+  if (!playingThisBroadcast) {
+    // 进入 / 重新进入广播播放。录制中的成员会被中断（封存已录内容）
+    if (animationStore.isRecording) {
+      animationStore.stopRecording()
+      showToast('房主开始广播动画，已结束你正在进行中的录制', 'global', LONG_TOAST_MS)
+    }
+    animationStore.enterPlayback(state.sessionId)
+    animationStore.toStart()
+  }
+
+  if (broadcastWatchingSessionId !== state.sessionId) {
+    broadcastWatchingSessionId = state.sessionId
+    showToast(`${state.hostName || '房主'} 正在广播动画`, 'global', LONG_TOAST_MS)
+  }
+
+  // 控制状态纠偏（只对齐步与播放态/方向/节奏/循环，不对齐到毫秒）
+  const p = animationStore.playback
+  if (p.direction !== state.direction) animationStore.setDirection(state.direction)
+  if (p.autoAdvanceMs !== state.autoAdvanceMs) animationStore.setAutoAdvance(state.autoAdvanceMs)
+  if (p.loop !== state.loop) animationStore.setLoop(state.loop)
+  if (p.cursor !== state.cursor) animationStore.goto(state.cursor)
+  if (p.playing !== state.playing) {
+    if (state.playing) animationStore.play()
+    else animationStore.pause()
+  }
+}
 
 // 草稿自动保存与意外关闭恢复
 const draftRecoveryVisible = ref(false)
@@ -527,6 +935,36 @@ const handlePreviewSettings = (e: Event) => {
 const handleKeydown = (e: KeyboardEvent) => {
   if (isEditableTarget(e.target)) return
 
+  // ── 播放视图快捷键（优先级最高；播放期间同时屏蔽编辑器快捷键）──
+  // 播放渲染的是影子场景，此时对主场景做撤销/重做会让用户看不到变化却改了数据。
+  const anim = animationStore.playback
+  if (anim.active) {
+    // 观看他人广播时本地播放控制被锁（由心跳纠偏），快捷键一并不响应，
+    // 否则会出现「按了空格却 1 秒后被房主状态纠正」的打架观感。
+    if (animationStore.isWatchingBroadcast) {
+      if (e.code === 'Space' || e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault()
+      }
+      return
+    }
+    if (e.code === 'Space') {
+      e.preventDefault()
+      animationStore.togglePlay()
+      return
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      animationStore.next()
+      return
+    }
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      animationStore.prev()
+      return
+    }
+    return
+  }
+
   const modKey = e.ctrlKey || e.metaKey
   if (!modKey) return
 
@@ -543,6 +981,54 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault()
     editor.redo()
   }
+}
+
+// ---- 动画数据（操作录像机）持久化 ----
+
+/** 当前动画文档的持久化形态（无可保存内容时为 null） */
+const currentAnimationPayload = () => serializeAnimationDocument(animationStore.document)
+
+/**
+ * 导出「含动画」的场景数据，用于所有落盘路径
+ * （项目保存 / 场景文件导出 / 草稿）。
+ * 注意：历史快照与协作同步**不要**用这个——它们不需要动画数据。
+ */
+const exportSceneWithAnimationData = (): SerializedScene => {
+  const data = exportScene(scene)
+  attachAnimationToSceneData(data, animationStore.document)
+  return data
+}
+
+/** 从场景数据恢复动画文档；数据缺失或损坏时清空（回到无动画状态） */
+const applyAnimationFromSceneData = (data: SerializedScene | null | undefined): void => {
+  // 先安全退出播放：避免播放器仍指向即将被替换/删除的旧会话
+  animationPlayer?.exit()
+  const doc = deserializeAnimationDocument(data?.animation)
+  if (doc) animationStore.setDocument(doc)
+  else animationStore.reset()
+}
+
+/** 记录「当前已落盘」基线（场景 + 动画），统一入口避免遗漏 */
+const markSavedBaseline = (): void => {
+  lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+  lastSavedAnimationJson.value = animationCompareJson(currentAnimationPayload())
+}
+
+/** 清空基线（切换/退出文档时调用） */
+const clearSavedBaseline = (): void => {
+  lastSavedSceneJson.value = null
+  lastSavedAnimationJson.value = ''
+}
+
+/** 是否存在未落盘改动（场景或动画任一变化） */
+const hasUnsavedChanges = (): boolean => {
+  const sceneJson = sceneToJsonForCompare(exportScene(scene))
+  const animJson = animationCompareJson(currentAnimationPayload())
+  return (
+    lastSavedSceneJson.value === null ||
+    sceneJson !== lastSavedSceneJson.value ||
+    animJson !== lastSavedAnimationJson.value
+  )
 }
 
 // ---- 草稿自动保存与意外关闭恢复 ----
@@ -572,9 +1058,17 @@ const autoSave = async () => {
     // 与房间共享数据一致，不受个人设置开关影响。
     if (!collabStore.currentRoom && !appSettings.value.autoSaveProject) return
     try {
-      const sceneData = exportScene(scene)
+      const animJson = animationCompareJson(currentAnimationPayload())
+      // 协作房间内非房主：录制段**不写进共享项目**（多人同时录制会 last-writer-wins
+      // 互相覆盖，也会覆盖房主的段），改写本机按房间分键的本地缓存。
+      const isRoomMember = !!collabStore.currentRoom && collabStore.currentRoom.myRole !== 'creator'
+      const sceneData = isRoomMember ? exportScene(scene) : exportSceneWithAnimationData()
       const compareJson = sceneToJsonForCompare(sceneData)
-      if (lastSavedSceneJson.value !== null && compareJson === lastSavedSceneJson.value) return
+      // 场景与动画各自比对：任一变化都要保存（动画变化在场景比对里被剔除）
+      const sceneChanged =
+        lastSavedSceneJson.value === null || compareJson !== lastSavedSceneJson.value
+      const animChanged = animJson !== lastSavedAnimationJson.value
+      if (!sceneChanged && !animChanged) return
       // 生成缩略图并上传（canvas+toBlob 开销大，仅在非协作模式执行）
       let thumbnailUrl: string | undefined
       const thumbnailBlob = await captureThumbnailAsync()
@@ -596,13 +1090,18 @@ const autoSave = async () => {
         collabStore.currentRoom.updatedAt = new Date().toISOString()
       }
       lastSavedSceneJson.value = compareJson
+      lastSavedAnimationJson.value = animJson
+      // 成员录制只存本地：缓存到该房间的本地键，重新加入时按 id 合并回来
+      if (isRoomMember && collabStore.currentRoom) {
+        RoomAnimationCache.save(collabStore.currentRoom.id, currentAnimationPayload())
+      }
     } catch {
       // 自动保存失败时静默处理，不打扰用户
     }
   } else {
     // 无项目：根据 draftProtection 设置决定是否保存草稿到 localStorage
     if (!appSettings.value.draftProtection) return
-    DraftStorageService.saveDraft(scene)
+    DraftStorageService.saveDraft(scene, currentAnimationPayload())
   }
 }
 
@@ -663,7 +1162,7 @@ const handleBeforeUnload = (e: BeforeUnloadEvent) => {
     return
   }
   if (!currentProjectId.value && appSettings.value.draftProtection) {
-    DraftStorageService.onBeforeUnload(scene)
+    DraftStorageService.onBeforeUnload(scene, currentAnimationPayload())
     if (!isSceneEmpty(scene)) {
       e.preventDefault()
     }
@@ -691,7 +1190,7 @@ const handlePageHide = () => {
     appSettings.value.draftProtection &&
     !isSceneEmpty(scene)
   ) {
-    DraftStorageService.saveDraft(scene)
+    DraftStorageService.saveDraft(scene, currentAnimationPayload())
     DraftStorageService.onPageHide()
   }
 }
@@ -705,7 +1204,7 @@ const handleVisibilityChange = () => {
   if (document.visibilityState === 'hidden') {
     // 协作模式下不做草稿保存：场景数据已通过 Yjs 实时同步到服务端
     if (!collabStore.currentRoom && !currentProjectId.value && appSettings.value.draftProtection) {
-      DraftStorageService.onVisibilityHidden(scene)
+      DraftStorageService.onVisibilityHidden(scene, currentAnimationPayload())
     }
   }
 }
@@ -715,6 +1214,8 @@ const handleDraftRecoveryConfirm = () => {
   const data = DraftStorageService.loadDraftData()
   if (data) {
     DraftStorageService.restoreDraft(scene, data)
+    // 草稿里若带有动画数据，一并恢复（否则清空，避免与残留状态不一致）
+    applyAnimationFromSceneData(data)
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
     // 恢复后重置内容区为默认收起状态，并同步折叠/展开按钮状态
@@ -846,14 +1347,293 @@ onMounted(() => {
   }
 
   renderer = new ThreeRenderer(viewportRef.value!, appSettings.value)
+  // 记录主视图画布上的指针活动：浮窗播放时据此在「活动 → 满帧 / 空闲 → 降帧」之间切换
+  bindMainViewActivityListeners(renderer.renderer.domElement)
   uiStore.setAxisGridSize(renderer.getAxisGridSize())
   uiStore.setGridVisible(renderer.isAxisGridVisible())
   uiStore.setCoordinateSystemVisible(renderer.isCoordinateSystemVisible())
   interaction = new Interaction(editor, renderer)
+  // 原地播放期间用户尝试拖拽几何对象 → 给退出播放按钮一次 1.5s 泛红光提示。
+  // 只在「命中几何对象的拖拽尝试」时触发（startDrag 的调用条件），
+  // 旋转视图、点击空白都不会误触发。
+  interaction.setBlockedAttemptListener(() => {
+    if (animationStore.locksMainViewInteraction) animationStore.notifyInteractionBlockedHint()
+  })
   interaction.setGlobalPointValueMode(isGlobalPointValueMode.value)
-  interaction.setViewOnly(isViewOnlyCollab.value)
+  // 初始只读态由 syncInteractionLock 统一落定（含协作只读与动画播放两种来源）
+  interaction.setViewOnly(isReadOnly.value)
   interaction.bind(renderer.renderer.domElement)
   interaction.syncControlLockState()
+
+  // ─── 动画系统初始化（操作录像机）───
+  // 影子场景：播放期间用独立 Scene 渲染，绝不触碰编辑器主场景。
+  {
+    // 用户是否正在手动操作相机（由 OrbitControls 的 start/end 事件驱动）。
+    // 播放期间的聚焦插值据此避让，避免与用户拖拽互相覆盖。
+    let orbitInteracting = false
+    renderer.controls.addEventListener('start', () => {
+      orbitInteracting = true
+    })
+    renderer.controls.addEventListener('end', () => {
+      orbitInteracting = false
+    })
+
+    // 编辑器默认的距离钳制（构造时已设定）。播放聚焦需要更近的机位，
+    // 因此临时放开，播放结束后复位——否则各档「推近程度」会被钳到同一距离。
+    const defaultControlsMinDistance = renderer.controls.minDistance
+    const defaultControlsMaxDistance = renderer.controls.maxDistance
+    /** 聚焦允许的最小相机距离 */
+    const FOCUS_ALLOWED_MIN_DISTANCE = 0.05
+
+    /** 复位主视图轨道控制的距离钳制（退出播放时调用） */
+    const restoreControlsDistanceClamp = () => {
+      renderer.controls.minDistance = defaultControlsMinDistance
+      renderer.controls.maxDistance = defaultControlsMaxDistance
+    }
+
+    /** 主视图相机：读写主 renderer 的相机与轨道控制 */
+    const mainCameraController: CameraController = {
+      getState: () => ({
+        position: {
+          x: renderer.camera.position.x,
+          y: renderer.camera.position.y,
+          z: renderer.camera.position.z,
+        },
+        target: {
+          x: renderer.controls.target.x,
+          y: renderer.controls.target.y,
+          z: renderer.controls.target.z,
+        },
+        zoom: renderer.camera.zoom,
+        controlsEnabled: renderer.controls.enabled,
+      }),
+      setState: (state) => {
+        renderer.camera.position.set(state.position.x, state.position.y, state.position.z)
+        renderer.controls.target.set(state.target.x, state.target.y, state.target.z)
+        renderer.camera.zoom = state.zoom
+        renderer.camera.updateProjectionMatrix()
+        renderer.controls.enabled = state.controlsEnabled
+        renderer.controls.update()
+      },
+      isUserInteracting: () => orbitInteracting,
+    }
+
+    /**
+     * 写入相机前放开轨道控制的距离钳制。
+     *
+     * OrbitControls.update() 会把相机距离钳到 [minDistance, maxDistance]（默认 11~215）。
+     * 聚焦距离 = 包围球半径 × 推近系数，小尺寸主体会远小于 11 → 各档都被顶到 11，
+     * 表现为「切换推近程度毫无观感差异」。这里按目标距离放开下限，
+     * 退出播放时由 restoreControlsDistanceClamp 复位。
+     */
+    const relaxControlsDistanceClamp = () => {
+      const dist = renderer.camera.position.distanceTo(renderer.controls.target)
+      if (!(dist > 0)) return
+      renderer.controls.minDistance = Math.min(FOCUS_ALLOWED_MIN_DISTANCE, dist)
+      renderer.controls.maxDistance = Math.max(renderer.controls.maxDistance, dist)
+    }
+    restoreControlsDistanceClampRef = restoreControlsDistanceClamp
+
+    // 先取出原始实现再用新的包一层：若直接在里面调用 mainCameraController.setState
+    // 会命中被覆盖后的自身，形成无限递归。
+    const baseMainSetState = mainCameraController.setState
+    const applyPlaybackCameraState = (state: Parameters<CameraController['setState']>[0]) => {
+      relaxControlsDistanceClamp()
+      baseMainSetState(state)
+    }
+    mainCameraController.setState = applyPlaybackCameraState
+
+    /**
+     * 播放期间的实时相机：浮窗模式下指向浮窗相机，否则为主视图相机。
+     *
+     * 判定只看「模式 + 浮窗渲染器是否就绪」，不掺入 `playback.active`：
+     * 进入/退出的瞬间 active 已经翻转，若掺入会导致存档与恢复落到不同相机上。
+     * （存档/恢复本身走 mainCameraController，与此无关）
+     */
+    const liveCameraController: CameraController = {
+      getState: () =>
+        floatRenderer && animationStore.mode === 'float'
+          ? floatRenderer.getCameraState()
+          : mainCameraController.getState(),
+      setState: (state) => {
+        if (floatRenderer && animationStore.mode === 'float') {
+          floatRenderer.setCameraState(state)
+          return
+        }
+        mainCameraController.setState(state)
+      },
+      isUserInteracting: () =>
+        floatRenderer && animationStore.mode === 'float'
+          ? floatRenderer.isUserInteracting()
+          : (mainCameraController.isUserInteracting?.() ?? false),
+    }
+    cameraControllerRef = mainCameraController
+
+    // 存档用主相机控制器；播放中的实时相机按模式选择（浮窗模式下为浮窗相机）
+    shadowScene = new ShadowScene(scene, mainCameraController, liveCameraController)
+
+    // 直接使用 store 的文档对象（引用终身恒定，见 store 的不变量说明）：
+    // 引擎与 store 必须操作同一个对象，否则 setDocument/reset 后引擎会与 UI 脱钩。
+    const animationDocument = animationStore.document
+
+    animationRecorder = new AnimationRecorder(scene, animationDocument, {
+      onChange: () => {
+        animationStore.recording.active = animationRecorder?.isRecording ?? false
+        animationStore.recording.paused = animationRecorder?.isPaused ?? false
+        animationStore.recording.sessionId = animationRecorder?.currentSessionId ?? null
+        animationStore.recording.stepCount = animationRecorder?.currentStepCount ?? 0
+        animationStore.notifyDocumentChanged()
+      },
+      onLimitReached: (limit) => {
+        showToast(`单段录制已达上限 ${limit} 步`, 'viewport', LONG_TOAST_MS)
+      },
+    })
+
+    animationPlayer = new AnimationPlayer(shadowScene, animationStore.playback, animationDocument, {
+      onChange: () => {
+        // playback 为共享可变对象，Vue 自动感知；此处仅提示文档可能变更
+        // 房主广播中：控制状态一变就立即推送，不必等 500ms 心跳（心跳仍作为纠偏兜底）
+        animationStore.notifyBroadcastControl()
+      },
+      requestRender: () => {
+        // 下一帧由渲染循环自动消费脏标记，无需显式触发
+      },
+      // AR 模式下相机即设备摄像头：不移动虚拟相机，聚焦自动关闭
+      canMoveCamera: () => !isARMode.value,
+    })
+
+    animationStore.bindEngines(animationPlayer, animationRecorder)
+
+    // 广播房主侧数据来源：读取本地播放状态与录制段数据（广播时由通道一次性写入共享表）
+    animationStore.bindBroadcastHostSource({
+      getControl: (sessionId) => {
+        const p = animationStore.playback
+        if (p.active && p.sessionId === sessionId) {
+          return {
+            sessionId,
+            cursor: p.cursor,
+            playing: p.playing,
+            direction: p.direction,
+            autoAdvanceMs: p.autoAdvanceMs,
+            loop: p.loop,
+          }
+        }
+        // 房主尚未进入该段播放：以「停在起点、未播放」维持心跳，避免广播被判定过期
+        return {
+          sessionId,
+          cursor: -1,
+          playing: false,
+          direction: animationDocument.settings.defaultDirection,
+          autoAdvanceMs: animationDocument.settings.autoAdvanceMs,
+          loop: animationDocument.settings.loopByDefault,
+        }
+      },
+      getSessionPayload: (sessionId) => {
+        const session = animationDocument.sessions.find((s) => s.id === sessionId)
+        return session ? serializeRecordingSession(session) : null
+      },
+    })
+
+    // 录制旁听挂点：HistoryManager 每次真实入栈 → 一个操作步
+    editor.historyManager.setPushListener((event) => {
+      animationRecorder?.onOperationPushed(event)
+    })
+
+    // 撤销/重做旁听挂点：仅当设置开启「记录撤销/重做」时才累积为步
+    editor.historyManager.setNavListener((event) => {
+      animationRecorder?.onHistoryNav(event)
+    })
+
+    // 播放期间暂停历史记录（播放产生的场景变化不进历史；主场景本身不被触碰）
+    // 注：P0 阶段播放只作用于影子场景，主场景无变化，故无需暂停/恢复。
+  }
+
+  // ─── 主视图渲染源切换：强制重建几何 ───
+  // 渲染脏状态是一次性消费的：原地播放期间主视图同步的是影子场景，
+  // 退出播放（或切到浮窗）后再切回编辑器场景时，主场景往往已无脏标记 →
+  // 主视图会停留在最后一步的几何状态，拾取/悬停也会基于陈旧网格。
+  watch(
+    () => animationStore.mainViewRendersShadowScene,
+    (now, prev) => {
+      if (now === prev) return
+      if (now) shadowScene?.scene?.markAllRenderDirty()
+      else scene.markAllRenderDirty()
+    },
+  )
+
+  // ─── 播放载体切换（原地 ⇄ 浮窗）───
+  //
+  // ⚠ 视角只有两个、各自独立：编辑器场景视角 与 动画播放视角。
+  // **原地播放与小窗播放共用同一个播放视角**，切换载体只是把这个播放视角
+  // 从一个载体搬到另一个载体（机位原样带过去），同时把主视图在
+  // 「渲染播放场景」与「渲染编辑器场景」之间交接 —— 交接时必须换用对应场景自己的视角。
+  //
+  // 切换时**不退出/重进播放**（影子场景与播放状态无需重建；
+  // 渲染源切换由 mainViewRendersShadowScene 的 watch 标脏重建几何）。
+  watch(
+    () => animationStore.mode,
+    (mode, prevMode) => {
+      if (!animationStore.playback.active) return
+      if (mode === prevMode) return
+
+      if (mode === 'float') {
+        // 原地 → 小窗：把播放视角从主相机取出来带着走，主视图交还编辑器视角
+        playbackView = cameraControllerRef?.getState() ?? null
+        handMainViewBackToEditor()
+        return
+      }
+
+      // 小窗 → 原地：把播放视角从小窗取出来搬回主相机；
+      // 浮窗期间用户在编辑器场景里调整的视角已由 controls change 钩子持续镜像到基线，
+      // 这里无需再搬（也不会把播放视角留在编辑器上）。
+      playbackView = floatRenderer?.getCameraState() ?? playbackView
+      if (playbackView) cameraControllerRef?.setState(playbackView)
+    },
+  )
+
+  // ─── 播放期间：小窗模式下持续镜像「编辑器视角」基线 ───
+  //
+  // 小窗播放时主视图显示的是编辑器场景，用户在其中的视角调整属于**编辑器视角**变化。
+  // 只有把它持续写回基线，无论从哪条路径退出播放才能保留这次调整
+  // （否则会被「进入播放前」的旧存档覆盖）。
+  renderer.controls.addEventListener('change', () => {
+    if (!animationStore.playback.active) return
+    if (animationStore.mode !== 'float') return
+    const current = cameraControllerRef?.getState() ?? null
+    if (current) animationPlayer?.overrideEditorCameraBaseline(current)
+  })
+
+  // ─── 退出播放：清空播放视角 + 复位相机距离钳制 ───
+  // （主相机由播放器还原为编辑器视角存档，见 ShadowScene.exit）
+  watch(
+    () => animationStore.playback.active,
+    (active) => {
+      if (!active) {
+        clearPlaybackView()
+        restoreControlsDistanceClampRef?.()
+      }
+    },
+  )
+
+  // 跟随状态变化（收起 / 重新跟随 / 强制观看开关）→ 立即做一次同步，
+  // 否则要等下一次轮询（约 1s）才生效，按钮点击会显得迟钝。
+  watch(
+    () => animationStore.isWatchingBroadcast,
+    () => {
+      void nextTick(() => syncBroadcastFromShared())
+    },
+  )
+
+  // ─── 播放期间锁住编辑器交互 ───
+  // 播放渲染的是影子场景，若此时仍允许拾取/拖拽，用户会「看不到选中却改了主场景」。
+  // watch 在 setup 层已挂（见 syncInteractionLock），此处只需按当前状态落一次初值。
+  syncInteractionLock()
+
+  // ─── 环境能力：AR 只播不录 + 协作权限（房主可禁止成员录制）───
+  // 单一来源：所有录制/浮窗/相机限制都在 animationCapabilities 里汇总，
+  // 任何来源变化都会经下面的 watch 落到 store。
+  watch(animationCapabilities, applyAnimationCapabilities, { immediate: true, deep: true })
+
   window.addEventListener('open-regular-polygon-dialog', handleOpenRegularPolygonDialog)
   window.addEventListener('show-normal-circle-radius-dialog', handleShowNormalCircleRadiusDialog)
   window.addEventListener('show-radius-sphere-dialog', handleShowRadiusSphereDialog)
@@ -1087,6 +1867,20 @@ onMounted(() => {
     }
   }
 
+  /**
+   * 协作撤销/重做的旁听通知（构造等价的占位条目）。
+   * 共享条目只提供 label，故此处只带 label；场景快照由旁听者自行读取。
+   */
+  const notifyCollabUndoRedo = (action: 'undo' | 'redo', label: string) => {
+    editor.historyManager.notifyExternalNav(action, {
+      id: `collab_${action}_${Date.now()}`,
+      label,
+      timestamp: Date.now(),
+      redo: () => {},
+      undo: () => {},
+    })
+  }
+
   editor.executeHistoryEntry = (entry: HistoryEntry) => {
     const cm = collabManager.value
     const inRoom = cm && cm.getStatus().room !== null
@@ -1149,6 +1943,9 @@ onMounted(() => {
             keepPointId,
             deleteTargetId,
           })
+          // 协作模式下本地 push() 被 pause 拦住，而 push 是动画录制器唯一的旁听挂点，
+          // 因此这里显式把「发生了一个真实操作步」通知给旁听者（与 push 事件等价）。
+          editor.historyManager.notifyExternalPush({ entry, before, after, fromTransaction: false })
         }
       }
     } else if (!inRoom) {
@@ -1163,7 +1960,10 @@ onMounted(() => {
   editor.undo = () => {
     const cm = collabManager.value
     if (cm && cm.getStatus().room !== null) {
-      cm.sharedUndo()
+      // 协作撤销走共享历史（不经过本地 HistoryManager.undo），需显式通知旁听者，
+      // 否则「记录撤销/重做」的录制设置在房间内失效。
+      const label = cm.sharedUndo()
+      if (label !== null) notifyCollabUndoRedo('undo', label)
     } else {
       editor.historyManager.undo()
       updateLocalHistoryUI()
@@ -1173,7 +1973,8 @@ onMounted(() => {
   editor.redo = () => {
     const cm = collabManager.value
     if (cm && cm.getStatus().room !== null) {
-      cm.sharedRedo()
+      const label = cm.sharedRedo()
+      if (label !== null) notifyCollabUndoRedo('redo', label)
     } else {
       editor.historyManager.redo()
       updateLocalHistoryUI()
@@ -1224,6 +2025,22 @@ onMounted(() => {
             label: collabTransactionLabel,
             before: collabTransactionBefore,
             after,
+          })
+          // 事务提交为「一步」：同样需要通知旁听者（房间内本地 push 被 pause 拦住）。
+          // 事务内的多个命令已合并，故构造一个只带 label 的占位条目——
+          // 具体操作意图由录制器按快照 diff 推导（与无 intent 的旧命令同路径）。
+          const transactionEntry: HistoryEntry = {
+            id: `collab_tx_${Date.now()}`,
+            label: collabTransactionLabel,
+            timestamp: Date.now(),
+            redo: () => {},
+            undo: () => {},
+          }
+          editor.historyManager.notifyExternalPush({
+            entry: transactionEntry,
+            before: collabTransactionBefore,
+            after,
+            fromTransaction: true,
           })
         }
         collabTransactionBefore = null
@@ -1408,14 +2225,58 @@ onMounted(() => {
         interaction.getLiveSyncNetIds(),
       )
     }
-    renderer.sync(
-      scene,
-      interaction.rubberBandData,
-      interaction.getFacePreviewData(),
-      interaction.getActiveLabelTarget(),
-      interaction.getActivePointValueTarget(),
-    )
-    renderer.render()
+
+    // ─── 动画播放驱动 ───
+    // 三种渲染组合：
+    //  - 原地播放：主视图渲染影子场景（编辑器主场景完全不动）
+    //  - 浮窗播放：主视图继续渲染编辑器场景（可协作作图），影子场景由浮窗的第二 renderer 渲染
+    //  - 非播放：主视图渲染编辑器场景
+    if (animationPlayer) {
+      animationPlayer.tick(now)
+    }
+    const playbackActive = animationStore.playback.active
+    // 浮窗模式（用户选择）与实际可渲染（渲染栈就绪）分开判断：
+    // 切换载体的瞬间浮窗渲染器要晚一帧才就绪，若用「已就绪」决定主视图渲染什么，
+    // 会先闪一帧「动画出现在主视图」再跳到浮窗。
+    const floatMode = playbackActive && animationStore.mode === 'float'
+    const floatReady = floatMode && floatRenderer !== null
+    // 主视图渲染源（原地播放=影子场景 / 其余=编辑器场景），规则见 store
+    const mainViewShadow = animationStore.mainViewRendersShadowScene
+
+    // 浮窗开启时主视图降帧（把 GPU 让给浮窗），但**仅在空闲时**：
+    // 主视图有指针活动（继续作图/转视角）时恢复满帧，避免协作作图卡顿。
+    mainViewFrameSkipCounter = (mainViewFrameSkipCounter + 1) % FLOAT_MODE_MAIN_VIEW_FRAME_SKIP
+    const mainViewBusy =
+      mainViewLastActivityAt > 0 &&
+      now - mainViewLastActivityAt < MAIN_VIEW_FULL_RATE_AFTER_ACTIVITY_MS
+    const renderMainView = !floatReady || mainViewBusy || mainViewFrameSkipCounter === 0
+
+    if (renderMainView) {
+      const mainScene = mainViewShadow ? shadowScene!.activeScene : scene
+      if (mainViewShadow) {
+        // 原地播放：不传交互预览数据（操作的是主场景，与影子场景无关）
+        renderer.sync(mainScene, null, null, null, null)
+      } else {
+        renderer.sync(
+          mainScene,
+          interaction.rubberBandData,
+          interaction.getFacePreviewData(),
+          interaction.getActiveLabelTarget(),
+          interaction.getActivePointValueTarget(),
+        )
+      }
+      renderer.render()
+    }
+
+    // 浮窗：始终整帧率渲染影子场景（第二 canvas，与主视图状态隔离）
+    if (floatReady && floatRenderer && shadowScene) {
+      const floatScene = shadowScene.scene
+      if (floatScene) {
+        floatRenderer.sync(floatScene)
+        floatRenderer.updateResponsiveScales()
+      }
+      floatRenderer.render()
+    }
     // 协作拖拽气泡跟随元素：渲染完成后按最新相机投影更新位置
     updateDragAwarenessBubbles()
     animationFrameId = requestAnimationFrame(loop)
@@ -1545,6 +2406,17 @@ watch(
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
     // 场景有改动时 debounce 自动保存
+    scheduleAutoSave()
+  },
+  { flush: 'post' },
+)
+
+// 动画数据（录制段/设置）改动同样要触发自动保存：
+// 它不属于场景集合，因此不会经过上面的场景 watcher。
+// 播放态切换也会触发本 watcher，但此时动画文档未变，autoSave 的差异比对会直接跳过。
+watch(
+  () => animationStore.documentRevision,
+  () => {
     scheduleAutoSave()
   },
   { flush: 'post' },
@@ -1737,6 +2609,17 @@ onUnmounted(() => {
 // 释放其中每个 snapshot 持有的 scene 引用，缩短大场景下的内存驻留时间。
 onBeforeUnmount(() => {
   editor.historyManager.clear()
+  // 动画系统：解绑引擎 + 复位录制/播放状态（文档数据由 store 持有，随本页销毁）
+  editor.historyManager.setPushListener(null)
+  editor.historyManager.setNavListener(null)
+  animationPlayer?.exit()
+  animationRecorder?.discard()
+  teardownBroadcastChannel()
+  mainViewActivityCleanup?.()
+  disposeFloatRenderer()
+  animationStore.unbindEngines()
+  animationStore.unbindBroadcastHostSource()
+  animationStore.reset()
 })
 
 function onModeChange(mode: EditorMode) {
@@ -2105,7 +2988,7 @@ const handleExportScene = async () => {
   }
   try {
     const prefix = currentProjectId.value ? currentProjectName.value : undefined
-    const savedFileName = await downloadSceneAsJson(scene, prefix)
+    const savedFileName = await downloadSceneAsJson(scene, prefix, currentAnimationPayload())
     if (savedFileName) {
       // 房间内导出：追加一条通知消息（导出不改变场景，因此不产生历史条目、不占撤销步骤）
       collabManager.value?.appendSceneFileExportNotice(savedFileName)
@@ -2171,6 +3054,13 @@ const handleImportScene = async () => {
     // 会让导入重新按 before/after 展开成几十条「创建了/删除了…」。
     // 房间内的共享条目由下方显式上报（携带 sceneFileName，只产生一条带文件名的消息）。
     originalExecuteHistoryEntry(importCommand)
+
+    // 覆盖导入：连带恢复文件里的动画数据（id 未变，录制步仍然有效）。
+    // 合并导入：**不恢复**动画——mergeScene 会对导入数据做 id 重映射，
+    // 文件中的录制步引用的是旧 id，恢复后会指向不存在的对象，因此只保留当前动画。
+    if (!isMerge) {
+      applyAnimationFromSceneData(result.data as SerializedScene)
+    }
 
     sceneStore.syncEditorState(editor)
     sceneStore.syncSceneState(scene)
@@ -2422,7 +3312,9 @@ const autoJoinRoomFromQuery = async (roomId: string) => {
       clearLocalSceneOnly()
       clearCollabInSession()
       resetProjectContext()
-      lastSavedSceneJson.value = null
+      // 场景已清空：动画数据同步复位
+      animationStore.reset()
+      clearSavedBaseline()
       const restQuery = { ...route.query }
       delete restQuery.roomId
       router.replace({ query: restQuery })
@@ -2619,6 +3511,10 @@ const syncRoomMetaToStore = (room: Room) => {
   if (current.disableClear !== room.disableClear) current.disableClear = room.disableClear
   if (current.disableUndoRedo !== room.disableUndoRedo)
     current.disableUndoRedo = room.disableUndoRedo
+  if (current.disableRecordAnimation !== room.disableRecordAnimation)
+    current.disableRecordAnimation = room.disableRecordAnimation
+  if (current.forceWatchAnimation !== room.forceWatchAnimation)
+    current.forceWatchAnimation = room.forceWatchAnimation
   if (current.defaultRole !== room.defaultRole) current.defaultRole = room.defaultRole
   if (current.onlineCount !== room.onlineCount) current.onlineCount = room.onlineCount
 }
@@ -2672,6 +3568,9 @@ const handleCollabJoin = async ({
               const validation = validateSerializedScene(parsed)
               if (validation.valid && !isSerializedSceneEmpty(parsed as SerializedScene)) {
                 importScene(scene, parsed as SerializedScene)
+                // 房间关联项目里带着房主的录制段，进房时必须一并载入，
+                // 否则成员的动画面板永远是空的（只能靠广播被动观看）。
+                applyAnimationFromSceneData(parsed as SerializedScene)
                 scene.solveDirtyConstraints()
                 scene.markAllRenderDirty()
                 sceneStore.syncEditorState(editor)
@@ -2682,7 +3581,7 @@ const handleCollabJoin = async ({
               console.error('加载协作项目场景失败:', e)
             }
           }
-          lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+          markSavedBaseline()
           // 将加载的项目场景推送到 Yjs 共享文档
           collabManager.value.syncNow()
         } catch {
@@ -2702,7 +3601,7 @@ const handleCollabJoin = async ({
           currentProjectName.value = room.projectName || ''
         }
         router.replace({ query: { ...route.query, projectId: room.projectId } })
-        lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+        markSavedBaseline()
       }
     }
 
@@ -2737,6 +3636,19 @@ const handleCollabJoin = async ({
       }
       // 后加入的成员：共享历史已有内容，自动同步即可（场景已被 joinRoom 同步）
     }
+
+    // 恢复「本机在该房间内的本地录制」：按 id 追加合并，
+    // 不覆盖项目里房主的录制段（成员录制只存本地，不进共享项目）。
+    {
+      const cachedDoc = deserializeAnimationDocument(RoomAnimationCache.load(roomId))
+      if (cachedDoc) {
+        const added = animationStore.mergeSessions(cachedDoc.sessions)
+        if (added > 0) showToast(`已恢复本机在该房间的 ${added} 段录制`, 'global')
+      }
+    }
+
+    // 建立动画广播通道（房主可发起广播，成员自动跟随）
+    setupBroadcastChannel()
 
     collabStore.closeJoinDialog()
     showToast(`成功加入房间: ${room.name}`, 'global')
@@ -2815,6 +3727,8 @@ const executeAbnormalExitHandling = () => {
 const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = 'leave') => {
   // 停止房间状态轮询
   stopRoomStatusPolling()
+  // 撤销广播并销毁通道（房主离开时成员会在心跳窗口内自动退出广播视图）
+  teardownBroadcastChannel()
   // 注销当前正在协作的房间标记（只注销本 Tab 的房间，不影响其他 Tab）
   const leftRoomId = collabStore.currentRoom?.id || collabManager.value?.getStatus().room || ''
   if (leftRoomId) {
@@ -2857,7 +3771,9 @@ const handleCollabLeave = (reason: 'leave' | 'close' | 'kick' | 'disconnect' = '
   collabHistoryMessages.value = []
   // 退出关联项目：清理项目状态、URL query、浏览器标签标题
   resetProjectContext()
-  lastSavedSceneJson.value = null
+  // 场景已清空：动画数据同步复位
+  animationStore.reset()
+  clearSavedBaseline()
   router.replace({ query: {} })
   sharedHistoryState.value = null
   updateLocalHistoryUI()
@@ -2926,14 +3842,6 @@ const handleToast = (e: Event) => {
   }
 }
 
-// 统一的提示函数
-const showToast = (msg: string, scope: 'global' | 'viewport' = 'global') => {
-  if (toastTimer) clearTimeout(toastTimer)
-  uiStore.openToast(msg, scope)
-  toastTimer = window.setTimeout(() => {
-    uiStore.closeToast()
-  }, 1000)
-}
 
 const handleNewProjectCancel = () => {
   newProjectDialogVisible.value = false
@@ -2975,11 +3883,13 @@ const handleNewProjectConfirm = async (data: {
           showToast('场景文件内容为空，已创建空项目', 'global')
         } else {
           importScene(scene, parsed as SerializedScene)
+          // 场景文件可能带有动画数据，一并载入
+          applyAnimationFromSceneData(parsed as SerializedScene)
           scene.solveDirtyConstraints()
           scene.markAllRenderDirty()
           sceneStore.syncEditorState(editor)
           sceneStore.syncSceneState(scene)
-          const exportedScene = exportScene(scene)
+          const exportedScene = exportSceneWithAnimationData()
           const thumbnailBlob = await captureThumbnailAsync()
           let thumbnailUrl: string | undefined
           if (thumbnailBlob) {
@@ -3002,7 +3912,7 @@ const handleNewProjectConfirm = async (data: {
     }
 
     showToast('项目创建成功', 'global')
-    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    markSavedBaseline()
     // 项目创建成功后清除草稿
     DraftStorageService.clearDraft()
   } catch (err) {
@@ -3037,9 +3947,8 @@ const handleExitProject = async () => {
 const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
   if (!currentProjectId.value) return false
   const projectId = currentProjectId.value
-  const sceneData = exportScene(scene)
-  const compareJson = sceneToJsonForCompare(sceneData)
-  const hasChanges = lastSavedSceneJson.value === null || compareJson !== lastSavedSceneJson.value
+  const sceneData = exportSceneWithAnimationData()
+  const hasChanges = hasUnsavedChanges()
   let saved = false
   if (hasChanges) {
     try {
@@ -3073,8 +3982,10 @@ const saveProjectIfChangedAndClose = async (): Promise<boolean> => {
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
+  // 退出项目：动画数据随项目落盘，本地状态清空
+  animationStore.reset()
   resetProjectContext()
-  lastSavedSceneJson.value = null
+  clearSavedBaseline()
   // O4：保存成功时清草稿（虽然项目场景不走草稿路径，这里仍然清理以防未来扩展引入），
   // 保存失败时保留草稿作为最后一道防线——下次用户打开编辑器还能从草稿恢复
   if (saved) {
@@ -3163,9 +4074,8 @@ const handleSaveAsConfirm = async (data: {
     // 用户若对临时副本做过编辑，先把当前内存场景序列化，另存时一并写入新项目，
     // 保证"编辑后另存"能保留用户的改动（未编辑时与源项目内容一致）。
     let editedSceneJson: string | undefined
-    const currentJson = sceneToJsonForCompare(exportScene(scene))
-    if (lastSavedSceneJson.value === null || currentJson !== lastSavedSceneJson.value) {
-      editedSceneJson = JSON.stringify(exportScene(scene))
+    if (hasUnsavedChanges()) {
+      editedSceneJson = JSON.stringify(exportSceneWithAnimationData())
     }
 
     // 服务端复制源项目的场景与缩略图文件，并让源项目 另存量 +1
@@ -3185,7 +4095,7 @@ const handleSaveAsConfirm = async (data: {
     isForeignEditing.value = false
     // 去掉 from=public，避免刷新后又回到预览判定
     router.replace({ query: { projectId: newProject.id } })
-    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    markSavedBaseline()
     saveAsDialogVisible.value = false
     showToast(`已另存为「${newProject.name}」`, 'global')
   } catch (err) {
@@ -3212,8 +4122,10 @@ const handleEditProjectDelete = async () => {
   scene.markAllRenderDirty()
   sceneStore.syncEditorState(editor)
   sceneStore.syncSceneState(scene)
+  // 项目已删除：动画数据一并清空
+  animationStore.reset()
   resetProjectContext()
-  lastSavedSceneJson.value = null
+  clearSavedBaseline()
   editProjectDialogVisible.value = false
   router.replace({ query: {} })
   showToast('项目已删除', 'global')
@@ -3243,7 +4155,7 @@ const handleProjectCreated = (projectId: string) => {
       // 获取项目信息失败不阻塞
     })
   // 记录当前场景快照用于后续变更检测
-  lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+  markSavedBaseline()
 }
 
 const loadProjectScene = async (projectId: string) => {
@@ -3262,6 +4174,8 @@ const loadProjectScene = async (projectId: string) => {
         const validation = validateSerializedScene(parsed)
         if (validation.valid && !isSerializedSceneEmpty(parsed as SerializedScene)) {
           importScene(scene, parsed as SerializedScene)
+          // 动画数据（操作录像机）随项目一起加载；文件没有则清空
+          applyAnimationFromSceneData(parsed as SerializedScene)
           scene.solveDirtyConstraints()
           scene.markAllRenderDirty()
           sceneStore.syncEditorState(editor)
@@ -3273,7 +4187,7 @@ const loadProjectScene = async (projectId: string) => {
         console.error('加载场景数据失败:', e)
       }
     }
-    lastSavedSceneJson.value = sceneToJsonForCompare(exportScene(scene))
+    markSavedBaseline()
     showToast(`已加载项目：${detail.name}`, 'global')
   } catch (err) {
     const msg = err instanceof ApiError ? err.message : '加载项目失败'
@@ -3313,13 +4227,13 @@ const handleSaveScene = async () => {
     return
   }
   try {
-    const sceneData = exportScene(scene)
-    const sceneJson = JSON.stringify(sceneData)
-    const compareJson = sceneToJsonForCompare(sceneData)
-    if (lastSavedSceneJson.value !== null && compareJson === lastSavedSceneJson.value) {
+    // 「已是最新」判定需同时看场景与动画（动画变化在场景比对里被剔除）
+    if (!hasUnsavedChanges()) {
       showToast('已是最新场景', 'global')
       return
     }
+    const sceneData = exportSceneWithAnimationData()
+    const sceneJson = JSON.stringify(sceneData)
     const thumbnailBlob = await captureThumbnailAsync()
     let thumbnailUrl: string | undefined
     if (thumbnailBlob) {
@@ -3338,7 +4252,7 @@ const handleSaveScene = async () => {
       collabStore.currentRoom.projectThumbnailUrl = thumbnailUrl
       collabStore.currentRoom.updatedAt = new Date().toISOString()
     }
-    lastSavedSceneJson.value = compareJson
+    markSavedBaseline()
     showToast('保存成功', 'global')
   } catch (err) {
     const msg = err instanceof ApiError ? err.message : '保存失败'
@@ -3628,7 +4542,13 @@ const handleSaveScene = async () => {
 
     <div ref="editorBodyRef" class="editor-body">
       <div ref="sidebarShellRef" class="sidebar-shell" :style="sidebarShellStyle">
-        <Sidebar :scene="scene" :editor="editor" :view-only="isReadOnly" />
+        <!-- 原地播放期间主视图显示的是影子场景，此时侧栏可选中播放场景的对象，
+             但其编辑作用于主场景（对当前画面无效）——必须一并锁住，避免「改了没反应」的困惑 -->
+        <Sidebar
+          :scene="scene"
+          :editor="editor"
+          :view-only="isReadOnly || animationStore.locksMainViewInteraction"
+        />
       </div>
       <div
         class="sidebar-width-resizer"
@@ -3691,12 +4611,31 @@ const handleSaveScene = async () => {
             <span class="drag-awareness-bubble-tail" aria-hidden="true"></span>
           </div>
         </div>
+        <!-- 原地播放：持续提示「当前看到的是播放场景，不是编辑器场景」。
+             整圈描边 + 顶部徽标，避免用户误以为还在原场景里操作。 -->
+        <template v-if="animationStore.locksMainViewInteraction">
+          <div class="playback-scene-frame" aria-hidden="true"></div>
+          <div class="playback-scene-badge" :class="{ offset: hasViewportTopBanner }">
+            <span class="dot" aria-hidden="true"></span>
+            动画播放中
+          </div>
+        </template>
         <div class="performance-indicators">
           <div class="fps-indicator">FPS: {{ fps }}</div>
           <div v-if="collabStatus.connected && collabLatencyMs !== null" class="latency-indicator">
             {{ collabLatencyMs }} ms
           </div>
         </div>
+        <!-- 浮窗播放：第二 renderer + 第二 canvas，主视图可继续协作作图 -->
+        <AnimationFloatWindow
+          v-if="showFloatWindow"
+          :host-el="viewportRef"
+          @container="handleFloatContainer"
+          @resize="handleFloatResize"
+          @reset-camera="handleFloatResetCamera"
+          @toggle-axes="handleFloatToggleAxes"
+        />
+
         <div v-if="!isARMode" class="viewport-controls">
           <button
             type="button"
@@ -3881,6 +4820,78 @@ const handleSaveScene = async () => {
 
 .sidebar-width-resizer.is-disabled .sidebar-width-resizer-handle {
   background: #5a5a5a;
+}
+
+/*
+ * 原地播放期间的持续提示：
+ * - playback-scene-frame：整圈呼吸式描边（不占内容、不拦交互）
+ * - playback-scene-badge：顶部居中徽标，说明「当前是播放场景」
+ * 二者仅覆盖视口本身，且 pointer-events: none，不影响任何操作。
+ */
+.playback-scene-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  border: 2px solid rgba(255, 160, 70, 0.5);
+  pointer-events: none;
+  animation: playback-frame-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes playback-frame-pulse {
+  0%,
+  100% {
+    border-color: rgba(255, 160, 70, 0.32);
+    box-shadow: inset 0 0 0 rgba(255, 160, 70, 0);
+  }
+  50% {
+    border-color: rgba(255, 175, 90, 0.85);
+    box-shadow: inset 0 0 26px rgba(255, 160, 70, 0.16);
+  }
+}
+
+.playback-scene-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 1px solid rgba(255, 175, 90, 0.55);
+  border-radius: 999px;
+  background: rgba(74, 45, 12, 0.86);
+  color: #ffcf9a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
+/* 顶部已有其它横幅时下移，避免两条横幅重叠 */
+.playback-scene-badge.offset {
+  top: 48px;
+}
+
+.playback-scene-badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffab4a;
+  animation: playback-badge-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes playback-badge-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 
 .performance-indicators {

@@ -250,6 +250,71 @@ export class Scene {
   private _circleToConesIndex: Map<string, string[]> | null = null
   private _circleToCylindersIndex: Map<string, string[]> | null = null
 
+  /**
+   * 解析法向圆的实际法向量（即圆所在平面的法线）。
+   *
+   * 三处使用方必须得到**完全一致**的结果，否则会出现「渲染是一个样、约束计算是另一个样」：
+   *  - 渲染 / 拾取（GeometrySyncer）
+   *  - 圆上约束点的投影（ObjectConstrainedPointConstraint）
+   *  - 动画录制时的主体包围范围（AnimationRecorder，缺它会退化成「只有圆心」）
+   * 因此把解析收敛到 Scene 上，供各方复用。
+   *
+   * 优先级与约束侧保持一致：
+   *  1. 圆锥底/顶圆 → 圆锥轴向；圆柱底/顶圆（且不属于任何圆锥）→ 圆柱轴向；
+   *  2. 否则取 directionType / directionId 指向对象的方向（directionType 为 point 时视为 +Y）；
+   *  3. 都不是 → null（调用方需自行兜底）。
+   */
+  resolveNormalCircleDirection(circle: Circle3): Vec3 | null {
+    if (!circle.isNormalCircle()) return null
+
+    const fromSolid = this.resolveCircleDirectionFromSolid(circle.id)
+    if (fromSolid) return fromSolid
+
+    if (!circle.directionType || !circle.directionId) return null
+    return this.resolveDirectionVector(circle.directionType, circle.directionId)
+  }
+
+  /** 圆是否为圆锥/圆柱的底顶圆；是则返回该实体的轴向（无则 null） */
+  private resolveCircleDirectionFromSolid(circleId: string): Vec3 | null {
+    const coneIds = this.getConesForCircle(circleId)
+    for (const coneId of coneIds) {
+      const cone = this.cones.get(coneId)
+      if (!cone) continue
+      const axis = new Vec3(
+        cone.apexPoint.position.x - cone.baseCenterPoint.position.x,
+        cone.apexPoint.position.y - cone.baseCenterPoint.position.y,
+        cone.apexPoint.position.z - cone.baseCenterPoint.position.z,
+      )
+      if (Math.hypot(axis.x, axis.y, axis.z) > 1e-8) return axis
+    }
+    // 与约束侧一致：只有在不属于任何圆锥时才考虑圆柱
+    if (coneIds.length > 0) return null
+    const cylinderIds = this.getCylindersForCircle(circleId)
+    for (const cylinderId of cylinderIds) {
+      const cylinder = this.cylinders.get(cylinderId)
+      if (!cylinder) continue
+      const axis = new Vec3(
+        cylinder.topCenterPoint.position.x - cylinder.bottomCenterPoint.position.x,
+        cylinder.topCenterPoint.position.y - cylinder.bottomCenterPoint.position.y,
+        cylinder.topCenterPoint.position.z - cylinder.bottomCenterPoint.position.z,
+      )
+      if (Math.hypot(axis.x, axis.y, axis.z) > 1e-8) return axis
+    }
+    return null
+  }
+
+  /** 方向来源对象的方向向量（directionType 为 point 时约定 +Y） */
+  private resolveDirectionVector(directionType: string, directionId: string): Vec3 | null {
+    if (directionType === 'point') return new Vec3(0, 1, 0)
+    if (directionType === 'line') return this.lines.get(directionId)?.getNormalizedDirectionVector() ?? null
+    if (directionType === 'straightLine') {
+      return this.straightLines.get(directionId)?.getNormalizedDirectionVector() ?? null
+    }
+    if (directionType === 'ray') return this.rays.get(directionId)?.getNormalizedDirectionVector() ?? null
+    if (directionType === 'vector') return this.vectors.get(directionId)?.getNormalizedDirectionVector() ?? null
+    return null
+  }
+
   getConesForCircle(circleId: string): string[] {
     if (!this._circleToConesIndex) {
       const idx = new Map<string, string[]>()

@@ -23,6 +23,29 @@ export interface HistoryManagerOptions {
   autoSolveConstraints: boolean
 }
 
+/**
+ * 操作被记录到历史后的通知载荷。
+ * 供动画系统（操作录像机）旁听使用：每个成功的 push 即一个「操作步」。
+ */
+export interface HistoryPushEvent {
+  entry: HistoryEntry
+  /** 操作前的场景快照（即上一步的状态） */
+  before: SerializedScene
+  /** 操作后的场景快照 */
+  after: SerializedScene
+  /** 是否由事务提交产生 */
+  fromTransaction: boolean
+}
+
+/** 撤销/重做的通知载荷（供动画系统按设置决定是否录制） */
+export interface HistoryNavEvent {
+  /** 'undo' | 'redo' */
+  action: 'undo' | 'redo'
+  entry: HistoryEntry
+  /** 导航后的场景快照 */
+  after: SerializedScene
+}
+
 /** 快照历史条目，与共享历史格式一致 */
 export interface SnapshotHistoryEntry {
   before: SerializedScene
@@ -51,6 +74,15 @@ export class HistoryManager {
 
   /** 暂停标记：协作模式下暂停本地历史记录，避免命令同时入栈本地和共享历史 */
   private paused = false
+
+  /**
+   * 操作被记录到历史后的回调（动画系统旁听挂点）。
+   * 仅在真正入栈（非空操作、非事务缓冲）时触发。
+   */
+  private onPushed: ((event: HistoryPushEvent) => void) | null = null
+
+  /** 撤销/重做发生后的回调（动画系统按设置决定是否录制） */
+  private onHistoryNav: ((event: HistoryNavEvent) => void) | null = null
 
   /**
    * 快照历史：与 undoStack/redoStack 平行维护，
@@ -94,6 +126,40 @@ export class HistoryManager {
   }
 
   /**
+   * 注册「操作已入历史」回调（动画系统旁听挂点）。
+   * 传入 null 可取消注册。
+   */
+  setPushListener(listener: ((event: HistoryPushEvent) => void) | null): void {
+    this.onPushed = listener
+  }
+
+  /** 注册「撤销/重做发生」回调。传入 null 可取消注册。 */
+  setNavListener(listener: ((event: HistoryNavEvent) => void) | null): void {
+    this.onHistoryNav = listener
+  }
+
+  /**
+   * 由**协作历史路径**显式触发的撤销/重做旁听通知。
+   *
+   * 协作房间内撤销/重做走共享历史（直接套用共享条目的 before 快照），
+   * 不经过本类的 undo()/redo()，因此 notifyNav 不会触发——
+   * 若要走「记录撤销/重做」的录制设置，必须由此显式通知。
+   */
+  notifyExternalNav(action: 'undo' | 'redo', entry: HistoryEntry): void {
+    this.notifyNav(action, entry)
+  }
+
+  /** 通知撤销/重做旁听者 */
+  private notifyNav(action: 'undo' | 'redo', entry: HistoryEntry): void {
+    if (!this.onHistoryNav) return
+    try {
+      this.onHistoryNav({ action, entry, after: exportScene(this.scene) })
+    } catch (e) {
+      console.warn('[HistoryManager] onHistoryNav listener failed:', e)
+    }
+  }
+
+  /**
    * 记录一个操作到历史栈。
    * 如果当前在事务中，命令会被收集到事务缓冲区，不直接入栈。
    * 如果当前已暂停（协作模式），push 为空操作。
@@ -102,9 +168,16 @@ export class HistoryManager {
    * 否则用户会看到「点击一次就多一步撤销」这类撤销后什么都没变的历史。
    */
   push(entry: HistoryEntry): void {
+    this.pushInternal(entry, false)
+  }
+
+  /**
+   * push 的内部实现，额外携带 fromTransaction 标记（供旁听者区分普通操作与事务提交）。
+   */
+  private pushInternal(entry: HistoryEntry, fromTransaction: boolean): void {
     if (this.isExecuting || this.paused) return
 
-    if (this.transactionDepth > 0) {
+    if (this.transactionDepth > 0 && !fromTransaction) {
       this.transactionEntries.push(entry)
       return
     }
@@ -114,8 +187,10 @@ export class HistoryManager {
     const after = exportScene(this.scene)
     if (isSameSerializedScene(this.lastSceneSnapshot, after)) return
 
+    const before = this.lastSceneSnapshot
+
     this.undoStack.push(entry)
-    this.undoSnapshotEntries.push({ before: this.lastSceneSnapshot, after, label: entry.label })
+    this.undoSnapshotEntries.push({ before, after, label: entry.label })
     this.lastSceneSnapshot = after
     this.clearRedoStack()
 
@@ -124,6 +199,36 @@ export class HistoryManager {
       removed.dispose?.()
       this.undoSnapshotEntries.shift()
     }
+
+    // 通知旁听者（动画系统）：一个真实操作已入历史，即一个「操作步」。
+    // 放在空操作过滤与非事务判断之后，保证「只有真实变化才算一步」。
+    this.emitPushed({ entry, before, after, fromTransaction })
+  }
+
+  /**
+   * 通知记录旁听者（动画系统等）。
+   * 调用方需保证 `before` / `after` 是一次**真实变化**，否则会凭空多出一个操作步。
+   */
+  private emitPushed(event: HistoryPushEvent): void {
+    if (!this.onPushed) return
+    try {
+      this.onPushed(event)
+    } catch (e) {
+      console.warn('[HistoryManager] onPushed listener failed:', e)
+    }
+  }
+
+  /**
+   * 由**协作历史路径**显式触发的旁听通知（不写入本地历史栈）。
+   *
+   * 为什么需要它：协作房间内 `pause()` 会让本地 `push()` 直接返回，操作改为走
+   * `CollabManager.appendHistoryEntry()`，而 `push` 恰好是动画录制器唯一的旁听挂点——
+   * 若不在此显式通知，房间内任何人都录不到任何一步。
+   *
+   * @param event 与 push 旁听事件等价；调用方需在过滤空操作后传入
+   */
+  notifyExternalPush(event: HistoryPushEvent): void {
+    this.emitPushed(event)
   }
 
   /**
@@ -149,11 +254,11 @@ export class HistoryManager {
       this.transactionEntries = []
       if (entries.length === 0) return
       if (entries.length === 1) {
-        this.push(entries[0]!)
+        this.pushInternal(entries[0]!, true)
         return
       }
       const composite = new CompositeEntry(this.transactionLabel, entries)
-      this.push(composite)
+      this.pushInternal(composite, true)
     }
   }
 
@@ -192,6 +297,7 @@ export class HistoryManager {
         this.scene.markAllRenderDirty()
       }
       this.lastSceneSnapshot = exportScene(this.scene)
+      this.notifyNav('undo', entry)
     } finally {
       this.isExecuting = false
     }
@@ -214,6 +320,7 @@ export class HistoryManager {
         this.scene.markAllRenderDirty()
       }
       this.lastSceneSnapshot = exportScene(this.scene)
+      this.notifyNav('redo', entry)
     } finally {
       this.isExecuting = false
     }

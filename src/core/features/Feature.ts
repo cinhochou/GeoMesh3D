@@ -90,3 +90,64 @@ export interface FeaturePlugin {
    */
   getDependencies(params: Record<string, unknown>): string[]
 }
+
+import { toSubscriptName } from '../geometry/displayName'
+
+/** 要素类型的中文名（历史标签、动画步骤标签等显示层统一取自这里） */
+export const FEATURE_TYPE_LABELS: Record<FeatureType, string> = {
+  point: '点',
+  line: '线段',
+  straightLine: '直线',
+  ray: '射线',
+  vector: '向量',
+  circle: '圆',
+  sphere: '两点球',
+  cone: '圆锥',
+  cylinder: '圆柱',
+  face: '多边形面',
+  perpendicularLine: '垂线',
+  parallelLine: '平行线',
+  hexahedron: '正六面体',
+  intersectionPoint: '交点',
+  constrainedPoint: '约束点',
+  regularPolygon: '正多边形',
+  prism: '棱柱',
+  pyramid: '棱锥',
+}
+
+/**
+ * 构造可读的操作标签：`动词 + 类型中文名 + 名称`。
+ *
+ * ⚠ 历史/动画步骤标签**不要**再用 `add-${type}` 这类内部机器名 ——
+ * 它们会原样出现在时间轴的步骤标题与悬停提示里（用户反馈「第 1 步：add-point」）。
+ * 名称本身已含类型词时不重复拼接（例如名称就是「正六面体1」）。
+ */
+export function buildFeatureActionLabel(
+  action: '创建' | '删除' | '更新',
+  type: FeatureType,
+  name?: unknown,
+): string {
+  const typeName = FEATURE_TYPE_LABELS[type] ?? type
+  // 名称按侧栏同一口径做下标化（正六面体1 → 正六面体₁），保证两处显示一致
+  const text = toSubscriptName(typeof name === 'string' ? name.trim() : '')
+  if (!text) return `${action}${typeName}`
+  return text.includes(typeName) ? `${action}${text}` : `${action}${typeName} ${text}`
+}
+
+/**
+ * 从特征参数里解析可读名称。
+ *
+ * 各类型的参数结构不统一：点/线等是扁平的（顶层就有 name），
+ * 而圆/面/垂线是嵌套对象、正六面体等实体是 `{ constraint }`。
+ * 因此这里同时看顶层 name 与常见嵌套对象的 name，供标签构造统一取用。
+ */
+export function resolveFeatureName(params: Record<string, unknown> | undefined): string | undefined {
+  if (!params) return undefined
+  const direct = params.name
+  if (typeof direct === 'string' && direct.trim()) return direct.trim()
+  for (const key of ['constraint', 'circle', 'face', 'line', 'sphere', 'cone', 'cylinder']) {
+    const nested = params[key] as { name?: unknown } | undefined
+    if (nested && typeof nested.name === 'string' && nested.name.trim()) return nested.name.trim()
+  }
+  return undefined
+}

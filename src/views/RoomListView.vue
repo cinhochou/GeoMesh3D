@@ -979,7 +979,7 @@ const togglePermissions = async (roomId: string) => {
 
 const updateRoomPerm = async (
   room: Room,
-  field: 'allowShare' | 'disableExport' | 'disableImport' | 'importMode' | 'defaultRole' | 'disableClear' | 'disableUndoRedo' | 'approvalRequired',
+  field: 'allowShare' | 'disableExport' | 'disableImport' | 'importMode' | 'defaultRole' | 'disableClear' | 'disableUndoRedo' | 'disableRecordAnimation' | 'forceWatchAnimation' | 'approvalRequired',
   value: boolean | 'editor' | 'viewer' | RoomImportMode,
 ) => {
   const oldVal = room[field]
@@ -2481,6 +2481,34 @@ const formatDateTime = (dateStr: string | null) => {
                             updateRoomPerm(
                               room,
                               'disableUndoRedo',
+                              ($event.target as HTMLInputElement).checked,
+                            )
+                          "
+                        />
+                      </label>
+                      <label class="rl-perm-toggle-item">
+                        <span class="rl-perm-toggle-label">禁止成员录制动画</span>
+                        <input
+                          type="checkbox"
+                          :checked="room.disableRecordAnimation"
+                          @change="
+                            updateRoomPerm(
+                              room,
+                              'disableRecordAnimation',
+                              ($event.target as HTMLInputElement).checked,
+                            )
+                          "
+                        />
+                      </label>
+                      <label class="rl-perm-toggle-item">
+                        <span class="rl-perm-toggle-label">强制观看广播动画</span>
+                        <input
+                          type="checkbox"
+                          :checked="room.forceWatchAnimation"
+                          @change="
+                            updateRoomPerm(
+                              room,
+                              'forceWatchAnimation',
                               ($event.target as HTMLInputElement).checked,
                             )
                           "

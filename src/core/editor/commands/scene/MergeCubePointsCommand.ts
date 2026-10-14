@@ -22,7 +22,7 @@ export function createMergeCubePointsCommand(
   removePoint: Point3,
   transforms: PointTransform[],
 ): SnapshotCommand {
-  const cmd = new SnapshotCommand('MergeCubePointsCommand', scene, () => {
+  const cmd = new SnapshotCommand('合并正六面体顶点', scene, () => {
     // 直接应用变换
     transforms.forEach(({ pointId, after }) => {
       const point = scene.points.get(pointId)

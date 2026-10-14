@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 import { Scene } from '../core/scene/Scene'
 import { Editor } from '../core/editor/Editor'
 import { Vec3 } from '../core/geometry/Vec3'
+import { toSubscriptName } from '../core/geometry/displayName'
 import type { Point3 } from '../core/geometry/Point3'
 import type { Line3 } from '../core/geometry/Line3'
 import type { Circle3 } from '../core/geometry/Circle3'
@@ -66,12 +67,8 @@ const hiddenLineHintStyle = ref<Record<string, string>>({})
 let hintRafId = 0
 
 // 将名称中最后一个数字序列转换为 Unicode 下角标字符
-const subName = (str: string | null | undefined): string => {
-  if (!str) return ''
-  return str.replace(/(\d+)(?=\D*$)/, (m) =>
-    m.split('').map((d) => '₀₁₂₃₄₅₆₇₈₉'[Number(d)]).join(''),
-  )
-}
+// 名称下标化统一由 core 提供（动画步骤标签等显示层共用同一口径）
+const subName = (str: string | null | undefined): string => toSubscriptName(str)
 
 const isTriggerVisible = (el: HTMLElement | null): boolean => {
   if (!el) return false

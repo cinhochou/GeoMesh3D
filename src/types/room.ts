@@ -84,6 +84,10 @@ export interface Room {
   disableClear: boolean
   // 是否禁止成员撤销/重做
   disableUndoRedo: boolean
+  // 是否禁止成员录制动画（房主本人不受限）
+  disableRecordAnimation: boolean
+  // 广播动画时是否强制成员观看（强制时成员无法收起动画面板）
+  forceWatchAnimation: boolean
   // 软删除时间（回收站用，null=未删除）
   deletedAt: string | null
 }
@@ -117,6 +121,8 @@ export interface UpdateRoomRequest {
   defaultRole?: 'editor' | 'viewer'
   disableClear?: boolean
   disableUndoRedo?: boolean
+  disableRecordAnimation?: boolean
+  forceWatchAnimation?: boolean
 }
 
 // 加入房间后后端返回的连接凭证

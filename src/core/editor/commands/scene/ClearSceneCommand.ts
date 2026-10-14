@@ -9,7 +9,7 @@ import { Scene } from '../../../scene/Scene'
 export function createClearSceneCommand(
   scene: Scene,
 ): SnapshotCommand {
-  const cmd = new SnapshotCommand('ClearSceneCommand', scene, () => {
+  const cmd = new SnapshotCommand('清空场景', scene, () => {
     scene.lines.clear()
     scene.straightLines.clear()
     scene.rays.clear()

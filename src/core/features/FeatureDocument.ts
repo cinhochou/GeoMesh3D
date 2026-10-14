@@ -2,12 +2,18 @@
 // Document API：把 Feature 创建/删除/更新封装为对 Scene 的一次事务操作，
 // 并生成可撤销的 HistoryEntry。这是外部程序和 UI 调用作图能力的统一入口。
 
-import type { Feature, FeatureType, GeneratedGeometry } from './Feature'
+import {
+  buildFeatureActionLabel,
+  resolveFeatureName,
+  type Feature,
+  type FeatureType,
+  type GeneratedGeometry,
+} from './Feature'
 import { featureRegistry } from './FeatureRegistry'
 import { SnapshotCommand } from '../editor/commands/SnapshotCommand'
 import type { Scene } from '../scene/Scene'
 import type { HistoryEntry } from '../editor/HistoryManager'
-import type { CollabOperationIntent, CollabIntentParam } from '../../types/collabIntent'
+import type { CollabIntentParam } from '../../types/collabIntent'
 import { colorTextOf } from '../../types/collabIntent'
 
 const genId = (prefix: string) => {
@@ -136,10 +142,14 @@ export class FeatureDocument {
     }
 
     let geometry: GeneratedGeometry | undefined
-    const cmd = new SnapshotCommand(`create-${feature.type}`, this.scene, () => {
-      geometry = featureRegistry.create(this.scene, feature)
-    })
-    cmd.intent = { category: 'create', targetId: feature.id }
+    const cmd = new SnapshotCommand(
+      buildFeatureActionLabel('创建', feature.type, resolveFeatureName(feature.params)),
+      this.scene,
+      () => {
+        geometry = featureRegistry.create(this.scene, feature)
+      },
+    )
+    cmd.intent = { category: 'create', targetId: feature.id, targetType: feature.type }
     cmd.executeAndCapture()
 
     if (!geometry) {
@@ -164,12 +174,16 @@ export class FeatureDocument {
       params: operation.params ?? entry.feature.params,
     }
 
-    const cmd = new SnapshotCommand(`delete-${feature.type}`, this.scene, () => {
-      featureRegistry.delete(this.scene, feature, entry.geometry)
-      this.entries.delete(feature.id)
-    })
+    const cmd = new SnapshotCommand(
+      buildFeatureActionLabel('删除', feature.type, resolveFeatureName(feature.params)),
+      this.scene,
+      () => {
+        featureRegistry.delete(this.scene, feature, entry.geometry)
+        this.entries.delete(feature.id)
+      },
+    )
     cmd.deleteTargetId = feature.id
-    cmd.intent = { category: 'delete', targetId: feature.id }
+    cmd.intent = { category: 'delete', targetId: feature.id, targetType: feature.type }
     cmd.executeAndCapture()
 
     if (this.pushHistory) {
@@ -190,15 +204,20 @@ export class FeatureDocument {
       dependencies: featureRegistry.get(operation.featureType)?.getDependencies(operation.params) ?? [],
     }
 
-    const cmd = new SnapshotCommand(`update-${feature.type}`, this.scene, () => {
-      const updated = featureRegistry.update(this.scene, feature, entry.geometry, operation.params)
-      this.entries.set(feature.id, { feature, geometry: updated })
-    })
+    const cmd = new SnapshotCommand(
+      buildFeatureActionLabel('更新', feature.type, resolveFeatureName(feature.params)),
+      this.scene,
+      () => {
+        const updated = featureRegistry.update(this.scene, feature, entry.geometry, operation.params)
+        this.entries.set(feature.id, { feature, geometry: updated })
+      },
+    )
     // 修改意图：主语 + 直接声明的属性变化（before=更新前 feature 参数，after=操作参数）
     const diffParams = diffIntentParams(entry.feature.params, operation.params)
     cmd.intent = {
       category: 'update',
       targetId: feature.id,
+      targetType: feature.type,
       params: diffParams.length > 0 ? diffParams : undefined,
     }
     cmd.executeAndCapture()

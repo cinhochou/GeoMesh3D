@@ -406,9 +406,26 @@ type SceneMetadata = {
   constraintCount: number
 }
 
+/**
+ * 持久化的动画文档（操作录像机）。
+ *
+ * 结构上兼容 AnimationDocument；此处用宽松声明，使序列化器不必反向依赖动画模块。
+ * 仅「项目保存 / 场景文件导出 / 草稿」会写入该字段；
+ * 历史快照（before/after）**不带**该字段，避免每步快照都携带动画数据。
+ */
+export type SavedAnimationDocument = {
+  version: number
+  meta: { createdAt: number; updatedAt: number }
+  sessions: unknown[]
+  activeSessionId: string | null
+  settings: Record<string, unknown>
+}
+
 export type SerializedScene = {
   version: 1
   metadata?: SceneMetadata
+  /** 动画系统（操作录像机）数据；缺失表示该场景没有录制内容 */
+  animation?: SavedAnimationDocument
   points: SerializedPoint[]
   lines: SerializedLine[]
   straightLines: SerializedStraightLine[]
@@ -428,15 +445,21 @@ export type SerializedScene = {
 const SCENE_FILE_VERSION = 1
 
 /**
- * 序列化场景的「可比对」文本：剔除会随每次导出变化的元数据（exportedAt）。
- * 用于判断两次导出是否代表同一场景状态（自动保存比对、空操作命令判定）。
+ * 序列化场景的「可比对」文本。
+ *
+ * 剔除项：
+ *  - `metadata.exportedAt`：每次导出都会变，不代表内容变化；
+ *  - `animation`：动画数据与几何无关，**不参与场景等价判定**。
+ *    否则「只改了录制内容」会被判成场景变化（污染撤销栈的空操作判定、
+ *    并让自动保存的差异判断失真）。动画变化由调用方用独立基线比对。
  */
 export function serializeSceneForCompare(data: SerializedScene): string {
-  const copy = { ...data }
+  const copy: SerializedScene = { ...data }
   if (copy.metadata) {
     copy.metadata = { ...copy.metadata }
     delete (copy.metadata as Record<string, unknown>).exportedAt
   }
+  delete copy.animation
   return JSON.stringify(copy)
 }
 
@@ -2689,8 +2712,14 @@ function localTimestampFileName(prefix?: string): string {
  * @returns 实际写入的文件名（含后缀）；用户取消或失败时返回 null。
  *          返回文件名是协作消息「导出了场景文件 xxx.json」所必需的。
  */
-export async function downloadSceneAsJson(scene: Scene, namePrefix?: string): Promise<string | null> {
+export async function downloadSceneAsJson(
+  scene: Scene,
+  namePrefix?: string,
+  animation?: SavedAnimationDocument | null,
+): Promise<string | null> {
   const serialized = exportScene(scene)
+  if (animation) serialized.animation = animation
+  else delete serialized.animation
   const jsonStr = JSON.stringify(serialized, null, 2)
   const fallbackFileName = localTimestampFileName(namePrefix)
 

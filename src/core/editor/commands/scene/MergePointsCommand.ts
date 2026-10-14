@@ -640,7 +640,7 @@ export function createMergePointsCommand(
   keepPoint: Point3,
   removePoint: Point3,
 ): SnapshotCommand {
-  const cmd = new SnapshotCommand('MergePointsCommand', scene, () => {
+  const cmd = new SnapshotCommand('合并点', scene, () => {
     executeMergePoints(scene, keepPoint, removePoint)
   })
   cmd.keepPointId = keepPoint.id

@@ -100,7 +100,7 @@ export function createSyncLockStateCommand(
   perpendicularLineTransforms: PerpendicularLineLockTransform[] = [],
   parallelLineTransforms: ParallelLineLockTransform[] = [],
 ): SnapshotCommand {
-  const cmd = new SnapshotCommand('SyncLockStateCommand', scene, () => {
+  const cmd = new SnapshotCommand('同步锁定状态', scene, () => {
     pointTransforms.forEach(({ point, after }) => {
       point.userLocked = after
     })
