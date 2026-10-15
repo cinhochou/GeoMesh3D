@@ -11,8 +11,10 @@
 
 import { restoreFromSnapshot } from '../editor/commands/SnapshotCommand'
 import { applyDelta } from './SnapshotDelta'
+import { buildMergeSnapshotCache } from './SnapshotScopeOps'
 import { ShadowScene, type CameraState } from './ShadowScene'
 import { ease } from './EasingLibrary'
+import { applySelectionIds } from './stepSelection'
 import { Vec3 } from '../geometry/Vec3'
 import {
   clampFocusZoom,
@@ -177,6 +179,7 @@ export class AnimationPlayer {
     if (!canAnimate) {
       // 硬切：几何直接落点，相机也直接聚焦（保持视线方向）
       this.applySnapshot(targetSnapshot, clamped)
+      this.applyStepSelection(clamped)
       this.applyFocusImmediately(clamped)
       this.callbacks.onChange?.()
       this.callbacks.requestRender?.()
@@ -418,6 +421,10 @@ export class AnimationPlayer {
 
     this.state.transitioning = true
     this.state.cursor = toIndex
+    // 选中态属于「本步状态」：进入过渡即刻按目标步落位 ——
+    // 「选中圆锥顶点」这类步的高亮在过渡开始就出现；
+    // 创建/删除步则同步清掉上一处高亮，避免残留。
+    this.applyStepSelection(toIndex)
     this.callbacks.onChange?.()
     this.callbacks.requestRender?.()
   }
@@ -521,6 +528,8 @@ export class AnimationPlayer {
     this.state.transitioning = false
 
     this.applySnapshot(tr.to, this.state.cursor)
+    // 快照落地会清空选中态（restoreFromSnapshot 的既有行为），此处按本步重新落位
+    this.applyStepSelection(this.state.cursor)
     // 相机：仅在本次过渡确实接管过相机、且用户未在操作时，才落到目标机位。
     // 若用户全程手动控制过视角，则尊重用户，不做最后的强制对齐。
     if (tr.cameraTo && tr.cameraApplied && !this.shadow.isUserInteracting()) {
@@ -664,10 +673,19 @@ export class AnimationPlayer {
   }
 
   /**
-   * 构建快照流水线：cache[0] = baseSnapshot，cache[i+1] = 第 i 步之后的状态。
-   * 优先从锚点起步重放，避免每次从头。
+   * 构建快照流水线：cache[0] = 起点，cache[i+1] = 第 i 步之后的状态。
+   *
+   *  - native（缺省）：起点 = 段.baseSnapshot，优先从锚点起步重放（现有行为，零改动）。
+   *  - merge（跨场景段：动画库导入 / 导入后固化）：
+   *      起点 = 目标场景快照 ∪ 裁剪后的段快照（段优先），全程 delta 递推。
+   *      **忽略锚点**：anchorSnapshot 是录制方全场景快照，直接替换会把
+   *      目标场景几何整体抹掉（典型症状：播放进行到第 50 步场景突然变空）。
    */
   private buildSnapshotCache(session: RecordingSession): void {
+    if (session.playbackMode === 'merge') {
+      this.snapshotCache = buildMergeSnapshotCache(session, this.shadow.takeMainSceneSnapshot())
+      return
+    }
     const cache: SceneSnapshot[] = [session.baseSnapshot]
     let current = session.baseSnapshot
     for (const step of session.steps) {
@@ -698,6 +716,22 @@ export class AnimationPlayer {
     scene.solveDirtyConstraints()
     this.appliedSnapshot = snapshot
     if (cursor !== undefined) this.state.cursor = cursor
+  }
+
+  /**
+   * 把「该步的选中态」落到影子场景（录制时已把 id 算好，回放零成本）。
+   *
+   * 语义为**步内状态**：每步先清空再按本步 selectionIds 落位 ——
+   * 「选中点A → 选中点B → 创建圆锥」依次呈现 A 高亮、A+B 高亮、高亮清空+圆锥出现；
+   * 删除类前情「选中X → 删除X」则先高亮 X、随后 X 消失。
+   * 起点（-1）与无 selectionIds 的旧数据都落到「无高亮」，与改动前观感一致。
+   */
+  private applyStepSelection(stepIndex: number): void {
+    const scene = this.shadow.scene
+    if (!scene) return
+    const session = this.currentSession
+    const step = session && stepIndex >= 0 ? session.steps[stepIndex] : undefined
+    applySelectionIds(scene, step?.selectionIds ?? [])
   }
 
   /** 供扩展使用：过渡进度（缓动后的系数） */

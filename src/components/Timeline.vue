@@ -4,6 +4,7 @@
 // 步间过渡与相机聚焦在 P3 阶段加入；浮窗（第二 renderer）在 P9。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAnimationStore } from '../store/animationStore'
+import { useAnimationLibraryStore } from '../store/animationLibraryStore'
 import {
   RHYTHM_PRESETS,
   RHYTHM_MIN_MS,
@@ -13,9 +14,10 @@ import {
 } from '../core/animation/types'
 import AnimIcon from './AnimIcon.vue'
 import { EASING_LABELS } from '../core/animation/EasingLibrary'
-import type { EasingType } from '../core/animation/types'
+import type { EasingType, RecordingSession } from '../core/animation/types'
 
 const anim = useAnimationStore()
+const libStore = useAnimationLibraryStore()
 
 const steps = computed(() => anim.currentSession?.steps ?? [])
 
@@ -56,6 +58,15 @@ function onDelete(id: string, name: string) {
   if (!window.confirm(`删除录制段「${name}」？该操作不可撤销。`)) return
   anim.removeSession(id)
   if (anim.activeSession?.id !== id) closeMenu()
+}
+/** 保存当前段到云端动画库（手动上传；本地段保留） */
+function onSaveToLibrary(session: RecordingSession) {
+  void libStore.saveSession(session)
+}
+/** 打开动画库弹窗（先收起会话下拉） */
+function onOpenLibrary() {
+  closeMenu()
+  libStore.openDialog()
 }
 
 // ── 录制 ──
@@ -323,12 +334,22 @@ watch(
             <template v-else>
               <span class="sname" :title="s.name" @click="pickSession(s.id)">{{ s.name }}</span>
               <span class="meta">{{ s.steps.length }} 步</span>
+              <button
+                class="mini"
+                :title="libStore.savedSessionIds.has(s.id) ? '已在动画库' : '保存到动画库'"
+                :disabled="libStore.savingSessionId === s.id || libStore.savedSessionIds.has(s.id)"
+                @click.stop="onSaveToLibrary(s)"
+              >
+                <AnimIcon name="upload" :size="10" />
+              </button>
               <button class="mini" title="重命名" @click.stop="startRename(s.id, s.name)">✎</button>
               <button class="mini" title="删除" @click.stop="onDelete(s.id, s.name)">
                 <AnimIcon name="close" :size="10" />
               </button>
             </template>
           </div>
+          <div class="tl-menu-sep" />
+          <button class="tl-menu-lib" @click="onOpenLibrary">动画库…</button>
         </div>
       </div>
 
@@ -930,6 +951,11 @@ watch(
 }
 .mini {
   flex: 0 0 auto;
+  /* 图标子项（.anim-icon 为 display:block）不吃 button 的 text-align 居中，
+     块级 SVG 会贴按钮左上角；用 inline-flex 把内容（图标或文字）稳定放在正中 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 20px;
   padding: 0;
@@ -943,6 +969,35 @@ watch(
 .mini:hover {
   background: #444;
   color: #fff;
+}
+.mini:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.mini:disabled:hover {
+  background: transparent;
+  color: #999;
+}
+.tl-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #333;
+}
+.tl-menu-lib {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: #8ab8e8;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tl-menu-lib:hover {
+  background: #333;
+  color: #cfe4ff;
 }
 .rename-input {
   flex: 1;

@@ -177,6 +177,9 @@ function isValidSession(value: unknown): value is RecordingSession {
   if (typeof s.color !== 'string') s.color = '#4a9eff'
   if (typeof s.createdAt !== 'number') s.createdAt = Date.now()
   if (typeof s.durationMs !== 'number') s.durationMs = 0
+  // 播放语义只认 'merge'；缺失/脏值一律清除（缺省即 'native'），
+  // 防止脏数据把段落导入合并路径或让 native 段走错分支。
+  if (s.playbackMode !== 'merge') delete s.playbackMode
   return true
 }
 

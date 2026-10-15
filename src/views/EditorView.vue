@@ -9,6 +9,7 @@ import Toolbar from '../components/Toolbar.vue'
 import Sidebar from '../components/SideBar.vue'
 import Timeline from '../components/Timeline.vue'
 import AnimationFloatWindow from '../components/AnimationFloatWindow.vue'
+import AnimationLibraryDialog from '../components/AnimationLibraryDialog.vue'
 import { FloatSceneRenderer } from '../renderer/FloatSceneRenderer'
 import InputDialog from '../components/InputDialog.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
@@ -57,6 +58,7 @@ import {
 } from '../core/animation/AnimationSerializer'
 import { AnimationBroadcastChannel } from '../core/collab/AnimationBroadcast'
 import { useAnimationStore } from '../store/animationStore'
+import { useAnimationLibraryStore } from '../store/animationLibraryStore'
 import {
   CollabManager,
   type DragLockTarget,
@@ -99,6 +101,7 @@ const sceneStore = useSceneStore()
 const collabStore = useCollabStore()
 const authStore = useAuthStore()
 const animationStore = useAnimationStore()
+const animationLibraryStore = useAnimationLibraryStore()
 
 // 会话失效善后：useSessionGuard 在 onInvalidated 回调中处理保存、断连、跳转等清理。
 // 重登成功后 store.clearSessionInvalidation() 会自动复位。
@@ -1045,8 +1048,11 @@ const resetProjectContext = () => {
   saveAsDialogVisible.value = false
 }
 
-/** 自动保存：根据设置和项目状态决定保存行为 */
-const autoSave = async () => {
+/**
+ * 自动保存任务（内部实现）：根据设置和项目状态决定保存行为。
+ * 外部一律经 runAutoSave 调用（串行化），不要直接调用本函数。
+ */
+const autoSaveTask = async (options?: { notifyOnError?: boolean }) => {
   // Yjs 负责房间内实时同步，但项目列表读取的是项目表的 scene_data；
   // 因此协作房间仍需由可编辑成员把当前共享场景定期落库。
   // 观看者不能覆盖项目数据。
@@ -1096,13 +1102,26 @@ const autoSave = async () => {
         RoomAnimationCache.save(collabStore.currentRoom.id, currentAnimationPayload())
       }
     } catch {
-      // 自动保存失败时静默处理，不打扰用户
+      // 常规自动保存失败静默处理；「管理动作立即保存」要求明确提示（见 notifyOnError）
+      if (options?.notifyOnError) {
+        showToast('保存失败，改动可能未落盘，请检查网络后重试', 'global', LONG_TOAST_MS)
+      }
     }
   } else {
     // 无项目：根据 draftProtection 设置决定是否保存草稿到 localStorage
     if (!appSettings.value.draftProtection) return
     DraftStorageService.saveDraft(scene, currentAnimationPayload())
   }
+}
+
+/**
+ * 串行执行自动保存：连续的管理动作（如快速删除两段）会排队执行，
+ * 避免并发请求"后发先至"用旧内容覆盖新内容。
+ */
+let autoSaveQueue: Promise<void> = Promise.resolve()
+const runAutoSave = (options?: { notifyOnError?: boolean }): Promise<void> => {
+  autoSaveQueue = autoSaveQueue.then(() => autoSaveTask(options)).catch(() => {})
+  return autoSaveQueue
 }
 
 /** 场景有改动时调用，debounce 后执行自动保存 */
@@ -1120,7 +1139,7 @@ const scheduleAutoSave = () => {
   }
   autoSaveTimer = window.setTimeout(() => {
     autoSaveTimer = null
-    autoSave()
+    void runAutoSave()
   }, AUTO_SAVE_DEBOUNCE)
 }
 
@@ -1136,7 +1155,7 @@ const stopAutoSave = () => {
 const startPeriodicSave = () => {
   stopPeriodicSave()
   periodicSaveTimer = window.setInterval(() => {
-    autoSave()
+    void runAutoSave()
   }, PERIODIC_SAVE_INTERVAL)
 }
 
@@ -1487,6 +1506,11 @@ onMounted(() => {
       onLimitReached: (limit) => {
         showToast(`单段录制已达上限 ${limit} 步`, 'viewport', LONG_TOAST_MS)
       },
+      // 构造类模式判定：只有构造模式（创建/合并等）下新发生的选中才缓冲为「选中」候选步；
+      // 纯选中 / 删除模式下的选中只代表浏览或命中，由「是否为后续操作的输入」过滤决定
+      // （预选工作流见 onModeChange 的 noteConstructionModeEntered）。
+      isConstructionMode: () =>
+        editor.mode !== EditorMode.Select && editor.mode !== EditorMode.Delete,
     })
 
     animationPlayer = new AnimationPlayer(shadowScene, animationStore.playback, animationDocument, {
@@ -1533,6 +1557,18 @@ onMounted(() => {
         return session ? serializeRecordingSession(session) : null
       },
     })
+
+    // 动画库：注入宿主上下文（当前项目 / 房间）与提示通道。
+    // 上下文用「取值函数」注入而非快照值 —— 切项目 / 进出房间后自动取最新值。
+    animationLibraryStore.bindContextSource({
+      getProjectId: () => currentProjectId.value,
+      getRoomId: () => collabStore.currentRoom?.id ?? null,
+    })
+    animationLibraryStore.bindNotify((msg) => {
+      showToast(msg, 'global', LONG_TOAST_MS)
+    })
+    // 静默预载动画库列表：Timeline 的「已在动画库」按钮状态从一开始就准确
+    void animationLibraryStore.silentRefresh()
 
     // 录制旁听挂点：HistoryManager 每次真实入栈 → 一个操作步
     editor.historyManager.setPushListener((event) => {
@@ -2422,6 +2458,17 @@ watch(
   { flush: 'post' },
 )
 
+// 段集合的管理动作（删除 / 重命名 / 复制 / 清空 / 固化 / 录制封存）→ 跳过去抖立即保存：
+// 删除类操作若只等 3s 去抖，用户"删除后马上刷新"会让删除丢失（实测踩坑：删了又回来）。
+// 失败时明确提示，避免同类问题再以无声方式出现。
+watch(
+  () => animationStore.urgentSaveRevision,
+  () => {
+    stopAutoSave()
+    void runAutoSave({ notifyOnError: true })
+  },
+)
+
 const sharedHistoryState = ref<import('../core/collab/CollabManager').SharedHistoryState | null>(
   null,
 )
@@ -2547,6 +2594,7 @@ watch(
 // 生命周期钩子，防止页面刷新或销毁后连接残留
 onUnmounted(() => {
   if (toastTimer) clearTimeout(toastTimer)
+  animationLibraryStore.unbindContextSource()
   stopAutoSave()
   stopPeriodicSave()
   stopRoomStatusPolling()
@@ -2614,6 +2662,7 @@ onBeforeUnmount(() => {
   editor.historyManager.setNavListener(null)
   animationPlayer?.exit()
   animationRecorder?.discard()
+  animationRecorder?.dispose()
   teardownBroadcastChannel()
   mainViewActivityCleanup?.()
   disposeFloatRenderer()
@@ -2633,6 +2682,12 @@ function onModeChange(mode: EditorMode) {
     editor.setMode(mode)
   }
   sceneStore.setCurrentMode(mode)
+  // 进入构造模式：把「进入前已选好的对象」补记为动画录制候选 ——
+  // 编辑器支持预选工作流（先选底面再进棱柱工具、选中立体面后创建展开图等），
+  // 这些选中发生在纯选中模式、不会被缓冲，只有在此补记才能被后续创建追溯到。
+  if (mode !== EditorMode.Select && mode !== EditorMode.Delete) {
+    animationRecorder?.noteConstructionModeEntered()
+  }
   uiStore.closeMergePointDialog()
   uiStore.closeRegularPolygonDialog()
   uiStore.closeNormalCircleRadiusDialog()
@@ -4670,6 +4725,8 @@ const handleSaveScene = async () => {
     <Timeline />
 
     <SettingsPanel />
+
+    <AnimationLibraryDialog />
 
     <NewProjectDialog
       :visible="newProjectDialogVisible"

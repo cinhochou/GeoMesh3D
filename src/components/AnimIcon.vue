@@ -23,6 +23,7 @@ export type AnimIconName =
   | 'close'
   | 'reset'
   | 'axes'
+  | 'upload'
 
 const props = withDefaults(defineProps<{ name: AnimIconName; size?: number }>(), {
   size: 14,
@@ -65,6 +66,8 @@ const ICONS: Record<AnimIconName, string> = {
     '<path d="M11 2h2v4h-2zM11 18h2v4h-2zM2 11h4v2H2zM18 11h4v2h-4z"/><path d="M12 6a6 6 0 100 12 6 6 0 000-12zm0 2a4 4 0 110 8 4 4 0 010-8z"/>',
   // 坐标系：三轴
   axes: '<path d="M4 19h16v2H4zM4 19V3h2v16z"/><path d="M5.6 19.4L18 7l1.4 1.4L7 20.8z"/>',
+  // 上传（保存到动画库）：上箭头 + 底座
+  upload: '<path d="M12 3.2l4.3 4.3h-2.9v5.2h-2.8V7.5H7.7z"/><path d="M5 16.6h14V20H5z"/>',
 }
 </script>
 

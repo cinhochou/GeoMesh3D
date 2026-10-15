@@ -355,6 +355,19 @@ export const useAnimationStore = defineStore('animation', () => {
     documentRevision.value++
   }
 
+  /**
+   * 「立即保存」信号：段集合的**管理动作**（删除 / 重命名 / 复制 / 清空 / 固化 / 录制封存）
+   * 完成后自增，承载环境（EditorView）据此跳过去抖立刻落盘。
+   *
+   * 为什么需要它：常规变更走 3s 去抖自动保存；但删除类操作若只靠去抖，
+   * 用户"删除后马上刷新会在去抖窗口内丢失删除"（实测踩坑：删了又回来）。
+   * 注意**不**覆盖加载 / 重置文档（setDocument / reset）——那是文档替换而非管理动作。
+   */
+  const urgentSaveRevision = ref(0)
+  function requestUrgentSave(): void {
+    urgentSaveRevision.value++
+  }
+
   // 设置变更即写本地偏好。挂在 documentRevision 上而非 deep watch：
   // document 是 shallowRef，内部字段不可被深度侦听；而所有设置写入路径
   // 都会调用 notifyDocumentChanged()（见各 setXxx），因此这里是可靠的单一钩子。
@@ -390,6 +403,8 @@ export const useAnimationStore = defineStore('animation', () => {
     doc.sessions.push(...incoming)
     if (!doc.activeSessionId) doc.activeSessionId = incoming[0]!.id
     notifyDocumentChanged()
+    // 段集合变化 = 管理动作（固化 / 房间本机段恢复）：立即保存
+    requestUrgentSave()
     return incoming.length
   }
 
@@ -421,6 +436,16 @@ export const useAnimationStore = defineStore('animation', () => {
   }
 
   // ───────── 播放操作（转调引擎） ─────────
+  /**
+   * 注册临时会话（动画库导入播放 / 协作广播共用）。
+   * 临时会话只存在于引擎内、不写入本地文档 —— 避免随自动保存污染当前项目 / 房间；
+   * 播放时 currentSession 会优先解析临时会话（步带、步数随之正确）。
+   */
+  function setTransientSession(session: RecordingSession): void {
+    playerRef.value?.setTransientSession(session)
+    notifyDocumentChanged()
+  }
+
   function enterPlayback(sessionId?: string | null): boolean {
     const ok = playerRef.value?.enter(sessionId ?? null) ?? false
     notifyDocumentChanged()
@@ -593,6 +618,8 @@ export const useAnimationStore = defineStore('animation', () => {
     // （空会话不会被封存，故排除）
     if (sealed && sealed.steps.length > 0) {
       document.value.activeSessionId = sealed.id
+      // 封存即落盘：录制完成不等去抖，立即保存
+      requestUrgentSave()
     }
     notifyDocumentChanged()
   }
@@ -641,6 +668,8 @@ export const useAnimationStore = defineStore('animation', () => {
     }
     doc.meta.updatedAt = Date.now()
     notifyDocumentChanged()
+    // 删除是管理动作：立即保存（否则"删除后马上刷新"会在去抖窗口内丢失）
+    requestUrgentSave()
   }
 
   /** 重命名录制段 */
@@ -652,6 +681,8 @@ export const useAnimationStore = defineStore('animation', () => {
     session.name = trimmed
     document.value.meta.updatedAt = Date.now()
     notifyDocumentChanged()
+    // 重命名是管理动作：立即保存
+    requestUrgentSave()
   }
 
   /** 复制录制段（名称加「副本」后缀） */
@@ -669,6 +700,8 @@ export const useAnimationStore = defineStore('animation', () => {
     document.value.activeSessionId = copy.id
     document.value.meta.updatedAt = Date.now()
     notifyDocumentChanged()
+    // 复制是管理动作：立即保存
+    requestUrgentSave()
     return copy.id
   }
 
@@ -686,6 +719,8 @@ export const useAnimationStore = defineStore('animation', () => {
     doc.activeSessionId = null
     doc.meta.updatedAt = Date.now()
     notifyDocumentChanged()
+    // 清空是管理动作：立即保存
+    requestUrgentSave()
   }
 
   // ───────── 协作广播 ─────────
@@ -912,6 +947,7 @@ export const useAnimationStore = defineStore('animation', () => {
     bindEngines,
     unbindEngines,
     notifyDocumentChanged,
+    urgentSaveRevision,
     setCapabilities,
     notifyInteractionBlockedHint,
     clearInteractionBlockedHint,
@@ -933,6 +969,7 @@ export const useAnimationStore = defineStore('animation', () => {
     setDocument,
     mergeSessions,
     setActiveSession,
+    setTransientSession,
     enterPlayback,
     exitPlayback,
     goto,

@@ -78,6 +78,8 @@ export interface StepIntent {
     | 'unlock'
     | 'merge'
     | 'clear'
+    /** 选中（构造输入 / 删除目标的选中前情，由录制器插入） */
+    | 'select'
     /** 撤销（仅当设置开启记录撤销/重做时出现） */
     | 'undo'
     /** 重做（同上） */
@@ -111,6 +113,16 @@ export interface AnimationStep {
   offsetMs: number
   /** 该步关联的几何对象 id（用于高亮/聚焦） */
   focusElementIds: string[]
+  /**
+   * 该步的「选中态」：本步展示时应处于选中高亮的对象 id（缺省/空 = 无高亮）。
+   *
+   * 用于两类步：
+   *  - **选中步**（label「选中X」，delta 为空）：本步只展示选中，几何不变；
+   *  - 承载语义的其它步：本步落地时按此还原选中态（空值即清空高亮）。
+   *
+   * 录制时算好、回放零成本；跨场景合并播放时查不到的 id 会被静默跳过。
+   */
+  selectionIds?: string[]
   /** 该步的聚焦目标 */
   focusTarget?: FocusTarget
   /** 是否为全量锚点（每 N 步一个，便于跨步跳转快速重放） */
@@ -131,6 +143,19 @@ export interface RecordingSession {
   baseSnapshot: SceneSnapshot
   /** 有序操作步 */
   steps: AnimationStep[]
+  /**
+   * 播放语义（可选，缺省视为 'native'）。
+   *
+   *  - 'native'：全量替换 —— 影子场景直接以 baseSnapshot 为起点，
+   *    是「录制来源场景」的纯净回放（现有行为）。
+   *  - 'merge'：合并叠加 —— 影子场景以「目标场景 ∪ 裁剪后的 baseSnapshot」为起点，
+   *    供跨场景段（动画库导入 / 导入后固化的段）在任意目标场景播放：
+   *    只有录制范围内的几何进入目标场景，目标场景原有对象全程保留。
+   *
+   * 固化后的段带着本字段持久化，且广播序列化会透传它 ——
+   * 房主与成员、下拉重播与一次性导入的观感因此完全一致。
+   */
+  playbackMode?: 'native' | 'merge'
 }
 
 /** 动画设置（随文档持久化，可被协作权限覆盖计算） */

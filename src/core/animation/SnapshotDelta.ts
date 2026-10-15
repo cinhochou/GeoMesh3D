@@ -12,7 +12,7 @@
 import type { SceneSnapshot, SnapshotDelta, DeltaEntityKey, UnknownEntity, DeltaEntityChange } from './types'
 
 /** 参与 diff 的实体键（与 SceneSubgraphSnapshot 的数组字段一致，constraints 单独处理） */
-const DELTA_ENTITY_KEYS: DeltaEntityKey[] = [
+export const DELTA_ENTITY_KEYS: DeltaEntityKey[] = [
   'points',
   'lines',
   'straightLines',

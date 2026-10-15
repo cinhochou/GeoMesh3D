@@ -9,6 +9,7 @@
 
 import type { Scene } from '../scene/Scene'
 import { exportScene, importScene } from '../editor/SceneSerializer'
+import { takeFullSnapshot, type SceneSubgraphSnapshot } from '../editor/commands/SnapshotCommand'
 
 /** 相机状态存档 */
 export interface CameraState {
@@ -65,6 +66,17 @@ export class ShadowScene {
   /** 影子场景实例（仅在接管中有效） */
   get scene(): Scene | null {
     return this.shadow
+  }
+
+  /**
+   * 主场景的实时全量快照。
+   *
+   * 用途：导入模式（playbackMode = 'merge'）构造 cache[0] 的「目标场景」基准。
+   * 必须**每次实时抓取**，不能复用影子场景的深拷贝：浮窗播放期间主视图可继续编辑；
+   * 且「切换播放段」不会重建影子场景，旧影子内容不能当作目标场景使用。
+   */
+  takeMainSceneSnapshot(): SceneSubgraphSnapshot {
+    return takeFullSnapshot(this.mainScene)
   }
 
   /**
